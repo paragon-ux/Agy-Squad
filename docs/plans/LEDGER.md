@@ -65,8 +65,8 @@ This file is the **single source of truth** for Agy-Squad's cross-cutting decisi
 |---|---|---|---|---|---|
 | L16 | The canary test from the old shared container | user, 2026-10-15 | decided | Moved here with the other subagent scripts and parked in `tests/legacy/` (not run). P2 rewrites it against the new sandbox. | plan P0, P2 |
 | L29 | Not installable before P3 | main, 2026-10-15; user accepted 2026-10-15 | decided | no installer and `private: true` until the spawn gate and the sandbox exist, because a payload used today would start an unsandboxed host subagent. | [index](../index.md) |
-| L30 | Docs are a Zensical site | user, 2026-10-15 | decided | Same as waymark-engine, PDLt and Agy-Context-Saver. Plans and this ledger live in `docs/plans/` and are listed in the nav while the project is in design. | `zensical.toml` |
-| L31 | P0: subagent tools split out of Agy-Context-Saver | user, 2026-10-15 | decided | Built, not yet committed. `subagent_brief` and `dispatch_squad` (payload only) moved here with 15 tests; Agy-Context-Saver no longer has any subagent tool. | plan P0 |
+| L30 | Docs are a Zensical site | user, 2026-10-15 | done (`8e461bf`) | Same as waymark-engine, PDLt and Agy-Context-Saver. Plans and this ledger live in `docs/plans/` and are listed in the nav while the project is in design. | `zensical.toml` |
+| L31 | P0: subagent tools split out of Agy-Context-Saver | user, 2026-10-15 | done (`8e461bf`; Agy-Context-Saver `dd94778`) | `subagent_brief` and `dispatch_squad` (payload only) moved here with 15 tests; Agy-Context-Saver no longer has any subagent tool. | plan P0 |
 
 ### Sandbox design
 
