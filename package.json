@@ -1,0 +1,29 @@
+{
+  "name": "agy-squad",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sandboxed subagent squads for Google Antigravity on Windows: staged squad briefs, a Docker sandbox per subagent, and a deny-by-default admission policy",
+  "main": "mcp/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/test-briefs.mjs && node tests/test-dispatch.mjs && node tests/test-server.mjs",
+    "docs": "zensical serve"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paragon-ux/Agy-Squad.git"
+  },
+  "homepage": "https://paragon-ux.github.io/agy-squad/",
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "antigravity",
+    "mcp",
+    "subagents",
+    "docker",
+    "sandbox"
+  ],
+  "author": "paragon-ux",
+  "license": "MIT"
+}
