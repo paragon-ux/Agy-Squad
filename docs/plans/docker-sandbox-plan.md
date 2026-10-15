@@ -98,6 +98,7 @@ A subagent is sandboxed only if the host forces it, so the gate sits on `invoke_
 |---|---|---|
 | `base/` | The seeded repo (§3.5) | Every agent, read-only |
 | `<role>/` per agent | A clone of `base` that borrows its history (`git clone --shared`, via git alternates), so only the agent's own changes take disk | Its agent read-write; the lead also mounts each leaf's folder read-only |
+| `deps/` | Dependencies (`node_modules`, Python packages) installed once per squad by the prepare step (L38) | Every agent, read-only, at the path the project expects (for example `/w/<role>/node_modules`) |
 
 **One container per agent,** created by the MCP server. Each container mounts only its own folders, using Docker's volume `subpath` option (a leaf sees `base` and its own folder; the lead sees `base`, its own folder, and its leaves' folders read-only):
 
@@ -110,6 +111,7 @@ docker run -d --init --name agy-<squad>-<role>
   --user <agent uid>
   --mount type=volume,src=agy-ws-<squad>,dst=/w/base,volume-subpath=base,readonly
   --mount type=volume,src=agy-ws-<squad>,dst=/w/<role>,volume-subpath=<role>
+  --mount type=volume,src=agy-ws-<squad>,dst=/w/<role>/node_modules,volume-subpath=deps/node_modules,readonly
   [lead only: --mount type=volume,src=agy-ws-<squad>,dst=/w/<leaf>,volume-subpath=<leaf>,readonly per leaf]
   agy-sandbox:<version> sleep infinity
 ```
@@ -118,8 +120,12 @@ docker run -d --init --name agy-<squad>-<role>
 - **Each agent gets its own uid,** so file ownership in the shared volume matches the agent.
 - **Image:** shipped in this repo (`sandbox/Dockerfile`), based on the existing swarm image (node 22 bookworm, python3, git, build-essential), plus the Linux `rtk` binary.
 - **Never mounted:** host folders, the Docker socket, or anything under `~/.gemini`.
+- **No credentials inside containers, ever (L40).** No API keys, tokens or SSH keys go into a container's environment, files or mounts. When a role needs authenticated access, the host proxy (L39, after P2) adds the credential to the request after it leaves the container.
 - **No network,** so `host.docker.internal`, the language server's ports and its CSRF token are unreachable.
-- **Dependencies:** installed in a separate prepare step, with network on, running a fixed command from the manifest that agents can't change. The agent's container then starts without network.
+- **Dependencies (L38):**
+  - **Install:** a separate prepare step, with network on, runs a fixed command from the manifest that agents can't change. It installs into the squad's `deps/` folder once, and the agents' containers then start without network.
+  - **Read-only:** agents can't add or upgrade dependencies. They ask, and the prepare step re-runs only with the user's approval (§3.8).
+  - **Caches:** tools that write caches into dependency folders get pointed at `/tmp` instead.
 - **Admission policy:** every flag above is the ceiling of the deny-all default role. Wider settings come only through §3.8.
 
 ### 3.5 Workspace in and results out
@@ -161,7 +167,7 @@ Access follows a policy the user configures. Agents and manifests can't widen it
 
 - **Default role: deny-all.** No network, no mounts beyond the workspace volume, and the minimum resources and tools.
 - **Roles and ceilings live in user config** (`%LOCALAPPDATA%\agy-squad\policy.json`), never in the workspace or a manifest. Each role sets its maximum:
-  - network (`none` / `registry` / `full`);
+  - network (`none` / `registry` / `full`). `none` is the default. `registry` comes after P2, through a host proxy that blocks everything except approved package registries and logs every connection (L39). Data can still leak through an approved site, so it's never the default;
   - CPU, memory and process count;
   - run time;
   - the tool allow-list;
@@ -173,6 +179,17 @@ Access follows a policy the user configures. Agents and manifests can't widen it
   - a sandbox tool call from a conversation with no binding.
   An approval covers that one squad run unless the user saves it into the policy.
 - **Pairing:** a conversation becomes bound only through the spawn gate (§3.2). Anything that shows up unpaired is treated as unknown.
+
+### 3.9 Scheduling and start-up (L38)
+
+- **A per-squad cap on commands running at once.** The server limits how many `sandbox_exec` calls each squad runs at the same time. Calls beyond the cap wait in a queue.
+  - **No command classification:** the server never decides which commands are "heavy", because that would mean pattern-matching command text.
+  - **Default cap:** the Docker VM's CPU count divided among the active squads, at least 1.
+  - **Per-container CPU limits** (`--cpus`) throttle what does run.
+- **Background processes don't hold a slot.** A dev server or watcher started in the background releases its slot once its command returns. The container's process limit, the run-time limit and the reaper bound it instead.
+- **Parallel start, no warm pool.**
+  - A squad's containers are created in parallel when the squad is dispatched. Measured one after another: 19 s for 17 containers (§2.1).
+  - A pool of pre-started containers isn't used: each container's mounts are fixed when it's created and are specific to one squad and one agent, so a generic warm container can't serve an unknown squad.
 
 ## 4. Phases
 
@@ -221,7 +238,12 @@ Rule for every phase: **no automated test starts a real agent.** Live checks are
   - reaching a host path or the Docker socket;
   - any network, including `host.docker.internal`;
   - exceeding the pid/memory limits;
-  - writing to the root filesystem.
+  - writing to the root filesystem;
+  - finding any credential in the environment, files or mounts (L40).
+- **Shared dependencies and scheduling (L38):**
+  - Waymark's build and test suite pass with `node_modules` mounted read-only from `deps/`;
+  - the per-squad exec cap queues extra calls, and a background process doesn't hold a slot;
+  - parallel start of 17 containers is measured.
 - **Squad layout gate (L35, must pass before P3).** A test file in this repo builds one squad (a lead and two leaves) on a real Docker volume and checks every row:
 
   | Check | Expected |
@@ -240,7 +262,7 @@ Rule for every phase: **no automated test starts a real agent.** Live checks are
 
   The test also records the disk each clone adds over `base`. An earlier ad-hoc version of this check never ran: Claude Code's safety check blocked inline shell scripts that remove containers. It has to be a reviewable file in the repo.
 - **Exit criteria:**
-  - squad layout gate and containment suite green;
+  - squad layout gate, containment suite and the shared-dependency checks green;
   - panic removes a 17-agent team in under 5 s with a fork bomb running (measured 4.0 s idle, §2.1);
   - the reaper leaves 0 containers and 0 volumes after the MCP server exits.
 
@@ -252,11 +274,13 @@ Rule for every phase: **no automated test starts a real agent.** Live checks are
   - default-deny for bound conversations;
   - rewrite the sandbox argument.
 - `dispatch_squad` payload mode creates containers and emits payloads carrying the binding.
+- Add the leads' stop tool (L37), which acts only when the caller, as stamped by the hook, is the target's lead.
 - Tests feed recorded hook payloads (from V1–V8) into the hook and MCP handlers. No live agents.
 - **Exit criteria:**
   - a forged or missing binding is denied;
   - a bound conversation's `run_command`, `write_to_file` and `view_file` are denied;
   - an MCP call aimed at another sandbox is rewritten or denied;
+  - a lead can stop its own leaf, but a leaf can't stop a sibling and a lead can't stop another squad's agents;
   - `manage_subagents` never reaches the hook.
 
 ### P4: Return path

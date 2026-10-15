@@ -14,7 +14,7 @@ There are three ways to stop agents, from narrowest to broadest.
 
 Each agent has its own container (ledger L35), so stopping one agent removes only that agent's container. Stopping a squad removes every container labeled with that squad.
 
-A lead stops its own leaves the same way, never from inside its container: no container has Docker access or root (proposed in ledger L37).
+A lead stops its own leaves the same way, never from inside its container: no container has Docker access or root (ledger L37).
 - **A leaf's conversation:** the lead uses `manage_subagents`.
 - **A leaf's runaway command:** the lead calls Agy-Squad's stop tool. The server checks that the target is one of that lead's own leaves before acting.
 
