@@ -22,7 +22,11 @@ Neither tool starts an agent. Spawning stays with Antigravity's own `invoke_suba
 
 ## Where it's going
 
-- **One container per subagent**, with the workspace in a Docker volume. There are no host folders, no network and no Docker socket.
+- **One workspace volume per squad, one container per agent.**
+  - Each agent works in its own folder, a clone that borrows the squad's read-only copy of the repo.
+  - The lead can read its leaves' work but not change it.
+  - Siblings can't see each other's files or processes.
+  - No container gets host folders, network or Docker access.
 - **A spawn gate** on `invoke_subagent`, so the host decides which subagents start, and how.
 - **Deny by default.** A subagent gets only what its role allows; anything more needs your approval.
 - **A panic command** that kills everything the system spawned. See [Stopping Agents](stopping-agents.md).

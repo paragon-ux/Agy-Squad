@@ -1,6 +1,6 @@
 // LEGACY, NOT RUN (ledger L16). Copied as-is from Agy-Context-Saver's wip/subagent-squad branch.
 // It targets the old shared `agy-swarm-sandbox` container and imports an mcp/index.js that no
-// longer exports these handlers. Plan phase P2 rewrites it against the per-subagent sandbox.
+// longer exports these handlers. Plan phase P2 rewrites it against the squad sandbox (ledger L35).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";

@@ -35,6 +35,33 @@ Make agent teams usable in Antigravity on Windows without trusting any subagent.
 
 Bind mounts from `C:\` cross the bridge between Windows and the WSL2 VM, and on this repo that made two tests fail. Bind mounts also expose `.git/config` and `.git/hooks`. A sandboxed agent could plant `core.fsmonitor` or a hook there, and it would run on the host the next time someone uses git. **Volumes avoid both problems.** The cost: host-side tools can't see the work until it's brought back (§3.5).
 
+### 2.1 Why a squad volume with one container per agent (L35, L36)
+
+**Containers are cheap.** Measured with 17 locked-down containers (no network, all capabilities dropped) on a 4-CPU Docker VM with 7.7 GB:
+
+| Measurement | Result |
+|---|---|
+| Idle memory per container | 0.8 MiB (14 MiB for all 17) |
+| Docker VM memory, before → after | 483 → 607 MB |
+| Starting all 17, one after another | 19 s |
+| One command in all 17 at the same time | 4.7 s |
+| Panic: remove all 17 | 4.0 s |
+
+Agents reason in Antigravity's language server on the host, so a container sits idle until its agent runs a command. The real limits are CPU and memory when many heavy commands run at once, and the disk that duplicated workspaces take. L38 addresses both.
+
+**One shared squad container can't hide siblings' processes without a dangerous privilege.** In a test with a lead and two leaves as separate Linux users in one container:
+- File permissions separated their folders.
+- Every agent could still read every other agent's command lines.
+- Hiding them (`/proc` remounted with `hidepid`) worked only once the container held `SYS_ADMIN`. Anything that reached root inside the container would then hold it too.
+
+Separate containers give each agent its own process list with no extra privilege. So the squad is the unit for the workspace, limits and stopping, and each agent still gets its own container.
+
+**Docker Sandboxes was considered and not adopted (L39).**
+- **License and status:** it's proprietary (all rights reserved), experimental, and needs a Docker account sign-in.
+- **Fit:** it runs agent command-line tools inside each microVM, so Antigravity's agents (which run in its language server) aren't supported.
+- **Isolation:** Docker's own team example runs the whole team in one sandbox.
+- **Worth borrowing:** its host proxy, which blocks traffic by default and keeps credentials on the host.
+
 ## 3. Design
 
 ### 3.1 Trust boundary
@@ -63,21 +90,33 @@ A subagent is sandboxed only if the host forces it, so the gate sits on `invoke_
   - If MCP calls can't be hooked, the fallback is a per-agent capability token passed as an argument. Subagents can't read other agents' briefs or transcripts, so they can't learn another agent's token.
 - **Unbound conversations** (the main agent) keep today's governance, unchanged.
 
-### 3.4 Container spec
+### 3.4 Squad layout and container spec (L35)
 
-One container per subagent, created by the MCP server:
+**One workspace volume per squad** (`agy-ws-<squad>`) holds:
+
+| Folder | Contents | Who mounts it |
+|---|---|---|
+| `base/` | The seeded repo (§3.5) | Every agent, read-only |
+| `<role>/` per agent | A clone of `base` that borrows its history (`git clone --shared`, via git alternates), so only the agent's own changes take disk | Its agent read-write; the lead also mounts each leaf's folder read-only |
+
+**One container per agent,** created by the MCP server. Each container mounts only its own folders, using Docker's volume `subpath` option (a leaf sees `base` and its own folder; the lead sees `base`, its own folder, and its leaves' folders read-only):
 
 ```text
-docker run -d --init --name agy-<squad>-<role>-<n>
-  --label agy.sandbox=1 --label agy.squad=<squad>
+docker run -d --init --name agy-<squad>-<role>
+  --label agy.sandbox=1 --label agy.squad=<squad> --label agy.role=<role>
   --network none --cap-drop ALL --security-opt no-new-privileges
   --pids-limit 512 --memory 4g --cpus 2
   --read-only --tmpfs /tmp:rw,nosuid,size=1g --tmpfs /home/agent:rw,nosuid,size=256m
-  --user agent -v agy-ws-<squad>-<role>-<n>:/workspace
+  --user <agent uid>
+  --mount type=volume,src=agy-ws-<squad>,dst=/w/base,volume-subpath=base,readonly
+  --mount type=volume,src=agy-ws-<squad>,dst=/w/<role>,volume-subpath=<role>
+  [lead only: --mount type=volume,src=agy-ws-<squad>,dst=/w/<leaf>,volume-subpath=<leaf>,readonly per leaf]
   agy-sandbox:<version> sleep infinity
 ```
 
-- **Image:** shipped in this repo (`sandbox/Dockerfile`), based on the existing swarm image (node 22 bookworm, python3, git, build-essential), plus a non-root `agent` user and the Linux `rtk` binary.
+- **Why clones and not worktrees:** worktrees share one `.git` folder that every agent would need to write, so a leaf could move a sibling's branches. A clone that borrows `base`'s history keeps each agent's refs to itself.
+- **Each agent gets its own uid,** so file ownership in the shared volume matches the agent.
+- **Image:** shipped in this repo (`sandbox/Dockerfile`), based on the existing swarm image (node 22 bookworm, python3, git, build-essential), plus the Linux `rtk` binary.
 - **Never mounted:** host folders, the Docker socket, or anything under `~/.gemini`.
 - **No network,** so `host.docker.internal`, the language server's ports and its CSRF token are unreachable.
 - **Dependencies:** installed in a separate prepare step, with network on, running a fixed command from the manifest that agents can't change. The agent's container then starts without network.
@@ -85,19 +124,25 @@ docker run -d --init --name agy-<squad>-<role>-<n>
 
 ### 3.5 Workspace in and results out
 
-- **Seed:**
+- **Seed (once per squad):**
   1. On the host: `git bundle` of `HEAD`, plus `git stash create` for uncommitted changes.
-  2. `docker cp` the bundle into the container, then clone it into the volume.
+  2. A host-run setup container clones the bundle into the squad volume's `base/`.
+  3. It then creates one `--shared` clone per agent and sets each folder's owner to that agent's uid.
   - Untracked and ignored files are not copied. Dependencies are installed by the prepare step.
-- **Return:**
-  1. At finish, the MCP server commits the agent's work inside the container.
-  2. It creates `git bundle <base>..HEAD`, runs `docker cp` to copy it out, and runs `git fetch` into the host branch `agy/<squad>/<role>`.
+- **Integration inside the squad:** the lead reads its leaves' folders (read-only mounts) and fetches their commits into its own clone. No agent can write another agent's folder.
+- **Return to the host:**
+  1. At finish, the MCP server commits each agent's work inside its container.
+  2. It creates `git bundle <base>..HEAD` for the lead's clone (and for any leaf the user asks for), runs `docker cp` to copy it out, and runs `git fetch` into the host branch `agy/<squad>/<role>`.
   - Fetching only copies git objects. No hooks or config come across.
   - The host working tree is never written. The user or the main agent reviews and merges.
 
 ### 3.6 Stopping agents
 
-- **Normal stop (one agent or squad):** use `manage_subagents` or the Antigravity UI, which stay unblockable because no hook matches them. The MCP server then removes that squad's containers.
+- **Normal stop (one agent or squad):** use `manage_subagents` or the Antigravity UI, which stay unblockable because no hook matches them. The MCP server then removes that agent's container, or every container labeled with that squad.
+- **A lead stopping its own leaves (L37):** no container has Docker access or root, so a lead can't stop anything from inside its container.
+  - **The leaf's conversation:** the lead uses `manage_subagents`.
+  - **A leaf's runaway command:** the lead calls a stop tool on Agy-Squad's server. The hook stamps the caller's real identity. The server acts only if the target is one of that lead's own leaves; then it removes that leaf's container (or kills its running command).
+  - A leaf can't stop its siblings, and a lead can't touch another squad.
 - **Panic (L24): one command kills every process the system spawned.**
   - **All containers** are removed by label (`docker rm -f`), which kills every process inside them in under a second.
   - **All host-side helpers** are killed too: prepare steps, `docker exec` clients, reapers. They run inside one Windows Job Object created with `KILL_ON_JOB_CLOSE`, so closing the job kills the whole tree, including anything a helper started.
@@ -177,9 +222,26 @@ Rule for every phase: **no automated test starts a real agent.** Live checks are
   - any network, including `host.docker.internal`;
   - exceeding the pid/memory limits;
   - writing to the root filesystem.
+- **Squad layout gate (L35, must pass before P3).** A test file in this repo builds one squad (a lead and two leaves) on a real Docker volume and checks every row:
+
+  | Check | Expected |
+  |---|---|
+  | Leaf commits in its own clone | allowed |
+  | Leaf's clone borrows `base`'s history (alternates file points at `/w/base`) | yes |
+  | Leaf sees a sibling's folder | denied (not mounted) |
+  | Leaf writes `base` | denied (read-only) |
+  | Leaf sees a sibling's processes or command lines | denied (separate containers) |
+  | Lead reads a leaf's work | allowed |
+  | Lead writes into a leaf's folder | denied (read-only mount) |
+  | Lead fetches a leaf's commits into its own clone | allowed |
+  | Host stops one leaf | that leaf's container gone, its sibling untouched |
+  | Any agent's capabilities | none (`CapEff` 0) |
+  | Container needs `SYS_ADMIN` | no |
+
+  The test also records the disk each clone adds over `base`. An earlier ad-hoc version of this check never ran: Claude Code's safety check blocked inline shell scripts that remove containers. It has to be a reviewable file in the repo.
 - **Exit criteria:**
-  - containment suite green;
-  - kill by label takes under 1 s with a fork bomb running;
+  - squad layout gate and containment suite green;
+  - panic removes a 17-agent team in under 5 s with a fork bomb running (measured 4.0 s idle, §2.1);
   - the reaper leaves 0 containers and 0 volumes after the MCP server exits.
 
 ### P3: Wire up enforcement
