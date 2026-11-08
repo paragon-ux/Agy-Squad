@@ -196,12 +196,19 @@ process.stdin.on("data", chunk => {
   const diagnoseCli = path.join(repoRoot, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
   const testScratchRel = `scratch-test-${process.pid}`;
   const diagEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: testScratchRel };
+  const r1Ledger = path.join(repoRoot, "docs/reviews/rebuild-wsl-dispatch-review.md");
+  const r2Ledger = path.join(repoRoot, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
+  const r1Stat = fs.statSync(r1Ledger);
+  const r2Stat = fs.statSync(r2Ledger);
   try {
+    const baseSec = Math.floor(Date.now() / 1000);
+    fs.utimesSync(r2Ledger, baseSec, baseSec);
+    fs.utimesSync(r1Ledger, baseSec + 0.05, baseSec + 0.05);
     const diagRun = spawnSync(process.execPath, [diagnoseCli], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
     assert.equal(diagRun.status, 0, diagRun.stderr);
     const diagParsed = JSON.parse(diagRun.stdout);
     assert.equal(diagParsed.status, "HEALTHY");
-    assert.ok(diagParsed.targetReviewLedger?.startsWith("docs/reviews/"));
+    assert.equal(diagParsed.targetReviewLedger, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
     assert.equal(fs.existsSync(path.join(repoRoot, testScratchRel)), false);
     const badFlags = spawnSync(process.execPath, [diagnoseCli, "--markdown", "--teardown"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
     assert.equal(badFlags.status, 1);
@@ -471,6 +478,8 @@ process.stdin.on("data", chunk => {
       fs.rmSync(badLedgerAbs, { force: true });
     }
   } finally {
+    fs.utimesSync(r1Ledger, r1Stat.atime, r1Stat.mtime);
+    fs.utimesSync(r2Ledger, r2Stat.atime, r2Stat.mtime);
     fs.rmSync(path.join(repoRoot, testScratchRel), { recursive: true, force: true });
   }
   console.log("✓ Managed flat and layered payloads, isolated report slots, and native launcher and self-diagnosis teardown");

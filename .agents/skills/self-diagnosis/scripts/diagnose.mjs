@@ -80,11 +80,30 @@ function resolveTargetReviewLedger(ledgerArg) {
     if (path.dirname(real) !== reviewsReal) continue;
     const stat = fs.statSync(real);
     if (stat.isFile()) {
-      candidates.push({ relative: `docs/reviews/${entry.name}`, absolute: real, stat });
+      const revMatch = /-r(\d+)\.md$/i.exec(entry.name);
+      const revision = revMatch ? Number.parseInt(revMatch[1], 10) : 1;
+      const family = entry.name.replace(/-r\d+(?=\.md$)/i, "").toLowerCase();
+      candidates.push({ relative: `docs/reviews/${entry.name}`, absolute: real, stat, family, revision });
     }
   }
-  candidates.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-  return candidates[0] ?? null;
+  const latestByFamily = new Map();
+  for (const item of candidates) {
+    const prev = latestByFamily.get(item.family);
+    if (!prev || item.revision > prev.revision || (item.revision === prev.revision && item.stat.mtimeMs > prev.stat.mtimeMs)) {
+      latestByFamily.set(item.family, item);
+    }
+  }
+  const activeCandidates = [...latestByFamily.values()];
+  activeCandidates.sort((a, b) => {
+    if (Math.abs(b.stat.mtimeMs - a.stat.mtimeMs) > 2000) {
+      return b.stat.mtimeMs - a.stat.mtimeMs;
+    }
+    if (b.revision !== a.revision) {
+      return b.revision - a.revision;
+    }
+    return b.relative.localeCompare(a.relative);
+  });
+  return activeCandidates[0] ?? null;
 }
 
 const ALLOWED_LEDGER_STATUSES = new Set([
