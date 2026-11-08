@@ -3,15 +3,15 @@
     "skill_and_pr_review_audit": {
       "lead": {
         "role": "Skill & PR-Review Standard Lead",
-        "objective": "Apply the Agy-Squad PR Review Standard v1.1.0 (.agents/skills/pr-review/SKILL.md) to audit .agents/skills/self-diagnosis and .agents/skills/pr-review for contract accuracy, progressive disclosure, and token efficiency.",
+        "objective": "Apply the Agy-Squad PR Review Standard v1.3.0 (.agents/skills/pr-review/SKILL.md) to audit .agents/skills/self-diagnosis and .agents/skills/pr-review for contract accuracy, progressive disclosure, and token efficiency.",
         "scopeFiles": [
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
           ".agents/skills/pr-review/SKILL.md",
           "docs/tools.md"
         ],
-        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-skill_and_pr_review_audit/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
-        "expectedDeliverable": "Synthesis report starting with Verdict: PASS, with SKILL/DOC/ARCH category triage and verified file SHA-256 hashes."
+        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
+        "expectedDeliverable": "Synthesis report starting with Verdict: PASS, with SKILL/DOC/ARCH/SCRIPT category triage and verified file SHA-256 hashes."
       },
       "specialists": [
         {
@@ -23,7 +23,7 @@
             ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file; do not run diagnose.mjs --teardown while other specialists are running).",
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file; pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort).",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -43,7 +43,7 @@
     "runtime_and_contract_diagnosis": {
       "lead": {
         "role": "Runtime & Contract Diagnostics Lead",
-        "objective": "Execute a pr-review v1.1.0 audit across MCP, RUN, SVC, SCRIPT, TEST, and DEP categories to detect unhandled edge cases, boundary gaps, or state-cleanup defects in Agy-Squad.",
+        "objective": "Execute a pr-review v1.3.0 audit across MCP, RUN, SVC, SCRIPT, TEST, and DEP categories to detect unhandled edge cases, boundary gaps, or state-cleanup defects in Agy-Squad.",
         "scopeFiles": [
           "mcp/index.js",
           "mcp/dispatch.mjs",
@@ -53,7 +53,7 @@
           "bin/agy-squad.mjs",
           "bin/terminal.py"
         ],
-        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-runtime_and_contract_diagnosis/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
+        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
         "expectedDeliverable": "Synthesis report starting with Verdict: PASS and summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
       },
       "specialists": [
@@ -98,7 +98,7 @@
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/pr-review/SKILL.md"
         ],
-        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-token_and_execution_optimization/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
+        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
         "expectedDeliverable": "Synthesis report starting with Verdict: PASS with ranked optimization opportunities and measured byte/latency deltas."
       },
       "specialists": [

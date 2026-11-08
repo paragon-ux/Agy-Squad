@@ -1,6 +1,6 @@
 # Agy-Squad PR Review Standard
 
-Version: 1.1.0
+Version: 1.3.0
 Status: Active repository workflow standard (enforced by `.agents/skills/pr-review/SKILL.md` and `.agents/skills/self-diagnosis/SKILL.md`)
 Established: 2026-11-08
 
@@ -16,7 +16,8 @@ Changes to this standard require a version bump, a rationale, and a PR that iden
 
 Record:
 
-- Repository, PR URL, review date, reviewer, standard version, base SHA, and head SHA.
+- Repository, PR URL, review date, reviewer, standard version, base SHA, and head SHA (plus any uncommitted working-tree delta).
+- Append-only **Session Provenance** table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`) so parent, resumed, and branched review or `/self-diagnosis` sessions and their exact `HEAD` state are distinguishable at the top of the report.
 - Exact commit or tree executed by each cited CI run. Distinguish a PR head from GitHub's generated merge commit.
 - Changed-file inventory from the base/head comparison, plus unchanged dependencies examined.
 - Evidence actually available: repository sources, normative design records (`docs/plans/LEDGER.md`, `docs/plans/wsl-cli-verification.md`, base commit `ee10ebc`), prior review, transcript, local reproduction, and CI logs. State when an attachment or environment was unavailable.
@@ -77,18 +78,24 @@ A category with findings and partial coverage records both facts. "Not applicabl
 
 ## 5. Required finding record
 
-Use one ID per independently remediable problem, e.g. MCP-001. Preserve IDs across revisions.
+Enforce a strict **`1 ID = 1 Row / Record`** and **zero lead/bundle compression or silent omission** rule: assign one stable ID per independently remediable problem (e.g., `MCP-001`) and preserve IDs across revisions. Because `mcp/handoffs.mjs prune` removes specialist reports and `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-<id>/lead/report.md` (`L41`), the `docs/reviews/` report is the sole surviving record; compressing findings into multi-defect umbrella IDs (`R5-HARDEN-P3-1`, `R5-OPT-P3-1`), range-compressed IDs (`TEST-2..4`), or multi-ID combined rows (`A & B`), or silently omitting deferred/residual items, is prohibited because it prevents distinguishing solved defects from hidden ones. Only duplicate reports of the exact same underlying defect are merged into one canonical ID (cross-referencing the duplicate report alias in parentheses per Section 3).
 
-- **Title, priority, status.**
-- **Contract provenance:** exact invariant, architecture decision (`docs/plans/LEDGER.md`), public contract, or evidenced external norm.
-- **Source evidence:** immutable commit-pinned file links and relevant line ranges, plus the affected symbol.
-- **Trigger:** concrete input, state, interleaving, or document instruction that exposes the issue.
-- **Expected / actual:** explain the mismatch and distinguish observed execution from source-derived inference.
-- **Impact:** concrete consequence and affected scope.
-- **Required remediation:** precise behavior to restore, compatibility constraints, and affected contract surfaces.
-- **Acceptance evidence:** regression case and assertions; use source reconciliation for low-impact prose changes where a test would add no value.
-- **Root cause / related IDs:** connect cross-layer defects without duplicating the finding.
-- **Closure:** fix commit, evidence at that revision, reviewer recheck, and residual limitations.
+Every surfaced `P0`–`P3` item must carry one explicit canonical status: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` (with `Informational` permitted for non-defect observations in Section 8). Section 8 is the mandatory sink for all `Residual (Open)` / `Closed (Post-Remediation)`, `Deferred / Won't Fix`, and `Closed (By Design)` / `Informational` items—never bury them inside a `Closed` row's prose or omit them.
+
+Tiered record density (instead of row compression):
+
+- **`P0` / `P1` / `P2` defects** require all 10 fields below, written as concise 1-line entries without repeating multi-paragraph prose across sections:
+  - **Title, priority, status.**
+  - **Contract provenance:** exact invariant, architecture decision (`docs/plans/LEDGER.md`), public contract, or evidenced external norm.
+  - **Source evidence:** immutable commit-pinned file links and relevant line ranges, plus the affected symbol.
+  - **Trigger:** concrete input, state, interleaving, or document instruction that exposes the issue.
+  - **Expected / actual:** explain the mismatch and distinguish observed execution from source-derived inference.
+  - **Impact:** concrete consequence and affected scope.
+  - **Required remediation:** precise behavior to restore, compatibility constraints, and affected contract surfaces.
+  - **Acceptance evidence:** regression case and assertions; use source reconciliation for low-impact prose changes where a test would add no value.
+  - **Root cause / related IDs:** connect cross-layer defects without duplicating the finding.
+  - **Closure:** fix commit, evidence at that revision, reviewer recheck, and residual limitations.
+- **`P3` advisories and optimizations** use a compact **1-row-per-ID** structured table schema (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`), preserving 100% per-finding granularity without prose bloat.
 
 Priorities:
 
@@ -110,9 +117,9 @@ A verification gap alone is not proof of a production defect. Label it as a gap.
 
 Agy-Squad-specific verification:
 
-- **Schema & Session Isolation:** exercise documented omitted/null/valid/invalid values through actual `tools/list` schemas (`mcp/index.js`) and the `dispatch_squad` runtime boundary (`mcp/dispatch.mjs`), including `AGY_SQUAD_RUN_DIR` vs. `AGY_SQUAD_SESSION` neighbor gating and the 10MB stdio frame limit.
-- **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW`, `O_NONBLOCK`, and `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`, and strict symlink rejection (`O_NOFOLLOW`, `O_NONBLOCK`, symlink directory rejection, and `/proc/self/fd/${fd}` regular-file verification) for reports, bundles, and staged directories in `mcp/handoffs.mjs` and `mcp/run-state.mjs`.
-- **Subagent Capability Guards:** verify `TypeName !== "research"` (default `"self"`) and `Workspace === "inherit"` across unmanaged and managed compiled briefs (`mcp/briefs.mjs`).
+- **Schema & Session Isolation:** exercise documented omitted/null/valid/invalid values through `request.jsonrpc === "2.0"` validation, actual `tools/list` schemas (`mcp/index.js`), and the `dispatch_squad` runtime boundary (`mcp/dispatch.mjs`), including `AGY_SQUAD_RUN_DIR` vs. `AGY_SQUAD_SESSION` neighbor gating and the 10MB stdio frame limit.
+- **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW`, `O_NONBLOCK`, and `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`; strict symlink rejection (`O_NOFOLLOW`, `O_NONBLOCK`, symlink directory rejection, and `/proc/self/fd/${fd}` verification) for reports and bundles in `mcp/handoffs.mjs`; and `fs.realpathSync(directory) === directory` + `lstatSync` directory checks (delegating file writes to `publish()`) in `mcp/run-state.mjs`.
+- **Subagent Capability & Input Guards:** verify `TypeName !== "research"` (default `"self"`), `Workspace === "inherit"`, workspace-relative `scopeFiles` path normalization, and camelCase/PascalCase field conflict rejection across unmanaged and managed compiled briefs (`mcp/briefs.mjs`).
 - **Pointer-Over-Wire Handoffs & Bundling:** verify single-line `<= 500` UTF-8 byte `READY`/`PARTIAL`/`NO_REPORT` receipt grammar, `stagePlan` slot collision guards (`mcp/run-state.mjs`), atomic `publish()` link/rename semantics, `readSynthesis` unambiguous `PASS` verdict enforcement, and `bundle`/`verify`/`prune` SHA-256 verification (`mcp/handoffs.mjs`).
 - **External MCP & Managed Launcher:** distinguish an in-process adapter call from a real stdio subprocess and live WSL `agy chat` execution (`bin/agy-squad.mjs`, `bin/terminal.py`).
 
@@ -131,13 +138,15 @@ Re-review each fix in its primary category and all affected categories. A fix co
 
 ## 8. Required report structure
 
-1. Review metadata and evidence limits.
+1. Review metadata, Session Provenance table, and evidence limits.
 2. File-to-category inventory and coverage matrix.
 3. Architecture-to-implementation trace.
 4. Ten category sections, each with separate P1, P2, and P3 finding lists, verification gaps, and its own verdict.
 5. Cross-category root causes and rationale for remediation order.
 6. Verification record and remaining gaps.
 7. Overall disposition and finding closure table.
+8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): atomic 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`) recording every advisory surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), `Deferred / Won't Fix` item, and `Closed (By Design)` / `Informational` item—never buried inside a `Closed` row's prose cell. Record `None (0 open residuals, 0 deferred items)` when empty.
+9. **`/self-diagnosis` Cohort & Bundle Ledger** (mandatory whenever `/self-diagnosis` cohorts are dispatched against the target branch/PR): one canonical **Cohort Provenance** table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) plus one atomic 1-ID-per-row **Wave Finding Ledger**, keeping `docs/reviews/` to one clean file per PR review cycle rather than bespoke per-wave sections or proliferating files.
 
 Keep local review reports under `docs/reviews/`. Cite the reviewed base and head, category coverage, findings, evidence and verdict in the PR. Identify the previous review when recording a follow-up.
 
@@ -145,6 +154,7 @@ Keep local review reports under `docs/reviews/`. Cite the reviewed base and head
 
 | Version | Date | Change |
 | --- | --- | --- |
-| 1.1.0 | 2026-11-08 | Adapt standard to Agy-Squad with 5 WSL runtime verification boundaries and self-diagnosis coupling. |
+| 1.3.0 | 2026-11-08 | Enforce `1 ID = 1 Row` (ban umbrella/range IDs) and 6-status enum, add tiered record density for `P3` tables, require Section 1 Session Provenance and mandatory Section 8 (`Post-Remediation Residuals & Deferred Dispositions`), and standardize Section 9 (`/self-diagnosis` Cohort & Bundle Ledger). |
+| 1.2.0 | 2026-11-08 | Adapt standard to Agy-Squad with 5 WSL runtime verification boundaries, durable review ledger coupling with `/self-diagnosis`, and distinct version bump per Section 0. |
 | 1.1.0 | 2026-10-20 | Require explicit P1/P2/P3 triage inside every category, including empty versus unassessed buckets; preserve separate verification gaps. |
 | 1.0.0 | 2026-10-20 | Establish category-separated review, provenance, explicit coverage, evidence distinctions, and finding closure. |

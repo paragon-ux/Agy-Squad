@@ -40,6 +40,7 @@ try {
   const broken = structuredClone(manifest);
   broken.squads.emitter.children[0].objective = "";
   assert.match(dispatch({ squadId: "all_l1", manifest: broken }).content[0].text, /requires an objective/);
+  assert.match(dispatch({ squadId: "lexer", manifest: broken }).content[0].text, /requires an objective/);
   assert.deepEqual(fs.readdirSync(managed.directory), []);
   const leads = unpack(dispatch({ squadId: "all_l1", manifest }));
   assert.deepEqual(leads.map(({ Role }) => Role), ["Lexer Integrator", "Emitter Integrator"]);
@@ -194,8 +195,277 @@ process.stdin.on("data", chunk => {
   try {
     const diagRun = spawnSync(process.execPath, [diagnoseCli], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
     assert.equal(diagRun.status, 0, diagRun.stderr);
-    assert.equal(JSON.parse(diagRun.stdout).status, "HEALTHY");
+    const diagParsed = JSON.parse(diagRun.stdout);
+    assert.equal(diagParsed.status, "HEALTHY");
+    assert.ok(diagParsed.targetReviewLedger?.startsWith("docs/reviews/"));
     assert.equal(fs.existsSync(path.join(repoRoot, testScratchRel)), false);
+    const badFlags = spawnSync(process.execPath, [diagnoseCli, "--markdown", "--teardown"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(badFlags.status, 1);
+    assert.match(badFlags.stderr, /mutually exclusive/);
+    const badShortVal = spawnSync(process.execPath, [diagnoseCli, "--print-dispatch", "all_l1", "--parent-id", "-h"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(badShortVal.status, 1);
+    assert.match(badShortVal.stderr, /valid conversationId/);
+    const badAcceptAll = spawnSync(process.execPath, [diagnoseCli, "--teardown", "all", "--accept", "0".repeat(64)], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(badAcceptAll.status, 1);
+    assert.match(badAcceptAll.stderr, /single squadId/);
+    const badLedgerDispatch = spawnSync(process.execPath, [diagnoseCli, "--print-dispatch", "all_l1", "--ledger", "docs/reviews/x.md"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(badLedgerDispatch.status, 1);
+    assert.match(badLedgerDispatch.stderr, /not valid with '--print-dispatch'/);
+    fs.mkdirSync(path.join(repoRoot, testScratchRel, "agy-squad/squad-skill_and_pr_review_audit"), { recursive: true });
+    const allowCohortRun = spawnSync(process.execPath, [diagnoseCli, "--allow-active-cohort"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(allowCohortRun.status, 0, allowCohortRun.stderr);
+    assert.equal(JSON.parse(allowCohortRun.stdout).status, "HEALTHY");
+
+    // Exercise pre-submission Ctrl-C (\x03) in bin/terminal.py and modified registration file retention in bin/agy-squad.mjs
+    const ctrlcBin = path.join(temporary, "bin-ctrlc");
+    fs.mkdirSync(ctrlcBin);
+    fs.writeFileSync(path.join(ctrlcBin, "agy"), "#!/usr/bin/env python3\nimport time\nprint('started', flush=True)\ntime.sleep(10)\n", { mode: 0o700 });
+    const ctrlcRes = spawnSync("python3", [
+      "-c",
+      `import os, pty, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+sent = False
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.05)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+            if not chunk: break
+            if b"started" in chunk and not sent:
+                os.write(fd, b"\\x03")
+                sent = True
+        except OSError:
+            break
+    wpid, status = os.waitpid(pid, os.WNOHANG)
+    if wpid != 0:
+        sys.exit(0 if os.waitstatus_to_exitcode(status) in (129, 130) else 1)
+_, status = os.waitpid(pid, 0)
+sys.exit(0 if os.waitstatus_to_exitcode(status) in (129, 130) else 1)`,
+      "python3",
+      fileURLToPath(new URL("../bin/terminal.py", import.meta.url)),
+      path.join(temporary, "never-ready"),
+      "prompt",
+      "--agent",
+      "test-agent"
+    ], {
+      env: { ...process.env, PATH: [ctrlcBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter) },
+      encoding: "utf8",
+      timeout: 8000
+    });
+    assert.equal(ctrlcRes.status, 0, ctrlcRes.stderr);
+
+    const mutateBin = path.join(temporary, "bin-mutate");
+    fs.mkdirSync(mutateBin);
+    fs.writeFileSync(path.join(mutateBin, "agy"), `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const argv = process.argv.slice(2);
+const name = argv[argv.indexOf("--agent") + 1];
+const plugin = ".agents/plugins/" + name;
+const registration = JSON.parse(fs.readFileSync(plugin + "/mcp_config.json", "utf8")).mcpServers.dispatch;
+const emptyReport = path.join(registration.env.AGY_SQUAD_RUN_DIR, "squad-x/lead/report.md");
+fs.mkdirSync(path.dirname(emptyReport), { recursive: true });
+fs.writeFileSync(emptyReport, "   \\n");
+fs.appendFileSync(".agents/agents/" + name + ".md", "\\n# mutated\\n");
+console.log("? for shortcuts " + name);
+let input = "";
+process.stdin.on("data", chunk => {
+  input += chunk;
+  if (input.includes("/mcp")) {
+    spawnSync(registration.command, registration.args, {
+      env: { ...process.env, ...registration.env },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\\n"
+    });
+  }
+  if (/\\x1b\\[200~/.test(input)) process.exit(9);
+});
+`, { mode: 0o700 });
+    const beforeRunDirs = fs.readdirSync(path.join(root, "scratch/agy-squad")).sort();
+    const mutatedRun = spawnSync("python3", [
+      "-c", "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))",
+      process.execPath, cli, "run", "--workspace", root, "--launch", "Mutate profile and write empty report"
+    ], {
+      env: { ...process.env, PATH: [mutateBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter) },
+      encoding: "utf8", timeout: 10000
+    });
+    assert.equal(mutatedRun.status, 9);
+    assert.match(mutatedRun.stdout + mutatedRun.stderr, /Retained changed session registration file/);
+    const retainedProfiles = fs.readdirSync(profileDir).filter(f => f !== "operator.md");
+    assert.equal(retainedProfiles.length, 1);
+    fs.unlinkSync(path.join(profileDir, retainedProfiles[0]));
+    assert.deepEqual(fs.readdirSync(path.join(root, "scratch/agy-squad")).sort(), beforeRunDirs);
+
+    // Exercise startup deadline timeout + SIGKILL escalation on SIG_IGN child, post-submission SIGTERM wakeup + SIGKILL escalation,
+    // failed --launch positive retention of non-empty report.md, and v1.3.0 review ledger schema validation
+    const terminalPy = fileURLToPath(new URL("../bin/terminal.py", import.meta.url));
+    const timeoutBin = path.join(temporary, "bin-timeout");
+    fs.mkdirSync(timeoutBin);
+    fs.writeFileSync(
+      path.join(timeoutBin, "agy"),
+      "#!/usr/bin/env python3\nimport signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nprint('hanging', flush=True)\ntime.sleep(10)\n",
+      { mode: 0o700 }
+    );
+    const timeoutRes = spawnSync(
+      "python3",
+      [
+        "-c",
+        "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))",
+        "python3",
+        terminalPy,
+        path.join(temporary, "never-ready"),
+        "prompt",
+        "--agent",
+        "test-agent"
+      ],
+      {
+        env: {
+          ...process.env,
+          AGY_SQUAD_STARTUP_TIMEOUT: "0.2",
+          AGY_SQUAD_KILL_GRACE: "0.1",
+          PATH: [timeoutBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter)
+        },
+        encoding: "utf8",
+        timeout: 5000
+      }
+    );
+    assert.equal(timeoutRes.status, 1);
+    assert.match(timeoutRes.stdout + timeoutRes.stderr, /dispatcher was not discovered within 0\.2 seconds/);
+
+    const postTermReady = path.join(temporary, "post-term.mcp-ready");
+    fs.writeFileSync(postTermReady, "ready\n");
+    const postTermBin = path.join(temporary, "bin-postterm");
+    fs.mkdirSync(postTermBin);
+    fs.writeFileSync(
+      path.join(postTermBin, "agy"),
+      "#!/usr/bin/env python3\nimport signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nprint('? for shortcuts test-agent', flush=True)\nbuf = b''\nwhile b'\\x1b[201~' not in buf:\n    ch = sys.stdin.buffer.read(1)\n    if not ch:\n        break\n    buf += ch\nprint('PROMPT_SUBMITTED', flush=True)\ntime.sleep(10)\n",
+      { mode: 0o700 }
+    );
+    const postTermRes = spawnSync(
+      "python3",
+      [
+        "-c",
+        `import os, pty, select, signal, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+termed = False
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.05)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            if b"PROMPT_SUBMITTED" in chunk and not termed:
+                os.kill(pid, signal.SIGTERM)
+                termed = True
+        except OSError:
+            break
+    wpid, status = os.waitpid(pid, os.WNOHANG)
+    if wpid != 0:
+        sys.exit(0 if termed and os.waitstatus_to_exitcode(status) == 137 else 1)
+_, status = os.waitpid(pid, 0)
+sys.exit(0 if termed and os.waitstatus_to_exitcode(status) == 137 else 1)`,
+        "python3",
+        terminalPy,
+        postTermReady,
+        "submit-check",
+        "--agent",
+        "test-agent"
+      ],
+      {
+        env: {
+          ...process.env,
+          AGY_SQUAD_KILL_GRACE: "0.1",
+          PATH: [postTermBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter)
+        },
+        encoding: "utf8",
+        timeout: 6000
+      }
+    );
+    assert.equal(postTermRes.status, 0, postTermRes.stderr);
+
+    const retainBin = path.join(temporary, "bin-retain");
+    fs.mkdirSync(retainBin);
+    fs.writeFileSync(
+      path.join(retainBin, "agy"),
+      `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const argv = process.argv.slice(2);
+const name = argv[argv.indexOf("--agent") + 1];
+const registration = JSON.parse(fs.readFileSync(".agents/plugins/" + name + "/mcp_config.json", "utf8")).mcpServers.dispatch;
+const nonEmptyReport = path.join(registration.env.AGY_SQUAD_RUN_DIR, "squad-x/lead/report.md");
+fs.mkdirSync(path.dirname(nonEmptyReport), { recursive: true });
+fs.writeFileSync(nonEmptyReport, "Verdict: PASS\\nConcrete evidence.\\n");
+console.log("? for shortcuts " + name);
+let input = "";
+process.stdin.on("data", chunk => {
+  input += chunk;
+  if (input.includes("/mcp")) {
+    spawnSync(registration.command, registration.args, {
+      env: { ...process.env, ...registration.env },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\\n"
+    });
+  }
+  if (/\\x1b\\[200~/.test(input)) process.exit(9);
+});
+`,
+      { mode: 0o700 }
+    );
+    const retainRun = spawnSync(
+      "python3",
+      [
+        "-c",
+        "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))",
+        process.execPath,
+        cli,
+        "run",
+        "--workspace",
+        root,
+        "--launch",
+        "Write non-empty report then fail"
+      ],
+      {
+        env: { ...process.env, PATH: [retainBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter) },
+        encoding: "utf8",
+        timeout: 10000
+      }
+    );
+    assert.equal(retainRun.status, 9);
+    assert.match(retainRun.stdout, /Run evidence:/);
+    const afterRetainDirs = fs.readdirSync(path.join(root, "scratch/agy-squad")).filter(d => !beforeRunDirs.includes(d));
+    assert.equal(afterRetainDirs.length, 1);
+    assert.match(
+      fs.readFileSync(path.join(root, "scratch/agy-squad", afterRetainDirs[0], "squad-x/lead/report.md"), "utf8"),
+      /Verdict: PASS/
+    );
+
+    const badLedgerRel = `docs/reviews/.tmp-schema-test-${process.pid}.md`;
+    const badLedgerAbs = path.join(repoRoot, badLedgerRel);
+    try {
+      fs.writeFileSync(
+        badLedgerAbs,
+        "# Bad Ledger\n\n## 1. Metadata\n\nNo session table.\n\n## 8. Post-Remediation Residuals & Deferred Dispositions\n\n| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| `R5-HARDEN-P3-1` | `R5` | `SVC` | **Closed** | `x` | `y` | `z` | `w` |\n"
+      );
+      const schemaFail = spawnSync(process.execPath, [diagnoseCli, "--ledger", badLedgerRel], {
+        cwd: repoRoot,
+        env: diagEnv,
+        encoding: "utf8"
+      });
+      assert.equal(schemaFail.status, 1);
+      const schemaParsed = JSON.parse(schemaFail.stdout);
+      assert.equal(schemaParsed.status, "CHANGES_REQUIRED");
+      assert.ok(schemaParsed.findings.some(f => f.id === "DOC-LEDGER-SCHEMA"));
+    } finally {
+      fs.rmSync(badLedgerAbs, { force: true });
+    }
   } finally {
     fs.rmSync(path.join(repoRoot, testScratchRel), { recursive: true, force: true });
   }
