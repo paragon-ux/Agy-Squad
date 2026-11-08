@@ -21,7 +21,7 @@ def run(ready_file, prompt, args):
         fcntl.ioctl(stdin, termios.TIOCSWINSZ, size)
         try:
             os.execvp("agy", ["agy", *args])
-        except FileNotFoundError:
+        except OSError:
             sys.exit("Antigravity CLI (agy) must be available on PATH.")
 
     def resize(_signum, _frame):
@@ -41,6 +41,8 @@ def run(ready_file, prompt, args):
     deadline = time.monotonic() + 15
     agent = args[args.index("--agent") + 1].encode()
     header = b""
+    seen_agent = False
+    seen_shortcuts = False
     prompt_open = False
     mcp_open = False
     ready_at = None
@@ -48,7 +50,7 @@ def run(ready_file, prompt, args):
     startup_failed = False
     try:
         while True:
-            sources, _, _ = select.select([master, stdin] if submitted else [master], [], [], None if submitted else 0.05)
+            sources, _, _ = select.select([master, stdin], [], [], None if submitted else 0.05)
             if master in sources:
                 try:
                     output = os.read(master, 65536)
@@ -61,11 +63,18 @@ def run(ready_file, prompt, args):
                 sys.stdout.buffer.write(output)
                 sys.stdout.buffer.flush()
                 if not prompt_open:
-                    header = (header + output)[-4096:]
-                    prompt_open = agent in header and b"? for shortcuts" in header
+                    header = (header + output)[-16384:]
+                    if not seen_agent and agent in header:
+                        seen_agent = True
+                    if not seen_shortcuts and b"? for shortcuts" in header:
+                        seen_shortcuts = True
+                    prompt_open = seen_agent and seen_shortcuts
             if stdin in sources:
                 data = os.read(stdin, 65536)
                 if not data:
+                    break
+                if not submitted and b"\x03" in data:
+                    terminate(signal.SIGINT, None)
                     break
                 os.write(master, data)
             if submitted:

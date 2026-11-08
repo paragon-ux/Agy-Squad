@@ -23,7 +23,7 @@ function readManifest(root, filename) {
   assertWithinWorkspace(root, candidate);
   const file = fs.realpathSync(candidate);
   assertWithinWorkspace(root, file);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   let manifest;
   try {
     if (!fs.fstatSync(fd).isFile()) {

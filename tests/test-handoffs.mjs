@@ -76,12 +76,28 @@ try {
   write("fixture.txt", "ALPHA-é");
   assert.throws(() => bundleReports(root, { ...record, verifiedFiles: ["fixture.txt"] }), /independent verification/);
   assert.throws(() => bundleReports(root, { ...record, verifiedFiles: { ...record.verifiedFiles, [lead]: "0".repeat(64) } }), /final work inputs/);
+  for (const invalidLead of [
+    "FAIL: output differs from expected.",
+    "Verdict: BLOCKED — missing required fixture.",
+    "Verdict: PASS\nSecondary check: FAIL.",
+    "Completed checks without recording a verdict token.",
+    "Pass the arguments to the function without a verdict token."
+  ]) {
+    write(lead, invalidLead);
+    assert.throws(() => bundleReports(root, record), /unambiguous PASS verdict/);
+    assert.equal(exists(bundle), false);
+  }
+  write(lead, "Verdict: PASS\nVerified that `FAIL` and `BLOCKED` inside code spans do not reject synthesis.");
 
   const initialBundle = bundleReports(root, record);
   write(lead, "PASS after independent inspection and recheck of fixture.txt.");
   const accepted = bundleReports(root, record);
   assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
+  write(lead, "FAIL: synthesis changed after bundling.");
+  assert.throws(() => verifyBundle(root, bundle), /unambiguous PASS verdict/);
+  assert.throws(() => pruneReports(root, bundle, accepted.sha256), /unambiguous PASS verdict/);
+  write(lead, "PASS after independent inspection and recheck of fixture.txt.");
   assert.ok(exists(first) && exists(second));
   assert.throws(() => pruneReports(root, bundle), /accepted bundle digest/);
   assert.throws(() => pruneReports(root, bundle, "0".repeat(64)), /accepted digest/);
@@ -111,6 +127,36 @@ try {
   const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
   assert.equal(cliVerify.status, 0, cliVerify.stderr);
   assert.deepEqual(JSON.parse(cliVerify.stdout), accepted);
+
+  // Verify managed-run slot bundling, CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
+  assert.throws(() => inspectHandoffs(root, {
+    workspace: root,
+    assignments: [{ conversationId: "child-1", report: first }],
+    handoffs: [{ sender: "child-1", message: `READY ${first} — line one\nline two` }]
+  }), /one line within 500 UTF-8 bytes/);
+  const managedRoot = "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000";
+  const mFirst = reportPath("alpha", 1, managedRoot);
+  const mLead = reportPath("alpha", undefined, managedRoot);
+  write(mFirst, "Managed specialist evidence.\n");
+  write(mLead, "Verdict: PASS\nManaged lead synthesis.\n");
+  const mRecordPath = path.join(root, "managed-record.json");
+  fs.writeFileSync(mRecordPath, JSON.stringify({
+    workspace: root,
+    squadId: "alpha",
+    verdict: "PASS",
+    verifiedFiles: fingerprint(root, ["fixture.txt"]),
+    assignments: [{ conversationId: "m-1", report: mFirst }],
+    handoffs: [{ sender: "m-1", message: `READY ${mFirst} — Managed specialist verified.` }]
+  }));
+  const cliInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(cliInspect.status, 0, cliInspect.stderr);
+  const cliBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(cliBundle.status, 0, cliBundle.stderr);
+  const mBundled = JSON.parse(cliBundle.stdout);
+  assert.ok(mBundled.path.startsWith(managedRoot + "/"));
+  const cliPrune = spawnSync(process.execPath, [handoffsCli, "prune", mBundled.path, mBundled.sha256], { cwd: root, encoding: "utf8" });
+  assert.equal(cliPrune.status, 0, cliPrune.stderr);
+  assert.deepEqual(JSON.parse(cliPrune.stdout), { removed: [mFirst] });
   console.log("✓ Receipt reconciliation, changed evidence, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

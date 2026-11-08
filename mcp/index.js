@@ -24,9 +24,9 @@ const agentSchema = {
     scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
     instructions: { type: "string" },
     expectedDeliverable: { type: "string", minLength: 1 },
-    typeName: { type: "string", minLength: 1 },
+    typeName: { type: "string", minLength: 1, not: { enum: ["research"] } },
     model: { type: "string", minLength: 1 },
-    workspace: { type: "string", minLength: 1 }
+    workspace: { type: "string", enum: ["inherit"] }
   },
   required: ["objective", "scopeFiles"]
 };
@@ -51,10 +51,12 @@ const TOOLS = [{
               additionalProperties: {
                 type: "object",
                 properties: {
+                  ...agentSchema.properties,
                   lead: agentSchema,
                   specialists: { type: "array", minItems: 1, items: agentSchema },
                   children: { type: "array", minItems: 1, items: agentSchema }
-                }
+                },
+                anyOf: [{ required: ["specialists"] }, { required: ["children"] }]
               }
             }
           },

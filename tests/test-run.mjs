@@ -144,6 +144,7 @@ process.stdin.on("data", chunk => {
   assert.match(reviewed.profile, /- read_file\b/);
   assert.doesNotMatch(reviewed.profile, /- (invoke_subagent|run_command|write_to_file|write_file|edit_file)\b/);
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
+  assert.equal(fs.existsSync(path.join(root, reviewed.registration.env.AGY_SQUAD_RUN_DIR)), false);
 
   const execution = launch(["--launch", "--manifest", "plan.json", "--squad", "all_l1", "--mode", "auto"]);
   assert.equal(execution.status, 0, execution.error?.message ?? execution.stderr);
@@ -173,10 +174,20 @@ process.stdin.on("data", chunk => {
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
   const failedRun = capture().registration.env.AGY_SQUAD_RUN_DIR;
   assert.equal(fs.existsSync(path.join(root, failedRun)), false);
+  const failedInline = launch(["--launch", "Inline task that fails"], 7);
+  assert.equal(failedInline.status, 7, failedInline.stderr);
+  assert.equal(fs.existsSync(path.join(root, capture().registration.env.AGY_SQUAD_RUN_DIR)), false);
   assert.equal(fs.existsSync(path.join(root, ".agents/plugins")), false);
   assert.equal(fs.readFileSync(path.join(root, ".agents/mcp_config.json"), "utf8"), '{"mcpServers":{}}\n');
   assert.equal(fs.readFileSync(path.join(profileDir, "operator.md"), "utf8"), "operator profile\n");
-  console.log("✓ Managed flat and layered payloads, isolated report slots, and native launcher setup and teardown");
+
+  const runCliDirect = args => spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: "utf8" });
+  assert.equal(runCliDirect(["--help"]).status, 0);
+  assert.match(runCliDirect(["run", "--mode", "invalid", "task"]).stderr, /Mode must be auto or accept-edits/);
+  assert.match(runCliDirect(["run", "--manifest", "plan.json"]).stderr, /both --manifest and --squad/);
+  assert.match(runCliDirect(["run", "bad\x07task"]).stderr, /control characters/);
+
+  console.log("✓ Managed flat and layered payloads, isolated report slots, and native launcher");
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

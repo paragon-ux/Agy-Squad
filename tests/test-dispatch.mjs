@@ -41,8 +41,8 @@ try {
 
   const leaves = payload({ squadId: "alpha", manifestPath });
   assert.deepEqual(leaves.map(({ Role, TypeName, Model, Workspace }) => [Role, TypeName, Model, Workspace]), [
-    ["First", "research", "inherit", "inherit"],
-    ["Second", "research", "inherit", "inherit"]
+    ["First", "self", "inherit", "inherit"],
+    ["Second", "self", "inherit", "inherit"]
   ]);
   const reports = leaves.map((leaf, index) => {
     assert.deepEqual(Object.keys(leaf).sort(), ["Model", "Prompt", "Role", "TypeName", "Workspace"]);
@@ -85,6 +85,34 @@ try {
     squads: { all_l1: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
   }));
   rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for lead compilation/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), typeName: "research" }] } }
+  }));
+  rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /writable typeName/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), workspace: "branch" }] } }
+  }));
+  rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /Workspace 'inherit'/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: { ...agent("Lead", "src"), typeName: " research " }, specialists: [agent("First", "src/a.js")] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /writable typeName/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: { ...agent("Lead", "src"), workspace: "branch" }, specialists: [agent("First", "src/a.js")] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /Workspace 'inherit'/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "../secret.txt") }] } }
+  }));
+  rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /workspace-relative/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a\nb.js") }] } }
+  }));
+  rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /workspace-relative/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), expectedDeliverable: "   " }] } }
+  }));
+  rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /invalid brief or payload fields/);
 
   const externalManifest = path.join(testDir, "outside.json");
   fs.writeFileSync(externalManifest, JSON.stringify(manifest));

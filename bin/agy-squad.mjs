@@ -96,10 +96,23 @@ function hasEvidence(directory) {
   return false;
 }
 
+function requireBinary(name, label) {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      if (fs.statSync(candidate).isFile()) return;
+    } catch {}
+  }
+  throw new Error(`${label} (${name}) must be available on PATH.`);
+}
+
 async function runSession(options, task) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Open an interactive terminal to start a squad run.");
   const workspace = fs.realpathSync(options.workspace ?? process.cwd());
   if (!fs.statSync(workspace).isDirectory()) throw new Error("Workspace must be a directory.");
+  requireBinary("python3", "Python 3");
+  requireBinary("agy", "Antigravity CLI");
   const created = [];
   const run = createRun(workspace, created);
   const name = `agy-squad-${run.id.slice(0, 13)}`;
@@ -124,8 +137,13 @@ async function runSession(options, task) {
       if (result.isError) throw new Error(result.content[0].text);
       dispatch.manifestPath = result.structuredContent.manifestPath;
     }
+    const seenDirs = new Set();
     for (const [target, contents] of artifacts) {
-      ensureDirectory(workspace, path.posix.dirname(target), created);
+      const dir = path.posix.dirname(target);
+      if (!seenDirs.has(dir)) {
+        ensureDirectory(workspace, dir, created);
+        seenDirs.add(dir);
+      }
       publish(workspace, target, Buffer.from(contents));
       published.push([path.join(workspace, target), contents]);
     }
@@ -160,12 +178,13 @@ async function runSession(options, task) {
       }
     }
     fs.rmSync(path.join(run.directory, ".mcp-ready"), { force: true });
-    if (status !== 0 && dispatch && fs.existsSync(run.directory) && !hasEvidence(run.directory)) {
-      fs.rmSync(path.join(workspace, path.posix.dirname(dispatch.manifestPath)), { recursive: true, force: true });
+    const keptEvidence = fs.existsSync(run.directory) && hasEvidence(run.directory);
+    if (!keptEvidence && (status !== 0 || !options.launch)) {
+      fs.rmSync(run.directory, { recursive: true, force: true });
     }
     removeEmpty(run.directory);
     for (const directory of created.reverse()) removeEmpty(directory);
-    if (fs.existsSync(run.directory)) console.log(`Run evidence: ${run.directory}`);
+    if (keptEvidence && fs.existsSync(run.directory)) console.log(`Run evidence: ${run.directory}`);
   }
 }
 

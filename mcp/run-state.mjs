@@ -3,20 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { publish } from "./handoffs.mjs";
 
-function ensureDirectory(root, relative, created = []) {
+function ensureDirectory(root, relative, created = [], verifiedDirs) {
   let directory = root;
   for (const part of relative.split("/")) {
     if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
     directory = path.join(directory, part);
+    if (verifiedDirs?.has(directory)) continue;
     try {
       fs.mkdirSync(directory, { mode: 0o700 });
       created.push(directory);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
+      if (!fs.lstatSync(directory).isDirectory()) {
+        throw new Error(`Expected a real workspace directory: ${directory}`);
+      }
     }
-    if (!fs.lstatSync(directory).isDirectory()) {
-      throw new Error(`Expected a real workspace directory: ${directory}`);
-    }
+    verifiedDirs?.add(directory);
   }
   return directory;
 }
@@ -42,10 +44,12 @@ function stagePlan(root, run, squads) {
   const reportRoot = `${run}/plan-${key}`;
   const manifestPath = `${reportRoot}/manifest.json`;
   return {
-    reportRoot, manifestPath,
+    reportRoot,
+    manifestPath,
     prepare(slots) {
+      const verifiedDirs = new Set();
       for (const slot of slots) {
-        ensureDirectory(root, path.posix.dirname(slot));
+        ensureDirectory(root, path.posix.dirname(slot), undefined, verifiedDirs);
         try {
           fs.lstatSync(path.join(root, slot));
           throw new Error(`Report slot is already occupied: ${slot}. Use a fresh squad ID for a retry.`);

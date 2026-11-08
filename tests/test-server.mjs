@@ -66,6 +66,12 @@ console.log("Agy-Squad MCP server tests\n");
     const err = await handleRequest(invalid);
     assert.equal(err.error.code, -32600);
   }
+  const unknownMethod = await send("resources/list");
+  assert.equal(unknownMethod.error.code, -32601);
+  proc.stdin.write("{malformed json\n");
+  const afterMalformed = await send("ping");
+  assert.deepEqual(afterMalformed.result, {});
+  assert.equal(unsolicited.pop()?.error?.code, -32700);
   console.log("✓ tools/call rejects direct mode, retired subagent_brief, and malformed JSON-RPC requests");
 }
 {
@@ -82,6 +88,7 @@ console.log("Agy-Squad MCP server tests\n");
     const listed = JSON.parse(active.stdout.trim()).result.tools[0];
     assert.deepEqual(Object.keys(listed.inputSchema.properties).sort(), ["manifest", "manifestPath", "squadId"]);
     assert.equal(listed.inputSchema.properties.manifest.properties.squads.minProperties, 1);
+    assert.deepEqual(listed.inputSchema.properties.manifest.properties.squads.additionalProperties.properties.lead.properties.workspace.enum, ["inherit"]);
     assert.equal(fs.readFileSync(path.join(tmp, run.relative, ".mcp-ready"), "utf8"), "ready\n");
 
     const neighbor = spawnSync(process.execPath, [server], {

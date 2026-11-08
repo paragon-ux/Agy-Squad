@@ -15,16 +15,36 @@ function reportPath(squadId, specialistNumber, reportRoot = "scratch/agy-squad")
   return `${reportRoot}/${directory}/${slot}/report.md`;
 }
 
+function resolveReportRoot(recordOrPath) {
+  if (typeof recordOrPath === "string") {
+    const match = /^(scratch\/agy-squad\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})\/squad-/.exec(recordOrPath);
+    return match ? match[1] : "scratch/agy-squad";
+  }
+  if (typeof recordOrPath?.reportRoot === "string" && recordOrPath.reportRoot.trim()) {
+    return recordOrPath.reportRoot.trim();
+  }
+  const firstSlot = recordOrPath?.assignments?.[0]?.report;
+  return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : "scratch/agy-squad";
+}
+
 function reconcileHandoffs(assignments, handoffs) {
   if (!Array.isArray(assignments) || !assignments.length || !Array.isArray(handoffs)) {
     throw new Error("Provide the ordered launch assignments and their handoffs.");
   }
   const expected = new Map();
   const slots = new Set();
-  for (const { conversationId, report } of assignments) {
-    if (typeof conversationId !== "string" || !conversationId.trim() || expected.has(conversationId) ||
-        typeof report !== "string" || slots.has(report) ||
-        !/^scratch\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.test(report)) {
+  for (const item of assignments) {
+    const { conversationId, report } = item ?? {};
+    if (
+      typeof conversationId !== "string" ||
+      !conversationId.trim() ||
+      expected.has(conversationId) ||
+      typeof report !== "string" ||
+      slots.has(report) ||
+      !/^scratch\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.test(
+        report
+      )
+    ) {
       throw new Error("Launch assignments must have distinct native IDs and their exact compiled report slots.");
     }
     expected.set(conversationId, report);
@@ -32,7 +52,8 @@ function reconcileHandoffs(assignments, handoffs) {
   }
 
   const received = new Map();
-  for (const { sender, message } of handoffs) {
+  for (const item of handoffs) {
+    const { sender, message } = item ?? {};
     const report = expected.get(sender);
     if (!report) throw new Error("Handoff is from outside the recorded cohort.");
     if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n]/.test(message)) {
@@ -56,8 +77,12 @@ function sha256(contents) {
 }
 
 function workspacePath(root, relative) {
-  if (typeof relative !== "string" || !relative || path.isAbsolute(relative) ||
-      relative.split("/").some(part => !part || part === "." || part === "..")) {
+  if (
+    typeof relative !== "string" ||
+    !relative ||
+    path.isAbsolute(relative) ||
+    relative.split("/").some(part => !part || part === "." || part === "..")
+  ) {
     throw new Error(`Expected a workspace-relative file path: ${relative}`);
   }
   const file = path.join(root, relative);
@@ -71,8 +96,7 @@ function readFile(root, relative) {
   const file = workspacePath(root, relative);
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
-    if (!fs.fstatSync(fd).isFile() ||
-        (process.platform === "linux" && fs.realpathSync(`/proc/self/fd/${fd}`) !== file)) {
+    if (!fs.fstatSync(fd).isFile() || (process.platform === "linux" && fs.realpathSync(`/proc/self/fd/${fd}`) !== file)) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
     return fs.readFileSync(fd);
@@ -91,7 +115,9 @@ function readIfPresent(root, relative) {
 }
 
 function fingerprint(root, files) {
-  if (!files.length) throw new Error("Specify the final files used for independent verification.");
+  if (!Array.isArray(files) || !files.length) {
+    throw new Error("Specify the final files used for independent verification.");
+  }
   return Object.fromEntries(files.map(file => [file, sha256(readFile(root, file))]));
 }
 
@@ -105,12 +131,16 @@ function verifyFiles(root, verifiedFiles) {
   }
 }
 
-function bundlePath(squadId) {
-  return reportPath(squadId).replace(/\.md$/, ".sources.json");
+function bundlePath(squadId, reportRoot = "scratch/agy-squad") {
+  return reportPath(squadId, undefined, reportRoot).replace(/\.md$/, ".sources.json");
 }
 
 function publish(root, relative, contents, replace = false) {
   const destination = workspacePath(root, relative);
+  if (!replace) {
+    const existing = readIfPresent(root, relative);
+    if (existing?.equals(contents)) return;
+  }
   const temporary = `${destination}.${randomUUID()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
   try {
@@ -141,7 +171,34 @@ function readEvidence(root, report) {
   return bytes;
 }
 
-function inspectHandoffs(root, { workspace, assignments, handoffs }) {
+function readSynthesis(root, report) {
+  const bytes = readEvidence(root, report);
+  const markdown = bytes.toString("utf8");
+  if (!Buffer.from(markdown).equals(bytes)) throw new Error(`Report must be UTF-8 Markdown: ${report}`);
+  const clean = markdown.replace(/```[\s\S]*?```/g, "").replace(/`[^`\r\n]+`/g, "");
+  const verdicts = new Set();
+  for (const line of clean.split(/\r?\n/)) {
+    for (const m of line.matchAll(
+      /(?:(?:^|\b)verdict\s*(?:\*{1,2})?\s*[:—-]\s*|:\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)\b/gi
+    )) {
+      verdicts.add(m[1].toUpperCase());
+    }
+    const leadToken = /^\s*(?:[#>*+-]+\s*)?(?:\*{1,2})?(PASS|FAIL|BLOCKED)\b/.exec(line);
+    if (leadToken) {
+      verdicts.add(leadToken[1].toUpperCase());
+    }
+  }
+  if (verdicts.size !== 1 || !verdicts.has("PASS")) {
+    throw new Error("Synthesis report must record an unambiguous PASS verdict.");
+  }
+  return bytes;
+}
+
+function inspectHandoffs(root, record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error("Provide a valid handoff inspection record.");
+  }
+  const { workspace, assignments, handoffs } = record;
   if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
   const received = reconcileHandoffs(assignments, handoffs);
   return assignments.map(({ conversationId, report }) => {
@@ -152,50 +209,84 @@ function inspectHandoffs(root, { workspace, assignments, handoffs }) {
 }
 
 function bundleReports(root, record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error("Provide a valid bundle record.");
+  }
   const { squadId, verdict, verifiedFiles } = record;
   if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
+  const rootPrefix = resolveReportRoot(record);
   const assignments = inspectHandoffs(root, record);
-  if (assignments.some(({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1))) {
+  if (
+    assignments.some(
+      ({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1, rootPrefix)
+    )
+  ) {
     throw new Error("Bundling requires a READY handoff from each recorded specialist in its compiled slot.");
   }
-  const synthesisSlot = reportPath(squadId);
-  const relative = bundlePath(squadId);
-  if ([...assignments.map(({ report }) => report), synthesisSlot, relative].some(report => Object.hasOwn(verifiedFiles ?? {}, report))) {
+  const synthesisSlot = reportPath(squadId, undefined, rootPrefix);
+  const relative = bundlePath(squadId, rootPrefix);
+  if (
+    [...assignments.map(({ report }) => report), synthesisSlot, relative].some(report =>
+      Object.hasOwn(verifiedFiles ?? {}, report)
+    )
+  ) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles);
-  const synthesis = sha256(readEvidence(root, synthesisSlot));
+  const synthesis = sha256(readSynthesis(root, synthesisSlot));
   const reports = assignments.map(({ report }) => {
     const bytes = readEvidence(root, report);
     const markdown = bytes.toString("utf8");
     if (!Buffer.from(markdown).equals(bytes)) throw new Error(`Report must be UTF-8 Markdown: ${report}`);
     return { path: report, sha256: sha256(bytes), markdown };
   });
-  publish(root, relative, Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n"), true);
-  return verifyBundle(root, relative);
+  const bundlePayload = Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n");
+  publish(root, relative, bundlePayload, true);
+  return {
+    path: relative,
+    sha256: sha256(bundlePayload),
+    reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h }))
+  };
 }
 
 function verifyBundle(root, relative, acceptedHash) {
   const contents = readFile(root, relative);
   const digest = sha256(contents);
-  if (acceptedHash !== undefined && digest !== acceptedHash) throw new Error("Bundle differs from the primary's accepted digest.");
-  const { squadId, synthesis, verifiedFiles, reports } = JSON.parse(contents);
-  if (relative !== bundlePath(squadId) || !Array.isArray(reports) || !reports.length ||
-      reports.some((report, index) => report.path !== reportPath(squadId, index + 1))) {
+  if (acceptedHash !== undefined && digest !== acceptedHash) {
+    throw new Error("Bundle differs from the primary's accepted digest.");
+  }
+  const parsed = JSON.parse(contents);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid bundle JSON object.");
+  }
+  const { squadId, synthesis, verifiedFiles, reports } = parsed;
+  const rootPrefix = resolveReportRoot(relative);
+  if (
+    relative !== bundlePath(squadId, rootPrefix) ||
+    !Array.isArray(reports) ||
+    !reports.length ||
+    reports.some(
+      (report, index) =>
+        !report || typeof report !== "object" || report.path !== reportPath(squadId, index + 1, rootPrefix)
+    )
+  ) {
     throw new Error("Bundle must contain the recorded squad's exact specialist slots.");
   }
-  if (sha256(readEvidence(root, reportPath(squadId))) !== synthesis) {
+  if (sha256(readSynthesis(root, reportPath(squadId, undefined, rootPrefix))) !== synthesis) {
     throw new Error("Synthesis changed after bundling.");
   }
   verifyFiles(root, verifiedFiles);
   for (const report of reports) {
+    if (typeof report.markdown !== "string" || typeof report.sha256 !== "string") {
+      throw new Error(`Invalid archived report entry: ${report?.path}`);
+    }
     const bytes = Buffer.from(report.markdown, "utf8");
     const loose = readIfPresent(root, report.path);
     if (!bytes.length || sha256(bytes) !== report.sha256 || (loose && !loose.equals(bytes))) {
       throw new Error(`Archived or loose report changed: ${report.path}`);
     }
   }
-  return { path: relative, sha256: digest, reports: reports.map(({ path, sha256 }) => ({ path, sha256 })) };
+  return { path: relative, sha256: digest, reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })) };
 }
 
 function pruneReports(root, relative, acceptedHash) {
