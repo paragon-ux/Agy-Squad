@@ -21,6 +21,20 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const isLead = specialistNumber === undefined;
   const rawRole = spec.role ?? spec.Role ?? (isLead ? "Squad Lead" : "Specialist");
   const role = typeof rawRole === "string" ? rawRole.trim() : "";
+  for (const [lower, upper] of [
+    ["role", "Role"],
+    ["objective", "Objective"],
+    ["scopeFiles", "ScopeFiles"],
+    ["instructions", "Instructions"],
+    ["expectedDeliverable", "ExpectedDeliverable"],
+    ["typeName", "TypeName"],
+    ["model", "Model"],
+    ["workspace", "Workspace"]
+  ]) {
+    if (spec[lower] !== undefined && spec[upper] !== undefined && spec[lower] !== spec[upper]) {
+      throw new Error(`Agent '${role || "unnamed"}' has conflicting ${lower} and ${upper} fields.`);
+    }
+  }
   const objective = spec.objective ?? spec.Objective;
   const scope = spec.scopeFiles ?? spec.ScopeFiles;
   if (typeof objective !== "string" || !objective.trim()) {
@@ -29,13 +43,13 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   if (
     !Array.isArray(scope) ||
     !scope.length ||
-    scope.some(
-      file =>
-        typeof file !== "string" ||
-        !file.trim() ||
-        /[\r\n]/.test(file) ||
-        file.split(/[\\/]/).includes("..")
-    )
+    scope.some(file => {
+      if (typeof file !== "string") return true;
+      const trimmed = file.trim();
+      if (!trimmed || /[\r\n]/.test(trimmed)) return true;
+      if (trimmed.startsWith("/") || trimmed.includes("\\") || /^[a-zA-Z]:/.test(trimmed)) return true;
+      return trimmed !== "." && trimmed.split("/").some(part => !part || part === "." || part === "..");
+    })
   ) {
     throw new Error(`Agent '${role || "unnamed"}' requires valid workspace-relative scopeFiles.`);
   }

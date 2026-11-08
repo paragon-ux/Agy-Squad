@@ -16,34 +16,36 @@ const SERVER_NAME = "agy-squad";
 const managedRun = process.env.AGY_SQUAD_RUN_DIR;
 // A neighboring CLI can discover the workspace plugin while this run is active.
 const activeRun = !managedRun || process.env.AGY_SQUAD_SESSION === managedRun;
-const agentSchema = {
-  type: "object",
-  properties: {
-    role: { type: "string", minLength: 1 },
-    objective: { type: "string", minLength: 1 },
-    scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-    instructions: { type: "string" },
-    expectedDeliverable: { type: "string", minLength: 1 },
-    typeName: { type: "string", minLength: 1, not: { enum: ["research"] } },
-    model: { type: "string", minLength: 1 },
-    workspace: { type: "string", enum: ["inherit"] }
-  },
-  required: ["objective", "scopeFiles"]
-};
+const agentSchema = managedRun
+  ? {
+      type: "object",
+      properties: {
+        role: { type: "string", minLength: 1 },
+        objective: { type: "string", minLength: 1 },
+        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+        instructions: { type: "string" },
+        expectedDeliverable: { type: "string", minLength: 1 },
+        typeName: { type: "string", minLength: 1, not: { enum: ["research"] } },
+        model: { type: "string", minLength: 1 },
+        workspace: { type: "string", enum: ["inherit"] }
+      },
+      required: ["objective", "scopeFiles"]
+    }
+  : null;
 const TOOLS = [{
   name: "dispatch_squad",
   description: managedRun
-    ? "Prepare one stage from a supplied task plan or workspace manifest and return its native Subagents payload. Antigravity performs launches."
+    ? "Prepare one stage from an inline plan or workspace manifest into a native Subagents payload."
     : "Compile leads (all_l1) or one squad's specialists from a workspace manifest into a native Subagents payload.",
   inputSchema: {
     type: "object",
     properties: {
-      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, or the ID of one squad for its specialists." },
-      manifestPath: { type: "string", minLength: 1, description: "Path to a manifest inside the workspace." },
+      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, or one squad ID for specialists." },
+      manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." },
       ...(managedRun ? {
         manifest: {
           type: "object",
-          description: "Inline plan with a squads object keyed by squad ID. Each squad has specialists and an optional lead. Provide exclusively this or manifestPath.",
+          description: "Inline squads plan (mutually exclusive with manifestPath; canonical camelCase fields shown, non-conflicting PascalCase aliases accepted at runtime).",
           properties: {
             squads: {
               type: "object",
@@ -71,7 +73,14 @@ const TOOLS = [{
 }];
 
 async function handleRequest(request) {
-  if (!request || typeof request !== "object" || Array.isArray(request) || typeof request.method !== "string" || !request.method.trim()) {
+  if (
+    !request ||
+    typeof request !== "object" ||
+    Array.isArray(request) ||
+    request.jsonrpc !== "2.0" ||
+    typeof request.method !== "string" ||
+    !request.method.trim()
+  ) {
     const id = request && typeof request === "object" && !Array.isArray(request) && "id" in request ? request.id : null;
     return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
   }

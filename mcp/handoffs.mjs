@@ -7,6 +7,9 @@ const messageLimit = 500;
 
 function reportPath(squadId, specialistNumber, reportRoot = "scratch/agy-squad") {
   if (typeof squadId !== "string" || !squadId.trim()) throw new Error("Provide a nonempty squad ID.");
+  if (specialistNumber !== undefined && (!Number.isInteger(specialistNumber) || specialistNumber < 1)) {
+    throw new Error("Specialist number must be a positive integer.");
+  }
   const directory = `squad-${encodeURIComponent(squadId)}`;
   if (Buffer.byteLength(directory) > 255) {
     throw new Error("Squad ID must fit in one workspace directory name.");
@@ -56,7 +59,7 @@ function reconcileHandoffs(assignments, handoffs) {
     const { sender, message } = item ?? {};
     const report = expected.get(sender);
     if (!report) throw new Error("Handoff is from outside the recorded cohort.");
-    if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n]/.test(message)) {
+    if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n\u2028\u2029]/.test(message)) {
       throw new Error("Handoff must be one line within 500 UTF-8 bytes.");
     }
     const match = /^(READY|PARTIAL) (\S+) — (.+)$/.exec(message);
@@ -72,28 +75,42 @@ function reconcileHandoffs(assignments, handoffs) {
   return received;
 }
 
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function workspacePath(root, relative) {
+function decodeUtf8(bytes, relative) {
+  try {
+    return utf8Decoder.decode(bytes);
+  } catch {
+    throw new Error(`Report must be UTF-8 Markdown: ${relative}`);
+  }
+}
+
+function workspacePath(root, relative, verifiedDirs) {
   if (
     typeof relative !== "string" ||
     !relative ||
+    relative.includes("\\") ||
     path.isAbsolute(relative) ||
     relative.split("/").some(part => !part || part === "." || part === "..")
   ) {
     throw new Error(`Expected a workspace-relative file path: ${relative}`);
   }
   const file = path.join(root, relative);
-  if (fs.realpathSync(path.dirname(file)) !== path.dirname(file)) {
-    throw new Error(`Symlinked directories are unsupported: ${relative}`);
+  const dir = path.dirname(file);
+  if (!verifiedDirs?.has(dir)) {
+    if (fs.realpathSync(dir) !== dir) {
+      throw new Error(`Symlinked directories are unsupported: ${relative}`);
+    }
+    verifiedDirs?.add(dir);
   }
   return file;
 }
 
-function readFile(root, relative) {
-  const file = workspacePath(root, relative);
+function readOpenedFile(file, relative) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     if (!fs.fstatSync(fd).isFile() || (process.platform === "linux" && fs.realpathSync(`/proc/self/fd/${fd}`) !== file)) {
@@ -105,28 +122,34 @@ function readFile(root, relative) {
   }
 }
 
-function readIfPresent(root, relative) {
+function readFile(root, relative, verifiedDirs) {
+  return readOpenedFile(workspacePath(root, relative, verifiedDirs), relative);
+}
+
+function readIfPresent(root, relative, verifiedDirs) {
   try {
-    return readFile(root, relative);
+    return readFile(root, relative, verifiedDirs);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
 }
 
-function fingerprint(root, files) {
+function fingerprint(root, files, verifiedDirs = new Set()) {
   if (!Array.isArray(files) || !files.length) {
     throw new Error("Specify the final files used for independent verification.");
   }
-  return Object.fromEntries(files.map(file => [file, sha256(readFile(root, file))]));
+  const unique = [...new Set(files)];
+  const hashes = new Map(unique.map(file => [file, sha256(readFile(root, file, verifiedDirs))]));
+  return Object.fromEntries(files.map(file => [file, hashes.get(file)]));
 }
 
-function verifyFiles(root, verifiedFiles) {
+function verifyFiles(root, verifiedFiles, verifiedDirs) {
   if (!verifiedFiles || typeof verifiedFiles !== "object" || Array.isArray(verifiedFiles)) {
     throw new Error("Specify the final files used for independent verification.");
   }
   const files = Object.keys(verifiedFiles);
-  for (const [file, hash] of Object.entries(fingerprint(root, files))) {
+  for (const [file, hash] of Object.entries(fingerprint(root, files, verifiedDirs))) {
     if (hash !== verifiedFiles[file]) throw new Error(`Verified input changed: ${file}`);
   }
 }
@@ -135,11 +158,14 @@ function bundlePath(squadId, reportRoot = "scratch/agy-squad") {
   return reportPath(squadId, undefined, reportRoot).replace(/\.md$/, ".sources.json");
 }
 
-function publish(root, relative, contents, replace = false) {
-  const destination = workspacePath(root, relative);
+function publish(root, relative, contents, replace = false, verifiedDirs) {
+  const destination = workspacePath(root, relative, verifiedDirs);
   if (!replace) {
-    const existing = readIfPresent(root, relative);
-    if (existing?.equals(contents)) return;
+    try {
+      if (readOpenedFile(destination, relative).equals(contents)) return;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
   const temporary = `${destination}.${randomUUID()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
@@ -154,7 +180,7 @@ function publish(root, relative, contents, replace = false) {
       fs.linkSync(temporary, destination);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      if (!readFile(root, relative).equals(contents)) {
+      if (!readOpenedFile(destination, relative).equals(contents)) {
         if (!replace) throw error;
         fs.renameSync(temporary, destination);
         return;
@@ -165,27 +191,27 @@ function publish(root, relative, contents, replace = false) {
   }
 }
 
-function readEvidence(root, report) {
-  const bytes = readFile(root, report);
+function readEvidence(root, report, verifiedDirs) {
+  const bytes = readFile(root, report, verifiedDirs);
   if (!bytes.toString("utf8").trim()) throw new Error(`Empty evidence report: ${report}`);
   return bytes;
 }
 
-function readSynthesis(root, report) {
-  const bytes = readEvidence(root, report);
-  const markdown = bytes.toString("utf8");
-  if (!Buffer.from(markdown).equals(bytes)) throw new Error(`Report must be UTF-8 Markdown: ${report}`);
-  const clean = markdown.replace(/```[\s\S]*?```/g, "").replace(/`[^`\r\n]+`/g, "");
+function readSynthesis(root, report, verifiedDirs) {
+  const bytes = readEvidence(root, report, verifiedDirs);
+  const markdown = decodeUtf8(bytes, report);
+  const clean = markdown
+    .replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "")
+    .replace(/(`+)([^\r\n]*?)\1/g, " ");
   const verdicts = new Set();
   for (const line of clean.split(/\r?\n/)) {
     for (const m of line.matchAll(
-      /(?:(?:^|\b)verdict\s*(?:\*{1,2})?\s*[:—-]\s*|:\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)\b/gi
+      /(?:^|\b)(?:verdict|status|result|check|disposition)\s*(?:\*{1,2})?\s*(?:[:—-]|\bis\b)\s*(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/gi
     )) {
       verdicts.add(m[1].toUpperCase());
     }
-    const leadToken = /^\s*(?:[#>*+-]+\s*)?(?:\*{1,2})?(PASS|FAIL|BLOCKED)\b/.exec(line);
-    if (leadToken) {
-      verdicts.add(leadToken[1].toUpperCase());
+    for (const m of line.matchAll(/(?:^\s*(?:[#>*+-]+\s*)?|:\s*|\|\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/g)) {
+      verdicts.add(m[1]);
     }
   }
   if (verdicts.size !== 1 || !verdicts.has("PASS")) {
@@ -194,7 +220,7 @@ function readSynthesis(root, report) {
   return bytes;
 }
 
-function inspectHandoffs(root, record) {
+function inspectReports(root, record, verifiedDirs = new Set()) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
@@ -203,9 +229,17 @@ function inspectHandoffs(root, record) {
   const received = reconcileHandoffs(assignments, handoffs);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
-    if (status === "READY" || status === "PARTIAL") readEvidence(root, report);
-    return { conversationId, report, status };
+    const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;
+    return { conversationId, report, status, bytes };
   });
+}
+
+function inspectHandoffs(root, record) {
+  return inspectReports(root, record).map(({ conversationId, report, status }) => ({
+    conversationId,
+    report,
+    status
+  }));
 }
 
 function bundleReports(root, record) {
@@ -214,8 +248,9 @@ function bundleReports(root, record) {
   }
   const { squadId, verdict, verifiedFiles } = record;
   if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
+  const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectHandoffs(root, record);
+  const assignments = inspectReports(root, record, verifiedDirs);
   if (
     assignments.some(
       ({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1, rootPrefix)
@@ -232,16 +267,14 @@ function bundleReports(root, record) {
   ) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
-  verifyFiles(root, verifiedFiles);
-  const synthesis = sha256(readSynthesis(root, synthesisSlot));
-  const reports = assignments.map(({ report }) => {
-    const bytes = readEvidence(root, report);
-    const markdown = bytes.toString("utf8");
-    if (!Buffer.from(markdown).equals(bytes)) throw new Error(`Report must be UTF-8 Markdown: ${report}`);
+  verifyFiles(root, verifiedFiles, verifiedDirs);
+  const synthesis = sha256(readSynthesis(root, synthesisSlot, verifiedDirs));
+  const reports = assignments.map(({ report, bytes }) => {
+    const markdown = decodeUtf8(bytes, report);
     return { path: report, sha256: sha256(bytes), markdown };
   });
   const bundlePayload = Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n");
-  publish(root, relative, bundlePayload, true);
+  publish(root, relative, bundlePayload, true, verifiedDirs);
   return {
     path: relative,
     sha256: sha256(bundlePayload),
@@ -249,8 +282,9 @@ function bundleReports(root, record) {
   };
 }
 
-function verifyBundle(root, relative, acceptedHash) {
-  const contents = readFile(root, relative);
+function verifyBundleInternal(root, relative, acceptedHash) {
+  const verifiedDirs = new Set();
+  const contents = readFile(root, relative, verifiedDirs);
   const digest = sha256(contents);
   if (acceptedHash !== undefined && digest !== acceptedHash) {
     throw new Error("Bundle differs from the primary's accepted digest.");
@@ -272,33 +306,42 @@ function verifyBundle(root, relative, acceptedHash) {
   ) {
     throw new Error("Bundle must contain the recorded squad's exact specialist slots.");
   }
-  if (sha256(readSynthesis(root, reportPath(squadId, undefined, rootPrefix))) !== synthesis) {
+  if (sha256(readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs)) !== synthesis) {
     throw new Error("Synthesis changed after bundling.");
   }
-  verifyFiles(root, verifiedFiles);
+  verifyFiles(root, verifiedFiles, verifiedDirs);
+  const loosePresent = [];
   for (const report of reports) {
     if (typeof report.markdown !== "string" || typeof report.sha256 !== "string") {
       throw new Error(`Invalid archived report entry: ${report?.path}`);
     }
     const bytes = Buffer.from(report.markdown, "utf8");
-    const loose = readIfPresent(root, report.path);
+    const loose = readIfPresent(root, report.path, verifiedDirs);
     if (!bytes.length || sha256(bytes) !== report.sha256 || (loose && !loose.equals(bytes))) {
       throw new Error(`Archived or loose report changed: ${report.path}`);
     }
+    if (loose) loosePresent.push(report.path);
   }
-  return { path: relative, sha256: digest, reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })) };
+  return {
+    path: relative,
+    sha256: digest,
+    reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })),
+    loosePresent
+  };
+}
+
+function verifyBundle(root, relative, acceptedHash) {
+  const { path: p, sha256: s, reports } = verifyBundleInternal(root, relative, acceptedHash);
+  return { path: p, sha256: s, reports };
 }
 
 function pruneReports(root, relative, acceptedHash) {
   if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { reports } = verifyBundle(root, relative, acceptedHash);
+  const { loosePresent } = verifyBundleInternal(root, relative, acceptedHash);
   const removed = [];
-  for (const { path: report, sha256: hash } of reports) {
-    const loose = readIfPresent(root, report);
-    if (!loose) continue;
-    if (sha256(loose) !== hash) throw new Error(`Loose report changed during cleanup: ${report}`);
+  for (const report of loosePresent) {
     try {
-      fs.unlinkSync(workspacePath(root, report));
+      fs.unlinkSync(path.join(root, report));
       removed.push(report);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
@@ -307,7 +350,15 @@ function pruneReports(root, relative, acceptedHash) {
   return { removed };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const realOrSelf = p => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+
+if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url))) {
   const root = fs.realpathSync(process.cwd());
   const [action, ...args] = process.argv.slice(2);
   try {

@@ -62,7 +62,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
   assert.equal(unknown.error.code, -32601);
-  for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }]) {
+  for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }, { id: 99, method: "ping" }]) {
     const err = await handleRequest(invalid);
     assert.equal(err.error.code, -32600);
   }

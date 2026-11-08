@@ -67,10 +67,52 @@ function loadSquads(root, manifestPath) {
   throw firstError ?? new Error("No squad manifest found. Pass a workspace-relative manifestPath.");
 }
 
+const inlineLeadKeys = [
+  "role",
+  "Role",
+  "objective",
+  "Objective",
+  "scopeFiles",
+  "ScopeFiles",
+  "instructions",
+  "Instructions",
+  "expectedDeliverable",
+  "ExpectedDeliverable",
+  "typeName",
+  "TypeName",
+  "model",
+  "Model",
+  "workspace",
+  "Workspace"
+];
+
+function resolveSquadLead(squad, squadId, requireLead) {
+  if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
+    throw new Error(`Squad '${squadId}' must be an object.`);
+  }
+  const hasInlineLead = inlineLeadKeys.some(key => squad[key] !== undefined);
+  if (squad.lead !== undefined && hasInlineLead) {
+    throw new Error(`Squad '${squadId}' cannot mix 'lead' with top-level lead fields.`);
+  }
+  if (squad.lead !== undefined) {
+    if (!squad.lead || typeof squad.lead !== "object" || Array.isArray(squad.lead)) {
+      throw new Error(`Lead for '${squadId}' must be an object.`);
+    }
+    return squad.lead;
+  }
+  return hasInlineLead || requireLead ? squad : undefined;
+}
+
 function specialistAssignments(squads, squadId) {
   if (!Object.hasOwn(squads, squadId)) throw new Error(`Unknown squadId '${squadId}'.`);
   const squad = squads[squadId];
-  const specialists = Array.isArray(squad?.children) ? squad.children : squad?.specialists;
+  if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
+    throw new Error(`Squad '${squadId}' must be an object.`);
+  }
+  if (squad.children !== undefined && squad.specialists !== undefined) {
+    throw new Error(`Squad '${squadId}' cannot define both 'children' and 'specialists'.`);
+  }
+  const specialists = squad.children !== undefined ? squad.children : squad.specialists;
   if (!Array.isArray(specialists) || specialists.length === 0) {
     throw new Error(`Squad '${squadId}' must define children or specialists.`);
   }
@@ -103,29 +145,33 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
         (requestedManifest !== staged.manifestPath || requestedManifest !== selectedManifest)) {
       throw new Error("The prepared manifest changed. Start a fresh assignment.");
     }
+    const alreadyStaged = Boolean(staged && requestedManifest === staged.manifestPath);
+    const build = ({ spec, id, number }) =>
+      buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
     let assignments;
     if (squadId === "all_l1") {
-      assignments = Object.entries(squads).map(([id, squad]) => {
-        if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
-          throw new Error(`Squad '${id}' must be an object.`);
-        }
-        const lead = squad.lead === undefined ? squad : squad.lead;
-        if (!lead || typeof lead !== "object" || Array.isArray(lead)) {
-          throw new Error(`Lead for '${id}' must be an object.`);
-        }
-        return { spec: lead, id };
-      });
+      assignments = Object.entries(squads).map(([id, squad]) => ({
+        spec: resolveSquadLead(squad, id, true),
+        id
+      }));
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
-    const build = ({ spec, id, number }) =>
-      buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
     const Subagents = assignments.map(build);
     const children = squadId === "all_l1" ? assignments.flatMap(({ id }) => specialistAssignments(squads, id)) : [];
     for (const child of children) build(child);
+    if (squadId !== "all_l1" && !alreadyStaged) {
+      for (const [id, squad] of Object.entries(squads)) {
+        const leadSpec = resolveSquadLead(squad, id, false);
+        if (leadSpec) build({ spec: leadSpec, id });
+        if (id !== squadId) {
+          for (const sibling of specialistAssignments(squads, id)) build(sibling);
+        }
+      }
+    }
     if (staged) {
       const slots = [...assignments, ...children].map(({ id, number }) => reportPath(id, number, staged.reportRoot));
-      staged.prepare(slots);
+      staged.prepare(slots, { skipManifestPublish: alreadyStaged });
     }
     return {
       content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }],

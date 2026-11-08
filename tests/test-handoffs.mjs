@@ -81,13 +81,17 @@ try {
     "Verdict: BLOCKED — missing required fixture.",
     "Verdict: PASS\nSecondary check: FAIL.",
     "Completed checks without recording a verdict token.",
-    "Pass the arguments to the function without a verdict token."
+    "Pass the arguments to the function without a verdict token.",
+    "Verdict: PASS\n\n| Gate | Verdict |\n| --- | --- |\n| Security | FAIL |\n\nOverall verdict is FAIL."
   ]) {
     write(lead, invalidLead);
     assert.throws(() => bundleReports(root, record), /unambiguous PASS verdict/);
     assert.equal(exists(bundle), false);
   }
-  write(lead, "Verdict: PASS\nVerified that `FAIL` and `BLOCKED` inside code spans do not reject synthesis.");
+  write(
+    lead,
+    "Verdict: PASS\nSummary: blocked symlinks, result is fail-safe, and status: fail-fast were checked.\n~~~\nVerdict: FAIL\n~~~\nVerified that `FAIL` and `` `FAIL` `` inside CommonMark code spans do not reject synthesis."
+  );
 
   const initialBundle = bundleReports(root, record);
   write(lead, "PASS after independent inspection and recheck of fixture.txt.");
@@ -127,6 +131,13 @@ try {
   const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
   assert.equal(cliVerify.status, 0, cliVerify.stderr);
   assert.deepEqual(JSON.parse(cliVerify.stdout), accepted);
+  const symlinkCli = path.join(root, "handoffs-link.mjs");
+  fs.symlinkSync(handoffsCli, symlinkCli);
+  const cliViaSymlink = spawnSync(process.execPath, [symlinkCli, "verify", bundle], { cwd: root, encoding: "utf8" });
+  assert.equal(cliViaSymlink.status, 0, cliViaSymlink.stderr);
+  assert.deepEqual(JSON.parse(cliViaSymlink.stdout), accepted);
+  fs.unlinkSync(symlinkCli);
+  assert.throws(() => verifyBundle(root, "scratch\\agy-squad\\bundle.json"), /workspace-relative/);
 
   // Verify managed-run slot bundling, CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
   assert.throws(() => inspectHandoffs(root, {
@@ -134,6 +145,12 @@ try {
     assignments: [{ conversationId: "child-1", report: first }],
     handoffs: [{ sender: "child-1", message: `READY ${first} — line one\nline two` }]
   }), /one line within 500 UTF-8 bytes/);
+  assert.throws(() => inspectHandoffs(root, {
+    workspace: root,
+    assignments: [{ conversationId: "child-1", report: first }],
+    handoffs: [{ sender: "child-1", message: `NO_REPORT — line one\u2028line two` }]
+  }), /one line within 500 UTF-8 bytes/);
+  assert.throws(() => reportPath("alpha", -1), /positive integer/);
   const managedRoot = "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000";
   const mFirst = reportPath("alpha", 1, managedRoot);
   const mLead = reportPath("alpha", undefined, managedRoot);

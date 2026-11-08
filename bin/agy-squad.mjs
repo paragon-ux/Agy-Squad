@@ -91,13 +91,16 @@ function hasEvidence(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory() && hasEvidence(target)) return true;
-    if (entry.isFile() && entry.name === "report.md") return true;
+    if (entry.isFile() && entry.name === "report.md" && fs.readFileSync(target, "utf8").trim().length > 0) {
+      return true;
+    }
   }
   return false;
 }
 
 function requireBinary(name, label) {
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+  const dirs = new Set((process.env.PATH ?? "").split(path.delimiter).filter(Boolean));
+  for (const dir of dirs) {
     const candidate = path.join(dir, name);
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -141,10 +144,10 @@ async function runSession(options, task) {
     for (const [target, contents] of artifacts) {
       const dir = path.posix.dirname(target);
       if (!seenDirs.has(dir)) {
-        ensureDirectory(workspace, dir, created);
+        ensureDirectory(workspace, dir, created, seenDirs);
         seenDirs.add(dir);
       }
-      publish(workspace, target, Buffer.from(contents));
+      publish(workspace, target, Buffer.from(contents), true, seenDirs);
       published.push([path.join(workspace, target), contents]);
     }
     const settings = {

@@ -4,6 +4,9 @@ import path from "node:path";
 import { publish } from "./handoffs.mjs";
 
 function ensureDirectory(root, relative, created = [], verifiedDirs) {
+  if (typeof relative !== "string" || relative.includes("\\")) {
+    throw new Error(`Invalid workspace directory: ${relative}`);
+  }
   let directory = root;
   for (const part of relative.split("/")) {
     if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
@@ -46,8 +49,12 @@ function stagePlan(root, run, squads) {
   return {
     reportRoot,
     manifestPath,
-    prepare(slots) {
-      const verifiedDirs = new Set();
+    prepare(slots, { skipManifestPublish = false } = {}) {
+      const verifiedDirs = new Set([
+        path.join(root, "scratch"),
+        path.join(root, "scratch/agy-squad"),
+        directory
+      ]);
       for (const slot of slots) {
         ensureDirectory(root, path.posix.dirname(slot), undefined, verifiedDirs);
         try {
@@ -57,7 +64,9 @@ function stagePlan(root, run, squads) {
           if (error.code !== "ENOENT") throw error;
         }
       }
-      publish(root, manifestPath, contents);
+      if (!skipManifestPublish) {
+        publish(root, manifestPath, contents);
+      }
     }
   };
 }
