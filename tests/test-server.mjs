@@ -1,10 +1,14 @@
 // MCP stdio server smoke test: handshake, tool list, unknown tools, and exit when stdin closes.
 // Starts only this MCP server process, never an agent.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { handleRequest } from "../mcp/index.js";
+import { createRun } from "../mcp/run-state.mjs";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mcp/index.js");
 const proc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
@@ -48,6 +52,8 @@ console.log("Agy-Squad MCP server tests\n");
   assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad"]);
   const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
   assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
+  assert.equal(dispatch.inputSchema.properties.squadId.minLength, 1);
+  assert.equal(dispatch.inputSchema.properties.manifestPath.minLength, 1);
   console.log("✓ tools/list exposes only dispatch_squad, with no spawn options");
 }
 {
@@ -56,7 +62,44 @@ console.log("Agy-Squad MCP server tests\n");
   assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
   assert.equal(unknown.error.code, -32601);
-  console.log("✓ tools/call rejects direct mode and the retired subagent_brief tool");
+  for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }]) {
+    const err = await handleRequest(invalid);
+    assert.equal(err.error.code, -32600);
+  }
+  console.log("✓ tools/call rejects direct mode, retired subagent_brief, and malformed JSON-RPC requests");
+}
+{
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-server-managed-")));
+  try {
+    const run = createRun(tmp);
+    const active = spawnSync(process.execPath, [server], {
+      cwd: tmp,
+      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: run.relative },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
+      encoding: "utf8"
+    });
+    assert.equal(active.status, 0, active.stderr);
+    const listed = JSON.parse(active.stdout.trim()).result.tools[0];
+    assert.deepEqual(Object.keys(listed.inputSchema.properties).sort(), ["manifest", "manifestPath", "squadId"]);
+    assert.equal(listed.inputSchema.properties.manifest.properties.squads.minProperties, 1);
+    assert.equal(fs.readFileSync(path.join(tmp, run.relative, ".mcp-ready"), "utf8"), "ready\n");
+
+    const neighbor = spawnSync(process.execPath, [server], {
+      cwd: tmp,
+      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: "other-session" },
+      input: [
+        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dispatch_squad", arguments: { squadId: "all_l1" } } })
+      ].join("\n") + "\n",
+      encoding: "utf8"
+    });
+    const [neighborList, neighborCall] = neighbor.stdout.trim().split("\n").map(JSON.parse);
+    assert.deepEqual(neighborList.result.tools, []);
+    assert.equal(neighborCall.error.code, -32601);
+    console.log("✓ managed-run session gating, inline manifest schema, and .mcp-ready publication");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

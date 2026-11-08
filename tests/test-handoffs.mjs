@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+
+const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-handoffs-")));
 const squadId = "trial-a";
@@ -70,8 +74,13 @@ try {
   write("fixture.txt", "Changed after review");
   assert.throws(() => bundleReports(root, record), /Verified input changed/);
   write("fixture.txt", "ALPHA-é");
+  assert.throws(() => bundleReports(root, { ...record, verifiedFiles: ["fixture.txt"] }), /independent verification/);
+  assert.throws(() => bundleReports(root, { ...record, verifiedFiles: { ...record.verifiedFiles, [lead]: "0".repeat(64) } }), /final work inputs/);
 
+  const initialBundle = bundleReports(root, record);
+  write(lead, "PASS after independent inspection and recheck of fixture.txt.");
   const accepted = bundleReports(root, record);
+  assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
   assert.ok(exists(first) && exists(second));
   assert.throws(() => pruneReports(root, bundle), /accepted bundle digest/);
@@ -99,6 +108,9 @@ try {
   const archived = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
   assert.deepEqual(archived.reports.map(report => report.markdown), [firstEvidence, secondEvidence]);
   assert.ok(exists(lead) && exists("fixture.txt"));
+  const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
+  assert.equal(cliVerify.status, 0, cliVerify.stderr);
+  assert.deepEqual(JSON.parse(cliVerify.stdout), accepted);
   console.log("✓ Receipt reconciliation, changed evidence, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

@@ -77,6 +77,14 @@ try {
   }));
   rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /scopeFiles/);
   rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /children or specialists/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { alpha: { lead: { objective: "Valid", scopeFiles: ["src"] }, specialists: [] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /children or specialists/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { all_l1: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for lead compilation/);
 
   const externalManifest = path.join(testDir, "outside.json");
   fs.writeFileSync(externalManifest, JSON.stringify(manifest));

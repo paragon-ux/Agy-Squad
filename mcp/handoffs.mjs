@@ -96,7 +96,10 @@ function fingerprint(root, files) {
 }
 
 function verifyFiles(root, verifiedFiles) {
-  const files = Object.keys(verifiedFiles ?? {});
+  if (!verifiedFiles || typeof verifiedFiles !== "object" || Array.isArray(verifiedFiles)) {
+    throw new Error("Specify the final files used for independent verification.");
+  }
+  const files = Object.keys(verifiedFiles);
   for (const [file, hash] of Object.entries(fingerprint(root, files))) {
     if (hash !== verifiedFiles[file]) throw new Error(`Verified input changed: ${file}`);
   }
@@ -106,7 +109,7 @@ function bundlePath(squadId) {
   return reportPath(squadId).replace(/\.md$/, ".sources.json");
 }
 
-function publish(root, relative, contents) {
+function publish(root, relative, contents, replace = false) {
   const destination = workspacePath(root, relative);
   const temporary = `${destination}.${randomUUID()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
@@ -120,10 +123,15 @@ function publish(root, relative, contents) {
     try {
       fs.linkSync(temporary, destination);
     } catch (error) {
-      if (error.code !== "EEXIST" || !readFile(root, relative).equals(contents)) throw error;
+      if (error.code !== "EEXIST") throw error;
+      if (!readFile(root, relative).equals(contents)) {
+        if (!replace) throw error;
+        fs.renameSync(temporary, destination);
+        return;
+      }
     }
   } finally {
-    fs.unlinkSync(temporary);
+    fs.rmSync(temporary, { force: true });
   }
 }
 
@@ -150,19 +158,20 @@ function bundleReports(root, record) {
   if (assignments.some(({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1))) {
     throw new Error("Bundling requires a READY handoff from each recorded specialist in its compiled slot.");
   }
-  if (assignments.some(({ report }) => Object.hasOwn(verifiedFiles ?? {}, report))) {
+  const synthesisSlot = reportPath(squadId);
+  const relative = bundlePath(squadId);
+  if ([...assignments.map(({ report }) => report), synthesisSlot, relative].some(report => Object.hasOwn(verifiedFiles ?? {}, report))) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles);
-  const synthesis = sha256(readEvidence(root, reportPath(squadId)));
+  const synthesis = sha256(readEvidence(root, synthesisSlot));
   const reports = assignments.map(({ report }) => {
     const bytes = readEvidence(root, report);
     const markdown = bytes.toString("utf8");
     if (!Buffer.from(markdown).equals(bytes)) throw new Error(`Report must be UTF-8 Markdown: ${report}`);
     return { path: report, sha256: sha256(bytes), markdown };
   });
-  const relative = bundlePath(squadId);
-  publish(root, relative, Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n"));
+  publish(root, relative, Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n"), true);
   return verifyBundle(root, relative);
 }
 

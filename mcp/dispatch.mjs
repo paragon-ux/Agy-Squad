@@ -45,6 +45,9 @@ function manifestSquads(manifest) {
   if (!squads || typeof squads !== "object" || Array.isArray(squads) || Object.keys(squads).length === 0) {
     throw new Error("Manifest must define at least one squad.");
   }
+  if (Object.hasOwn(squads, "all_l1")) {
+    throw new Error("Squad ID 'all_l1' is reserved for lead compilation.");
+  }
   return squads;
 }
 
@@ -110,7 +113,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
         if (!lead || typeof lead !== "object" || Array.isArray(lead)) {
           throw new Error(`Lead for '${id}' must be an object.`);
         }
-        return { spec: { ...squad, ...lead }, id };
+        return { spec: lead, id };
       });
     } else {
       assignments = specialistAssignments(squads, squadId);
@@ -118,9 +121,9 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
     const build = ({ spec, id, number }) =>
       buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
     const Subagents = assignments.map(build);
+    const children = squadId === "all_l1" ? assignments.flatMap(({ id }) => specialistAssignments(squads, id)) : [];
+    for (const child of children) build(child);
     if (staged) {
-      const children = squadId === "all_l1" ? assignments.flatMap(({ id }) => specialistAssignments(squads, id)) : [];
-      for (const child of children) build(child);
       const slots = [...assignments, ...children].map(({ id, number }) => reportPath(id, number, staged.reportRoot));
       staged.prepare(slots);
     }

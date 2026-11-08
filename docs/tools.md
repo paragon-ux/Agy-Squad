@@ -6,6 +6,7 @@
 | --- | --- |
 | `squadId` | Required. Use `all_l1` for every squad lead or a squad ID for that squad's specialists. |
 | `manifestPath` | Optional. A relative or absolute path inside the configured workspace. Symlinks must also resolve inside the workspace. |
+| `manifest` | Managed runs only. An inline object with a `squads` map; mutually exclusive with `manifestPath`. |
 
 The server uses `AGY_SQUAD_WORKSPACE` from its launch environment or its working directory. For CLI registration, set the environment variable to the absolute path of the intended workspace. With no explicit `manifestPath`, the server looks for `task-01-manifest.json`, `swarm-manifest.json`, `.scratch/swarm-manifest.json`, and `suite-manifest.json`, in that order, and uses the first valid squad manifest.
 

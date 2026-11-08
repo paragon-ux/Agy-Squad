@@ -16,6 +16,20 @@ const SERVER_NAME = "agy-squad";
 const managedRun = process.env.AGY_SQUAD_RUN_DIR;
 // A neighboring CLI can discover the workspace plugin while this run is active.
 const activeRun = !managedRun || process.env.AGY_SQUAD_SESSION === managedRun;
+const agentSchema = {
+  type: "object",
+  properties: {
+    role: { type: "string", minLength: 1 },
+    objective: { type: "string", minLength: 1 },
+    scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    instructions: { type: "string" },
+    expectedDeliverable: { type: "string", minLength: 1 },
+    typeName: { type: "string", minLength: 1 },
+    model: { type: "string", minLength: 1 },
+    workspace: { type: "string", minLength: 1 }
+  },
+  required: ["objective", "scopeFiles"]
+};
 const TOOLS = [{
   name: "dispatch_squad",
   description: managedRun
@@ -24,16 +38,28 @@ const TOOLS = [{
   inputSchema: {
     type: "object",
     properties: {
-      squadId: { type: "string", description: "'all_l1' for leads, or the ID of one squad for its specialists." },
-      manifestPath: { type: "string", description: "Path to a manifest inside the workspace." },
+      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, or the ID of one squad for its specialists." },
+      manifestPath: { type: "string", minLength: 1, description: "Path to a manifest inside the workspace." },
       ...(managedRun ? {
         manifest: {
           type: "object",
-          description: "Inline plan with a squads object keyed by squad ID. Each squad has specialists and an optional lead. Provide this or manifestPath.",
+          description: "Inline plan with a squads object keyed by squad ID. Each squad has specialists and an optional lead. Provide exclusively this or manifestPath.",
           properties: {
-            squads: { type: "object", additionalProperties: { type: "object" } }
+            squads: {
+              type: "object",
+              minProperties: 1,
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  lead: agentSchema,
+                  specialists: { type: "array", minItems: 1, items: agentSchema },
+                  children: { type: "array", minItems: 1, items: agentSchema }
+                }
+              }
+            }
           },
-          required: ["squads"]
+          required: ["squads"],
+          additionalProperties: false
         }
       } : {})
     },
@@ -43,6 +69,10 @@ const TOOLS = [{
 }];
 
 async function handleRequest(request) {
+  if (!request || typeof request !== "object" || Array.isArray(request) || typeof request.method !== "string" || !request.method.trim()) {
+    const id = request && typeof request === "object" && !Array.isArray(request) && "id" in request ? request.id : null;
+    return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
+  }
   const { id, method, params } = request;
 
   // Notifications carry no request ID and must not produce a response.
@@ -85,7 +115,7 @@ if (isEntryPoint) {
 
   rl.on("line", async (line) => {
     if (!line || !line.trim()) return;
-    if (line.length > MAX_STDIO_PAYLOAD_BYTES) {
+    if (Buffer.byteLength(line, "utf8") > MAX_STDIO_PAYLOAD_BYTES) {
       process.stdout.write(JSON.stringify({
         jsonrpc: "2.0",
         id: null,
@@ -93,12 +123,24 @@ if (isEntryPoint) {
       }) + "\n");
       return;
     }
+    let parsed;
     try {
-      const resp = await handleRequest(JSON.parse(line));
+      parsed = JSON.parse(line);
+    } catch (err) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: `Parse error: ${err.message}` }
+      }) + "\n");
+      return;
+    }
+    try {
+      const resp = await handleRequest(parsed);
       if (resp) process.stdout.write(JSON.stringify(resp) + "\n");
       if (managedRun && resp?.result?.tools === TOOLS) {
         try {
-          publish(process.env.AGY_SQUAD_WORKSPACE, `${managedRun}/.mcp-ready`, Buffer.from("ready\n"));
+          const root = fs.realpathSync(process.env.AGY_SQUAD_WORKSPACE || process.cwd());
+          publish(root, `${managedRun}/.mcp-ready`, Buffer.from("ready\n"));
         } catch (error) {
           process.stderr.write(`Agy-Squad readiness signal failed: ${error.message}\n`);
         }
@@ -106,8 +148,8 @@ if (isEntryPoint) {
     } catch (err) {
       process.stdout.write(JSON.stringify({
         jsonrpc: "2.0",
-        id: null,
-        error: { code: -32700, message: `Parse error: ${err.message}` }
+        id: parsed && typeof parsed === "object" && "id" in parsed ? parsed.id : null,
+        error: { code: -32603, message: `Internal error: ${err.message}` }
       }) + "\n");
     }
   });

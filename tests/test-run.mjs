@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -73,12 +73,34 @@ try {
   assert.notEqual(slotOf(flat[0]), report);
   assert.ok(slotOf(flat[0]).startsWith(other.relative));
 
+  const concurrent = createRun(root);
+  const dispatchModule = fileURLToPath(new URL("../mcp/dispatch.mjs", import.meta.url));
+  const runChildDispatch = squadId => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--input-type=module", "-e",
+      `import { handleDispatchSquad } from ${JSON.stringify(dispatchModule)};
+       const res = handleDispatchSquad(${JSON.stringify({ squadId, manifest })}, ${JSON.stringify(root)}, ${JSON.stringify(concurrent.relative)});
+       if (res.isError) { console.error(res.content[0].text); process.exit(1); }
+       process.stdout.write(res.content[0].text);`
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => code === 0 ? resolve(JSON.parse(stdout).Subagents) : reject(new Error(stderr || `exit ${code}`)));
+  });
+  const [concurrentLexer, concurrentEmitter] = await Promise.all([runChildDispatch("lexer"), runChildDispatch("emitter")]);
+  assert.equal(concurrentLexer[0].Role, "Boundary Investigator");
+  assert.equal(concurrentEmitter[0].Role, "Output Investigator");
+
   fs.mkdirSync(path.join(root, ".agents/agents"), { recursive: true });
   fs.writeFileSync(path.join(root, ".agents/mcp_config.json"), '{"mcpServers":{}}\n');
   fs.writeFileSync(path.join(root, ".agents/agents/operator.md"), "operator profile\n");
   fs.writeFileSync(path.join(root, "plan.json"), JSON.stringify(manifest));
   // This executable captures the invocation and never starts the native CLI or a model.
   fs.writeFileSync(path.join(fakeBin, "agy"), `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const argv = process.argv.slice(2);
@@ -91,10 +113,15 @@ console.log("? for shortcuts " + name);
 let input = "";
 process.stdin.on("data", chunk => {
   input += chunk;
-  if (input.includes("/mcp") && !fs.existsSync(ready)) fs.writeFileSync(ready, "ready\\n");
+  if (input.includes("/mcp") && !fs.existsSync(ready)) {
+    spawnSync(registration.command, registration.args, {
+      env: { ...process.env, ...registration.env },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\\n"
+    });
+  }
   const prompt = input.match(/\\x1b\\[200~([\\s\\S]+?)\\x1b\\[201~/)?.[1];
   if (!prompt) return;
-  fs.writeFileSync(process.env.AGY_TEST_RECORD, JSON.stringify({ argv, profile, prompt, name, registration, cwd: process.cwd() }));
+  fs.writeFileSync(process.env.AGY_TEST_RECORD, JSON.stringify({ argv, profile, prompt, name, registration, cwd: process.cwd(), input }));
   process.exit(Number(process.env.AGY_TEST_STATUS || 0));
 });
 `, { mode: 0o700 });
@@ -114,19 +141,22 @@ process.stdin.on("data", chunk => {
   assert.equal(reviewed.cwd, root);
   assert.ok(reviewed.argv.includes("--sandbox"));
   assert.match(reviewed.prompt, /Find the smallest lexer regression/);
-  assert.doesNotMatch(reviewed.profile, /- (invoke_subagent|run_command|write_to_file)\b/);
+  assert.match(reviewed.profile, /- read_file\b/);
+  assert.doesNotMatch(reviewed.profile, /- (invoke_subagent|run_command|write_to_file|write_file|edit_file)\b/);
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
 
   const execution = launch(["--launch", "--manifest", "plan.json", "--squad", "all_l1", "--mode", "auto"]);
   assert.equal(execution.status, 0, execution.error?.message ?? execution.stderr);
   const executed = capture();
   assert.match(executed.profile, /- invoke_subagent\b/);
+  assert.match(executed.profile, /- (write_file|edit_file|manage_task)\b/);
   assert.match(executed.prompt, /"squadId":"all_l1","manifestPath":"scratch\/agy-squad\/run-.*\/plan-.*\/manifest\.json"/);
   assert.match(executed.prompt, /operator authorized delegation/);
   assert.ok(executed.argv.includes("auto"));
   const { registration } = executed;
   assert.equal(registration.env.AGY_SQUAD_WORKSPACE, root);
-  assert.ok(fs.readdirSync(path.join(root, registration.env.AGY_SQUAD_RUN_DIR)).some(x => x.startsWith("plan-")));
+  const [stagedPlan] = fs.readdirSync(path.join(root, registration.env.AGY_SQUAD_RUN_DIR)).filter(x => x.startsWith("plan-"));
+  assert.ok(stagedPlan);
   const settings = JSON.parse(executed.argv[executed.argv.indexOf("--settings") + 1]);
   assert.equal(settings.allowNonWorkspaceAccess, false);
   assert.deepEqual(settings.permissions.allow, [
@@ -134,8 +164,11 @@ process.stdin.on("data", chunk => {
     `mcp(${executed.name}_dispatch/dispatch_squad)`,
     `write_file(${path.join(root, registration.env.AGY_SQUAD_RUN_DIR)})`
   ]);
+  assert.ok(settings.permissions.deny.includes(
+    `write_file(${path.join(root, registration.env.AGY_SQUAD_RUN_DIR, stagedPlan, "manifest.json")})`
+  ));
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
-  const unsuccessful = launch(["--launch", "Find the lexer regression."], 7);
+  const unsuccessful = launch(["--launch", "--manifest", "plan.json", "--squad", "all_l1"], 7);
   assert.equal(unsuccessful.status, 7, unsuccessful.stderr);
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
   const failedRun = capture().registration.env.AGY_SQUAD_RUN_DIR;

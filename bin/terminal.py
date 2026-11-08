@@ -48,7 +48,7 @@ def run(ready_file, prompt, args):
     startup_failed = False
     try:
         while True:
-            sources, _, _ = select.select([master, stdin], [], [], None if submitted else 0.05)
+            sources, _, _ = select.select([master, stdin] if submitted else [master], [], [], None if submitted else 0.05)
             if master in sources:
                 try:
                     output = os.read(master, 65536)

@@ -45,9 +45,10 @@ function makeProfile(name, launch) {
     "---", `name: ${name}`, "description: Task-driven Agy-Squad session.",
     "mainAgent: true", "subagent: false", "inheritMcp: true", "inheritCustomizations: true",
     `commandExecutionPolicy: ${launch ? "sandbox" : "off"}`,
-    "tools:", "  - view_file", "  - search_web", "  - read_url_content",
-    ...(launch ? ["  - write_to_file", "  - replace_file_content", "  - send_message", "  - run_command",
-      "  - command_status", "  - invoke_subagent", "  - manage_subagents"] : []),
+    "tools:", "  - view_file", "  - read_file", "  - search_web", "  - read_url_content",
+    ...(launch ? ["  - write_to_file", "  - replace_file_content", "  - write_file", "  - edit_file",
+      "  - send_message", "  - run_command", "  - command_status", "  - manage_task",
+      "  - invoke_subagent", "  - manage_subagents"] : []),
     "---", "", "Follow the current assignment. Use the run-local dispatcher when your assignment authorizes delegation.", ""
   ].join("\n");
 }
@@ -86,6 +87,15 @@ function removeEmpty(directory) {
   }
 }
 
+function hasEvidence(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory() && hasEvidence(target)) return true;
+    if (entry.isFile() && entry.name === "report.md") return true;
+  }
+  return false;
+}
+
 async function runSession(options, task) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Open an interactive terminal to start a squad run.");
   const workspace = fs.realpathSync(options.workspace ?? process.cwd());
@@ -107,6 +117,7 @@ async function runSession(options, task) {
     [`.agents/agents/${name}.md`, makeProfile(name, options.launch)]
   ];
   const published = [];
+  let status = 1;
   try {
     if (dispatch) {
       const result = handleDispatchSquad(dispatch, workspace, run.relative);
@@ -123,7 +134,11 @@ async function runSession(options, task) {
       allowNonWorkspaceAccess: false,
       permissions: {
         allow: [`read_file(${workspace})`, `mcp(${serverName}/dispatch_squad)`, ...(options.launch ? [`write_file(${run.directory})`] : [])],
-        deny: [`write_file(${path.join(workspace, plugin)})`, `write_file(${published.at(-1)[0]})`]
+        deny: [
+          `write_file(${path.join(workspace, plugin)})`,
+          `write_file(${published.at(-1)[0]})`,
+          ...(dispatch ? [`write_file(${path.join(workspace, dispatch.manifestPath)})`] : [])
+        ]
       }
     };
     const args = ["--sandbox", "--settings", JSON.stringify(settings), "--agent", name];
@@ -131,8 +146,9 @@ async function runSession(options, task) {
       if (options[flag]) args.push(`--${flag}`, options[flag]);
     }
     console.log(`Agy-Squad run ${run.directory}`);
-    return await waitForSession(args, workspace, initialPrompt(serverName, task, dispatch, options.launch),
+    status = await waitForSession(args, workspace, initialPrompt(serverName, task, dispatch, options.launch),
       path.join(run.directory, ".mcp-ready"));
+    return status;
   } finally {
     for (const [file, contents] of published.reverse()) {
       const entry = fs.lstatSync(file, { throwIfNoEntry: false });
@@ -144,6 +160,9 @@ async function runSession(options, task) {
       }
     }
     fs.rmSync(path.join(run.directory, ".mcp-ready"), { force: true });
+    if (status !== 0 && dispatch && fs.existsSync(run.directory) && !hasEvidence(run.directory)) {
+      fs.rmSync(path.join(workspace, path.posix.dirname(dispatch.manifestPath)), { recursive: true, force: true });
+    }
     removeEmpty(run.directory);
     for (const directory of created.reverse()) removeEmpty(directory);
     if (fs.existsSync(run.directory)) console.log(`Run evidence: ${run.directory}`);
