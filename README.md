@@ -8,7 +8,7 @@ Task-driven subagent orchestration for the Antigravity CLI on WSL.
 - [WSL CLI verification and live trial](docs/plans/wsl-cli-verification.md)
 - [Decisions](docs/plans/LEDGER.md)
 
-Agy-Context-Saver is the companion package for RTK command rewriting, lifecycle governance, and transcript tools.
+Agy-Context-Saver (`v1.8.1+`) is the companion package for RTK command rewriting, Reactive Wakeup lifecycle governance, and transcript forensics (`L31`). Before running live cohorts on a new WSL host, verify `Agy-Context-Saver` reports `HEALTHY & ACTIVE` (or invoke its `sync_installation` MCP tool to provision the pinned `rtk` binary); see [Companion integration](docs/index.md#companion-integration-agy-context-saver).
 
 ## Run a task on WSL
 
@@ -27,11 +27,10 @@ The launcher creates a temporary workspace plugin and agent profile. It uses the
 
 ## Compare orchestration
 
-| Approach | Work allocation | Handoff and verification |
+| Approach | Work allocation | Handoff, governance, and verification |
 | --- | --- | --- |
-| Antigravity Teamwork, the control | Scoping interview, approved prompt, dedicated project directory, and built-in orchestration and verification roles | Structured milestones and integrity checks within Teamwork's selected mode |
-| Agy-Context-Saver 1.7.0 | One batch of task-specific subagent briefs | Summary and report pointer from each specialist |
-| Agy-Squad | One command in the caller's workspace. One compile per cohort, with a flat stage or leads chosen for the task | One observation and evidence pointer per assignment. Each parent checks the claims that determine the result. |
+| Antigravity Teamwork, the control | Scoping interview (or `[skip-interview]`), dedicated orchestration wrapper, and built-in planning and verification roles | Single top-level delegation with structured milestones and internal integrity checks |
+| Agy-Squad + Agy-Context-Saver (`v1.8.1+`) | Direct workspace compile (`dispatch_squad`), choosing a flat specialist stage or domain leads proportional to the task | `<= 500` UTF-8 byte Pointer-Over-Wire receipt per assignment, `RTK` + Reactive Wakeup child governance, and SHA-256 `report.sources.json` verification (`mcp/handoffs.mjs`) |
 
 Compare Teamwork and Agy-Squad on equivalent starting inputs and the same external acceptance checks. Record time to first delegation, approval prompts and wait time, parent coordination calls, time to independently verified results, and teardown effort separately. [Antigravity Teamwork](https://antigravity.google/docs/teamwork/)
 

@@ -142,15 +142,19 @@ process.stdin.on("data", chunk => {
   assert.equal(reviewed.cwd, root);
   assert.ok(reviewed.argv.includes("--sandbox"));
   assert.match(reviewed.prompt, /Find the smallest lexer regression/);
+  assert.match(reviewed.profile, /^inheritCustomizations: false$/m);
   assert.match(reviewed.profile, /- read_file\b/);
-  assert.doesNotMatch(reviewed.profile, /- (invoke_subagent|run_command|write_to_file|write_file|edit_file)\b/);
+  assert.doesNotMatch(reviewed.profile, /- (invoke_subagent|run_command|schedule|call_mcp_tool|write_to_file|write_file|edit_file)\b/);
   assert.deepEqual(fs.readdirSync(profileDir), ["operator.md"]);
   assert.equal(fs.existsSync(path.join(root, reviewed.registration.env.AGY_SQUAD_RUN_DIR)), false);
 
   const execution = launch(["--launch", "--manifest", "plan.json", "--squad", "all_l1", "--mode", "auto"]);
   assert.equal(execution.status, 0, execution.error?.message ?? execution.stderr);
   const executed = capture();
+  assert.match(executed.profile, /^inheritCustomizations: true$/m);
   assert.match(executed.profile, /- invoke_subagent\b/);
+  assert.match(executed.profile, /- schedule\b/);
+  assert.match(executed.profile, /- call_mcp_tool\b/);
   assert.match(executed.profile, /- (write_file|edit_file|manage_task)\b/);
   assert.match(executed.prompt, /"squadId":"all_l1","manifestPath":"scratch\/agy-squad\/run-.*\/plan-.*\/manifest\.json"/);
   assert.match(executed.prompt, /operator authorized delegation/);

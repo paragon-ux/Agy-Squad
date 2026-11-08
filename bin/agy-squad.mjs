@@ -43,12 +43,12 @@ function initialPrompt(name, task, dispatch, launch) {
 function makeProfile(name, launch) {
   return [
     "---", `name: ${name}`, "description: Task-driven Agy-Squad session.",
-    "mainAgent: true", "subagent: false", "inheritMcp: true", "inheritCustomizations: true",
+    "mainAgent: true", "subagent: false", "inheritMcp: true", `inheritCustomizations: ${Boolean(launch)}`,
     `commandExecutionPolicy: ${launch ? "sandbox" : "off"}`,
     "tools:", "  - view_file", "  - read_file", "  - search_web", "  - read_url_content",
     ...(launch ? ["  - write_to_file", "  - replace_file_content", "  - write_file", "  - edit_file",
-      "  - send_message", "  - run_command", "  - command_status", "  - manage_task",
-      "  - invoke_subagent", "  - manage_subagents"] : []),
+      "  - send_message", "  - run_command", "  - command_status", "  - manage_task", "  - schedule",
+      "  - call_mcp_tool", "  - invoke_subagent", "  - manage_subagents"] : []),
     "---", "", "Follow the current assignment. Use the run-local dispatcher when your assignment authorizes delegation.", ""
   ].join("\n");
 }

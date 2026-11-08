@@ -45,3 +45,21 @@ The earlier supervised trial passed on November 7, 2026, under the original hand
 The reports are under `scratch/agy-squad/squad-pow_trial/` in the disposable trial workspace.
 
 On November 8, 2026, an operator-authorized 1-specialist live subagent check (`squadId: "live_pow_r2"`, child conversation `1e211e57-a046-4b5a-8fdf-46a2dcd8a083`) verified the revised report-slot hierarchy and `mcp/handoffs.mjs` CLI lifecycle end to end. The specialist (`TypeName: "self"`, `Workspace: "inherit"`) wrote `scratch/agy-squad/squad-live_pow_r2/specialist-1/report.md` (`4,897` bytes, SHA-256 `55ee7af4...`) and sent a single-line `READY` receipt (`272` UTF-8 bytes) via `send_message`, waking the parent via Reactive Wakeup. After independent verification (`fingerprint` on `mcp/briefs.mjs` and `mcp/handoffs.mjs`) and writing `scratch/agy-squad/squad-live_pow_r2/lead/report.md` (`Verdict: PASS`, `449` bytes), `node mcp/handoffs.mjs` passed `inspect`, `bundle` (`scratch/agy-squad/squad-live_pow_r2/lead/report.sources.json`, SHA-256 `9782972e...`), `verify`, and `prune`.
+
+## Controlled head-to-head benchmark vs. Antigravity `/teamwork`
+
+On November 8, 2026, a blinded, sequential A/B benchmark compared **`Agy-Squad` + `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`)** against **Antigravity `/teamwork` (`TypeName: "teamwork"`, `[skip-interview]`)** on an identical 2-domain (`gateway/` + `worker/` + `config.json`) event-relay fixture containing `6` planted `P1`/`P2` security, state/clock drift, data-loss, retry, and cross-domain contract defects:
+
+| Metric | `Agy-Squad` + `Agy-Context-Saver` (`ab_audit`) | Antigravity `/teamwork` (`[skip-interview]` Control) | Delta (`Agy-Squad` vs. `/teamwork`) |
+| --- | ---: | ---: | --- |
+| **Planted defect catch rate** | **`6 / 6` (`100%`)** | **`6 / 6` (`100%`)** | Parity on recall (`18` vs. `25` total findings) |
+| **Active execution wall-clock time** | **`6m 15s` (`375s`)** | **`26m 19s` (`1,579s`)** | **`4.2x` faster (`-76.2%` wall-clock time)** |
+| **Time to first specialist delegation** | **`59s`** (`8.5 ms` compile) | **`91s`** (internal startup phase) | **`1.5x` faster initial delegation** |
+| **Total subagents spawned** | **`3`** (`1` Lead + `2` Specialists) | **`8`** (wrapper, orchestrator, 3 explorers, writer, reviewer, auditor) | **`2.7x` fewer subagents** |
+| **Total transcript steps (`check_context_health`)** | **`64` steps** (`32 + 19 + 13`) | **`645` steps** (`66..129` across `8` agents) | **`10.1x` fewer steps (`-90.1%`)** |
+| **Total assistant turns** | **`26` turns** (`11 + 9 + 6`) | **`321` turns** (`25..63` across `8` agents) | **`12.3x` fewer LLM turns (`-91.9%`)** |
+| **Total tool calls** | **`32` calls** (`17 + 9 + 6`) | **`302` calls** (`24..57` across `8` agents) | **`9.4x` fewer tool calls (`-89.4%`)** |
+| **Aggregate raw transcript footprint** | **`148.2 KB`** (`78.3 + 38.3 + 31.6 KB`) | **`817.4 KB`** (`59.0..186.2 KB` across `8` agents) | **`5.5x` smaller (`-81.9%` transcript bytes)** |
+| **Parent wakeups & injected bytes** | **`1` wakeup / `249 B`** (`READY` receipt) | **`5` wakeups / `4,940 B`** (`4` Sentinel updates + final summary) | **`19.8x` fewer parent context bytes (`-95.0%`)** |
+| **Verification mechanism** | Deterministic `handoffs.mjs verify` (`~20 ms`, SHA-256 `418d7ccb...`) | `2` LLM verifier subagents (`reviewer_1` + `auditor_1`, `~8m`, `218 KB`) | Zero-token cryptographic verification |
+| **Post-run workspace hygiene** | **`0` untracked files** (`prune` + `--teardown`) | **`41` untracked files (`207.9 KB`)** left in `.agents/teamwork/` | Clean working tree (`L41`) |
