@@ -1,7 +1,7 @@
 [project]
 site_url = "https://paragon-ux.github.io/agy-squad/"
 site_name = "Agy-Squad Documentation"
-site_description = "Sandboxed subagent squads for Google Antigravity on Windows"
+site_description = "Staged subagent dispatch for the Antigravity CLI on WSL"
 site_author = "paragon-ux"
 copyright = "Copyright &copy; 2026 paragon-ux. Released under the MIT License."
 
@@ -12,7 +12,7 @@ nav = [
   { "Overview" = "index.md" },
   { "Tools" = "tools.md" },
   { "Stopping Agents" = "stopping-agents.md" },
-  { "Sandbox Design" = "plans/docker-sandbox-plan.md" },
+  { "WSL CLI Verification" = "plans/wsl-cli-verification.md" },
   { "Decision Ledger" = "plans/LEDGER.md" },
 ]
 

@@ -1,15 +1,10 @@
 #!/usr/bin/env node
-// Agy-Squad MCP server (stdio JSON-RPC): subagent_brief and dispatch_squad.
-//
-// Not installable yet. Until the Docker sandbox and the spawn gate exist (docs/plans, P1-P3),
-// payloads from this server would start unsandboxed host subagents, so nothing registers it
-// with Antigravity. Run it only from the tests.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { SERVER_NAME, handleSubagentBrief } from "./briefs.mjs";
 import { handleDispatchSquad } from "./dispatch.mjs";
+import { publish } from "./handoffs.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
@@ -17,72 +12,41 @@ const isEntryPoint = Boolean(process.argv[1] && realOrSelf(process.argv[1]) === 
 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
-const SPEC_PROPERTIES = {
-  role: { type: "string", description: "2-5 word role description." },
-  objective: { type: "string", description: "The core objective for this subagent." },
-  instructions: { type: "string", description: "Optional step-by-step instructions." },
-  scopeFiles: { type: "array", items: { type: "string" }, description: "Mandatory files/directories this subagent may inspect/edit." },
-  expectedDeliverable: { type: "string", description: "Expected deliverable format." },
-  typeName: { type: "string", description: "Subagent type name ('self', 'research', or a custom type)." },
-  model: { type: "string", enum: ["inherit", "flash_lite", "flash", "pro"], description: "Model tier." },
-  workspace: { type: "string", enum: ["inherit", "branch", "share"], description: "Workspace isolation." }
-};
-
-const CHILDREN_SCHEMA = {
-  type: "array",
-  description: "For tier='L1_lead' only: L2_leaf subagent specifications pre-compiled into the L1 Squad Lead's prompt.",
-  items: { type: "object", properties: SPEC_PROPERTIES, required: ["objective", "scopeFiles"] }
-};
-
-const TOOLS = [
-  {
-    name: "subagent_brief",
-    description: "Generates scope-isolated, structural prompts and ready-to-use invoke_subagent JSON payloads for single subagents or 2-layer (L1 Squad Lead -> L2 Leaf) hierarchies. Pre-compiles L2 payloads directly inside L1 briefs to eliminate multi-hop prompt degradation.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...SPEC_PROPERTIES,
-        objective: { type: "string", description: "The core research or execution objective (mandatory for single subagent)." },
-        tier: { type: "string", enum: ["L1_lead", "L2_leaf"], description: "Hierarchy layer: 'L1_lead' (Squad Lead that delegates pre-compiled children) or 'L2_leaf' (terminal worker, default)." },
-        children: CHILDREN_SCHEMA,
-        subagents: {
-          type: "array",
-          description: "Optional array of subagent configurations (L1 leads or L2 leaves) to formulate multiple subagents at once.",
-          items: {
-            type: "object",
-            properties: {
-              ...SPEC_PROPERTIES,
-              tier: { type: "string", enum: ["L1_lead", "L2_leaf"] },
-              children: CHILDREN_SCHEMA
-            },
-            required: ["objective", "scopeFiles"]
-          }
+const SERVER_NAME = "agy-squad";
+const managedRun = process.env.AGY_SQUAD_RUN_DIR;
+// A neighboring CLI can discover the workspace plugin while this run is active.
+const activeRun = !managedRun || process.env.AGY_SQUAD_SESSION === managedRun;
+const TOOLS = [{
+  name: "dispatch_squad",
+  description: managedRun
+    ? "Prepare one stage from a supplied task plan or workspace manifest and return its native Subagents payload. Antigravity performs launches."
+    : "Compile leads (all_l1) or one squad's specialists from a workspace manifest into a native Subagents payload.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      squadId: { type: "string", description: "'all_l1' for leads, or the ID of one squad for its specialists." },
+      manifestPath: { type: "string", description: "Path to a manifest inside the workspace." },
+      ...(managedRun ? {
+        manifest: {
+          type: "object",
+          description: "Inline plan with a squads object keyed by squad ID. Each squad has specialists and an optional lead. Provide this or manifestPath.",
+          properties: {
+            squads: { type: "object", additionalProperties: { type: "object" } }
+          },
+          required: ["squads"]
         }
-      }
-    }
-  },
-  {
-    name: "dispatch_squad",
-    description: "Staged squad dispatcher. Reads a team topology from a squad manifest and returns a ready-to-use invoke_subagent payload, preserving native manage_subagents and Reactive Wakeup. Stage 1 ('all_l1') compiles only the L1 Squad Leads; Stage 2 (a squad ID) compiles that squad's L2 leaves.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        squadId: {
-          type: "string",
-          description: "Stage target: 'all_l1' (Stage 1: L1 Squad Leads only) or a squad ID like 'squad_alpha' (Stage 2: that squad's L2 leaves)."
-        },
-        manifestPath: {
-          type: "string",
-          description: "Optional path to the manifest. Auto-discovers '<workspace>/swarm-manifest.json' or '<workspace>/suite-manifest.json' if omitted."
-        }
-      },
-      required: ["squadId"]
-    }
+      } : {})
+    },
+    required: ["squadId"],
+    additionalProperties: false
   }
-];
+}];
 
 async function handleRequest(request) {
   const { id, method, params } = request;
+
+  // Notifications carry no request ID and must not produce a response.
+  if (id === undefined) return null;
 
   if (method === "initialize") {
     return {
@@ -96,25 +60,20 @@ async function handleRequest(request) {
     };
   }
 
-  if (method === "notifications/initialized") {
-    return null;
+  if (method === "ping") {
+    return { jsonrpc: "2.0", id, result: {} };
   }
 
   if (method === "tools/list") {
-    return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
+    return { jsonrpc: "2.0", id, result: { tools: activeRun ? TOOLS : [] } };
   }
 
   if (method === "tools/call") {
     const { name, arguments: args = {} } = params || {};
-    let toolResult;
-    if (name === "subagent_brief") {
-      toolResult = handleSubagentBrief(args);
-    } else if (name === "dispatch_squad") {
-      toolResult = handleDispatchSquad(args);
-    } else {
+    if (!activeRun || name !== "dispatch_squad") {
       return { jsonrpc: "2.0", id, error: { code: -32601, message: `Tool not found: ${name}` } };
     }
-    return { jsonrpc: "2.0", id, result: toolResult };
+    return { jsonrpc: "2.0", id, result: handleDispatchSquad(args, undefined, managedRun) };
   }
 
   return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
@@ -137,6 +96,13 @@ if (isEntryPoint) {
     try {
       const resp = await handleRequest(JSON.parse(line));
       if (resp) process.stdout.write(JSON.stringify(resp) + "\n");
+      if (managedRun && resp?.result?.tools === TOOLS) {
+        try {
+          publish(process.env.AGY_SQUAD_WORKSPACE, `${managedRun}/.mcp-ready`, Buffer.from("ready\n"));
+        } catch (error) {
+          process.stderr.write(`Agy-Squad readiness signal failed: ${error.message}\n`);
+        }
+      }
     } catch (err) {
       process.stdout.write(JSON.stringify({
         jsonrpc: "2.0",

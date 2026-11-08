@@ -1,174 +1,76 @@
-// Subagent briefs: scope-isolated prompts and ready-to-use invoke_subagent payloads,
-// for single subagents or 2-layer (L1 Squad Lead -> L2 Leaf) hierarchies.
-//
-// Moved from Agy-Context-Saver (2026-10-15). Payload mode only: this module builds text and
-// JSON, it never spawns an agent. Spawning stays with Antigravity's native invoke_subagent.
+import { messageLimit, reportPath } from "./handoffs.mjs";
 
-export const SERVER_NAME = "agy-squad";
+const superviseCohort = [
+  "Before launch, record neutral acceptance criteria, what evidence would show useful progress, the operator, the shared workspace, each exact unused report slot, and an evidence checkpoint. Default to 10 minutes from cohort launch. Agree a longer interval for work that needs it. Apply a resource ceiling only if the operator explicitly sets one.",
+  "Use the shared workspace for this workflow. Pass each compiled brief verbatim to one native invoke_subagent call. Record the native conversation ID and workspace from each launch receipt against the assigned slot. Treat an unexpected workspace as a blocker. Use a fresh squad ID and report slots for any retry.",
+  "Yield for Reactive Wakeup after launching. On each wake, reconcile READY, PARTIAL, and NO_REPORT messages against the recorded sender and slot. Accept one handoff per assignment and ignore exact duplicates. Record conflicts, missing reports, and mismatched slots as unresolved. Avoid acknowledgment messages that wake idle children.",
+  "At the evidence checkpoint, the operator checks /agents even if nobody has reported. Distinguish approval waits, progress on scoped work, and repeated work with unchanged results. The operator may extend useful work or stop the affected agents. An active parent may stop only its own recorded children. Record agent termination and any command cleanup separately.",
+  "Once relevant writers and their commands finish or stop, independently check the claims that decide the outcome against the final artifacts or primary sources. Record the versions or hashes checked and recheck changed inputs. Base PASS on independent checks. Keep conflicting observations in the synthesis. Use FAIL when a required check fails and BLOCKED when required evidence or access is missing."
+].join("\n");
 
-function buildSubagentSpecObject(spec = {}, forcedTier = null) {
-  const children = Array.isArray(spec.children || spec.Children) ? (spec.children || spec.Children) : [];
-  const tier = forcedTier || spec.tier || spec.Tier || (children.length > 0 ? "L1_lead" : "L2_leaf");
-  const role = spec.role || spec.Role || (tier === "L1_lead" ? "L1 Squad Lead Orchestrator" : "Scope-Isolated Deep Research Subagent");
-  const objective = (spec.objective || spec.Objective || "").trim();
-  const instructions = spec.instructions || spec.Instructions || "";
-  const rawScope = spec.scopeFiles || spec.ScopeFiles || [];
-  const scopeFiles = Array.isArray(rawScope) ? rawScope.map(s => String(s).trim()).filter(Boolean) : [];
-  const expectedDeliverable = spec.expectedDeliverable || spec.ExpectedDeliverable || "Synthesized factual findings";
+const managedCohort = [
+  "Before launch, state the acceptance checks and keep concurrent edits disjoint. Match native launch IDs to the assigned slots. Use fresh squad IDs for retries.",
+  "Yield after launch. Reconcile handoffs by sender and slot, ignore exact duplicates, and avoid routine replies. If progress stops, distinguish approval waits from repeated work and escalate only what needs the operator.",
+  "After relevant writers finish, independently verify the evidence that decides the outcome. Record what was checked and its revision or hashes. Recheck changed inputs and keep gaps or contradictory evidence in the synthesis."
+].join("\n");
 
-  // L1 Squad Leads need subagent tools ('self'); L2 leaves default to 'research' (read-only, no subagent tools).
-  const defaultTypeName = tier === "L1_lead" ? "self" : "research";
-  const typeName = spec.typeName || spec.TypeName || defaultTypeName;
-  const model = spec.model || spec.Model || "inherit";
-  const workspace = spec.workspace || spec.Workspace || "inherit";
-
-  if (!objective) {
-    throw new Error(`Subagent '${role}' is missing a required 'objective'.`);
+function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, reportRoot) {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+    throw new Error(`Invalid agent in squad '${squadId}'.`);
   }
-  if (scopeFiles.length === 0) {
-    throw new Error(`Subagent '${role}' is missing required 'scopeFiles'. Explicit file/directory boundaries are mandatory to prevent out-of-scope directory crawling.`);
+  const isLead = specialistNumber === undefined;
+  const role = spec.role ?? spec.Role ?? (isLead ? "Squad Lead" : "Specialist");
+  const objective = spec.objective ?? spec.Objective;
+  const scope = spec.scopeFiles ?? spec.ScopeFiles;
+  if (typeof objective !== "string" || !objective.trim()) {
+    throw new Error(`Agent '${role}' requires an objective.`);
   }
-
-  // Pre-compile L2 children into an L1 Squad Lead's prompt
-  let compiledChildrenPayload = null;
-  if (tier === "L1_lead" && children.length > 0) {
-    const childSubagents = children.map(childSpec => buildSubagentSpecObject(childSpec, "L2_leaf"));
-    compiledChildrenPayload = JSON.stringify({ Subagents: childSubagents }, null, 2);
+  if (!Array.isArray(scope) || !scope.length || scope.some(file => typeof file !== "string" || !file.trim())) {
+    throw new Error(`Agent '${role}' requires nonempty scopeFiles.`);
   }
 
-  const promptText = formatSingleBrief({
-    role,
-    tier,
-    objective,
-    instructions,
-    scopeFiles,
-    expectedDeliverable,
-    compiledChildrenPayload,
-    squadId: spec.squadId || null
-  });
+  const artifact = reportPath(squadId, specialistNumber, reportRoot);
+  const instructions = spec.instructions ?? spec.Instructions;
+  const deliverable = spec.expectedDeliverable ?? spec.ExpectedDeliverable ?? "Factual findings with file and line references.";
+  const payload = {
+    TypeName: spec.typeName ?? spec.TypeName ?? (isLead || reportRoot ? "self" : "research"),
+    Role: role,
+    Model: spec.model ?? spec.Model ?? "inherit",
+    Workspace: spec.workspace ?? spec.Workspace ?? "inherit"
+  };
+  if (Object.values(payload).some(value => typeof value !== "string" || !value.trim()) ||
+      typeof deliverable !== "string" || (instructions !== undefined && typeof instructions !== "string")) {
+    throw new Error(`Agent '${role}' has invalid brief or payload fields.`);
+  }
+  if (reportRoot && payload.Workspace !== "inherit") {
+    throw new Error(`Managed assignment '${role}' needs Workspace 'inherit' so its report slot is shared.`);
+  }
 
   return {
-    TypeName: typeName,
-    Role: role,
-    Model: model,
-    Workspace: workspace,
-    Prompt: promptText
+    ...payload,
+    Prompt: [
+      `Role: ${role}`,
+      `Objective: ${objective.trim()}`,
+      "Work within these files or directories:",
+      ...scope.map(file => `- ${file.trim()}`),
+      ...(instructions ? [`Instructions: ${instructions}`] : []),
+      `Deliverable: ${deliverable}`,
+      `Report slot: ${artifact}`,
+      ...(reportRoot ? [
+        "Write one Markdown report in the assigned slot. For each material observation include the source location and excerpt, or the command, inputs, exit code, and relevant output. Keep unresolved blockers.",
+        `Send one single-line message within ${messageLimit} UTF-8 bytes. Use READY <report slot> — <finding and its implication>, PARTIAL <report slot> — <finding and blocker>, or NO_REPORT — <reason>. Then end your turn.`,
+        isLead
+          ? `This lead assignment authorizes the listed specialists. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch the returned specialists verbatim through the native tool, and yield.\n${managedCohort}\nWrite one synthesis with your own PASS, FAIL, or BLOCKED verdict. Keep routine coordination inside your squad.`
+          : "Carry out your assignment directly. Retry when a changed input or a different diagnostic can advance the work. If no useful next step remains, save partial evidence and hand it off."
+      ] : [
+      "Write one Markdown evidence report in the shared workspace, using your exact slot. If the slot belongs to an earlier assignment, report the conflict and request a fresh assignment. For each material finding, give the actual observation with the command, working directory, relevant inputs, exit code, and relevant output, or the exact source location and observed excerpt. Preserve contradictory results and identify missing evidence.",
+      `Pointer-Over-Wire requires one single-line native send_message handoff within ${messageLimit} UTF-8 bytes. Use READY ${artifact} — <concrete observation> for a report ready for review, PARTIAL ${artifact} — <observation and blocker> for partial evidence, or NO_REPORT — <reason> if no report can be written. Confirm the report is readable before sending its pointer. End the turn after sending.`,
+      isLead
+        ? `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`
+        : "Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic. If an operation keeps producing the same result under the same conditions, change approach or report partial evidence and the blocker. On longer assignments, save new evidence and what remains in the same report as you reach useful milestones."
+      ])
+    ].join("\n")
   };
 }
 
-function formatSingleBrief({
-  role = "Scope-Isolated Deep Research Subagent",
-  tier = "L2_leaf",
-  objective = "",
-  instructions = "",
-  scopeFiles = [],
-  expectedDeliverable = "Synthesized factual findings",
-  compiledChildrenPayload = null,
-  squadId = null
-} = {}) {
-  const scopeStr = scopeFiles && scopeFiles.length
-    ? `\n\nTarget files (STRICT CONTAINMENT BOUNDARY):\n${scopeFiles.map(f => `- ${f}`).join("\n")}`
-    : "";
-  const instrStr = instructions && instructions.trim() ? `\n\nSPECIFIC INSTRUCTIONS:\n${instructions.trim()}` : "";
-  const hasBrainUuidPath = /[/\\]\.gemini[/\\]antigravity[/\\]brain[/\\][0-9a-f-]{36}/i.test(`${objective}\n${instructions}\n${expectedDeliverable}`);
-  const brainPathWarning = hasBrainUuidPath
-    ? `\n\n⚠️ ARTIFACT DIRECTORY WRITE GUARD: Any 'brain/<uuid>/' path referenced above belongs to another conversation. You may READ from it via 'view_file', but when calling 'write_to_file' or 'replace_file_content', you MUST either write to workspace '<workspace>/scratch/...' (OMIT ArtifactMetadata) or substitute YOUR OWN Artifact Directory Path from <user_information> (INCLUDE ArtifactMetadata).`
-    : "";
-
-  let tierSection;
-  if (tier !== "L1_lead") {
-    tierSection = [
-      `7. Codebase Intelligence & Containment:`,
-      `   - Use 'waymark-engine' ('waymark_ask') for symbol/AST search rather than crawling filesystems.`,
-      `   - Perform all reads and edits strictly within your assigned Target files or '<workspace>/scratch/'.`
-    ].join("\n");
-  } else if (compiledChildrenPayload) {
-    tierSection = [
-      `7. L1 Squad Lead Delegation Mandate:`,
-      `   - You lead this squad and coordinate L2 leaf specialists.`,
-      `   - Dispatch your L2 specialists by invoking 'invoke_subagent' with this pre-compiled payload:\n\`\`\`json\n${compiledChildrenPayload}\n\`\`\``,
-      `   - After dispatching, conclude your turn immediately and wait for Reactive Wakeup when their deliverables arrive.`
-    ].join("\n");
-  } else if (squadId) {
-    tierSection = [
-      `7. L1 Squad Lead Delegation Mandate:`,
-      `   - You lead this squad and coordinate L2 leaf specialists.`,
-      `   - Retrieve your pre-compiled L2 specialists payload by calling MCP tool 'dispatch_squad' with squadId='${squadId}'.`,
-      `   - Pass the resulting Subagents array to 'invoke_subagent' byte-for-byte.`,
-      `   - After dispatching, conclude your turn immediately and wait for Reactive Wakeup when their deliverables arrive.`
-    ].join("\n");
-  } else {
-    tierSection = [
-      `7. L1 Squad Lead Delegation Mandate:`,
-      `   - You lead this squad and coordinate L2 leaf specialists.`,
-      `   - When delegating tasks to L2 specialists, formulate exact file boundaries using 'mcp:${SERVER_NAME}:subagent_brief' (tier='L2_leaf') before calling 'invoke_subagent'.`,
-      `   - After dispatching, conclude your turn immediately and wait for Reactive Wakeup.`
-    ].join("\n");
-  }
-
-  return [
-    `ROLE: ${role}`,
-    `TIER: ${tier}`,
-    `OBJECTIVE: ${objective}${scopeStr}${instrStr}${brainPathWarning}`,
-    ``,
-    `CRITICAL CONTEXT GOVERNANCE INSTRUCTIONS (POINTER-OVER-WIRE):`,
-    `1. Isolated Workspace & Bounded File Slices: Do all exploration inside your Target files list. Prefer 'view_file' with bounded slices (StartLine and EndLine, max 150 lines) over 'rtk read' so line numbers are preserved and terminal buffers never truncate file headers.`,
-    `2. Pointer-Over-Wire (POW) Protocol: In-band messaging channels (send_message) have strict transport payload limits (~16-20 KB). If your findings or deliverable exceed 1 KB:`,
-    `   a. Write the full comprehensive deliverable using 'write_to_file' following Antigravity's strict path rules:`,
-    `      - Option A (Workspace 'scratch/' — Recommended): Set TargetFile to '<workspace>/scratch/<task>_findings.md' and OMIT ArtifactMetadata completely (passing ArtifactMetadata on a workspace path throws "files must be written to the correct artifact directory").`,
-    `      - Option B (Your Own Brain 'scratch/'): Set TargetFile to '<your-Artifact-Directory-Path>/scratch/<task>_findings.md' using the exact Artifact Directory Path from YOUR <user_information> block (NEVER a parent's brain/<other-uuid>/ path) and INCLUDE ArtifactMetadata: { Summary: "...", UserFacing: false, RequestFeedback: false }.`,
-    `   b. In 'send_message', transmit ONLY:`,
-    `      - Executive Summary (3-5 high-signal sentences)`,
-    `      - Verdict / Scoreboard Table`,
-    `      - Clickable File Link: [Full Deliverable](file:///absolute/path/to/findings.md)`,
-    `3. Fast Turn Termination: Once 'send_message' is dispatched, stop calling tools and conclude your turn immediately so the parent agent wakes up without latency.`,
-    `4. Format: ${expectedDeliverable}`,
-    `5. Citation Mandate: Keep your final response concise, structured, and cite exact file:line references.`,
-    `6. Write Scope: You may edit only files inside your Target files (assumed disjoint from sibling subagents) or '<workspace>/scratch/'. If a tool or the environment fails, report it to the parent via 'send_message' and stop; do not work around it.`,
-    tierSection
-  ].join("\n");
-}
-
-function handleSubagentBrief(args = {}) {
-  let specs = [];
-  if (Array.isArray(args.subagents) && args.subagents.length > 0) {
-    specs = args.subagents;
-  } else if (args.objective || args.role || args.instructions) {
-    specs = [args];
-  } else {
-    return {
-      isError: true,
-      content: [{ type: "text", text: "subagent_brief error: provide either 'objective' + 'scopeFiles' (for a single subagent) or 'subagents' array (for multiple subagents)." }]
-    };
-  }
-
-  const subagentsPayload = [];
-  const renderedBriefs = [];
-
-  try {
-    for (let i = 0; i < specs.length; i++) {
-      const built = buildSubagentSpecObject(specs[i]);
-      subagentsPayload.push(built);
-      renderedBriefs.push(specs.length === 1 ? built.Prompt : `### Subagent ${i + 1}: ${built.Role} (${built.TypeName})\n${built.Prompt}`);
-    }
-  } catch (err) {
-    return {
-      isError: true,
-      content: [{ type: "text", text: `subagent_brief validation error: ${err.message}` }]
-    };
-  }
-
-  const fullText = [
-    renderedBriefs.join("\n\n---\n\n"),
-    "",
-    "==================================================",
-    "READY-TO-USE invoke_subagent PAYLOAD:",
-    "```json",
-    JSON.stringify({ Subagents: subagentsPayload }, null, 2),
-    "```"
-  ].join("\n");
-
-  return { content: [{ type: "text", text: fullText }] };
-}
-
-export { buildSubagentSpecObject, formatSingleBrief, handleSubagentBrief };
+export { buildSubagentSpec, managedCohort, superviseCohort };

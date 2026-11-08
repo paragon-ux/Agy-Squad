@@ -2,11 +2,12 @@
   "name": "agy-squad",
   "version": "0.1.0",
   "private": true,
-  "description": "Sandboxed subagent squads for Google Antigravity on Windows: staged squad briefs, a Docker sandbox per subagent, and a deny-by-default admission policy",
+  "description": "Staged subagent payloads and Pointer-Over-Wire briefs for the Antigravity CLI on WSL.",
   "main": "mcp/index.js",
+  "bin": { "agy-squad": "bin/agy-squad.mjs" },
   "type": "module",
   "scripts": {
-    "test": "node tests/test-briefs.mjs && node tests/test-dispatch.mjs && node tests/test-server.mjs",
+    "test": "node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs",
     "docs": "zensical serve"
   },
   "repository": {
@@ -21,8 +22,8 @@
     "antigravity",
     "mcp",
     "subagents",
-    "docker",
-    "sandbox"
+    "sandbox",
+    "wsl"
   ],
   "author": "paragon-ux",
   "license": "MIT"

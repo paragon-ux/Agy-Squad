@@ -10,12 +10,15 @@ const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mc
 const proc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
 const rl = readline.createInterface({ input: proc.stdout, terminal: false });
 const pending = new Map();
+const unsolicited = [];
 let nextId = 1;
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
   if (pending.has(msg.id)) {
     pending.get(msg.id)(msg);
     pending.delete(msg.id);
+  } else {
+    unsolicited.push(msg);
   }
 });
 const send = (method, params = {}) => new Promise((resolve) => {
@@ -32,18 +35,28 @@ console.log("Agy-Squad MCP server tests\n");
   console.log("✓ initialize handshake");
 }
 {
-  const res = await send("tools/list");
-  assert.deepEqual(res.result.tools.map((t) => t.name), ["subagent_brief", "dispatch_squad"]);
-  const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
-  assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
-  console.log("✓ tools/list exposes exactly subagent_brief and dispatch_squad, with no spawn options");
+  for (const method of ["notifications/initialized", "notifications/cancelled", "notifications/roots/list_changed"]) {
+    proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method }) + "\n");
+  }
+  const res = await send("ping");
+  assert.deepEqual(res.result, {});
+  assert.deepEqual(unsolicited, []);
+  console.log("✓ handles keepalive and sends no replies to notifications");
 }
 {
-  const res = await send("tools/call", { name: "subagent_brief", arguments: { objective: "Analyze test failures", scopeFiles: ["tests/test_foo.py"] } });
-  assert.match(res.result.content[0].text, /READY-TO-USE invoke_subagent PAYLOAD/);
-  const unknown = await send("tools/call", { name: "check_context_health" });
+  const res = await send("tools/list");
+  assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad"]);
+  const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
+  assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
+  console.log("✓ tools/list exposes only dispatch_squad, with no spawn options");
+}
+{
+  const res = await send("tools/call", { name: "dispatch_squad", arguments: { squadId: "all_l1", mode: "direct" } });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
+  const unknown = await send("tools/call", { name: "subagent_brief" });
   assert.equal(unknown.error.code, -32601);
-  console.log("✓ tools/call routes subagent_brief and rejects unknown tools");
+  console.log("✓ tools/call rejects direct mode and the retired subagent_brief tool");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));
