@@ -1,6 +1,6 @@
 # Decision and work ledger
 
-This ledger records the active Agy-Squad decisions. IDs shared with Agy-Context-Saver stay stable. The previous Docker plan and its decision history are in commit `ee10ebc`.
+This ledger records the active Agy-Squad decisions. IDs shared with Agy-Context-Saver stay stable (`L13–L15, L25–L27, L32–L34` are allocated in the Agy-Context-Saver ledger). The previous Docker plan and its decision history are in commit `ee10ebc`.
 
 | ID | Decision | Status |
 | --- | --- | --- |
@@ -17,5 +17,6 @@ This ledger records the active Agy-Squad decisions. IDs shared with Agy-Context-
 | L29 | Keep distribution private while verifying the native WSL boundaries. Use workspace-local registration for tests. | Active |
 | L30 | Publish documentation as a Zensical site (`zensical.toml`, `.github/workflows/docs.yml`). | Active |
 | L31 | Keep Context-Saver and Squad separate. Expose staged payload compilation through one public Squad tool, `dispatch_squad`. | Rebuild branch |
+| L41 | Keep self-diagnosis directories and canary runs under workspace-local `scratch/agy-squad/` (`L4`) and tear them down deterministically after verification (`diagnose.mjs --teardown` and `try/finally` canary cleanup), removing empty parent `scratch/agy-squad` and `scratch` directories so no stale report slots or dirty working-tree artifacts remain. | Active |
 
 See the [WSL CLI verification checklist](wsl-cli-verification.md) for the launch gates.

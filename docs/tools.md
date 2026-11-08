@@ -12,9 +12,9 @@ The server uses `AGY_SQUAD_WORKSPACE` from its launch environment or its working
 
 ## Managed runs
 
-The `agy-squad run` launcher gives its dispatcher a fresh run directory in the selected workspace. In that session, pass exactly one of `manifestPath` or `manifest`, an inline object with the shape below. The dispatcher saves the plan by content hash under the run directory and prepares unused report slots. Compiled leads reuse that snapshot to compile their own specialists. Use a fresh squad ID when retrying an assignment.
+The `agy-squad run` launcher gives its dispatcher a fresh run directory (`AGY_SQUAD_RUN_DIR`) in the selected workspace and gates tool visibility to the matching `AGY_SQUAD_SESSION` so neighboring CLI processes see an empty tool list. In that session, pass exactly one of `manifestPath` or `manifest`, an inline object with the shape below. The dispatcher saves the plan by content hash under the run directory and prepares unused report slots. Compiled leads reuse that snapshot to compile their own specialists (`all_l1` also validates every squad's specialists upfront). Use a fresh squad ID when retrying an assignment.
 
-The returned native payload still contains only the five native brief fields on each member of `Subagents`. Managed slots use `scratch/agy-squad/run-…/plan-…/squad-…/<assignment>/report.md`. Managed agents default to `self` so they can write evidence. A custom agent type needs access to its report slot and native messaging. A custom lead also needs access to the dispatcher and native launch. Agents share the selected workspace through `Workspace: "inherit"`. File ownership for concurrent work belongs in the assignments.
+The returned native payload still contains only the five native brief fields on each member of `Subagents`, and the MCP response adds `structuredContent: { manifestPath }` pointing to the staged snapshot (`scratch/agy-squad/run-…/plan-…/manifest.json`). Managed slots use `scratch/agy-squad/run-…/plan-…/squad-…/<assignment>/report.md`. Compiled agents default to `self` so they can write evidence. A custom agent type needs access to its report slot and native messaging. A custom lead also needs access to the dispatcher and native launch. Agents share the selected workspace through `Workspace: "inherit"`. File ownership for concurrent work belongs in the assignments.
 
 The managed dispatcher performs staging and compilation. The Antigravity session controls agent execution and approvals. The launcher removes its registration at session exit and keeps the staged evidence.
 
@@ -41,7 +41,7 @@ The managed dispatcher performs staging and compilation. The Antigravity session
 }
 ```
 
-`children` is an alias for `specialists`. A lead can also be specified directly on the squad object. Each agent needs an objective and at least one scope file or directory. Optional fields include `role`, `instructions`, `expectedDeliverable`, `typeName`, `model`, and `workspace`. The native types default to `self` for leads and `research` for specialists. Model and workspace default to `inherit`.
+`children` is an alias for `specialists`. A lead can also be specified directly on the squad object (`all_l1` is reserved for lead compilation and cannot be used as a squad ID in `squads`). Each agent needs an objective and at least one scope file or directory. Optional fields include `role`, `instructions`, `expectedDeliverable`, `typeName`, `model`, and `workspace`. The native `typeName` defaults to `self` for leads and specialists (`research` is rejected because it is read-only). `model` defaults to `inherit`, and `workspace` must be `inherit` so report slots stay in the shared workspace.
 
 ## Stages and Pointer-Over-Wire
 
@@ -55,9 +55,9 @@ File scope in a brief describes the assignment. Use the [WSL verification checkl
 
 ## Optional report cleanup
 
-The benchmark presets stage a copy of `mcp/handoffs.mjs` at `.benchmark-bin/agy-squad-handoffs.mjs`. Run it with Node from the shared workspace root. Bundling and pruning apply to the manually registered report layout.
+The benchmark presets stage a copy of `mcp/handoffs.mjs` at `.benchmark-bin/agy-squad-handoffs.mjs`. Run it with Node from the shared workspace root. Bundling and pruning support both unmanaged (`scratch/agy-squad/squad-…`) and managed (`scratch/agy-squad/run-…/plan-…/squad-…`) report layouts.
 
 - `fingerprint <file...>` returns workspace-relative paths mapped to SHA-256. Capture hashes before and after independent checks on final work inputs.
 - `inspect <record.json>` checks the recorded cohort against the native messages and readable reports. The record contains an absolute `workspace`, ordered `assignments` with `conversationId` and `report`, and `handoffs` with native `sender` and exact `message`.
-- `bundle <record.json>` additionally requires `squadId`, the synthesizer's `verdict: "PASS"`, and `verifiedFiles` containing the hashes of the final work inputs. The synthesis lives at the squad's `lead/report.md` slot. The helper publishes `lead/report.sources.json` with the exact Markdown and hashes of the original reports.
+- `bundle <record.json>` additionally requires `squadId`, the synthesizer's `verdict: "PASS"`, `verifiedFiles` containing the hashes of the final work inputs (excluding the squad's report and bundle slots), and an unambiguous `PASS` verdict recorded in the synthesis at the squad's `lead/report.md` slot (with no standalone `FAIL` or `BLOCKED` tokens). The helper publishes `lead/report.sources.json` with the exact Markdown and hashes of the original reports.
 - `verify <bundle.json>` checks the bundle, synthesis, final inputs, and any loose reports against their recorded hashes. After the primary independently accepts the result, record the returned bundle digest. `prune <bundle.json> <accepted-sha256>` removes only matching loose reports and can resume after partial cleanup. Run it after writers have stopped. Failed, blocked, changed, and shell-disabled runs keep their loose reports.
