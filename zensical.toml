@@ -10,6 +10,7 @@ repo_name = "paragon-ux/agy-squad"
 
 nav = [
   { "Overview" = "index.md" },
+  { "Benchmarks" = "benchmarks.md" },
   { "Tools" = "tools.md" },
   { "Stopping Agents" = "stopping-agents.md" },
   { "WSL CLI Verification" = "plans/wsl-cli-verification.md" },

@@ -2,7 +2,11 @@
 
 Agy-Squad compiles staged subagent payloads and Pointer-Over-Wire briefs for the Antigravity CLI on WSL. Use it alongside Agy-Context-Saver (`v1.8.1+`), which handles RTK command rewriting, Reactive Wakeup lifecycle governance, and session transcripts (`L31`).
 
-Start with the [manifest and tool contract](tools.md). Use the [WSL CLI verification checklist](plans/wsl-cli-verification.md) before launching a live squad.
+Start with the [manifest and tool contract](tools.md), the [head-to-head Teamwork benchmark](benchmarks.md), and the [WSL CLI verification checklist](plans/wsl-cli-verification.md) before launching a live squad.
+
+## Measured efficiency against Antigravity `/teamwork`
+
+On an identical two-domain codebase audit with six planted `P1` and `P2` defects ([`benchmarks/teamwork-vs-squad/`](benchmarks.md)), both systems caught all six bugs (`100%` recall). **Agy-Squad + Agy-Context-Saver (`v1.8.1`)** finished in **`6m 15s` vs. `26m 19s`** (`4.2x` faster), used **`64` vs. `645` transcript steps** (`90.1%` reduction), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` byte reduction), injected **`249 B` vs. `4,940 B` into the parent context** (`95.0%` reduction), verified SHA-256 report digests in **`20 ms`** with zero LLM verifier tokens, and left **`0` vs. `41` (`207.9 KB`) untracked workspace files**.
 
 ## Companion integration: Agy-Context-Saver
 

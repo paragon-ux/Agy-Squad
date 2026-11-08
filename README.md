@@ -5,6 +5,7 @@ Task-driven subagent orchestration for the Antigravity CLI on WSL.
 `dispatch_squad` compiles a cohort of direct specialists or squad leads. Each assignment gets an evidence report slot and one Pointer-Over-Wire message with a finding and its report path. Parents independently verify the evidence that determines the result. Antigravity handles native launch, Reactive Wakeup, and stopping.
 
 - [Manifest and tool contract](docs/tools.md)
+- [Head-to-head benchmark vs. Antigravity Teamwork](docs/benchmarks.md) ([benchmark folder](benchmarks/teamwork-vs-squad/README.md))
 - [WSL CLI verification and live trial](docs/plans/wsl-cli-verification.md)
 - [Decisions](docs/plans/LEDGER.md)
 
@@ -32,7 +33,23 @@ The launcher creates a temporary workspace plugin and agent profile. It uses the
 | Antigravity Teamwork, the control | Scoping interview (or `[skip-interview]`), dedicated orchestration wrapper, and built-in planning and verification roles | Single top-level delegation with structured milestones and internal integrity checks |
 | Agy-Squad + Agy-Context-Saver (`v1.8.1+`) | Direct workspace compile (`dispatch_squad`), choosing a flat specialist stage or domain leads proportional to the task | `<= 500` UTF-8 byte Pointer-Over-Wire receipt per assignment, `RTK` + Reactive Wakeup child governance, and SHA-256 `report.sources.json` verification (`mcp/handoffs.mjs`) |
 
-Compare Teamwork and Agy-Squad on equivalent starting inputs and the same external acceptance checks. Record time to first delegation, approval prompts and wait time, parent coordination calls, time to independently verified results, and teardown effort separately. [Antigravity Teamwork](https://antigravity.google/docs/teamwork/)
+### Head-to-head benchmark vs. Antigravity `/teamwork`
+
+On an identical two-domain event-relay audit with six planted `P1` and `P2` bugs ([`benchmarks/teamwork-vs-squad/`](benchmarks/teamwork-vs-squad/README.md)), both systems caught all six bugs (`6 / 6`). Pairing **Agy-Squad** with **Agy-Context-Saver 1.8.1 (`rtk 0.51.0`)** finished in **`6m 15s` vs. `26m 19s`** (`4.2x` faster), used **`64` vs. `645` transcript steps** (`90.1%` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` byte reduction), injected **`249 B` vs. `4,940 B` into the parent context** (`95.0%` reduction across `1` wakeup vs. `5`), verified SHA-256 source and report digests in **`20 ms`** (`0` LLM tokens vs. `2` LLM verifier subagents), and left **`0` vs. `41` (`207.9 KB`) untracked files** in the workspace.
+
+| Metric | Agy-Squad + Agy-Context-Saver | Antigravity `/teamwork` (`[skip-interview]`) | Improvement with Agy-Squad |
+| --- | ---: | ---: | --- |
+| **Planted defects caught** | **`6 / 6` (`100%`)** | **`6 / 6` (`100%`)** | Equal recall (`18` vs. `25` findings) |
+| **Active wall-clock time** | **`6m 15s` (`375s`)** | **`26m 19s` (`1,579s`)** | **`4.2x` faster (`76.2%` less time)** |
+| **Subagents spawned** | **`3`** (`1` lead, `2` specialists) | **`8`** (`teamwork` fleet) | **`2.7x` fewer subagents** |
+| **Total transcript steps** | **`64`** | **`645`** | **`10.1x` fewer steps (`90.1%` reduction)** |
+| **Total assistant LLM turns** | **`26`** | **`321`** | **`12.3x` fewer turns (`91.9%` reduction)** |
+| **Total tool calls** | **`32`** | **`302`** | **`9.4x` fewer tool calls (`89.4%` reduction)** |
+| **Aggregate raw transcript size** | **`148.2 KB`** | **`817.4 KB`** | **`5.5x` smaller (`81.9%` byte reduction)** |
+| **Parent wakeups and injected bytes** | **`1` (`249 B`)** | **`5` (`4,940 B`)** | **`19.8x` fewer parent bytes (`95.0%` reduction)** |
+| **Post-run untracked files** | **`0` (`0 B`)** | **`41` (`207.9 KB`)** | Clean working tree (`L41`) |
+
+Run `node benchmarks/teamwork-vs-squad/verify-benchmark.mjs` to execute the offline fixture, manifest, and telemetry checks (`L7`), or read the full breakdown in [docs/benchmarks.md](docs/benchmarks.md). [Antigravity Teamwork](https://antigravity.google/docs/teamwork/)
 
 ## Manual registration and benchmark profiles
 
