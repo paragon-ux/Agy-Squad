@@ -187,7 +187,19 @@ process.stdin.on("data", chunk => {
   assert.match(runCliDirect(["run", "--manifest", "plan.json"]).stderr, /both --manifest and --squad/);
   assert.match(runCliDirect(["run", "bad\x07task"]).stderr, /control characters/);
 
-  console.log("✓ Managed flat and layered payloads, isolated report slots, and native launcher");
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const diagnoseCli = path.join(repoRoot, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
+  const testScratchRel = `scratch-test-${process.pid}`;
+  const diagEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: testScratchRel };
+  try {
+    const diagRun = spawnSync(process.execPath, [diagnoseCli], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    assert.equal(diagRun.status, 0, diagRun.stderr);
+    assert.equal(JSON.parse(diagRun.stdout).status, "HEALTHY");
+    assert.equal(fs.existsSync(path.join(repoRoot, testScratchRel)), false);
+  } finally {
+    fs.rmSync(path.join(repoRoot, testScratchRel), { recursive: true, force: true });
+  }
+  console.log("✓ Managed flat and layered payloads, isolated report slots, and native launcher and self-diagnosis teardown");
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

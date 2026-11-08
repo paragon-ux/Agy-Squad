@@ -1,0 +1,132 @@
+{
+  "squads": {
+    "skill_and_pr_review_audit": {
+      "lead": {
+        "role": "Skill & PR-Review Standard Lead",
+        "objective": "Apply the Agy-Squad PR Review Standard v1.1.0 (.agents/skills/pr-review/SKILL.md) to audit .agents/skills/self-diagnosis and .agents/skills/pr-review for contract accuracy, progressive disclosure, and token efficiency.",
+        "scopeFiles": [
+          ".agents/skills/self-diagnosis/SKILL.md",
+          ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+          ".agents/skills/pr-review/SKILL.md",
+          "docs/tools.md"
+        ],
+        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-skill_and_pr_review_audit/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
+        "expectedDeliverable": "Synthesis report starting with Verdict: PASS, with SKILL/DOC/ARCH category triage and verified file SHA-256 hashes."
+      },
+      "specialists": [
+        {
+          "role": "Self-Diagnosis Skill & Progressive Disclosure Auditor",
+          "objective": "Audit .agents/skills/self-diagnosis/SKILL.md, scripts/diagnose.mjs, resources/self-diagnosis-manifest.json, and references/optimization-and-review-rubric.md using pr-review SKILL/DOC/SCRIPT criteria: verify frontmatter, relative links, CLI flags, progressive disclosure ratio (SKILL.md vs references/), and propose concrete token or runtime optimizations.",
+          "scopeFiles": [
+            ".agents/skills/self-diagnosis/SKILL.md",
+            ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+            ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+            ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file; do not run diagnose.mjs --teardown while other specialists are running).",
+          "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
+        },
+        {
+          "role": "PR-Review Skill & Contract Alignment Auditor",
+          "objective": "Cross-check .agents/skills/pr-review/SKILL.md and references/pr-review-standard.md against current Agy-Squad runtime contracts (mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, docs/plans/LEDGER.md, docs/tools.md) and identify any stale guidance or token/prompt optimization opportunities.",
+          "scopeFiles": [
+            ".agents/skills/pr-review/SKILL.md",
+            ".agents/skills/pr-review/references/pr-review-standard.md",
+            "docs/plans/LEDGER.md",
+            "docs/tools.md"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "expectedDeliverable": "Markdown evidence report with SKILL/ARCH/DOC P1/P2/P3 triage, contract provenance checks, and concrete optimization recommendations."
+        }
+      ]
+    },
+    "runtime_and_contract_diagnosis": {
+      "lead": {
+        "role": "Runtime & Contract Diagnostics Lead",
+        "objective": "Execute a pr-review v1.1.0 audit across MCP, RUN, SVC, SCRIPT, TEST, and DEP categories to detect unhandled edge cases, boundary gaps, or state-cleanup defects in Agy-Squad.",
+        "scopeFiles": [
+          "mcp/index.js",
+          "mcp/dispatch.mjs",
+          "mcp/briefs.mjs",
+          "mcp/handoffs.mjs",
+          "mcp/run-state.mjs",
+          "bin/agy-squad.mjs",
+          "bin/terminal.py"
+        ],
+        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-runtime_and_contract_diagnosis/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
+        "expectedDeliverable": "Synthesis report starting with Verdict: PASS and summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
+      },
+      "specialists": [
+        {
+          "role": "MCP, Dispatch & Handoff Boundary Inspector",
+          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, and mcp/run-state.mjs under pr-review MCP, RUN, and SVC criteria: verify input validation, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, and readSynthesis verdict enforcement.",
+          "scopeFiles": [
+            "mcp/index.js",
+            "mcp/dispatch.mjs",
+            "mcp/briefs.mjs",
+            "mcp/handoffs.mjs",
+            "mcp/run-state.mjs"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC P1/P2/P3 triage and reproduction or test coverage evidence."
+        },
+        {
+          "role": "Launcher, PTY Bridge & Test Coverage Inspector",
+          "objective": "Audit bin/agy-squad.mjs, bin/terminal.py, and tests/ under pr-review SCRIPT, TEST, and DEP criteria: verify sandbox permissions, profile tool allowlists, PTY readiness and signal handling, failed-run cleanup, and adversarial test assertions.",
+          "scopeFiles": [
+            "bin/agy-squad.mjs",
+            "bin/terminal.py",
+            "tests/test-dispatch.mjs",
+            "tests/test-handoffs.mjs",
+            "tests/test-run.mjs",
+            "tests/test-server.mjs"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP P1/P2/P3 triage and verification gap analysis."
+        }
+      ]
+    },
+    "token_and_execution_optimization": {
+      "lead": {
+        "role": "Token & Execution Optimization Lead",
+        "objective": "Profile and optimize Agy-Squad's context footprint, compiled brief byte budgets, squad manifest topology, and filesystem/IPC hot paths without weakening L1-L41 guarantees.",
+        "scopeFiles": [
+          "mcp/briefs.mjs",
+          "mcp/dispatch.mjs",
+          "mcp/handoffs.mjs",
+          "mcp/index.js",
+          ".agents/skills/self-diagnosis/SKILL.md",
+          ".agents/skills/pr-review/SKILL.md"
+        ],
+        "instructions": "Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <your-conversation-id>', pass both Subagents verbatim to invoke_subagent, and yield for Reactive Wakeup. After both READY receipts arrive, read the reports with 'rtk read', write your 'Verdict: PASS' synthesis to scratch/agy-squad/squad-token_and_execution_optimization/lead/report.md, run 'node mcp/handoffs.mjs' (fingerprint, inspect, bundle, verify, prune), kill both specialists via manage_subagents(Action='kill'), and send one single-line READY receipt (<= 500 B) to the Parent conversation ID.",
+        "expectedDeliverable": "Synthesis report starting with Verdict: PASS with ranked optimization opportunities and measured byte/latency deltas."
+      },
+      "specialists": [
+        {
+          "role": "Prompt, Schema & Skill Token Optimizer",
+          "objective": "Measure UTF-8 byte and token budgets across mcp/briefs.mjs (superviseCohort, managedCohort, compiled lead/specialist prompts), mcp/index.js (tools/list schema), and .agents/skills/*/SKILL.md; identify concrete wording or progressive-disclosure optimizations that reduce context overhead while preserving all contract invariants.",
+          "scopeFiles": [
+            "mcp/briefs.mjs",
+            "mcp/index.js",
+            ".agents/skills/self-diagnosis/SKILL.md",
+            ".agents/skills/pr-review/SKILL.md"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "expectedDeliverable": "Markdown evidence report with exact byte/token measurements and concrete before/after optimization proposals."
+        },
+        {
+          "role": "I/O, Concurrency & Cohort Topology Optimizer",
+          "objective": "Inspect mcp/dispatch.mjs, mcp/handoffs.mjs, mcp/run-state.mjs, and bin/agy-squad.mjs for redundant filesystem syscalls (realpathSync, openSync, statSync), cohort fan-out bottlenecks, and scopeFiles overlap; propose measurable runtime optimizations.",
+          "scopeFiles": [
+            "mcp/dispatch.mjs",
+            "mcp/handoffs.mjs",
+            "mcp/run-state.mjs",
+            "bin/agy-squad.mjs"
+          ],
+          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "expectedDeliverable": "Markdown evidence report with syscall/latency analysis and ranked runtime optimization proposals."
+        }
+      ]
+    }
+  }
+}
