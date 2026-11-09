@@ -1,6 +1,7 @@
 # Agy-Squad PR #1 Consolidation, Remediation & Reverification Ledger
 
-**Disposition:** `APPROVE — All 11 Consolidated PR1 Findings Remediated & Reverified (0 Open Findings, 0 Open Residuals)`
+**Disposition:** `CHANGES REQUIRED — Wave R11 Documentation Review: 5 Open P2 + 14 Open P3 DOC Findings (R11-DOC-01..R11-DOC-19 listed individually in Sections 4.2 and 7); All 11 Prior Consolidated Code Findings Remain Closed`
+**Wave R11 Reviewed Head SHA:** `f6ed11d16dcfcbf926468aad5b59b713db79248f` (`rebuild/wsl-dispatch`, clean working tree; documentation-scoped review)
 **Review Date:** `2026-11-09`
 **Repository / PR:** [paragon-ux/Agy-Squad #1](https://github.com/paragon-ux/Agy-Squad/pull/1) (`rebuild/wsl-dispatch` -> `main`)
 **Base Branch / SHA:** `main` at `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`
@@ -21,6 +22,7 @@
 | Session 4 (Wave R8 Devin `B1`/`B2`/`F1`/`F2` Closure) | `944c64a0-e4c9-4272-a701-e3a32108a31b` | Root operator session | 2026-11-09 | `ee10ebc..c663bd2` + R8 fixes (`R8-SVC-01`, `R8-SVC-02`, `R8-SCRIPT-01`, `R8-SCRIPT-02`) | Direct remediation + `npm test` + `/self-diagnosis` verification |
 | Session 5 (Wave R9 Devin `B1`/`B2`/`B3` Precision Refinement) | `944c64a0-e4c9-4272-a701-e3a32108a31b` | Root operator session | 2026-11-09 | `ee10ebc..1ade0f0` + R9 refinements on `R8-SVC-01`, `R8-SVC-02`, `R8-SCRIPT-01` | Direct remediation + `npm test` + `/self-diagnosis` verification |
 | Session 6 (Wave R10 Sol Merge-Readiness Handoff Closure) | `944c64a0-e4c9-4272-a701-e3a32108a31b` | Root operator session | 2026-11-09 | `ee10ebc..ed94e83` + R10 fixes (`SVC-NEW-01`, `SVC-NEW-02`, `SCRIPT-NEW-01`, `SVC-NEW-03`) | Direct remediation + `npm test` + `/self-diagnosis` verification |
+| Session 7 (Wave R11 Documentation Consistency `/pr-review`) | `fa93e383-0b2c-4874-8568-cb1d93e98924` | None (independent review thread) | 2026-11-09 | `ee10ebc..f6ed11d` (clean working tree; no code changes) | Direct non-delegated `/pr-review` (Standard `v1.3.0`), `DOC`-scoped: active docs, benchmark README, skills, `docs/plans/`, and `docs/reviews/` cross-checked against `mcp/`, `bin/`, and `diagnose.mjs`; `npm test` + `diagnose.mjs --ledger` |
 
 - **Scope & Precedence:** Phase 2 began only after Phase 1 (PR #2) was remediated, reverified by a flat specialist squad, validated via `/self-diagnosis`, and merged into `rebuild/wsl-dispatch` (`3df852b9251170870d03c42e2a4e6d03440efbe2`).
 - **Phase 2 Step 1 — Reconciliation Against Completed PR #2 Baseline (`3df852b9251170870d03c42e2a4e6d03440efbe2`):**
@@ -70,7 +72,7 @@
 - **Verdict:** **PASS** (0 findings).
 
 ### 4.2 `DOC` — Documentation & Review Ledgers
-- **Verdict:** **PASS** (1 finding remediated and reverified: `R6-DOC-01`).
+- **Verdict:** **Changes required** (Wave R11 / Session 7: `5` open `P2` and `14` open `P3` documentation findings `R11-DOC-01`–`R11-DOC-19`, each recorded individually below; `R6-DOC-01` remains closed).
 
 #### `R6-DOC-01`
 - **Priority:** `P3` | **Status:** **Closed**
@@ -78,6 +80,87 @@
 - **Location:** `docs/reviews/pr1-code-review-ledger.md:1-265`, `docs/reviews/rebuild-wsl-dispatch-review-r2.md:15-26`
 - **Defect Summary:** Record Wave R6 consolidation, remediation, and reverification in `docs/reviews/` under PR Review Standard `v1.3.0`.
 - **Remediation & Reverification Evidence:** Established `docs/reviews/pr1-code-review-ledger.md` and updated `docs/reviews/rebuild-wsl-dispatch-review-r2.md` with Session Provenance row `S4 (R6)` and cross-references to both consolidation ledgers; validated via `diagnose.mjs --ledger`.
+
+#### Wave R11 Documentation Consistency Findings (Session 7, head `f6ed11d`)
+
+Evidence boundary: source inspection of active docs against runtime at `f6ed11d`, plus local execution of `npm test` (pass), `diagnose.mjs --ledger` on all three `docs/reviews/` ledgers (`HEALTHY`; schema-only check, does not validate content consistency), and a reproduction of `R11-DOC-02`. No live `agy` sessions or subagents were launched.
+
+#### `R11-DOC-01` — Documented receipt grammar uses ASCII hyphen; runtime requires em dash
+1. **Title / Priority / Status:** Receipt examples use ` - `, but `reconcileHandoffs()` requires ` — `; **P2**, **Open (Pre-Remediation)**.
+2. **Contract Provenance:** Pointer-Over-Wire receipt grammar compiled by `mcp/briefs.mjs` and documented in `docs/tools.md:50`; `L1`/`L2` receipt-verified slot boundary.
+3. **Source Evidence:** `docs/concepts.md:41-43`, `docs/getting-started.md:97` vs. `mcp/handoffs.mjs:106-116` (`READY ${report} — `, `PARTIAL ${report} — `, `/^NO_REPORT — \S/`) @ `f6ed11d`.
+4. **Trigger:** A child agent or operator copies the documented `READY <report-path> - <observation>` form.
+5. **Expected / Actual:** Expected these docs to match the em-dash separator used by `docs/tools.md` and the compiled briefs. Instead, they show ASCII ` - `, which `inspect`/`bundle` reject with `Handoff must include the sender's assigned report…` (source-derived). The getting-started example path `scratch/agy-squad/run-.../specialist-1/report.md` also omits the managed `plan-…/squad-…/` segments.
+6. **Impact:** Receipts written from the onboarding guide fail reconciliation, and two active docs contradict `docs/tools.md`.
+7. **Required Remediation:** Use ` — ` in `docs/concepts.md:41-43` and `docs/getting-started.md:97`, and show a full managed slot (`scratch/agy-squad/run-…/plan-…/squad-…/specialist-1/report.md`).
+8. **Acceptance Evidence:** No active doc shows a ` - ` receipt separator; `inspect` accepts the documented example.
+9. **Root Cause / Related IDs:** Prose paraphrased instead of derived from `mcp/briefs.mjs`; related `R11-DOC-07`, `SVC-NEW-03`.
+10. **Closure:** Open.
+
+#### `R11-DOC-02` — Benchmark live-run `verify` command fails with a usage error
+1. **Title / Priority / Status:** `handoffs.mjs verify --squad ab_audit` is not a valid invocation; **P2**, **Open (Pre-Remediation)**.
+2. **Contract Provenance:** `mcp/handoffs.mjs` CLI contract `verify <bundle.json>` (`docs/tools.md`, "Optional report cleanup").
+3. **Source Evidence:** `benchmarks/teamwork-vs-squad/README.md:98` vs. the `mcp/handoffs.mjs` CLI dispatcher (`action === "verify" && args.length === 1`) @ `f6ed11d`.
+4. **Trigger:** Operator follows step 2 of "Run a new live experiment".
+5. **Expected / Actual:** Expected a working verify command. Instead, `node mcp/handoffs.mjs verify --squad ab_audit` prints the usage string and exits `1` (reproduced locally at `f6ed11d`).
+6. **Impact:** The documented live-reproduction protocol cannot complete its integrity check as written.
+7. **Required Remediation:** Replace it with `node mcp/handoffs.mjs verify scratch/agy-squad/run-<uuid>/plan-<hex>/squad-ab_audit/lead/report.sources.json` (or the bundle path the lead reports).
+8. **Acceptance Evidence:** The documented command parses and verifies a bundle.
+9. **Root Cause / Related IDs:** Stale flag-style syntax, and `npm test` does not check documented commands; related `R11-DOC-09`.
+10. **Closure:** Open.
+
+#### `R11-DOC-03` — `core-workflows.md` teardown ordering contradicts the self-diagnosis skill
+1. **Title / Priority / Status:** Public workflow runs `--teardown` after remediation, but the skill requires it before; **P2**, **Open (Pre-Remediation)**.
+2. **Contract Provenance:** `L41`; `.agents/skills/self-diagnosis/SKILL.md:56` ("Immediately after updating the target `docs/reviews/` ledger … and before mutating `verifiedFiles` during code remediation").
+3. **Source Evidence:** `docs/core-workflows.md:56` (`… -> transcribe … -> remediate -> re-verify with the same specialists -> run diagnose.mjs --teardown -> terminate subagents`).
+4. **Trigger:** Operator follows the public workflow during a cohort that includes remediation.
+5. **Expected / Actual:** Expected teardown right after the ledger update, because remediation changes `verifiedFiles`, so `verifyBundle` then fails and teardown is refused without `--force` (`diagnose.mjs:439`, source-derived). Instead, the doc defers teardown until after remediation and re-verification.
+6. **Impact:** Following the doc leads to a teardown refusal or pushes the operator toward `--force`, which skips the evidence gates.
+7. **Required Remediation:** Reorder to `… -> transcribe -> diagnose.mjs --teardown -> remediate -> same-squad re-verify (send_message) -> terminate`, matching SKILL Step 2.
+8. **Acceptance Evidence:** `docs/core-workflows.md` and the self-diagnosis SKILL list the same ordering.
+9. **Root Cause / Related IDs:** Summary predates final `L41` gate ordering; related `SVC-NEW-02`.
+10. **Closure:** Open.
+
+#### `R11-DOC-04` — Decision-ledger IDs misattributed in glossary and workflow docs
+1. **Title / Priority / Status:** Active docs give `L7`, `L29`, `L30`, `L40`, and `L41` meanings that do not match `LEDGER.md`; **P2**, **Open (Pre-Remediation)**.
+2. **Contract Provenance:** `docs/plans/LEDGER.md` (normative ID source per `pr-review` SKILL Step 2).
+3. **Source Evidence:** `docs/concepts.md:67` (`L7` = orchestration model, `L29` = 500-byte receipt ceiling, `L30` = report slots/SHA-256 bundles, `L40` = ledger-gated teardown); `docs/core-workflows.md:8` (teardown = `L40`); `docs/index.md:26` (handoff prune = `L41`); `docs/reviews/pr2-documentation-review-ledger.md` §3 (`L29–L31` = digest bundling) and `F04` (`L40`).
+4. **Trigger:** A reviewer traces a contract through the glossary, as Step 2 requires.
+5. **Expected / Actual:** `LEDGER.md` defines `L7` = zero real subagents in automated tests, `L29` = private distribution, `L30` = Zensical docs site, `L21`/`L40` = deny-by-default admission and credential isolation, and `L41` = self-diagnosis scratch teardown. The docs assign different meanings, and the receipt ceiling and bundle contract appear only indirectly in `L1`/`L2`.
+6. **Impact:** Architecture-before-runtime traces cite the wrong decisions.
+7. **Required Remediation:** Correct the mappings to match `LEDGER.md`, or add explicit `LEDGER.md` entries for the receipt ceiling and bundle contract and cite those.
+8. **Acceptance Evidence:** Every `L<n>` cited in active docs matches the `LEDGER.md` decision text.
+9. **Root Cause / Related IDs:** Glossary not derived from `LEDGER.md`; related `R11-DOC-13`.
+10. **Closure:** Open.
+
+#### `R11-DOC-05` — This ledger's finding counts, statuses, and record density are inconsistent
+1. **Title / Priority / Status:** Header, §5, and §7 count 11 findings, but 23 remediated defects exist, and four IDs carry two different statuses; **P2**, **Open (Pre-Remediation)**.
+2. **Contract Provenance:** PR Review Standard `v1.3.0` Step 5 (P0–P2 need 10-field records; one status per ID) and Step 7 (§8 holds residuals surfaced during re-verification).
+3. **Source Evidence:** `docs/reviews/pr1-code-review-ledger.md`: header Disposition (pre-R11 "All 11"), §5 totals (`P1=1`), §7 (11 rows), §8 rows `R7-*`, `R8-*`, `SVC-NEW-01..03`, `SCRIPT-NEW-01`, and the §9 Wave Finding Ledger.
+4. **Trigger:** A reader tallies PR #1 findings or checks the status of one ID.
+5. **Expected / Actual:** Expected every remediated defect to be counted, to have one status, and, for P1/P2 (`SVC-NEW-01` P1; `SVC-NEW-02`, `SVC-NEW-03`, `SCRIPT-NEW-01` P2), to have a 10-field record. Instead, the 12 R7–R10 defects exist only as compact §8 rows, and `SVC-NEW-01..03`/`SCRIPT-NEW-01` are `Closed (Post-Remediation)` in §8 but `Closed` in §9.
+6. **Impact:** The merge disposition understates scope (2 P1 defects, not 1), and the R10 findings, which came from an independent review rather than re-verification, sit in the residual sink.
+7. **Required Remediation:** Promote R7–R10 defects to §4/§7 (10-field records for P1/P2), recount §5 and the header, keep one status per ID, and reserve §8 for true residuals.
+8. **Acceptance Evidence:** §5 totals equal the §7 row count, each ID has one status, and `diagnose.mjs --ledger` remains `HEALTHY`.
+9. **Root Cause / Related IDs:** Later waves were appended to §8 instead of re-baselining the ledger; related `R11-DOC-15`, `R11-DOC-16`, `R11-DOC-17`, `R11-DOC-19`.
+10. **Closure:** Open.
+
+| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `R11-DOC-06` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/getting-started.md:115-117` | Troubleshooting symptoms do not match any runtime message. Actual messages: `agy-squad: Open an interactive terminal to start a squad run.` (`bin/agy-squad.mjs:124`, a generic TTY check, not WSL-specific), `Antigravity CLI (agy) must be available on PATH.` / `Python 3 (python3) must be available on PATH.` (`bin/agy-squad.mjs:120, 73`), and `Agy-Squad: the dispatcher was not discovered within 15 seconds (startup timeout: …)` (`bin/terminal.py:152`). | Quote the exact runtime strings and drop the WSL-only wording from the TTY row. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-07` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/core-workflows.md:18`, `docs/getting-started.md:99` | Both say `handoffs.mjs` requires `lead/report.md` to *start with* `Verdict: PASS`. In fact, `readSynthesis()` (`mcp/handoffs.mjs:266`) requires one unambiguous `PASS` anywhere after stripping code spans and rejects conflicting `FAIL`/`BLOCKED`/negated `PASS`. `docs/tools.md` describes this correctly. | Reword both docs to match `docs/tools.md`. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-08` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/concepts.md:48` | The evidence bundle is said to hash "every workspace file passed via `--file`", but `handoffs.mjs` has no `--file` flag. Hashed inputs come from the record's `verifiedFiles` (`bundle <record.json>`). | Reference `verifiedFiles` in the record JSON. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-09` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/tools.md:58` | Says "benchmark presets stage a copy of `mcp/handoffs.mjs` at `.benchmark-bin/agy-squad-handoffs.mjs`", but no code in the repo creates that path (repo-wide grep @ `f6ed11d`). Every other doc runs `node mcp/handoffs.mjs`. | Replace with `node mcp/handoffs.mjs` from the checkout, or remove the stale preset sentence. | Repo grep @ `f6ed11d`; no cohort |
+| `R11-DOC-10` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/concepts.md:32` | The manifest is titled `run-plan.json`, but that file is never a default. `mcp/dispatch.mjs:7-12` and `docs/tools.md` list `task-01-manifest.json`, `swarm-manifest.json`, `.scratch/swarm-manifest.json`, and `suite-manifest.json`. | Retitle the entry "Manifest" and link to the default search order in `docs/tools.md`. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-11` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/concepts.md:21, 30` | Says the `all_l1` lead stage needs a "multi-squad" manifest with "`2` or more squads". `mcp/dispatch.mjs` has no minimum, and the benchmark manifest's `all_l1` compiles 1 lead (asserted in `verify-benchmark.mjs`; the recorded arm used 1 lead). | State "one lead per squad (1 or more squads)". | Source inspection + `npm test` @ `f6ed11d`; no cohort |
+| `R11-DOC-12` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/benchmarks.md:15` | Teamwork per-agent step range is given as "`66` to `129`", but the per-agent table and `results/telemetry.json` show a minimum of `50` (`miner_contract_1`). The total of `645` is correct. | Change to "`50` to `129`". | `telemetry.json` inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-13` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `docs/plans/LEDGER.md` (L3/L5, L6, L31 rows) vs. `pr-review` SKILL Step 2, `docs/concepts.md:67`, `docs/core-workflows.md:63` | Docs list `L3`, `L5`, `L6`, and `L31` as "Active architecture", but the `LEDGER.md` Status column holds trial results for them ("WSL command and supervised stop checks passed", "Trial specialist denied…") and marks `L31` as "Rebuild branch". | Align the `LEDGER.md` Status values with the active-ID list (or adjust the list). | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-14` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | `README.md:3`, `docs/getting-started.md:3`, `docs/index.md:3`, `zensical.toml` vs. `docs/plans/LEDGER.md` (L8–L12), `package.json` `description`, `.github/workflows/ci.yml` | Docs claim Linux, macOS, and WSL2 support, but `LEDGER.md` selects the WSL CLI, `package.json` says "on WSL", CI runs only on `ubuntu-latest`, all recorded checks are WSL2, and the `/proc/self/fd` descriptor re-check (`mcp/dispatch.mjs:34`) runs only on Linux. macOS is unverified. | Mark macOS as untested/best-effort (or add macOS CI plus a recorded check) and reconcile the `package.json` description. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-15` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | This ledger §8 (`R7-SVC-01` … `SVC-NEW-03` rows) | The Verification column cites the Session 2 cohort bundle `8ff52104…` for fixes made in Sessions 3–6, which §1 records as "Direct remediation + `npm test`" with no cohort. | Cite `npm test` at the fix commit, or mark `N/A (no cohort)`. | Source inspection @ `f6ed11d`; no cohort |
+| `R11-DOC-16` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | This ledger §4.2, §4.6, §7, §8, §9 | Unpinned line references have drifted: `readSynthesis()` is cited at `mcp/handoffs.mjs:241-262` / `241-266` / `241-368` but now starts at `:266`; the verdict default is cited at `:369` but is now at `:379`; `R6-DOC-01` cites this ledger at `:1-265`. Step 5 requires commit-pinned links. | Convert references to links pinned to the fix SHA. | `grep -n` @ `f6ed11d`; no cohort |
+| `R11-DOC-17` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | This ledger §2 | The file inventory omits files changed in `3df852b..f6ed11d`: `benchmarks/teamwork-vs-squad/verify-benchmark.mjs` (`R7-SCRIPT-01`, `R8-SCRIPT-01`), `docs/plans/wsl-cli-verification.md` (`R8-SCRIPT-02`), and `docs/reviews/pr1-code-review-ledger.md`. | Add the missing inventory rows. | `git diff --stat 3df852b..f6ed11d`; no cohort |
+| `R11-DOC-18` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | This ledger §4, §5 | Category verdicts use `PASS`/`APPROVE` instead of the standard's enum (`Changes required`, `No findings within reviewed scope`, `Incomplete`, `Not applicable`). `DB` should be `Not applicable` because state is filesystem-only (SKILL Step 3); `diagnose.mjs` itself reports `DB` as `Not applicable`. | Use the standard verdict enum. | `diagnose.mjs --markdown` @ `f6ed11d`; no cohort |
+| `R11-DOC-19` | `R11 / Session 7` | `DOC` | **Open (Pre-Remediation)** | This ledger §1 header vs. Session Provenance table | The header records remediated commit `2634683`, but Session 6 covers only `ee10ebc..ed94e83`, and no session row records the work that produced `2634683` or `f6ed11d`. The Session 7 row added in Wave R11 covers only this documentation review. | Extend Session 6 (or add a row) to cover `ed94e83..f6ed11d`. | `git log` @ `f6ed11d`; no cohort |
 
 ### 4.3 `SKILL` — Skills & Manifests
 - **Verdict:** **PASS** (0 findings; cross-referenced via `R6-SVC-01` and `R6-TEST-01`).
@@ -180,7 +263,7 @@
 | Category | P0 | P1 | P2 | P3 | Open (Pre-Remediation) | Closed | Verdict |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `ARCH` | 0 | 0 | 0 | 0 | 0 | 0 | **PASS** |
-| `DOC` | 0 | 0 | 0 | 1 | 0 | 1 | **PASS** |
+| `DOC` | 0 | 0 | 5 | 15 | 19 | 1 | **Changes required** |
 | `SKILL` | 0 | 0 | 0 | 0 | 0 | 0 | **PASS** |
 | `MCP` | 0 | 0 | 1 | 1 | 0 | 2 | **PASS** |
 | `RUN` | 0 | 0 | 2 | 0 | 0 | 2 | **PASS** |
@@ -189,7 +272,7 @@
 | `SCRIPT` | 0 | 0 | 0 | 1 | 0 | 1 | **PASS** |
 | `TEST` | 0 | 0 | 0 | 1 | 0 | 1 | **PASS** |
 | `DEP` | 0 | 0 | 0 | 0 | 0 | 0 | **PASS** |
-| **Total** | **0** | **1** | **5** | **5** | **0** | **11** | **APPROVE** |
+| **Total** | **0** | **1** | **10** | **19** | **19** | **11** | **CHANGES REQUIRED** |
 
 ---
 
@@ -207,6 +290,7 @@
    node .agents/skills/self-diagnosis/scripts/diagnose.mjs --ledger docs/reviews/rebuild-wsl-dispatch-review-r2.md
    ```
    - All 3 ledgers report `status: "HEALTHY"` with `0` blocking findings.
+3. **Wave R11 (Session 7) Documentation Review @ `f6ed11d`:** `npm test` passed locally (all suites plus the offline benchmark check). `diagnose.mjs --ledger` reported `HEALTHY` for all 3 ledgers, but that check validates schema only, not content consistency (see `R11-DOC-05`). `node mcp/handoffs.mjs verify --squad ab_audit` exits `1` with a usage error (`R11-DOC-02`). All other R11 findings come from source inspection; no live `agy` sessions or subagents were launched.
 
 ---
 
@@ -225,6 +309,25 @@
 | `SVC-002` | `SVC` | `P2` | `SVC-002` / Claim 5 | `mcp/handoffs.mjs:103-115` | Carried-forward: `reconcileHandoffs()` enforces single-line `<= 500` UTF-8 byte receipts. | **Closed** |
 | `RUN-003` | `RUN` | `P2` | `RUN-003` / Claim 1 | `mcp/briefs.mjs:62, 79-81` | Carried-forward: `buildSubagentSpec()` defaults `TypeName` to `"self"` and rejects `"research"`. | **Closed** |
 | `RUN-004` | `RUN` | `P2` | `RUN-004` / Claim 2 | `mcp/briefs.mjs:64, 82-84` | Carried-forward: `buildSubagentSpec()` enforces `Workspace: "inherit"`. | **Closed** |
+| `R11-DOC-01` | `DOC` | `P2` | Wave R11 / Session 7 | `docs/concepts.md:41-43`, `docs/getting-started.md:97` | Receipt examples use ASCII ` - `; `reconcileHandoffs()` requires ` — `. | **Open (Pre-Remediation)** |
+| `R11-DOC-02` | `DOC` | `P2` | Wave R11 / Session 7 | `benchmarks/teamwork-vs-squad/README.md:98` | `handoffs.mjs verify --squad ab_audit` exits `1` with a usage error; the CLI takes `verify <bundle.json>`. | **Open (Pre-Remediation)** |
+| `R11-DOC-03` | `DOC` | `P2` | Wave R11 / Session 7 | `docs/core-workflows.md:56` | Workflow runs `--teardown` after remediation; the self-diagnosis SKILL (`:56`) requires it before. | **Open (Pre-Remediation)** |
+| `R11-DOC-04` | `DOC` | `P2` | Wave R11 / Session 7 | `docs/concepts.md:67`, `docs/core-workflows.md:8`, `docs/index.md:26` | `L7`/`L29`/`L30`/`L40`/`L41` meanings contradict `docs/plans/LEDGER.md`. | **Open (Pre-Remediation)** |
+| `R11-DOC-05` | `DOC` | `P2` | Wave R11 / Session 7 | This ledger header, §5, §7, §8, §9 | 11 findings counted vs. 23 remediated; R7–R10 P1/P2 lack 10-field records; four IDs carry two statuses. | **Open (Pre-Remediation)** |
+| `R11-DOC-06` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/getting-started.md:115-117` | Troubleshooting error strings do not match runtime messages. | **Open (Pre-Remediation)** |
+| `R11-DOC-07` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/core-workflows.md:18`, `docs/getting-started.md:99` | "Starts with `Verdict: PASS`" misstates the `readSynthesis()` rule. | **Open (Pre-Remediation)** |
+| `R11-DOC-08` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/concepts.md:48` | Nonexistent `--file` flag; inputs come from `verifiedFiles`. | **Open (Pre-Remediation)** |
+| `R11-DOC-09` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/tools.md:58` | Stale `.benchmark-bin/agy-squad-handoffs.mjs` preset reference. | **Open (Pre-Remediation)** |
+| `R11-DOC-10` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/concepts.md:32` | Manifest titled `run-plan.json`, which is not a default manifest name. | **Open (Pre-Remediation)** |
+| `R11-DOC-11` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/concepts.md:21, 30` | `all_l1` described as needing 2+ squads; 1 squad is valid and is used by the benchmark. | **Open (Pre-Remediation)** |
+| `R11-DOC-12` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/benchmarks.md:15` | Teamwork step range "`66` to `129`" should be "`50` to `129`". | **Open (Pre-Remediation)** |
+| `R11-DOC-13` | `DOC` | `P3` | Wave R11 / Session 7 | `docs/plans/LEDGER.md` | Status column for `L3`/`L5`/`L6`/`L31` disagrees with the documented active-ID set. | **Open (Pre-Remediation)** |
+| `R11-DOC-14` | `DOC` | `P3` | Wave R11 / Session 7 | `README.md:3`, `docs/getting-started.md:3`, `docs/index.md:3` | macOS support is claimed but unverified (WSL decision, Ubuntu-only CI, Linux-only descriptor check). | **Open (Pre-Remediation)** |
+| `R11-DOC-15` | `DOC` | `P3` | Wave R11 / Session 7 | This ledger §8 | R7–R10 rows cite the Session 2 cohort bundle SHA for no-cohort fixes. | **Open (Pre-Remediation)** |
+| `R11-DOC-16` | `DOC` | `P3` | Wave R11 / Session 7 | This ledger §4–§9 | Unpinned line references have drifted (`readSynthesis` `:266`, verdict default `:379`). | **Open (Pre-Remediation)** |
+| `R11-DOC-17` | `DOC` | `P3` | Wave R11 / Session 7 | This ledger §2 | Inventory omits `verify-benchmark.mjs`, `wsl-cli-verification.md`, and this ledger. | **Open (Pre-Remediation)** |
+| `R11-DOC-18` | `DOC` | `P3` | Wave R11 / Session 7 | This ledger §4, §5 | Verdicts use `PASS`/`APPROVE` instead of the standard enum; `DB` should be `Not applicable`. | **Open (Pre-Remediation)** |
+| `R11-DOC-19` | `DOC` | `P3` | Wave R11 / Session 7 | This ledger §1 | No session row covers `ed94e83..f6ed11d` (remediated commit `2634683`). | **Open (Pre-Remediation)** |
 
 ---
 
