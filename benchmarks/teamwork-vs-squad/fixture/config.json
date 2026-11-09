@@ -1,0 +1,13 @@
+{
+  "service": "event-relay",
+  "maxSkewSeconds": 300,
+  "rateLimit": {
+    "capacity": 10,
+    "refillTokens": 2,
+    "refillIntervalMs": 1000
+  },
+  "retry": {
+    "maxRetries": 1,
+    "baseDelayMs": 50
+  }
+}

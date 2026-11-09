@@ -1,0 +1,40 @@
+{
+  "squads": {
+    "ab_audit": {
+      "lead": {
+        "role": "Event Relay Audit Squad Lead",
+        "objective": "Orchestrate a read-only security, correctness, and cross-domain contract audit of benchmarks/teamwork-vs-squad/fixture/ (gateway/ + worker/ + config.json) without modifying any fixture files.",
+        "scopeFiles": [
+          "benchmarks/teamwork-vs-squad/fixture",
+          "benchmarks/teamwork-vs-squad/manifest.json"
+        ],
+        "instructions": "Compile specialist payloads via handleDispatchSquad({squadId:\"ab_audit\",manifestPath:\"benchmarks/teamwork-vs-squad/manifest.json\"},process.cwd()). Launch both specialists via invoke_subagent and yield for Reactive Wakeup. Use rtk read via run_command (never call read_file) to cross-verify fixture sources independently. Preserve 1-ID-per-finding granularity in your synthesis at scratch/agy-squad/squad-ab_audit/lead/report.md with an explicit Verdict: PASS line once every defect (P1/P2, file:line, trigger, impact, cross-domain mismatches) is verified. Then bundle, verify, and prune via node mcp/handoffs.mjs before sending your single-line READY receipt.",
+        "expectedDeliverable": "Verified synthesis at scratch/agy-squad/squad-ab_audit/lead/report.md + report.sources.json covering all gateway, worker, and cross-domain defects."
+      },
+      "specialists": [
+        {
+          "role": "Gateway Security & Rate-Limit Auditor",
+          "objective": "Perform a read-only line-by-line audit of benchmarks/teamwork-vs-squad/fixture/gateway/ and benchmarks/teamwork-vs-squad/fixture/config.json for P1/P2 security, crash, state/clock drift, test-coverage blind spots, and envelope contract issues.",
+          "scopeFiles": [
+            "benchmarks/teamwork-vs-squad/fixture/gateway",
+            "benchmarks/teamwork-vs-squad/fixture/config.json",
+            "benchmarks/teamwork-vs-squad/fixture/worker/worker.mjs"
+          ],
+          "instructions": "Do NOT modify any fixture files. Use rtk read via run_command to inspect files (never call read_file). Cite exact file:line ranges, trigger inputs, and expected vs actual behavior.",
+          "expectedDeliverable": "Evidence report in your assigned slot listing every P1/P2 defect in gateway/ and any gateway->worker contract mismatches."
+        },
+        {
+          "role": "Worker Retry, Ledger & Contract Auditor",
+          "objective": "Perform a read-only line-by-line audit of benchmarks/teamwork-vs-squad/fixture/worker/ and benchmarks/teamwork-vs-squad/fixture/config.json for P1/P2 data-loss/persistence, retry/unit logic, test-coverage blind spots, and worker<-gateway contract mismatches.",
+          "scopeFiles": [
+            "benchmarks/teamwork-vs-squad/fixture/worker",
+            "benchmarks/teamwork-vs-squad/fixture/config.json",
+            "benchmarks/teamwork-vs-squad/fixture/gateway/gateway.mjs"
+          ],
+          "instructions": "Do NOT modify any fixture files. Use rtk read via run_command to inspect files (never call read_file). Cite exact file:line ranges, trigger inputs, and expected vs actual behavior.",
+          "expectedDeliverable": "Evidence report in your assigned slot listing every P1/P2 defect in worker/ and any worker<-gateway contract mismatches."
+        }
+      ]
+    }
+  }
+}
