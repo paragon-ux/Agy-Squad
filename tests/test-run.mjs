@@ -520,8 +520,8 @@ process.stdin.on("data", chunk => {
     const tdLead = hReportPath(tdSquad, undefined, tdRoot);
     for (const [slot, text] of [
       [tdS1, "# Specialist 1\n\n| ID | Status |\n| --- | --- |\n| `SD-TEST-01` | **Closed** |\n"],
-      [tdS2, "# Specialist 2\n\nVerified.\n"],
-      [tdLead, "# Lead Synthesis\n\nVerdict: PASS\n\n| ID | Status |\n| --- | --- |\n| `SD-TEST-01` | **Closed** |\n"]
+      [tdS2, "# Specialist 2\n\n### SD-HEAD-01 — Missing verification in plain heading\n\nVerified.\n"],
+      [tdLead, "# Lead Synthesis\n\nVerdict: PASS\n\n- **SD-BULLET-01**: Missing verification in bullet list\n"]
     ]) {
       const abs = path.join(repoRoot, slot);
       fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -539,14 +539,14 @@ process.stdin.on("data", chunk => {
       ],
       handoffs: [
         { sender: "td-1", message: `READY ${tdS1} — Reported SD-TEST-01.` },
-        { sender: "td-2", message: `READY ${tdS2} — Verified.` }
+        { sender: "td-2", message: `READY ${tdS2} — Reported SD-HEAD-01.` }
       ]
     });
     pruneReports(repoRoot, tdBundled.path, tdBundled.sha256);
 
     const tdLedgerRel = `docs/reviews/.tmp-td-test-${process.pid}.md`;
     const tdLedgerAbs = path.join(repoRoot, tdLedgerRel);
-    const makeTdLedger = (bundleSha, includeFinding) => [
+    const makeTdLedger = (bundleSha, findingIds) => [
       "# Temp Teardown Ledger",
       "",
       "## 1. Review Metadata",
@@ -565,18 +565,19 @@ process.stdin.on("data", chunk => {
       "| --- | --- | --- | --- | --- | --- | --- |",
       `| \`W1\` | \`00000000-0000-4000-8000-000000000000\` | \`${tdSquad}\` | \`td-1, td-2\` | \`N/A\` | \`${bundleSha}\` | \`Pending\` |`,
       "",
-      ...(includeFinding
+      ...(findingIds.length > 0
         ? [
             "| ID | Status | Summary |",
             "| --- | --- | --- |",
-            "| `SD-TEST-01` | **Closed** | Verified finding recorded in ledger. |"
+            ...findingIds.map(id => `| \`${id}\` | **Closed** | Verified finding recorded in ledger. |`)
           ]
         : ["None (0 wave findings)."])
     ].join("\n") + "\n";
 
     try {
+      const allTdIds = ["SD-TEST-01", "SD-HEAD-01", "SD-BULLET-01"];
       // Case A: Unrelated bundle SHA -> rejected
-      fs.writeFileSync(tdLedgerAbs, makeTdLedger("f".repeat(64), true));
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger("f".repeat(64), allTdIds));
       const tdUnrelated = spawnSync(
         process.execPath,
         [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
@@ -585,18 +586,38 @@ process.stdin.on("data", chunk => {
       assert.equal(tdUnrelated.status, 1);
       assert.match(tdUnrelated.stderr, /bundle digest .* is not recorded in Section 9/);
 
-      // Case B: Bundle SHA recorded, but cohort finding SD-TEST-01 missing -> rejected
-      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, false));
-      const tdMissingFinding = spawnSync(
+      // Case B1: Table finding SD-TEST-01 omitted -> rejected
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, ["SD-HEAD-01", "SD-BULLET-01"]));
+      const tdMissingTable = spawnSync(
         process.execPath,
         [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
         { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
       );
-      assert.equal(tdMissingFinding.status, 1);
-      assert.match(tdMissingFinding.stderr, /cohort finding ID\(s\) \[SD-TEST-01\] are missing/);
+      assert.equal(tdMissingTable.status, 1);
+      assert.match(tdMissingTable.stderr, /cohort finding ID\(s\) \[SD-TEST-01\] are missing/);
 
-      // Case C: Both bundle SHA and SD-TEST-01 recorded -> accepted and torn down
-      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, true));
+      // Case B2: Plain heading finding SD-HEAD-01 omitted -> rejected
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, ["SD-TEST-01", "SD-BULLET-01"]));
+      const tdMissingHeading = spawnSync(
+        process.execPath,
+        [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+        { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+      );
+      assert.equal(tdMissingHeading.status, 1);
+      assert.match(tdMissingHeading.stderr, /cohort finding ID\(s\) \[SD-HEAD-01\] are missing/);
+
+      // Case B3: Bullet finding SD-BULLET-01 omitted -> rejected
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, ["SD-TEST-01", "SD-HEAD-01"]));
+      const tdMissingBullet = spawnSync(
+        process.execPath,
+        [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+        { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+      );
+      assert.equal(tdMissingBullet.status, 1);
+      assert.match(tdMissingBullet.stderr, /cohort finding ID\(s\) \[SD-BULLET-01\] are missing/);
+
+      // Case C: Bundle SHA and all 3 finding formats recorded -> accepted and torn down
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, allTdIds));
       const tdAccepted = spawnSync(
         process.execPath,
         [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],

@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleDispatchSquad } from "../../mcp/dispatch.mjs";
 import { verifyWebhookSignature, createRateLimiter, buildWorkerEnvelope } from "./fixture/gateway/gateway.mjs";
-import { readLedger } from "./fixture/worker/ledger.mjs";
+import { appendLedgerEntry, readLedger } from "./fixture/worker/ledger.mjs";
 import { processWorkerEnvelope } from "./fixture/worker/worker.mjs";
 
 const benchDir = path.dirname(fileURLToPath(import.meta.url));
@@ -75,8 +75,15 @@ try {
   assert.equal(offByOneRetry.status, "FAILED");
   assert.equal(calls, 1);
 
+  appendLedgerEntry(ledgerPath, { requestId: "r-prior", tenantId: "t1", output: { ok: 1 } });
+  assert.equal(readLedger(ledgerPath).length, 1);
   fs.writeFileSync(ledgerPath, "{corrupt-json");
   assert.deepEqual(readLedger(ledgerPath), []);
+  const overwriteRes = appendLedgerEntry(ledgerPath, { requestId: "r-new", tenantId: "t1", output: { ok: 2 } });
+  assert.deepEqual(overwriteRes, { duplicate: false, count: 1 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(ledgerPath, "utf8")), [
+    { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
+  ]);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

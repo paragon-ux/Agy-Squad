@@ -78,8 +78,12 @@ try {
   assert.throws(() => bundleReports(root, { ...record, verifiedFiles: { ...record.verifiedFiles, [lead]: "0".repeat(64) } }), /final work inputs/);
   for (const invalidLead of [
     "FAIL: output differs from expected.",
+    "1. FAIL: output differs from expected.",
+    "Output check — FAIL: output differs from expected.",
     "Verdict: BLOCKED — missing required fixture.",
+    "BLOCKED: missing upstream schema.",
     "Verdict: PASS\nSecondary check: FAIL.",
+    "Verdict: PASS\n1. FAIL: output differs from expected.",
     "Completed checks without recording a verdict token.",
     "Pass the arguments to the function without a verdict token.",
     "Verdict: PASS\n\n| Gate | Verdict |\n| --- | --- |\n| Security | FAIL |\n\nOverall verdict is FAIL."
@@ -126,6 +130,7 @@ try {
   assert.deepEqual(pruneReports(root, bundle, accepted.sha256), { removed: [] });
   assert.deepEqual(verifyBundle(root, bundle), accepted);
   const archived = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
+  assert.equal(archived.verdict, "PASS");
   assert.deepEqual(archived.reports.map(report => report.markdown), [firstEvidence, secondEvidence]);
   assert.ok(exists(lead) && exists("fixture.txt"));
   const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });

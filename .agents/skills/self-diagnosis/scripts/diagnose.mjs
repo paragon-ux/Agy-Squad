@@ -166,22 +166,66 @@ function extractTopLevelSection(markdown, sectionNum) {
   return { heading: match[0].trim(), body };
 }
 
-function extractCohortFindingIds(markdown) {
+const NON_FINDING_HYPHEN_TOKENS = new Set([
+  "UTF-8",
+  "UTF-16",
+  "SHA-1",
+  "SHA-256",
+  "SHA-384",
+  "SHA-512",
+  "JSON-RPC",
+  "CTRL-C",
+  "CTRL-D",
+  "PRE-FIX",
+  "RE-VERIFY",
+  "NON-ZERO",
+  "NON-EMPTY",
+  "READ-ONLY",
+  "FAIL-FAST",
+  "FAIL-SAFE",
+  "OPT-IN",
+  "END-TO-END",
+  "ONE-TO-ONE",
+  "STEP-BY-STEP",
+  "LINE-BY-LINE",
+  "MULTI-BYTE",
+  "SUB-AGENT"
+]);
+
+function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = false } = {}) {
   const ids = new Set();
   if (typeof markdown !== "string" || !markdown.trim()) return ids;
   const idPattern = /^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})$/;
-  for (const table of parseMarkdownTables(markdown)) {
+  const addCandidate = raw => {
+    const clean = raw.replace(/\([^)]*\)/g, "").replace(/`/g, "").replace(/\*/g, "").trim();
+    if (idPattern.test(clean) && !NON_FINDING_HYPHEN_TOKENS.has(clean.toUpperCase())) {
+      ids.add(clean);
+    }
+  };
+  const stripped = markdown.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
+  for (const table of parseMarkdownTables(stripped)) {
     if (table.headers[0] !== "ID" && table.headers[0] !== "Finding ID") continue;
     for (const row of table.rows) {
       if (!row.length) continue;
-      const primaryId = row[0].replace(/\([^)]*\)/g, "").replace(/`/g, "").trim();
-      if (idPattern.test(primaryId)) {
-        ids.add(primaryId);
-      }
+      addCandidate(row[0]);
     }
   }
-  for (const match of markdown.matchAll(/^#{3,4}\s+`([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`/gm)) {
-    ids.add(match[1]);
+  for (const match of stripped.matchAll(/^#{3,4}\s+`([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`/gm)) {
+    addCandidate(match[1]);
+  }
+  if (includeProseHeadingsAndBullets) {
+    // Plain or styled headings (e.g., "### SD-TEST-01 — Missing verification", "#### [P2] **SD-TEST-01**: ...")
+    const headingRe =
+      /^#{2,6}\s+(?:(?:\*{1,2}|`)?\s*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)\s*(?:\*{1,2}|`)?\s*[:—–-]?\s*)?(?:\*{1,2}|`)?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?:\*{1,2}|`)?(?=$|\s*(?:[:—–(-]|\*{1,2}|`|\s))/gm;
+    for (const match of stripped.matchAll(headingRe)) {
+      addCandidate(match[1]);
+    }
+    // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **[P2] `SD-TEST-01`**: ...", "1. SD-TEST-01: ...")
+    const bulletRe =
+      /^\s*(?:[*+-]|\d+[.)])\s+(?:(?:\*{1,2}|`)?\s*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)\s*(?:\*{1,2}|`)?\s*[:—–-]?\s*)?(?:\*{1,2}|`)?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?:\*{1,2}|`)?\s*(?:\([^)]*\)\s*)?(?:\*{1,2}|`)?\s*(?:[:—–-]|$)/gm;
+    for (const match of stripped.matchAll(bulletRe)) {
+      addCandidate(match[1]);
+    }
   }
   return ids;
 }
@@ -403,7 +447,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
         ];
         const cohortFindingIds = new Set();
         for (const md of cohortMarkdowns) {
-          for (const fid of extractCohortFindingIds(md)) {
+          for (const fid of extractCohortFindingIds(md, { includeProseHeadingsAndBullets: true })) {
             cohortFindingIds.add(fid);
           }
         }

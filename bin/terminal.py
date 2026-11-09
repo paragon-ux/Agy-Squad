@@ -4,12 +4,15 @@ import errno
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import sys
 import termios
 import time
 import tty
+
+ANSI_ESCAPE_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 
 def run(ready_file, prompt, args):
@@ -85,9 +88,10 @@ def run(ready_file, prompt, args):
                 sys.stdout.buffer.flush()
                 if not prompt_open:
                     header = (header + output)[-16384:]
-                    if not seen_agent and agent in header:
+                    clean_header = ANSI_ESCAPE_RE.sub(b"", header)
+                    if not seen_agent and agent in clean_header:
                         seen_agent = True
-                    if not seen_shortcuts and b"? for shortcuts" in header:
+                    if not seen_shortcuts and b"? for shortcuts" in clean_header:
                         seen_shortcuts = True
                     prompt_open = seen_agent and seen_shortcuts
             if stdin in sources:

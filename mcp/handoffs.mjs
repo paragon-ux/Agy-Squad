@@ -247,18 +247,23 @@ function readSynthesis(root, report, verifiedDirs) {
   const verdicts = new Set();
   for (const line of clean.split(/\r?\n/)) {
     for (const m of line.matchAll(
-      /(?:^|\b)(?:verdict|status|result|check|disposition)\s*(?:\*{1,2})?\s*(?:[:—-]|\bis\b)\s*(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/gi
+      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:\*{1,2})?\s*(?:[:—–-]|\bis\b)\s*(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/gi
     )) {
       verdicts.add(m[1].toUpperCase());
     }
-    for (const m of line.matchAll(/(?:^\s*(?:[#>*+-]+\s*)?|:\s*|\|\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/g)) {
+    for (const m of line.matchAll(
+      /(?:^\s*(?:(?:#+|>|[*+-]|\d+[.)])\s*)*|[:|—–]\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?:\*{1,2})?(?![-\w])/g
+    )) {
+      verdicts.add(m[1]);
+    }
+    for (const m of line.matchAll(/\b(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?:\*{1,2})?\s*[:—–-](?=\s|$)/g)) {
       verdicts.add(m[1]);
     }
   }
   if (verdicts.size !== 1 || !verdicts.has("PASS")) {
     throw new Error("Synthesis report must record an unambiguous PASS verdict.");
   }
-  return bytes;
+  return { bytes, verdict: "PASS" };
 }
 
 function inspectReports(root, record, verifiedDirs = new Set()) {
@@ -309,12 +314,18 @@ function bundleReports(root, record) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
-  const synthesis = sha256(readSynthesis(root, synthesisSlot, verifiedDirs));
+  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs);
+  if (synthesisCheck.verdict !== verdict) {
+    throw new Error("Synthesis report must record an unambiguous PASS verdict.");
+  }
+  const synthesis = sha256(synthesisCheck.bytes);
   const reports = assignments.map(({ report, bytes }) => {
     const markdown = decodeUtf8(bytes, report);
     return { path: report, sha256: sha256(bytes), markdown };
   });
-  const bundlePayload = Buffer.from(JSON.stringify({ squadId, synthesis, verifiedFiles, reports }, null, 2) + "\n");
+  const bundlePayload = Buffer.from(
+    JSON.stringify({ squadId, verdict: synthesisCheck.verdict, synthesis, verifiedFiles, reports }, null, 2) + "\n"
+  );
   publish(root, relative, bundlePayload, true, verifiedDirs);
   return {
     path: relative,
@@ -334,7 +345,10 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Invalid bundle JSON object.");
   }
-  const { squadId, synthesis, verifiedFiles, reports } = parsed;
+  const { squadId, verdict, synthesis, verifiedFiles, reports } = parsed;
+  if (verdict !== "PASS") {
+    throw new Error("Bundle must record an independently verified PASS verdict.");
+  }
   const rootPrefix = resolveReportRoot(relative);
   if (
     relative !== bundlePath(squadId, rootPrefix) ||
@@ -347,7 +361,8 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   ) {
     throw new Error("Bundle must contain the recorded squad's exact specialist slots.");
   }
-  if (sha256(readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs)) !== synthesis) {
+  const synthesisCheck = readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs);
+  if (synthesisCheck.verdict !== verdict || sha256(synthesisCheck.bytes) !== synthesis) {
     throw new Error("Synthesis changed after bundling.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
