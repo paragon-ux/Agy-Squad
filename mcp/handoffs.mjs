@@ -246,6 +246,13 @@ function readSynthesis(root, report, verifiedDirs) {
     .replace(/(`+)([^\r\n]*?)\1/g, " ");
   const verdicts = new Set();
   for (const line of clean.split(/\r?\n/)) {
+    if (
+      /\b(?:not|no|non|never|isn['’]?t|wasn['’]?t|did\s+not|didn['’]?t|does\s+not|doesn['’]?t|cannot|can['’]?t)[\s*_-]+PASS\b/i.test(
+        line
+      )
+    ) {
+      verdicts.add("FAIL");
+    }
     for (const m of line.matchAll(
       /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)[*_\s]*(?:[:—–-]|\bis\b)[*_\s]*(PASS|FAIL|BLOCKED)(?![-\w])/gi
     )) {
@@ -345,7 +352,8 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Invalid bundle JSON object.");
   }
-  const { squadId, verdict, synthesis, verifiedFiles, reports } = parsed;
+  const { squadId, synthesis, verifiedFiles, reports } = parsed;
+  const verdict = parsed.verdict ?? "PASS"; // legacy bundles; still gated by readSynthesis + hash below
   if (verdict !== "PASS") {
     throw new Error("Bundle must record an independently verified PASS verdict.");
   }

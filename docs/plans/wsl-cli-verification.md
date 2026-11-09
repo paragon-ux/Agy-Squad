@@ -14,6 +14,7 @@ Use a disposable workspace with synthetic files. Keep configuration local to tha
 - Check native file tools and MCP permissions separately. Verify that a specialist cannot read other conversations' transcripts or invoke an MCP tool that would expose them.
 - Confirm the actual tool restrictions on lead and specialist presets. Verify them through tool behavior or the model request schema. A startup tool inventory alone is insufficient.
 - Confirm the CLI can stop a bounded command and that the command leaves no process running. Keep the native `/agents` controls available.
+- When running `agy-squad run --launch` against the native `agy` CLI, `bin/terminal.py` strips ANSI escape sequences and waits for both the `--agent` profile name and the readiness marker (`AGY_SQUAD_READY_MARKER`, default `"? for shortcuts"`) plus `.mcp-ready` before injecting the bracketed-paste prompt. If a newer `agy` release changes its startup footer text, override `AGY_SQUAD_READY_MARKER` with the new banner token. On timeout, `bin/terminal.py` reports `startup timeout: seen_agent=<bool> seen_shortcuts=<bool> mcp_ready=<bool>` so operators can distinguish banner mismatches from MCP registration delays.
 
 If any required boundary fails, keep the workflow at payload compilation.
 

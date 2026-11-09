@@ -345,6 +345,10 @@ process.stdin.on("data", chunk => {
     );
     assert.equal(timeoutRes.status, 1);
     assert.match(timeoutRes.stdout + timeoutRes.stderr, /dispatcher was not discovered within 0\.2 seconds/);
+    assert.match(
+      timeoutRes.stdout + timeoutRes.stderr,
+      /startup timeout: seen_agent=False seen_shortcuts=False mcp_ready=False/
+    );
 
     const postTermReady = path.join(temporary, "post-term.mcp-ready");
     fs.writeFileSync(postTermReady, "ready\n");
@@ -352,7 +356,7 @@ process.stdin.on("data", chunk => {
     fs.mkdirSync(postTermBin);
     fs.writeFileSync(
       path.join(postTermBin, "agy"),
-      "#!/usr/bin/env python3\nimport signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nprint('? for shortcuts test-agent', flush=True)\nbuf = b''\nwhile b'\\x1b[201~' not in buf:\n    ch = sys.stdin.buffer.read(1)\n    if not ch:\n        break\n    buf += ch\nprint('PROMPT_SUBMITTED', flush=True)\ntime.sleep(10)\n",
+      "#!/usr/bin/env python3\nimport signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nprint('CUSTOM_READY_MARKER test-agent', flush=True)\nbuf = b''\nwhile b'\\x1b[201~' not in buf:\n    ch = sys.stdin.buffer.read(1)\n    if not ch:\n        break\n    buf += ch\nprint('PROMPT_SUBMITTED', flush=True)\ntime.sleep(10)\n",
       { mode: 0o700 }
     );
     const postTermRes = spawnSync(
@@ -393,6 +397,7 @@ sys.exit(0 if termed and os.waitstatus_to_exitcode(status) == 137 else 1)`,
         env: {
           ...process.env,
           AGY_SQUAD_KILL_GRACE: "0.1",
+          AGY_SQUAD_READY_MARKER: "CUSTOM_READY_MARKER",
           PATH: [postTermBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter)
         },
         encoding: "utf8",

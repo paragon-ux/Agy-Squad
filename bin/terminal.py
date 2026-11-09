@@ -56,6 +56,7 @@ def run(ready_file, prompt, args):
     tty.setraw(stdin)
     startup_timeout = float(os.environ.get("AGY_SQUAD_STARTUP_TIMEOUT", "15"))
     kill_grace = float(os.environ.get("AGY_SQUAD_KILL_GRACE", "2.0"))
+    ready_marker = os.environ.get("AGY_SQUAD_READY_MARKER", "? for shortcuts").encode()
     deadline = time.monotonic() + startup_timeout
     agent = args[args.index("--agent") + 1].encode()
     header = b""
@@ -91,7 +92,7 @@ def run(ready_file, prompt, args):
                     clean_header = ANSI_ESCAPE_RE.sub(b"", header)
                     if not seen_agent and agent in clean_header:
                         seen_agent = True
-                    if not seen_shortcuts and b"? for shortcuts" in clean_header:
+                    if not seen_shortcuts and ready_marker in clean_header:
                         seen_shortcuts = True
                     prompt_open = seen_agent and seen_shortcuts
             if stdin in sources:
@@ -146,7 +147,11 @@ def run(ready_file, prompt, args):
         os.close(wake_r)
         os.close(wake_w)
     if startup_failed:
-        sys.exit(f"Agy-Squad: the dispatcher was not discovered within {startup_timeout:g} seconds.")
+        mcp_ready = os.path.isfile(ready_file)
+        sys.exit(
+            f"Agy-Squad: the dispatcher was not discovered within {startup_timeout:g} seconds "
+            f"(startup timeout: seen_agent={seen_agent} seen_shortcuts={seen_shortcuts} mcp_ready={mcp_ready})."
+        )
     code = os.waitstatus_to_exitcode(status)
     exit_code = 128 - code if code < 0 else code
     if not submitted and not terminating:

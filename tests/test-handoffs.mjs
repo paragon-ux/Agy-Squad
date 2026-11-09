@@ -80,6 +80,9 @@ try {
     "FAIL: output differs from expected.",
     "1. FAIL: output differs from expected.",
     "Output check — FAIL: output differs from expected.",
+    "NOT PASS: validation failed.",
+    "Verdict: not PASS",
+    "no PASS: check failed.",
     "- **Verdict:** **FAIL**",
     "Verdict: PASS\n- **Verdict:** **FAIL**",
     "Verdict: BLOCKED — missing required fixture.",
@@ -134,6 +137,13 @@ try {
   const archived = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
   assert.equal(archived.verdict, "PASS");
   assert.deepEqual(archived.reports.map(report => report.markdown), [firstEvidence, secondEvidence]);
+  // Verify B2: legacy bundle without verdict field still verifies when synthesis is PASS, and rejects explicit non-PASS verdict
+  const { verdict: _omittedVerdict, ...legacyBundleObj } = archived;
+  write(bundle, JSON.stringify(legacyBundleObj, null, 2) + "\n");
+  assert.equal(verifyBundle(root, bundle).path, bundle);
+  write(bundle, JSON.stringify({ ...legacyBundleObj, verdict: "FAIL" }, null, 2) + "\n");
+  assert.throws(() => verifyBundle(root, bundle), /independently verified PASS verdict/);
+  write(bundle, JSON.stringify(archived, null, 2) + "\n");
   assert.ok(exists(lead) && exists("fixture.txt"));
   const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
   assert.equal(cliVerify.status, 0, cliVerify.stderr);

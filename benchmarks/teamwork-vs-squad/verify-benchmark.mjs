@@ -75,15 +75,46 @@ try {
   assert.equal(offByOneRetry.status, "FAILED");
   assert.equal(calls, 1);
 
+  // N6 planted defect: corrupt ledger is overwritten, prior entry lost
   appendLedgerEntry(ledgerPath, { requestId: "r-prior", tenantId: "t1", output: { ok: 1 } });
   assert.equal(readLedger(ledgerPath).length, 1);
   fs.writeFileSync(ledgerPath, "{corrupt-json");
-  assert.deepEqual(readLedger(ledgerPath), []);
-  const overwriteRes = appendLedgerEntry(ledgerPath, { requestId: "r-new", tenantId: "t1", output: { ok: 2 } });
-  assert.deepEqual(overwriteRes, { duplicate: false, count: 1 });
-  assert.deepEqual(JSON.parse(fs.readFileSync(ledgerPath, "utf8")), [
-    { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
-  ]);
+  const expectFixed = process.argv.includes("--expect-fixed") || process.env.AGY_BENCHMARK_EXPECT_FIXED === "1";
+  const verifyFixedLedgerGuard = (appendFn, targetPath) => {
+    let threw = false;
+    let res;
+    try {
+      res = appendFn(targetPath, { requestId: "r-new", tenantId: "t1", output: { ok: 2 } });
+    } catch {
+      threw = true;
+    }
+    const backedUp = fs.existsSync(targetPath + ".corrupt");
+    assert.ok(threw || backedUp, "Fixed appendLedgerEntry must throw on corrupt JSON or preserve ledger.json.corrupt");
+    assert.notEqual(res?.count, 1, "Fixed appendLedgerEntry must not silently return { count: 1 } without backup");
+  };
+  if (expectFixed) {
+    verifyFixedLedgerGuard(appendLedgerEntry, ledgerPath);
+  } else {
+    assert.deepEqual(readLedger(ledgerPath), []);
+    const overwriteRes = appendLedgerEntry(ledgerPath, { requestId: "r-new", tenantId: "t1", output: { ok: 2 } });
+    assert.deepEqual(overwriteRes, { duplicate: false, count: 1 });
+    assert.deepEqual(JSON.parse(fs.readFileSync(ledgerPath, "utf8")), [
+      { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
+    ]);
+    // Also verify the fixed-mode grading check against a backup-preserving reference fix
+    const fixedLedgerPath = path.join(tmp, "ledger-fixed.json");
+    fs.writeFileSync(fixedLedgerPath, "{corrupt-json");
+    verifyFixedLedgerGuard((p, entry) => {
+      try {
+        JSON.parse(fs.readFileSync(p, "utf8"));
+      } catch (err) {
+        fs.copyFileSync(p, p + ".corrupt");
+        throw err;
+      }
+      return appendLedgerEntry(p, entry);
+    }, fixedLedgerPath);
+    assert.equal(fs.existsSync(fixedLedgerPath + ".corrupt"), true);
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
