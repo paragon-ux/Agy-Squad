@@ -1,6 +1,6 @@
 # Agy-Squad
 
-Staged subagent orchestration, self-diagnosis, and review governance for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **POSIX systems (Linux, macOS, and WSL2)**.
+Staged subagent orchestration, self-diagnosis, and review governance for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (with best-effort, untested macOS support)**.
 
 `Agy-Squad` compiles coding or review tasks into scoped Antigravity subagent assignments (`dispatch_squad`). Each specialist writes a file-backed report (`scratch/agy-squad/.../report.md`) and returns a single-line receipt under `500` UTF-8 bytes (`Pointer-Over-Wire`) with a concrete observation and its report path. The parent or squad lead checks the cited code and tests directly, then bundles SHA-256 input and report digests via `node mcp/handoffs.mjs`.
 
@@ -25,7 +25,7 @@ Beyond task delegation, the core harness includes:
 
 ### Prerequisites
 
-- **POSIX environment:** Linux, macOS, or WSL2 on Windows (`Node.js >= 22`, `Python >= 3.9` for the CLI PTY bridge).
+- **Operating system:** Linux or WSL2 on Windows (primary verified targets; macOS is best-effort and untested; `Node.js >= 22`, `Python >= 3.9` for the CLI PTY bridge).
 - **Antigravity environment:** Antigravity Desktop (IDE) or the authenticated Antigravity CLI (`agy` on `PATH`; see the [CLI install guide](https://antigravity.google/docs/cli/install/)).
 - **Companion governor:** `Agy-Context-Saver` (`>= 1.8.1`) reporting `HEALTHY & ACTIVE` with pinned `RTK` (`0.51.0`). Run its `sync_installation` MCP tool once on a new host if `rtk` is missing; see [Getting started](docs/getting-started.md#host-and-companion-compatibility-matrix).
 

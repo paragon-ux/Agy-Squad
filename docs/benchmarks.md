@@ -12,7 +12,7 @@ In this recorded six-defect audit, both arms caught all six planted defect categ
 | **Active wall-clock time** | **`6m 15s` (`375s`)** | **`26m 19s` (`1,579s`)** | **`4.2x` faster (`76.2%` less time)** |
 | **Time to first specialist delegation** | **`59s`** (`8.5 ms` compile) | **`91s`** (startup phase) | **`1.5x` faster initial delegation** |
 | **Subagents spawned** | **`3`** (`1` lead, `2` specialists) | **`8`** (`teamwork` fleet) | **`2.7x` fewer subagents** |
-| **Total transcript steps (`check_context_health`)** | **`64`** (`32 + 19 + 13`) | **`645`** (`66` to `129` across `8` agents) | **`10.1x` fewer steps (`90.1%` reduction)** |
+| **Total transcript steps (`check_context_health`)** | **`64`** (`32 + 19 + 13`) | **`645`** (`50` to `129` across `8` agents) | **`10.1x` fewer steps (`90.1%` reduction)** |
 | **Total assistant LLM turns** | **`26`** (`11 + 9 + 6`) | **`321`** (`25` to `63` across `8` agents) | **`12.3x` fewer turns (`91.9%` reduction)** |
 | **Total tool calls** | **`32`** (`17 + 9 + 6`) | **`302`** (`24` to `57` across `8` agents) | **`9.4x` fewer tool calls (`89.4%` reduction)** |
 | **Aggregate raw transcript size** | **`148.2 KB`** | **`817.4 KB`** | **`5.5x` smaller (`81.9%` byte reduction)** |

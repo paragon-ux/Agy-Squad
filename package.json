@@ -5,6 +5,12 @@
   "description": "Staged subagent payloads and Pointer-Over-Wire briefs for the Antigravity CLI on WSL.",
   "main": "mcp/index.js",
   "bin": { "agy-squad": "bin/agy-squad.mjs" },
+  "files": [
+    "bin",
+    "mcp",
+    ".agents/skills",
+    "docs"
+  ],
   "type": "module",
   "scripts": {
     "test": "node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",

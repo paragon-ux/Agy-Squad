@@ -1,12 +1,12 @@
 # Getting started (Desktop IDE & CLI on POSIX / WSL2)
 
-Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **POSIX systems (Linux, macOS, and WSL2)**. It compiles coding or review tasks into scoped Antigravity subagent assignments with `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, deterministic SHA-256 bundle checks, recursive [`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), and the [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v130-standard) repository standard (`v1.3.0`).
+Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux and WSL2 (with best-effort, untested macOS support)**. It compiles coding or review tasks into scoped Antigravity subagent assignments with `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, deterministic SHA-256 bundle checks, recursive [`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), and the [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v130-standard) repository standard (`v1.3.0`).
 
 ## Host and companion compatibility matrix
 
 | Layer | Requirement | Check command |
 | --- | --- | --- |
-| Operating system | POSIX environment: Linux, macOS, or WSL2 on Windows | `uname -a` |
+| Operating system | Linux or WSL2 on Windows (primary verified targets; macOS is best-effort and untested) | `uname -a` |
 | Node.js | `>= 22.0.0` | `node --version` |
 | Python | `>= 3.9` (used by `bin/terminal.py` when launching the CLI PTY wrapper) | `python3 --version` |
 | Antigravity surface | Antigravity Desktop (IDE) or authenticated `agy` CLI on `PATH` ([CLI install guide](https://antigravity.google/docs/cli/install/)) | Open Desktop IDE or run `agy --version` |
@@ -94,9 +94,9 @@ node bin/agy-squad.mjs run --workspace "$PWD" \
 1. In Desktop IDE or CLI sessions, `dispatch_squad` compiles the target stage and prepares the `scratch/agy-squad/...` report directories.
 2. Each specialist writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and returns a single-line `<= 500` byte receipt:
    ```text
-   READY scratch/agy-squad/run-.../specialist-1/report.md - gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
+   READY scratch/agy-squad/run-.../plan-.../squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
-3. The parent (or squad lead) inspects the cited source lines and tests to verify semantic correctness, writes `lead/report.md` starting with `Verdict: PASS`, and runs `node mcp/handoffs.mjs` (`inspect`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
+3. The parent (or squad lead) inspects the cited source lines and tests to verify semantic correctness, records an unambiguous PASS verdict in `lead/report.md`, and runs `node mcp/handoffs.mjs` (`inspect`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
 4. Exiting a managed CLI session removes the temporary workspace plugin and agent profile while keeping staged evidence in `scratch/agy-squad/run-<uuid>/`. Use `manage_subagents` (in Desktop IDE) or `/agents` (in CLI) to inspect or stop running subagents, and see [Stopping agents](stopping-agents.md) to verify child process termination.
 
 ## When to use Agy-Squad vs. alternatives
@@ -112,9 +112,9 @@ node bin/agy-squad.mjs run --workspace "$PWD" \
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `Error: Running 'agy' requires an interactive WSL terminal` | `bin/agy-squad.mjs run` CLI wrapper was invoked outside an interactive WSL TTY | Use an interactive WSL2 terminal for `bin/agy-squad.mjs run`, or register `mcp/index.js` directly in Antigravity Desktop IDE / `.agents/mcp_config.json` on any POSIX host |
-| `spawn agy ENOENT` or `python3: not found` | `agy` or `python3` is missing from `PATH` | Confirm `which agy` and `python3 --version` succeed in the same shell |
-| `Native Antigravity CLI did not reach ready state within 15s` | `agy` is unauthenticated, awaiting first-run prompt, or MCP discovery stalled | Run `agy` directly once to complete sign-in, then retry `bin/agy-squad.mjs run` |
+| `agy-squad: Open an interactive terminal to start a squad run.` | `bin/agy-squad.mjs run` CLI wrapper was invoked outside an interactive TTY | Run `bin/agy-squad.mjs run` in an interactive terminal, or register `mcp/index.js` directly in Antigravity Desktop IDE / `.agents/mcp_config.json` |
+| `agy-squad: Antigravity CLI (agy) must be available on PATH.` or `agy-squad: Python 3 (python3) must be available on PATH.` | `agy` or `python3` is missing from `PATH` | Confirm `which agy` and `python3 --version` succeed in the same shell |
+| `Agy-Squad: the dispatcher was not discovered within 15 seconds (startup timeout: ...)` | `agy` is unauthenticated, awaiting first-run prompt, or MCP discovery stalled | Run `agy` directly once to complete sign-in, then retry `bin/agy-squad.mjs run` |
 | `read_file` denied by `Agy-Context-Saver` hook during live run | `Agy-Context-Saver` routes workspace reads to `rtk read` | Use `rtk read <file>` via `run_command`; run `sync_installation` if `rtk` (`0.51.0`) is missing |
 | `invoke_subagent` unavailable in CLI session | Session started in preview mode (without `--launch`) | Re-run with `--launch` to include `invoke_subagent`, `run_command`, `schedule`, and `call_mcp_tool` |
 | Specialist silent past checkpoint | Waiting on permission prompt or stuck command | Use `manage_subagents` (Desktop IDE) or `/agents` (CLI) to inspect or stop the child, then verify underlying processes exited ([Stopping agents](stopping-agents.md)) |

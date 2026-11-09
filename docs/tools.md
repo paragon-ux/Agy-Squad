@@ -55,7 +55,7 @@ File scope in a brief describes the assignment. Use the [WSL verification checkl
 
 ## Optional report cleanup
 
-The benchmark presets stage a copy of `mcp/handoffs.mjs` at `.benchmark-bin/agy-squad-handoffs.mjs`. Run it with Node from the shared workspace root. Bundling and pruning support both unmanaged (`scratch/agy-squad/squad-…`) and managed (`scratch/agy-squad/run-…/plan-…/squad-…`) report layouts.
+Run `node mcp/handoffs.mjs` with Node from the shared workspace root. Bundling and pruning support both unmanaged (`scratch/agy-squad/squad-…`) and managed (`scratch/agy-squad/run-…/plan-…/squad-…`) report layouts.
 
 - `fingerprint <file...>` returns workspace-relative paths mapped to SHA-256. Capture hashes before and after independent checks on final work inputs.
 - `inspect <record.json>` checks the recorded cohort against the native messages and readable reports. The record contains an absolute `workspace`, ordered `assignments` with `conversationId` and `report`, and `handoffs` with native `sender` and exact `message`.

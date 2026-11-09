@@ -6,3 +6,4 @@ scratch/
 *.log
 *.tgz
 .DS_Store
+.agents/teamwork/

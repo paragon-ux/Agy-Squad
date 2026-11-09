@@ -5,7 +5,7 @@ Agy-Squad combines four connected workflows inside one workspace harness across 
 1. **Task-proportional subagent orchestration** (`dispatch_squad` + `mcp/handoffs.mjs`)
 2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))
 3. **Governed PR review under Standard v1.3.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md))
-4. **Three-scope evidence retention and teardown** (`L40`, `L41`)
+4. **Three-scope evidence retention and teardown** (`L41`)
 
 ## 1. Orchestrate proportional specialist or lead cohorts
 
@@ -15,7 +15,7 @@ Agy-Squad combines four connected workflows inside one workspace harness across 
 - **500-byte receipt ceiling (`Pointer-Over-Wire`):** Each child sends one single-line message (`READY`, `PARTIAL`, or `NO_REPORT`) under `500` UTF-8 bytes back to its parent via `send_message`, waking the parent via Reactive Wakeup without dumping multi-kilobyte transcripts into the parent context.
 - **Two-part verification:**
   1. **Semantic correctness check:** The parent or squad lead inspects the cited source lines and test outputs directly before writing `lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED`).
-  2. **Cryptographic integrity check:** `node mcp/handoffs.mjs` (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`) verifies that `lead/report.md` starts with `Verdict: PASS`, computes SHA-256 digests for all cited `verifiedFiles` and specialist reports in `lead/report.sources.json`, and prunes loose `specialist-<N>/report.md` files.
+  2. **Cryptographic integrity check:** `node mcp/handoffs.mjs` (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`) verifies that `lead/report.md` contains an unambiguous `PASS` verdict (with no conflicting or negated verdicts), computes SHA-256 digests for all cited `verifiedFiles` and specialist reports in `lead/report.sources.json`, and prunes loose `specialist-<N>/report.md` files.
 
 ## 2. Diagnose and optimize the harness (`self-diagnosis`)
 
@@ -53,7 +53,7 @@ node .agents/skills/self-diagnosis/scripts/diagnose.mjs \
 
 Every diagnostic pass follows a strict sequence:
 
-`run zero-subagent profiler -> launch cohort -> reconcile & bundle reports -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> remediate -> re-verify with the same specialists -> run diagnose.mjs --teardown -> terminate subagents`
+`run zero-subagent profiler -> launch cohort -> reconcile & bundle reports -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> run diagnose.mjs --teardown -> remediate -> re-verify with the same specialists -> terminate subagents`
 
 ## 3. Review pull requests to the v1.3.0 standard
 

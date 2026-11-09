@@ -18,7 +18,7 @@ flowchart LR
 The top-level Antigravity conversation (started in **Antigravity Desktop (IDE)** or via `node bin/agy-squad.mjs run` in the CLI on POSIX / WSL2) that owns user approvals, invokes `dispatch_squad`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
 
 ### Squad lead
-An intermediate subagent compiled when `dispatch_squad` runs with `squadId: "all_l1"` on a multi-squad manifest. Each squad lead dispatches its own domain specialists, verifies their cited files, writes `scratch/agy-squad/.../lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED`), and bundles SHA-256 digests via `node mcp/handoffs.mjs`.
+An intermediate subagent compiled when `dispatch_squad` runs with `squadId: "all_l1"` on a manifest defining one or more squads. Each squad lead dispatches its own domain specialists, verifies their cited files, writes `scratch/agy-squad/.../lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED`), and bundles SHA-256 digests via `node mcp/handoffs.mjs`.
 
 ### Specialist
 A focused worker subagent compiled for a single squad (`squadId: "<id>"`). Every specialist uses `TypeName: "self"` and `Workspace: "inherit"` so it can inspect its assigned `scopeFiles` and write its evidence report to `scratch/agy-squad/.../specialist-<N>/report.md`.
@@ -27,10 +27,10 @@ A focused worker subagent compiled for a single squad (`squadId: "<id>"`). Every
 A single compilation step returned by `dispatch_squad`:
 
 - **Direct specialist stage (`squadId: "<id>"`):** Returns the `Subagents` array for that squad (`1` to `N` specialists reporting directly to the caller).
-- **Lead stage (`squadId: "all_l1"`):** Returns one lead subagent per squad defined in the manifest (`2` or more squads).
+- **Lead stage (`squadId: "all_l1"`):** Returns one lead subagent per squad defined in the manifest (`1` or more squads).
 
-### Manifest (`run-plan.json`)
-A JSON file inside the workspace that defines `squads`, each containing an optional `lead` and a required `specialists` array (`role`, `objective`, `scopeFiles`, and optional `instructions`, `expectedDeliverable`, or `model`). See [Manifest and tool contract](tools.md).
+### Manifest
+A JSON file inside the workspace that defines `squads`, each containing an optional `lead` and a required `specialists` array (`role`, `objective`, `scopeFiles`, and optional `instructions`, `expectedDeliverable`, or `model`). When no explicit manifest path is given, `dispatch_squad` searches in order for default filenames (`task-01-manifest.json`, `swarm-manifest.json`, `.scratch/swarm-manifest.json`, `suite-manifest.json`). See [Manifest and tool contract](tools.md).
 
 ### Report slot
 The deterministic workspace-relative path assigned to each specialist (`scratch/agy-squad/.../specialist-<N>/report.md`) or lead (`scratch/agy-squad/.../lead/report.md`). Keeping full evidence in report slots prevents large markdown payloads from bloating parent conversation context.
@@ -38,14 +38,14 @@ The deterministic workspace-relative path assigned to each specialist (`scratch/
 ### Pointer-Over-Wire receipt (`<= 500` UTF-8 bytes)
 The single-line message a child sends back to its parent via `send_message` when it finishes:
 
-- `READY <report-path> - <concrete observation>`
-- `PARTIAL <report-path> - <reason>`
-- `NO_REPORT - <reason>`
+- `READY <report-path> — <concrete observation>`
+- `PARTIAL <report-path> — <reason>`
+- `NO_REPORT — <reason>`
 
 `mcp/handoffs.mjs` enforces the `500` UTF-8 byte ceiling and single-line format.
 
 ### Evidence bundle (`report.sources.json`)
-A JSON manifest written by `node mcp/handoffs.mjs bundle` alongside `lead/report.md`. It records the SHA-256 digest and byte size of `lead/report.md`, every `specialist-<N>/report.md`, and every workspace file passed via `--file`. Running `node mcp/handoffs.mjs verify` checks that none of those files have changed since bundling. Digest verification proves artifact consistency, while the lead or parent's code and test inspection verifies semantic correctness.
+A JSON manifest written by `node mcp/handoffs.mjs bundle` alongside `lead/report.md`. It records the SHA-256 digest and byte size of `lead/report.md`, every `specialist-<N>/report.md`, and every workspace file recorded in the record's `verifiedFiles` property. Running `node mcp/handoffs.mjs verify` checks that none of those files have changed since bundling. Digest verification proves artifact consistency, while the lead or parent's code and test inspection verifies semantic correctness.
 
 ## Companion and governance terms
 
@@ -64,5 +64,5 @@ The repository's formal review specification (`.agents/skills/pr-review/SKILL.md
 ### Decision ledger codes (`L1` through `L41`)
 Short identifiers referencing architectural decisions in [`docs/plans/LEDGER.md`](plans/LEDGER.md):
 
-- **Active architecture (`L1-L7, L17, L21, L29-L31, L40, L41`):** Define the current CLI and Desktop orchestration model (`L1`, `L7`), 500-byte receipt ceiling (`L29`), file-backed specialist slots and SHA-256 bundles (`L30`), `Agy-Context-Saver` separation (`L31`), and ledger-gated teardown (`L40`, `L41`).
+- **Active architecture (`L1-L7, L17, L21, L29-L31, L40, L41`):** Define host-enforced boundaries, 500-byte receipt ceiling, and SHA-256 bundling (`L1, L2`), native stop controls (`L3, L5`), scratch isolation (`L4`), transcript boundaries (`L6`), zero real subagents in automated tests (`L7`), CLI sandbox execution (`L17`), deny-by-default permissions (`L21, L40`), private distribution (`L29`), Zensical docs (`L30`), `Agy-Context-Saver` separation (`L31`), and deterministic scratch teardown (`L41`).
 - **Retired historical IDs (`L8-L12, L16, L18-L20, L22-L24, L28, L35-L39`):** Record earlier Windows/Docker trials and migration steps retained in `docs/plans/LEDGER.md` for historical provenance.

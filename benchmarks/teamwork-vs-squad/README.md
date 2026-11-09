@@ -95,6 +95,6 @@ To run a fresh live comparison on an authenticated WSL2 host with `Agy-Context-S
    node bin/agy-squad.mjs run --workspace "$PWD" \
      --manifest benchmarks/teamwork-vs-squad/manifest.json --squad all_l1 --launch
    ```
-   After the lead returns its `READY` receipt and `report.sources.json` bundle digest, run `node mcp/handoffs.mjs verify --squad ab_audit` and collect per-agent metrics via `check_context_health`.
+   After the lead returns its `READY` receipt and `report.sources.json` bundle digest, run `node mcp/handoffs.mjs verify scratch/agy-squad/run-<uuid>/plan-<hex>/squad-ab_audit/lead/report.sources.json` and collect per-agent metrics via `check_context_health`.
 3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `check_context_health`.
 4. Grade both arms' findings against the six-defect rubric (`N1` through `N6`) in `results/telemetry.json`.
