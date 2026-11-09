@@ -87,13 +87,23 @@ function removeEmpty(directory) {
   }
 }
 
-function hasEvidence(directory) {
+function hasEvidence(directory, relative = "") {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory() && hasEvidence(target)) return true;
-    if (entry.isFile() && entry.name === "report.md" && fs.readFileSync(target, "utf8").trim().length > 0) {
-      return true;
+    const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (hasEvidence(absolute, childRelative)) return true;
+      continue;
     }
+
+    // REVIEW: These are launcher-owned transient files, not task evidence.
+    if (childRelative === ".mcp-ready" || /^plan-[0-9a-f]{24}\/manifest\.json$/.test(childRelative)) continue;
+
+    // REVIEW: Preserve existing test behavior for empty report slots.
+    if (entry.isFile() && entry.name === "report.md" && !fs.readFileSync(absolute, "utf8").trim()) continue;
+
+    // REVIEW: Unexpected JSON/log files and symlinks may be the only failure evidence.
+    return true;
   }
   return false;
 }

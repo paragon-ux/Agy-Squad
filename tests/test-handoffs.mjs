@@ -221,6 +221,53 @@ try {
   const cPrune = spawnSync(process.execPath, [handoffsCli, "prune", cBundled.path, cBundled.sha256], { cwd: root, env: customScratchEnv, encoding: "utf8" });
   assert.equal(cPrune.status, 0, cPrune.stderr);
   assert.deepEqual(JSON.parse(cPrune.stdout), { removed: [cFirst] });
+
+  // Verify SVC-NEW-03: READY and PARTIAL receipts with spaces and " — " separator in reportRoot
+  const spacedRoot = "scratch files/nested/agy-squad";
+  const spacedReport = reportPath("alpha", 1, spacedRoot);
+  write(spacedReport, "# Evidence\nObserved result.\n");
+  const spacedRecord = {
+    workspace: root,
+    reportRoot: spacedRoot,
+    assignments: [{ conversationId: "space-child", report: spacedReport }],
+    handoffs: [
+      {
+        sender: "space-child",
+        message: `READY ${spacedReport} — Completed verification.`
+      }
+    ]
+  };
+  assert.equal(inspectHandoffs(root, spacedRecord)[0].status, "READY");
+  assert.equal(
+    inspectHandoffs(root, {
+      ...spacedRecord,
+      handoffs: [{ sender: "space-child", message: `PARTIAL ${spacedReport} — Waiting for approval.` }]
+    })[0].status,
+    "PARTIAL"
+  );
+
+  const dashRoot = "scratch — files/nested/agy-squad";
+  const dashReport = reportPath("alpha", 1, dashRoot);
+  write(dashReport, "# Evidence\nObserved dash-path result.\n");
+  const dashRecord = {
+    workspace: root,
+    reportRoot: dashRoot,
+    assignments: [{ conversationId: "dash-child", report: dashReport }],
+    handoffs: [
+      {
+        sender: "dash-child",
+        message: `READY ${dashReport} — Completed dash-path verification.`
+      }
+    ]
+  };
+  assert.equal(inspectHandoffs(root, dashRecord)[0].status, "READY");
+  assert.equal(
+    inspectHandoffs(root, {
+      ...dashRecord,
+      handoffs: [{ sender: "dash-child", message: `PARTIAL ${dashReport} — Waiting on dash-path check.` }]
+    })[0].status,
+    "PARTIAL"
+  );
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

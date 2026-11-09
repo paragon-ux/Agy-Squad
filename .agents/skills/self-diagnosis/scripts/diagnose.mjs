@@ -40,16 +40,40 @@ function removeEmpty(directory) {
   }
 }
 
-function hasEvidence(directory) {
-  if (!fs.existsSync(directory)) return false;
+function listArtifacts(directory) {
+  const found = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory() && hasEvidence(target)) return true;
-    if (entry.isFile() && entry.name === "report.md" && fs.readFileSync(target, "utf8").trim().length > 0) {
-      return true;
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...listArtifacts(absolute));
+    } else {
+      // REVIEW: JSON, logs, zero-byte files, and symlinks are all artifacts.
+      // Do not silently treat a non-report file as disposable.
+      found.push(path.relative(repoRoot, absolute).split(path.sep).join("/"));
     }
   }
-  return false;
+  return found;
+}
+
+function assertSafeDeleteTarget(relative) {
+  if (
+    typeof relative !== "string" ||
+    !relative ||
+    path.posix.isAbsolute(relative) ||
+    relative.includes("\\") ||
+    relative.split("/").some(part => !part || part === "." || part === "..")
+  ) {
+    throw new Error(`Invalid cleanup path: ${relative}`);
+  }
+  let absolute = repoRoot;
+  for (const part of relative.split("/")) {
+    absolute = path.join(absolute, part);
+    const info = fs.lstatSync(absolute); // REVIEW: lstat does NOT follow a symlink.
+    if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) {
+      throw new Error(`Refusing cleanup through a symlink/non-directory: ${absolute}`);
+    }
+  }
+  return absolute;
 }
 
 function resolveTargetReviewLedger(ledgerArg) {
@@ -408,6 +432,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
       }
       continue;
     }
+    assertSafeDeleteTarget(relDir); // REVIEW: --force skips evidence gates, never path safety.
     const bundleRel = reportPath(id, undefined, scratchSquadRel).replace(/\.md$/, ".sources.json");
     const bundleAbs = path.join(repoRoot, bundleRel);
 
@@ -467,9 +492,22 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
             `Refusing to tear down ${relDir}: cohort finding ID(s) [${missingIds.join(", ")}] are missing from ${targetLedger.relative}.`
           );
         }
+        // REVIEW: Bundle verification does not attest arbitrary new files in the squad folder.
+        // Never delete diagnostics.json, trace.log, or an unlisted specialist report.
+        const expectedArtifacts = new Set([
+          bundleRel,
+          reportPath(id, undefined, scratchSquadRel),
+          ...bundleJson.reports.map(({ path: report }) => report)
+        ]);
+        const unexpectedArtifacts = listArtifacts(absDir).filter(file => !expectedArtifacts.has(file));
+        if (unexpectedArtifacts.length) {
+          throw new Error(
+            `Refusing to tear down ${relDir}: unbundled artifacts remain: ${unexpectedArtifacts.join(", ")}`
+          );
+        }
       } else if (acceptedHash) {
         throw new Error(`Cannot verify accepted hash for '${id}': missing bundle at ${bundleRel}`);
-      } else if (hasEvidence(absDir)) {
+      } else if (listArtifacts(absDir).length > 0) {
         throw new Error(
           `Refusing to tear down unbundled evidence in ${relDir} without bundle verification or --force.`
         );
@@ -478,16 +516,18 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
     validatedDirs.push({ absDir, relDir });
   }
 
-  for (const { absDir, relDir } of validatedDirs) {
-    fs.rmSync(absDir, { recursive: true, force: true });
+  for (const { relDir } of validatedDirs) {
+    // REVIEW: Recheck the full parent chain immediately before destructive cleanup.
+    fs.rmSync(assertSafeDeleteTarget(relDir), { recursive: true, force: true });
     tornDown.push(relDir);
   }
 
   if (squadId === "all" && fs.existsSync(scratchSquadRoot)) {
+    assertSafeDeleteTarget(scratchSquadRel); // REVIEW: don't enumerate external symlink trees.
     for (const entry of fs.readdirSync(scratchSquadRoot, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name.startsWith("self-diag-canary-")) {
         const relCanary = `${scratchSquadRel}/${entry.name}`;
-        fs.rmSync(path.join(repoRoot, relCanary), { recursive: true, force: true });
+        fs.rmSync(assertSafeDeleteTarget(relCanary), { recursive: true, force: true });
         tornDown.push(relCanary);
       }
     }

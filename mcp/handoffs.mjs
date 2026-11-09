@@ -103,15 +103,25 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n\u2028\u2029]/.test(message)) {
       throw new Error("Handoff must be one line within 500 UTF-8 bytes.");
     }
-    const match = /^(READY|PARTIAL) (\S+) — (.+)$/.exec(message);
+    const readyPrefix = `READY ${report} — `;
+    const partialPrefix = `PARTIAL ${report} — `;
+    const status = message.startsWith(readyPrefix)
+      ? "READY"
+      : message.startsWith(partialPrefix)
+        ? "PARTIAL"
+        : undefined;
+    const observation = status
+      ? message.slice((status === "READY" ? readyPrefix : partialPrefix).length)
+      : "";
     const noReport = /^NO_REPORT — \S/.test(message);
-    if (!noReport && (!match || match[2] !== report || !match[3].trim())) {
+    // REVIEW: Compare to the exact assigned path. It may contain spaces or " — ".
+    if (!noReport && (!status || !observation.trim())) {
       throw new Error("Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason.");
     }
     if (received.has(sender) && received.get(sender).message !== message) {
       throw new Error("Conflicting handoffs from one assignment.");
     }
-    received.set(sender, { message, status: noReport ? "NO_REPORT" : match[1] });
+    received.set(sender, { message, status: noReport ? "NO_REPORT" : status });
   }
   return received;
 }

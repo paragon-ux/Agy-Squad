@@ -122,6 +122,10 @@ process.stdin.on("data", chunk => {
   }
   const prompt = input.match(/\\x1b\\[200~([\\s\\S]+?)\\x1b\\[201~/)?.[1];
   if (!prompt) return;
+  if (Number(process.env.AGY_TEST_STATUS) === 8) {
+    const diagFile = path.join(registration.env.AGY_SQUAD_RUN_DIR, "diagnostics.json");
+    fs.writeFileSync(diagFile, '{"reason":"session-failed"}\\n');
+  }
   fs.writeFileSync(process.env.AGY_TEST_RECORD, JSON.stringify({ argv, profile, prompt, name, registration, cwd: process.cwd(), input }));
   process.exit(Number(process.env.AGY_TEST_STATUS || 0));
 });
@@ -182,6 +186,14 @@ process.stdin.on("data", chunk => {
   const failedInline = launch(["--launch", "Inline task that fails"], 7);
   assert.equal(failedInline.status, 7, failedInline.stderr);
   assert.equal(fs.existsSync(path.join(root, capture().registration.env.AGY_SQUAD_RUN_DIR)), false);
+  const diagnosticFailure = launch(["--launch", "Write diagnostic and exit"], 8);
+  assert.equal(diagnosticFailure.status, 8, diagnosticFailure.stderr);
+  const diagnosticRunRoot = capture().registration.env.AGY_SQUAD_RUN_DIR;
+  assert.equal(
+    fs.readFileSync(path.join(root, diagnosticRunRoot, "diagnostics.json"), "utf8"),
+    '{"reason":"session-failed"}\n'
+  );
+  fs.rmSync(path.join(root, diagnosticRunRoot), { recursive: true, force: true });
   assert.equal(fs.existsSync(path.join(root, ".agents/plugins")), false);
   assert.equal(fs.readFileSync(path.join(root, ".agents/mcp_config.json"), "utf8"), '{"mcpServers":{}}\n');
   assert.equal(fs.readFileSync(path.join(profileDir, "operator.md"), "utf8"), "operator profile\n");
@@ -620,6 +632,93 @@ process.stdin.on("data", chunk => {
       );
       assert.equal(tdMissingBullet.status, 1);
       assert.match(tdMissingBullet.stderr, /cohort finding ID\(s\) \[SD-BULLET-01\] are missing/);
+
+      // Case B4 (SVC-NEW-02): Unexpected non-report artifact blocks teardown even with an accepted bundle
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, allTdIds));
+      const unexpectedArtifact = path.join(repoRoot, tdRoot, `squad-${tdSquad}`, "diagnostics.json");
+      fs.writeFileSync(unexpectedArtifact, '{"unarchived":true}\n');
+      try {
+        const rejected = spawnSync(
+          process.execPath,
+          [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+          { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+        );
+        assert.equal(rejected.status, 1);
+        assert.match(rejected.stderr, /unbundled artifacts remain/);
+        assert.equal(fs.existsSync(unexpectedArtifact), true);
+      } finally {
+        fs.rmSync(unexpectedArtifact, { force: true });
+      }
+
+      // Case B5 (SVC-NEW-02): Known squad directory with only diagnostics.json and no bundle blocks non-force teardown
+      const noBundleSquad = "runtime_and_contract_diagnosis";
+      const noBundleDir = path.join(repoRoot, tdRoot, `squad-${noBundleSquad}`);
+      const noBundleDiag = path.join(noBundleDir, "diagnostics.json");
+      fs.mkdirSync(noBundleDir, { recursive: true });
+      fs.writeFileSync(noBundleDiag, '{"unbundledOnly":true}\n');
+      try {
+        const rejectedNoBundle = spawnSync(
+          process.execPath,
+          [diagnoseCli, "--teardown", noBundleSquad, "--ledger", tdLedgerRel],
+          { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+        );
+        assert.equal(rejectedNoBundle.status, 1);
+        assert.match(rejectedNoBundle.stderr, /unbundled evidence/);
+        assert.equal(fs.existsSync(noBundleDiag), true);
+      } finally {
+        fs.rmSync(noBundleDir, { recursive: true, force: true });
+      }
+
+      // Case B6 (SVC-NEW-01): Symlinked cleanup parent must not delete an outside sentinel (forced, non-forced, and all-canary)
+      const linkedScratch = `scratch-external-probe-${process.pid}`;
+      const outsideScratch = path.join(temporary, "external-probe");
+      const externalSquad = path.join(outsideScratch, "agy-squad", `squad-${tdSquad}`);
+      const externalEmptySquad = path.join(outsideScratch, "agy-squad", `squad-${noBundleSquad}`);
+      const externalCanary = path.join(outsideScratch, "agy-squad", "self-diag-canary-external");
+      fs.mkdirSync(externalSquad, { recursive: true });
+      fs.mkdirSync(externalEmptySquad, { recursive: true });
+      fs.mkdirSync(externalCanary, { recursive: true });
+      const sentinel = path.join(externalSquad, "KEEP.json");
+      const canarySentinel = path.join(externalCanary, "KEEP_CANARY.json");
+      fs.writeFileSync(sentinel, '{"mustSurvive":true}\n');
+      fs.writeFileSync(canarySentinel, '{"canaryMustSurvive":true}\n');
+      fs.symlinkSync(outsideScratch, path.join(repoRoot, linkedScratch), "dir");
+      try {
+        const forcedSymlinkRes = spawnSync(process.execPath, [diagnoseCli, "--teardown", tdSquad, "--force"], {
+          cwd: repoRoot,
+          env: { ...process.env, AGY_SQUAD_SCRATCH_ROOT: linkedScratch },
+          encoding: "utf8"
+        });
+        assert.equal(forcedSymlinkRes.status, 1, forcedSymlinkRes.stdout);
+        assert.match(forcedSymlinkRes.stderr, /symlink|non-directory/);
+        assert.equal(fs.readFileSync(sentinel, "utf8"), '{"mustSurvive":true}\n');
+
+        const nonForcedSymlinkRes = spawnSync(
+          process.execPath,
+          [diagnoseCli, "--teardown", noBundleSquad, "--ledger", tdLedgerRel],
+          {
+            cwd: repoRoot,
+            env: { ...process.env, AGY_SQUAD_SCRATCH_ROOT: linkedScratch },
+            encoding: "utf8"
+          }
+        );
+        assert.equal(nonForcedSymlinkRes.status, 1, nonForcedSymlinkRes.stdout);
+        assert.match(nonForcedSymlinkRes.stderr, /symlink|non-directory/);
+        assert.equal(fs.existsSync(externalEmptySquad), true);
+
+        fs.rmSync(externalSquad, { recursive: true, force: true });
+        fs.rmSync(externalEmptySquad, { recursive: true, force: true });
+        const canarySymlinkRes = spawnSync(process.execPath, [diagnoseCli, "--teardown", "all", "--force"], {
+          cwd: repoRoot,
+          env: { ...process.env, AGY_SQUAD_SCRATCH_ROOT: linkedScratch },
+          encoding: "utf8"
+        });
+        assert.equal(canarySymlinkRes.status, 1, canarySymlinkRes.stdout);
+        assert.match(canarySymlinkRes.stderr, /symlink|non-directory/);
+        assert.equal(fs.readFileSync(canarySentinel, "utf8"), '{"canaryMustSurvive":true}\n');
+      } finally {
+        fs.unlinkSync(path.join(repoRoot, linkedScratch));
+      }
 
       // Case C: Bundle SHA and all 3 finding formats recorded -> accepted and torn down
       fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, allTdIds));
