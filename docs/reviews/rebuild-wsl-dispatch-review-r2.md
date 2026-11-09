@@ -12,6 +12,7 @@
 - **Previous Reviews & External Artifacts Reconciled:**
   - **R1 Review:** [rebuild-wsl-dispatch-review.md](https://github.com/paragon-ux/Agy-Squad/blob/2bdff1a9bd52230be931a0d9433cc6fcfd06b8c5/docs/reviews/rebuild-wsl-dispatch-review.md) (`https://github.com/paragon-ux/Agy-Squad/pull/1#issuecomment-6719916015`, head `6d6ad31a9054a41ca5563b05dfff02ecdcf724d7`, *Request changes*: `2` P1, `10` P2, `1` P3, `2` gaps).
   - **External Devin Artifacts:** `/home/paragon-ux/Antigravity/artifacts/devin-agy-squad-bugs-and-flags.md` (`RUN-003`, `SVC-003`, `RUN-004`, `SCRIPT-GAP-002`, `TEST-GAP-001`) and `/home/paragon-ux/Antigravity/artifacts/devin-agy-squad-issue-ledger.md`.
+  - **R6 Consolidation, Remediation & Reverification Ledgers:** [pr1-code-review-ledger.md](./pr1-code-review-ledger.md) (PR #1 R6 Devin + ChatGPT audit consolidation, remediation, and reverification) and [pr2-documentation-review-ledger.md](./pr2-documentation-review-ledger.md) (merged PR #2 documentation and benchmark consolidation ledger).
 
 ### Session Provenance
 
@@ -21,6 +22,7 @@
 | `S2 (R2)` | `Unrecorded (pre-v1.3.0; child 1e211e57-a046-4b5a-8fdf-46a2dcd8a083)` | `None` | `2026-11-08` | `ee10ebc..45a66d1` + R2 Devin remediation delta | `/pr-review` (`v1.1.0` R2 re-review + 1-specialist live trial `live_pow_r2`) |
 | `S3 (R3–R5)` | [`944c64a0-e4c9-4272-a701-e3a32108a31b`](conversation://944c64a0-e4c9-4272-a701-e3a32108a31b) | `None (primary operator thread)` | `2026-11-08` | `ee10ebc..2bdff1a` (clean code tree across `2b284f4..2bdff1a` + `/teamwork` A/B benchmark) | `/self-diagnosis` (`all_specialists` Wave R3 -> `all_l1` Waves R4 & R5) + `/pr-review` (`v1.2.0` -> `v1.3.0`) |
 | `S3a (Side Audit)` | `ba959810-...` (read-only `/btw` side consultation) | [`944c64a0-e4c9-4272-a701-e3a32108a31b`](conversation://944c64a0-e4c9-4272-a701-e3a32108a31b) | `2026-11-08` | `ee10ebc..90485b2` + Wave R5 working-tree delta (no writes) | Design audit (`v1.3.0` `1 ID = 1 Row`, Section 8 Residuals, Section 9 Cohort Ledger) |
+| `S4 (R6)` | [`944c64a0-e4c9-4272-a701-e3a32108a31b`](conversation://944c64a0-e4c9-4272-a701-e3a32108a31b) | `None (primary operator thread)` | `2026-11-09` | `ee10ebc..3df852b` + R6 PR1 remediation (`R6-SVC-01`, `R6-MCP-01`, `R6-MCP-02`, `R6-SCRIPT-01`, `R6-SVC-02`, `R6-TEST-01`, `R6-DOC-01`) | PR2/PR1 consolidation (`pr2-documentation-review-ledger.md` -> `pr1-code-review-ledger.md`) + flat specialist squad + `/self-diagnosis` reverification |
 
 ### Commit History Examined (`ee10ebc255f0d52dc93b51d7cf8198bb069c4532..2bdff1a9bd52230be931a0d9433cc6fcfd06b8c5`)
 1. `6d6ad31a9054a41ca5563b05dfff02ecdcf724d7` — `feat(wsl): rebuild staged squad dispatch and managed CLI launcher for WSL` (R1 head)

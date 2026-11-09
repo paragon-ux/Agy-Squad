@@ -201,7 +201,7 @@ process.stdin.on("data", chunk => {
   const r1Stat = fs.statSync(r1Ledger);
   const r2Stat = fs.statSync(r2Ledger);
   try {
-    const baseSec = Math.floor(Date.now() / 1000);
+    const baseSec = Math.floor(Date.now() / 1000) + 5;
     fs.utimesSync(r2Ledger, baseSec, baseSec);
     fs.utimesSync(r1Ledger, baseSec + 0.05, baseSec + 0.05);
     const diagRun = spawnSync(process.execPath, [diagnoseCli], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
@@ -476,6 +476,136 @@ process.stdin.on("data", chunk => {
       assert.ok(schemaParsed.findings.some(f => f.id === "DOC-LEDGER-SCHEMA"));
     } finally {
       fs.rmSync(badLedgerAbs, { force: true });
+    }
+
+    // Exercise premature exit(0) before prompt submission in bin/terminal.py (R6-SCRIPT-01)
+    for (const [label, scriptBody] of [
+      ["before-banner", "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n"],
+      ["after-banner-before-ready", "#!/usr/bin/env python3\nimport sys\nprint('? for shortcuts test-agent', flush=True)\nsys.exit(0)\n"]
+    ]) {
+      const earlyExitBin = path.join(temporary, `bin-early-${label}`);
+      fs.mkdirSync(earlyExitBin);
+      fs.writeFileSync(path.join(earlyExitBin, "agy"), scriptBody, { mode: 0o700 });
+      const earlyExitRes = spawnSync(
+        "python3",
+        [
+          "-c",
+          "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))",
+          "python3",
+          terminalPy,
+          path.join(temporary, "never-ready"),
+          "prompt",
+          "--agent",
+          "test-agent"
+        ],
+        {
+          env: {
+            ...process.env,
+            PATH: [earlyExitBin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter)
+          },
+          encoding: "utf8",
+          timeout: 5000
+        }
+      );
+      assert.equal(earlyExitRes.status, 1, `Expected non-zero exit for ${label}`);
+      assert.match(earlyExitRes.stdout + earlyExitRes.stderr, /native CLI exited before prompt submission/);
+    }
+
+    // Exercise R6-SVC-01 teardown ledger binding: bundle SHA membership and 1:1 cohort finding-ID membership
+    const { bundleReports, fingerprint, pruneReports, reportPath: hReportPath } = await import("../mcp/handoffs.mjs");
+    const tdSquad = "skill_and_pr_review_audit";
+    const tdRoot = `${testScratchRel}/agy-squad`;
+    const tdS1 = hReportPath(tdSquad, 1, tdRoot);
+    const tdS2 = hReportPath(tdSquad, 2, tdRoot);
+    const tdLead = hReportPath(tdSquad, undefined, tdRoot);
+    for (const [slot, text] of [
+      [tdS1, "# Specialist 1\n\n| ID | Status |\n| --- | --- |\n| `SD-TEST-01` | **Closed** |\n"],
+      [tdS2, "# Specialist 2\n\nVerified.\n"],
+      [tdLead, "# Lead Synthesis\n\nVerdict: PASS\n\n| ID | Status |\n| --- | --- |\n| `SD-TEST-01` | **Closed** |\n"]
+    ]) {
+      const abs = path.join(repoRoot, slot);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, text);
+    }
+    const tdBundled = bundleReports(repoRoot, {
+      workspace: repoRoot,
+      squadId: tdSquad,
+      reportRoot: tdRoot,
+      verdict: "PASS",
+      verifiedFiles: fingerprint(repoRoot, ["package.json"]),
+      assignments: [
+        { conversationId: "td-1", report: tdS1 },
+        { conversationId: "td-2", report: tdS2 }
+      ],
+      handoffs: [
+        { sender: "td-1", message: `READY ${tdS1} — Reported SD-TEST-01.` },
+        { sender: "td-2", message: `READY ${tdS2} — Verified.` }
+      ]
+    });
+    pruneReports(repoRoot, tdBundled.path, tdBundled.sha256);
+
+    const tdLedgerRel = `docs/reviews/.tmp-td-test-${process.pid}.md`;
+    const tdLedgerAbs = path.join(repoRoot, tdLedgerRel);
+    const makeTdLedger = (bundleSha, includeFinding) => [
+      "# Temp Teardown Ledger",
+      "",
+      "## 1. Review Metadata",
+      "",
+      "| Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |",
+      "| --- | --- | --- | --- | --- | --- |",
+      "| `S1` | `00000000-0000-4000-8000-000000000000` | `None` | `2026-11-09` | `main..HEAD` | `/self-diagnosis` |",
+      "",
+      "## 8. Post-Remediation Residuals & Deferred Dispositions",
+      "",
+      "None (0 open residuals, 0 deferred items).",
+      "",
+      "## 9. `/self-diagnosis` Cohort & Bundle Ledger",
+      "",
+      "| Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      `| \`W1\` | \`00000000-0000-4000-8000-000000000000\` | \`${tdSquad}\` | \`td-1, td-2\` | \`N/A\` | \`${bundleSha}\` | \`Pending\` |`,
+      "",
+      ...(includeFinding
+        ? [
+            "| ID | Status | Summary |",
+            "| --- | --- | --- |",
+            "| `SD-TEST-01` | **Closed** | Verified finding recorded in ledger. |"
+          ]
+        : ["None (0 wave findings)."])
+    ].join("\n") + "\n";
+
+    try {
+      // Case A: Unrelated bundle SHA -> rejected
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger("f".repeat(64), true));
+      const tdUnrelated = spawnSync(
+        process.execPath,
+        [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+        { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+      );
+      assert.equal(tdUnrelated.status, 1);
+      assert.match(tdUnrelated.stderr, /bundle digest .* is not recorded in Section 9/);
+
+      // Case B: Bundle SHA recorded, but cohort finding SD-TEST-01 missing -> rejected
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, false));
+      const tdMissingFinding = spawnSync(
+        process.execPath,
+        [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+        { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+      );
+      assert.equal(tdMissingFinding.status, 1);
+      assert.match(tdMissingFinding.stderr, /cohort finding ID\(s\) \[SD-TEST-01\] are missing/);
+
+      // Case C: Both bundle SHA and SD-TEST-01 recorded -> accepted and torn down
+      fs.writeFileSync(tdLedgerAbs, makeTdLedger(tdBundled.sha256, true));
+      const tdAccepted = spawnSync(
+        process.execPath,
+        [diagnoseCli, "--teardown", tdSquad, "--accept", tdBundled.sha256, "--ledger", tdLedgerRel],
+        { cwd: repoRoot, env: diagEnv, encoding: "utf8" }
+      );
+      assert.equal(tdAccepted.status, 0, tdAccepted.stderr);
+      assert.equal(JSON.parse(tdAccepted.stdout).status, "TORN_DOWN");
+    } finally {
+      fs.rmSync(tdLedgerAbs, { force: true });
     }
   } finally {
     fs.utimesSync(r1Ledger, r1Stat.atime, r1Stat.mtime);

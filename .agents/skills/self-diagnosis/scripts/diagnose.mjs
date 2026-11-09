@@ -166,10 +166,32 @@ function extractTopLevelSection(markdown, sectionNum) {
   return { heading: match[0].trim(), body };
 }
 
+function extractCohortFindingIds(markdown) {
+  const ids = new Set();
+  if (typeof markdown !== "string" || !markdown.trim()) return ids;
+  const idPattern = /^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})$/;
+  for (const table of parseMarkdownTables(markdown)) {
+    if (table.headers[0] !== "ID" && table.headers[0] !== "Finding ID") continue;
+    for (const row of table.rows) {
+      if (!row.length) continue;
+      const primaryId = row[0].replace(/\([^)]*\)/g, "").replace(/`/g, "").trim();
+      if (idPattern.test(primaryId)) {
+        ids.add(primaryId);
+      }
+    }
+  }
+  for (const match of markdown.matchAll(/^#{3,4}\s+`([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`/gm)) {
+    ids.add(match[1]);
+  }
+  return ids;
+}
+
 function validateTargetReviewLedger(targetLedger, { requireCohortSection = false } = {}) {
   const markdown = fs.readFileSync(targetLedger.absolute, "utf8");
   const errors = [];
   const openResiduals = [];
+  const recordedFindingIds = extractCohortFindingIds(markdown);
+  const recordedBundleShas = [];
 
   const sec1 = extractTopLevelSection(markdown, 1);
   const expectedSessionHeaders = [
@@ -295,6 +317,15 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
       errors.push(
         "Section 9 must contain a populated Cohort Provenance table ('Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown')."
       );
+    } else {
+      for (const row of cohortTable.rows) {
+        for (const colIdx of [4, 5]) {
+          const cell = row[colIdx] ?? "";
+          for (const match of cell.matchAll(/[0-9a-f]{12,64}/gi)) {
+            recordedBundleShas.push(match[0].toLowerCase());
+          }
+        }
+      }
     }
     const findingTables = sec9Tables.filter(t => t !== cohortTable && (t.headers[0] === "ID" || t.headers[0] === "Finding ID"));
     if (findingTables.length === 0 && !/None \(0 wave findings\)/.test(sec9.body)) {
@@ -305,7 +336,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   }
 
-  return { errors, openResiduals };
+  return { errors, openResiduals, recordedFindingIds, recordedBundleShas };
 }
 
 function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = false, ledgerPath } = {}) {
@@ -349,11 +380,37 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
         );
       }
       if (fs.existsSync(bundleAbs)) {
-        verifyBundle(repoRoot, bundleRel, acceptedHash);
+        const verified = verifyBundle(repoRoot, bundleRel, acceptedHash);
         const bundleStat = fs.statSync(bundleAbs);
         if (targetLedger.stat.mtimeMs + 1000 < bundleStat.mtimeMs) {
           throw new Error(
             `Refusing to tear down ${relDir} before updating the durable target PR review ledger (${targetLedger.relative}). Update ${targetLedger.relative} with this cohort's findings and bundle digest before running --teardown.`
+          );
+        }
+        const digestRecorded = ledgerCheck.recordedBundleShas.some(
+          token => verified.sha256 === token || verified.sha256.startsWith(token)
+        );
+        if (!digestRecorded) {
+          throw new Error(
+            `Refusing to tear down ${relDir}: bundle digest ${verified.sha256} is not recorded in Section 9 of ${targetLedger.relative}.`
+          );
+        }
+        const bundleJson = JSON.parse(fs.readFileSync(bundleAbs, "utf8"));
+        const leadReportAbs = path.join(repoRoot, reportPath(id, undefined, scratchSquadRel));
+        const cohortMarkdowns = [
+          ...(fs.existsSync(leadReportAbs) ? [fs.readFileSync(leadReportAbs, "utf8")] : []),
+          ...(Array.isArray(bundleJson.reports) ? bundleJson.reports.map(r => r.markdown || "") : [])
+        ];
+        const cohortFindingIds = new Set();
+        for (const md of cohortMarkdowns) {
+          for (const fid of extractCohortFindingIds(md)) {
+            cohortFindingIds.add(fid);
+          }
+        }
+        const missingIds = [...cohortFindingIds].filter(fid => !ledgerCheck.recordedFindingIds.has(fid));
+        if (missingIds.length > 0) {
+          throw new Error(
+            `Refusing to tear down ${relDir}: cohort finding ID(s) [${missingIds.join(", ")}] are missing from ${targetLedger.relative}.`
           );
         }
       } else if (acceptedHash) {
@@ -742,14 +799,21 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       }
     }
 
+    const managedReportRoot = path.posix.dirname(managedLeads.structuredContent.manifestPath);
     for (const id of squadIds) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
       const leadSlot = reportPath(id);
+      const ms1 = reportPath(id, 1, managedReportRoot);
+      const ms2 = reportPath(id, 2, managedReportRoot);
+      const mleadSlot = reportPath(id, undefined, managedReportRoot);
       for (const [slot, text] of [
         [s1, `# ${id} Specialist 1\nVerified target.txt.\n`],
         [s2, `# ${id} Specialist 2\nVerified target.txt.\n`],
-        [leadSlot, `# ${id} Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`]
+        [leadSlot, `# ${id} Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`],
+        [ms1, `# ${id} Managed Specialist 1\nVerified target.txt.\n`],
+        [ms2, `# ${id} Managed Specialist 2\nVerified target.txt.\n`],
+        [mleadSlot, `# ${id} Managed Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`]
       ]) {
         const full = path.join(canaryDir, slot);
         fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -763,7 +827,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const leadHandoffs = [];
 
     // Smoke-test Single-Squad (2 specialists), Flat Full-Squad (6 specialists across all 3 squads),
-    // and Layered Full-Squad (3 leads -> 6 specialists) handoff/bundle/verify/prune pipelines
+    // Layered Full-Squad (3 leads -> 6 specialists), and Managed Plan-Root handoff/bundle/verify/prune pipelines
     for (const id of squadIds) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
@@ -796,6 +860,32 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       });
     }
 
+    const managedId = squadIds[0];
+    const ms1 = reportPath(managedId, 1, managedReportRoot);
+    const ms2 = reportPath(managedId, 2, managedReportRoot);
+    const managedRecord = {
+      workspace: canaryDir,
+      squadId: managedId,
+      reportRoot: managedReportRoot,
+      verdict: "PASS",
+      verifiedFiles,
+      assignments: [
+        { conversationId: `${managedId}-mchild-1`, report: ms1 },
+        { conversationId: `${managedId}-mchild-2`, report: ms2 }
+      ],
+      handoffs: [
+        { sender: `${managedId}-mchild-1`, message: `READY ${ms1} — Managed Specialist 1 verified ${managedId}.` },
+        { sender: `${managedId}-mchild-2`, message: `READY ${ms2} — Managed Specialist 2 verified ${managedId}.` }
+      ]
+    };
+    inspectHandoffs(canaryDir, managedRecord);
+    const managedBundled = bundleReports(canaryDir, managedRecord);
+    const managedVerified = verifyBundle(canaryDir, managedBundled.path, managedBundled.sha256);
+    const managedPruned = pruneReports(canaryDir, managedBundled.path, managedVerified.sha256);
+    if (managedPruned.removed.length !== 2) {
+      throw new Error(`Expected 2 pruned managed reports in self-diagnosis canary for '${managedId}', got ${managedPruned.removed.length}`);
+    }
+
     // Verify Layered Full-Squad (all_l1) 3-lead receipt reconciliation
     const layeredInspected = inspectHandoffs(canaryDir, {
       workspace: canaryDir,
@@ -805,14 +895,15 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     if (layeredInspected.some(item => item.status !== "READY") || layeredInspected.length !== 3) {
       throw new Error("Layered 3-lead canary reconciliation failed.");
     }
+    const totalCanarySquads = squadIds.length + 1;
     timings.handoffPipelineMs = Number((performance.now() - tHandoff).toFixed(2));
-    timings.perSquadHandoffMs = Number((timings.handoffPipelineMs / squadIds.length).toFixed(2));
+    timings.perSquadHandoffMs = Number((timings.handoffPipelineMs / totalCanarySquads).toFixed(2));
     if (timings.perSquadHandoffMs > 50) {
       findings.push({
         id: "SVC-LATENCY-HANDOFF",
         category: "SVC",
         priority: "P3",
-        summary: `Handoff/bundle/verify/prune canary took ${timings.perSquadHandoffMs} ms per 2-specialist squad (${timings.handoffPipelineMs} ms total across ${squadIds.length} squads; target < 20 ms, flag > 50 ms per squad).`
+        summary: `Handoff/bundle/verify/prune canary took ${timings.perSquadHandoffMs} ms per 2-specialist squad (${timings.handoffPipelineMs} ms total across ${totalCanarySquads} squads; target < 20 ms, flag > 50 ms per squad).`
       });
     }
   } finally {

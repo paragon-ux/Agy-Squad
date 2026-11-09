@@ -174,7 +174,35 @@ try {
   const cliPrune = spawnSync(process.execPath, [handoffsCli, "prune", mBundled.path, mBundled.sha256], { cwd: root, encoding: "utf8" });
   assert.equal(cliPrune.status, 0, cliPrune.stderr);
   assert.deepEqual(JSON.parse(cliPrune.stdout), { removed: [mFirst] });
-  console.log("✓ Receipt reconciliation, changed evidence, and retryable report cleanup");
+
+  // Verify custom AGY_SQUAD_SCRATCH_ROOT across inspect/bundle/verify/prune (R6-SVC-02).
+  const customScratchEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "custom-scratch/nested" };
+  const customRootPrefix = "custom-scratch/nested/agy-squad";
+  const cFirst = reportPath("alpha", 1, customRootPrefix);
+  const cLead = reportPath("alpha", undefined, customRootPrefix);
+  write(cFirst, "Custom scratch specialist evidence.\n");
+  write(cLead, "Verdict: PASS\nCustom scratch lead synthesis.\n");
+  const cRecordPath = path.join(root, "custom-record.json");
+  fs.writeFileSync(cRecordPath, JSON.stringify({
+    workspace: root,
+    squadId: "alpha",
+    verdict: "PASS",
+    verifiedFiles: fingerprint(root, ["fixture.txt"]),
+    assignments: [{ conversationId: "c-1", report: cFirst }],
+    handoffs: [{ sender: "c-1", message: `READY ${cFirst} — Custom scratch specialist verified.` }]
+  }));
+  const cInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "custom-record.json"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  assert.equal(cInspect.status, 0, cInspect.stderr);
+  const cBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "custom-record.json"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  assert.equal(cBundle.status, 0, cBundle.stderr);
+  const cBundled = JSON.parse(cBundle.stdout);
+  assert.ok(cBundled.path.startsWith(customRootPrefix + "/"));
+  const cVerify = spawnSync(process.execPath, [handoffsCli, "verify", cBundled.path], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  assert.equal(cVerify.status, 0, cVerify.stderr);
+  const cPrune = spawnSync(process.execPath, [handoffsCli, "prune", cBundled.path, cBundled.sha256], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  assert.equal(cPrune.status, 0, cPrune.stderr);
+  assert.deepEqual(JSON.parse(cPrune.stdout), { removed: [cFirst] });
+  console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

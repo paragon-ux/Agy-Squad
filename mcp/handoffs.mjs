@@ -5,7 +5,29 @@ import { fileURLToPath } from "node:url";
 
 const messageLimit = 500;
 
-function reportPath(squadId, specialistNumber, reportRoot = "scratch/agy-squad") {
+function isValidRelativePrefix(prefix) {
+  return (
+    typeof prefix === "string" &&
+    prefix.length > 0 &&
+    !prefix.includes("\\") &&
+    !path.isAbsolute(prefix) &&
+    !prefix.split("/").some(part => !part || part === "." || part === "..")
+  );
+}
+
+function defaultScratchBase() {
+  const raw = (process.env.AGY_SQUAD_SCRATCH_ROOT || "scratch").trim().replace(/\/+$/, "");
+  if (!isValidRelativePrefix(raw)) {
+    throw new Error(`Invalid AGY_SQUAD_SCRATCH_ROOT: ${raw}`);
+  }
+  return raw;
+}
+
+function defaultReportRoot() {
+  return `${defaultScratchBase()}/agy-squad`;
+}
+
+function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot()) {
   if (typeof squadId !== "string" || !squadId.trim()) throw new Error("Provide a nonempty squad ID.");
   if (specialistNumber !== undefined && (!Number.isInteger(specialistNumber) || specialistNumber < 1)) {
     throw new Error("Specialist number must be a positive integer.");
@@ -20,33 +42,52 @@ function reportPath(squadId, specialistNumber, reportRoot = "scratch/agy-squad")
 
 function resolveReportRoot(recordOrPath) {
   if (typeof recordOrPath === "string") {
-    const match = /^(scratch\/agy-squad\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})\/squad-/.exec(recordOrPath);
-    return match ? match[1] : "scratch/agy-squad";
+    const match = /^(.+\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?)\/squad-[^/\s]+\//.exec(recordOrPath);
+    if (match && isValidRelativePrefix(match[1])) {
+      return match[1];
+    }
+    return defaultReportRoot();
   }
   if (typeof recordOrPath?.reportRoot === "string" && recordOrPath.reportRoot.trim()) {
-    return recordOrPath.reportRoot.trim();
+    const trimmed = recordOrPath.reportRoot.trim().replace(/\/+$/, "");
+    if (!isValidRelativePrefix(trimmed)) {
+      throw new Error(`Expected a workspace-relative reportRoot: ${recordOrPath.reportRoot}`);
+    }
+    return trimmed;
   }
   const firstSlot = recordOrPath?.assignments?.[0]?.report;
-  return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : "scratch/agy-squad";
+  return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : defaultReportRoot();
 }
 
-function reconcileHandoffs(assignments, handoffs) {
+function reconcileHandoffs(assignments, handoffs, customReportRoot) {
   if (!Array.isArray(assignments) || !assignments.length || !Array.isArray(handoffs)) {
     throw new Error("Provide the ordered launch assignments and their handoffs.");
+  }
+  const allowedBases = new Set(["scratch", defaultScratchBase()]);
+  if (typeof customReportRoot === "string" && customReportRoot.trim()) {
+    const trimmed = customReportRoot.trim().replace(/\/+$/, "");
+    const baseMatch = /^(.+)\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?$/.exec(trimmed);
+    if (baseMatch && isValidRelativePrefix(baseMatch[1])) {
+      allowedBases.add(baseMatch[1]);
+    }
   }
   const expected = new Map();
   const slots = new Set();
   for (const item of assignments) {
     const { conversationId, report } = item ?? {};
+    const slotMatch =
+      typeof report === "string"
+        ? /^(.+)\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.exec(
+            report
+          )
+        : null;
     if (
       typeof conversationId !== "string" ||
       !conversationId.trim() ||
       expected.has(conversationId) ||
-      typeof report !== "string" ||
-      slots.has(report) ||
-      !/^scratch\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.test(
-        report
-      )
+      !slotMatch ||
+      !allowedBases.has(slotMatch[1]) ||
+      slots.has(report)
     ) {
       throw new Error("Launch assignments must have distinct native IDs and their exact compiled report slots.");
     }
@@ -154,7 +195,7 @@ function verifyFiles(root, verifiedFiles, verifiedDirs) {
   }
 }
 
-function bundlePath(squadId, reportRoot = "scratch/agy-squad") {
+function bundlePath(squadId, reportRoot = defaultReportRoot()) {
   return reportPath(squadId, undefined, reportRoot).replace(/\.md$/, ".sources.json");
 }
 
@@ -224,9 +265,9 @@ function inspectReports(root, record, verifiedDirs = new Set()) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
-  const { workspace, assignments, handoffs } = record;
+  const { workspace, assignments, handoffs, reportRoot } = record;
   if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
-  const received = reconcileHandoffs(assignments, handoffs);
+  const received = reconcileHandoffs(assignments, handoffs, reportRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;

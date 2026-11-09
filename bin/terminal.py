@@ -144,7 +144,12 @@ def run(ready_file, prompt, args):
     if startup_failed:
         sys.exit(f"Agy-Squad: the dispatcher was not discovered within {startup_timeout:g} seconds.")
     code = os.waitstatus_to_exitcode(status)
-    return 128 - code if code < 0 else code
+    exit_code = 128 - code if code < 0 else code
+    if not submitted and not terminating:
+        if exit_code == 0:
+            sys.exit("Agy-Squad: native CLI exited before prompt submission.")
+        return exit_code
+    return exit_code
 
 
 if __name__ == "__main__":
