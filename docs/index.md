@@ -1,6 +1,6 @@
 # Agy-Squad
 
-Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **POSIX systems (Linux, macOS, and WSL2)**. It compiles coding or review tasks into scoped specialist or lead cohorts (`dispatch_squad`), enforces a `500` UTF-8 byte `Pointer-Over-Wire` receipt ceiling, bundles SHA-256 input and report digests via `node mcp/handoffs.mjs`, and pairs with `Agy-Context-Saver` (`v1.8.1+`) for `RTK` command rewriting and Reactive Wakeup governance.
+Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (macOS support is best-effort and untested)**. It compiles coding or review tasks into scoped specialist or lead cohorts (`dispatch_squad`), enforces a `500` UTF-8 byte `Pointer-Over-Wire` receipt ceiling, bundles SHA-256 input and report digests via `node mcp/handoffs.mjs`, and pairs with `Agy-Context-Saver` (`v1.8.1+`) for `RTK` command rewriting and Reactive Wakeup governance.
 
 ## Start here
 

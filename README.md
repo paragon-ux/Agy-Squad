@@ -83,7 +83,7 @@ node bin/agy-squad.mjs run --workspace "$PWD" \
   --manifest benchmarks/teamwork-vs-squad/manifest.json --squad all_l1 --launch
 ```
 
-When the CLI session exits, the launcher removes unchanged temporary `.gemini/` plugin and profile files while keeping staged evidence in the printed `scratch/agy-squad/run-...` directory. Use `manage_subagents` (in Desktop IDE) or `/agents` (in CLI) to inspect or stop children ([Stopping agents](docs/stopping-agents.md)).
+When the CLI session exits, the launcher removes unchanged temporary registration files under `.agents/plugins/agy-squad-*/` and profile files under `.agents/agents/agy-squad-*.md`, while retaining staged evidence in the printed `scratch/agy-squad/run-...` directory. Modified registration files are retained for inspection. Use `manage_subagents` (in Desktop IDE) or `/agents` (in CLI) to inspect or stop children ([Stopping agents](docs/stopping-agents.md)).
 
 ## Core workflows: orchestrate, diagnose, and review
 

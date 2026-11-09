@@ -72,7 +72,7 @@ Agy-Squad defines explicit rules for what evidence is kept, when loose reports a
 
 | Lifecycle scope | Governing tool | What is cleaned up | What is retained and gated |
 | --- | --- | --- | --- |
-| **1. Managed CLI session** | `bin/agy-squad.mjs` | Removes unchanged temporary `.gemini/` plugin and agent profile registrations on session exit | Preserves staged run plans and specialist/lead reports under `scratch/agy-squad/run-<uuid>/` |
+| **1. Managed CLI session** | `bin/agy-squad.mjs` | Removes unchanged `.agents/plugins/agy-squad-*/` registration files and `.agents/agents/agy-squad-*.md` agent profiles on session exit; modified registrations are retained for inspection | Preserves staged run plans and specialist/lead reports under `scratch/agy-squad/run-<uuid>/` |
 | **2. Handoff bundle** | `node mcp/handoffs.mjs` | `prune` deletes loose `specialist-<N>/report.md` files only after `bundle` and `verify` succeed | Preserves `lead/report.md` (`Verdict: PASS`) and `lead/report.sources.json` (SHA-256 digests of all inputs and specialist reports) |
 | **3. Self-diagnosis wave** | `diagnose.mjs --teardown` | Removes `scratch/agy-squad/squad-<id>` and empty `scratch/` parents | Refuses deletion (unless `--force` is passed) until `lead/report.sources.json` verifies and the target `docs/reviews/<slug>.md` ledger is schema-valid, newer than the bundle, and records the cohort's findings |
 
