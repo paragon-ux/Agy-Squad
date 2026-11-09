@@ -1,7 +1,9 @@
 # Agy-Squad PR #1 Production Readiness Review
 
-**Disposition:** `READY TO MERGE — Wave RM2 Independent Review & Final Closure: All 43 Findings (PR1-DEP-01, R11-DOC-01..19, and 23 prior code/architecture findings) Verified Closed; Package Scoped to 30 Production Files; 5/5 Test Suites Passing; Zero Unresolved Blocking Defects`
-**Reviewed Head SHA:** `999c221b0958174d058226a4e9ba7288fbb61612` (`rebuild/wsl-dispatch`, clean working tree)
+**Disposition:** `READY TO MERGE — Wave R12: 47 distinct defect findings closed (2 P1 / 20 P2 / 25 P3), 0 blocking residuals; Node 22/24 package-manifest assertion + self-test; final immutable head and CI run IDs in post-push GitHub review; native WSL2 agy smoke test remains separately tracked`
+**Wave RM1 historical audit checkpoint:** `999c221b0958174d058226a4e9ba7288fbb61612` (49 files / 27 commits at that historical checkpoint).
+**Wave R12 pre-remediation checkpoint:** `74ff8600dbc213bbe9b63342941ab96ebb54a1d2` (50 files / 29 commits at the start of R12).
+**Release-candidate SHA and CI proof:** Final head and green Actions run URLs must be pinned in a post-push GitHub review/comment after all R12 fixes.
 **Review Date:** `2026-11-09`
 **Repository / PR:** [paragon-ux/Agy-Squad #1](https://github.com/paragon-ux/Agy-Squad/pull/1) (`rebuild/wsl-dispatch` -> `main`)
 **Base Branch / SHA:** `main` at `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`
@@ -25,9 +27,10 @@
 | Session 7 (Wave R11 Documentation Consistency `/pr-review`) | `fa93e383-0b2c-4874-8568-cb1d93e98924` | None (independent review thread) | 2026-11-09 | `ee10ebc..f6ed11d` (clean working tree; no code changes) | Direct non-delegated `/pr-review` (Standard `v1.3.0`), `DOC`-scoped: active docs, benchmark README, skills, `docs/plans/`, and `docs/reviews/` cross-checked against `mcp/`, `bin/`, and `diagnose.mjs`; `npm test` + `diagnose.mjs --ledger` |
 | Session 8 (PR1 Holistic Production Readiness Review) | `8c066b81-f7fb-4384-accb-11df3c54c717` | `ef239063-b2ae-4e79-aef8-3343b9097b3e` | 2026-11-09 | `ee10ebc255f0d52dc93b51d7cf8198bb069c4532..999c221b0958174d058226a4e9ba7288fbb61612 (clean working tree)` | Full 10-category holistic production readiness review (Standard `v1.3.0`) + additive ledger reconciliation across all 49 changed files |
 | Session 9 (PR1 P2/P3 Defect Remediation & Verification) | `b3203b09-75c6-4b09-9e28-613a103ed37b` | `1cb74e5c-af0d-40d7-a66a-fc5571d15444` | 2026-11-09 | `ee10ebc255f0..999c221b0958` + packaging allowlist & doc fixes | Full remediation of PR1-DEP-01 (package allowlist), 5 P2 doc defects (R11-DOC-01..05), and 14 P3 doc consistency findings (R11-DOC-06..19); verified via npm test, diagnose.mjs, and npm pack |
+| Session 10 (Wave R12 Independent Release-Gate Closure) | External independent review: GitHub review `5829814649`; Argon follow-up implementation | Root operator / teamwork implementation | 2026-11-09 | `74ff860` pre-remediation baseline; final post-fix head/CI pinned in GitHub review | Targeted R12 TEST/DOC hardening; sole-owner ledger reconciliation; Node 22/24 pack-file assertion + self-test |
 
 ### Evidence Boundaries & Verification Limits
-- **Repository Scope:** All 49 modified, added, or deleted files across 27 commits between `main` (`ee10ebc255f0d52dc93b51d7cf8198bb069c4532`) and `rebuild/wsl-dispatch` (`999c221b0958174d058226a4e9ba7288fbb61612`).
+- **Repository Scope:** The historical Wave RM1 audit covered 49 files / 27 commits through `999c221b0958174d058226a4e9ba7288fbb61612`. The final R12 review inventory is updated against base `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`, including the production-readiness review and new package verifier. The immutable final head SHA, changed-file count, commit count and CI run IDs are recorded by the post-push GitHub review.
 - **Executed Local Verifications:**
   1. Full automated test suite via `npm test` synchronously executing `test-dispatch.mjs`, `test-handoffs.mjs`, `test-run.mjs`, `test-server.mjs`, and `verify-benchmark.mjs` (all 5 suites passing with 0 errors).
   2. Automated schema and contract verification via `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --ledger` across all historical and active review ledgers (`pr1-production-readiness-review.md`, `pr1-code-review-ledger.md`, `pr2-documentation-review-ledger.md`, `rebuild-wsl-dispatch-review-r2.md`).
@@ -39,7 +42,7 @@
 
 ## 2. File-to-Category Inventory & Coverage Matrix
 
-Every changed file across the 27 commits of PR #1 (`ee10ebc..999c221`) is accounted for in this inventory, resolving the 36-file omission in the initial review ledger (`R11-DOC-17`):
+This inventory covers the release-candidate PR diff against base `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`. The original RM1 inventory covered 49 files / 27 commits through `999c221`; Wave R12 adds the production-readiness report and the npm package verifier. Verify exact file and commit counts against the last pushed head and record that immutable SHA in a GitHub PR review.
 
 | # | Path | Primary Category | Cross-Referenced Categories | Review Ref |
 |---|---|---|---|---|
@@ -71,27 +74,29 @@ Every changed file across the 27 commits of PR #1 (`ee10ebc..999c221`) is accoun
 | 26 | `docs/getting-started.md` | `DOC` | — | Onboarding guide, installation instructions, prerequisites (`R11-DOC-01`, `R11-DOC-06`, `R11-DOC-07`, `R11-DOC-14`) |
 | 27 | `docs/index.md` | `DOC` | — | Documentation landing page reflecting native CLI and Pointer-Over-Wire handoffs (`R11-DOC-04`, `R11-DOC-14`) |
 | 28 | `docs/plans/LEDGER.md` | `ARCH` | `DOC` | Architectural decision ledger recording decisions L1 through L41 (`R11-DOC-13`) |
-| 29 | `docs/plans/docker-sandbox-plan.md` (deleted) | `ARCH` | — | Retired legacy Windows Docker Desktop container design document |
+| 29 | `docs/plans/docker-sandbox-plan.md (deleted)` | `ARCH` | — | Retired legacy Windows Docker Desktop container design document |
 | 30 | `docs/plans/wsl-cli-verification.md` | `DOC` | `SCRIPT` | Loopback fixture verification and supervised live trial checks (`R8-SCRIPT-02`) |
 | 31 | `docs/reviews/pr1-code-review-ledger.md` | `DOC` | — | Active PR #1 consolidation, remediation, and reverification ledger (R1-R11) |
-| 32 | `docs/reviews/pr2-documentation-review-ledger.md` | `DOC` | — | Review ledger for PR #2 (documentation and benchmark consolidation) |
-| 33 | `docs/reviews/rebuild-wsl-dispatch-review-r2.md` | `DOC` | `SKILL`, `SVC` | Historical R2 review report closing prior findings (`R6-DOC-01`) |
-| 34 | `docs/reviews/rebuild-wsl-dispatch-review.md` | `DOC` | — | Historical R1 review report for the initial rebuild commit |
-| 35 | `docs/stopping-agents.md` | `DOC` | — | Updated stopping procedures for WSL CLI, `/agents` panel, and `manage_subagents` |
-| 36 | `docs/tools.md` | `DOC` | — | Documents public MCP tool (`dispatch_squad`) and CLI utilities (`R11-DOC-09`) |
-| 37 | `mcp/briefs.mjs` | `RUN` | `MCP` | Brief compiler: validates `scopeFiles`, enforces `TypeName: "self"`, `Workspace: "inherit"` (`RUN-003`, `RUN-004`) |
-| 38 | `mcp/dispatch.mjs` | `RUN` | `MCP`, `SVC` | Squad dispatcher: workspace containment, `/proc/self/fd` checks, staged plans (`L1`, `L17`) |
-| 39 | `mcp/handoffs.mjs` | `SVC` | `TEST` | Pointer-Over-Wire handoff reconciliation, bundling, verification, and pruning (`SVC-002`, `SVC-003`, `R6-SVC-02`, `R7-SVC-02`, `R8-SVC-01`, `R8-SVC-02`, `SVC-NEW-03`) |
-| 40 | `mcp/index.js` | `MCP` | `RUN`, `SVC` | MCP server: stdio JSON-RPC, 10MB chunk-level framing, retired `subagent_brief` (`L6`, `R6-MCP-01`, `R6-MCP-02`) |
-| 41 | `mcp/run-state.mjs` | `SVC` | `RUN` | Managed run staging: creates `scratch/agy-squad/run-<uuid>`, slot isolation (`L3`) |
-| 42 | `package.json` | `DEP` | — | Package manifest: WSL dependencies, files allowlist, and 5-suite `npm test` script (`PR1-DEP-01 resolved`) |
-| 43 | `tests/legacy/test-security-canary-re-trial.mjs` (deleted) | `TEST` | — | Deleted legacy Docker container canary test |
-| 44 | `tests/test-briefs.mjs` (deleted) | `TEST` | — | Deleted retired `subagent_brief` tool test |
-| 45 | `tests/test-dispatch.mjs` | `TEST` | `RUN`, `MCP` | Tests Stage 1 (`all_l1`), Stage 2 (`<squadId>`), containment, error paths (`RUN-003`, `RUN-004`) |
-| 46 | `tests/test-handoffs.mjs` | `TEST` | `SVC` | Tests handoff reconciliation, 500-byte boundary, bundle digest verification (`SVC-002`, `SVC-003`, `R6-SVC-02`, `R7-SVC-02`, `R8-SVC-01`, `R8-SVC-02`, `SVC-NEW-03`) |
-| 47 | `tests/test-run.mjs` | `TEST` | `SVC`, `SCRIPT` | Comprehensive test of managed runs, launcher lifecycle, fake CLI PTY, teardown (`R6-SVC-01`, `R6-SCRIPT-01`, `R6-TEST-01`, `SVC-NEW-01`, `SVC-NEW-02`, `SCRIPT-NEW-01`) |
-| 48 | `tests/test-server.mjs` | `TEST` | `MCP` | Tests MCP server handshake, notification suppression, 10MB framing, exit on stdin close (`R6-MCP-01`, `R6-MCP-02`, `R6-TEST-GAP-03`) |
-| 49 | `zensical.toml` | `DEP` | `DOC` | Zensical static site configuration updated with new nav items (`L30`) |
+| 32 | `docs/reviews/pr1-production-readiness-review.md` | `DOC` | `TEST`, `DEP` | This production-readiness review: R12 provenance, finding closure and package-verification evidence |
+| 33 | `docs/reviews/pr2-documentation-review-ledger.md` | `DOC` | — | Review ledger for PR #2 (documentation and benchmark consolidation) |
+| 34 | `docs/reviews/rebuild-wsl-dispatch-review-r2.md` | `DOC` | `SKILL`, `SVC` | Historical R2 review report closing prior findings (`R6-DOC-01`) |
+| 35 | `docs/reviews/rebuild-wsl-dispatch-review.md` | `DOC` | — | Historical R1 review report for the initial rebuild commit |
+| 36 | `docs/stopping-agents.md` | `DOC` | — | Updated stopping procedures for WSL CLI, `/agents` panel, and `manage_subagents` |
+| 37 | `docs/tools.md` | `DOC` | — | Documents public MCP tool (`dispatch_squad`) and CLI utilities (`R11-DOC-09`) |
+| 38 | `mcp/briefs.mjs` | `RUN` | `MCP` | Brief compiler: validates `scopeFiles`, enforces `TypeName: "self"`, `Workspace: "inherit"` (`RUN-003`, `RUN-004`) |
+| 39 | `mcp/dispatch.mjs` | `RUN` | `MCP`, `SVC` | Squad dispatcher: workspace containment, `/proc/self/fd` checks, staged plans (`L1`, `L17`) |
+| 40 | `mcp/handoffs.mjs` | `SVC` | `TEST` | Pointer-Over-Wire handoff reconciliation, bundling, verification, and pruning (`SVC-002`, `SVC-003`, `R6-SVC-02`, `R7-SVC-02`, `R8-SVC-01`, `R8-SVC-02`, `SVC-NEW-03`) |
+| 41 | `mcp/index.js` | `MCP` | `RUN`, `SVC` | MCP server: stdio JSON-RPC, 10MB chunk-level framing, retired `subagent_brief` (`L6`, `R6-MCP-01`, `R6-MCP-02`) |
+| 42 | `mcp/run-state.mjs` | `SVC` | `RUN` | Managed run staging: creates `scratch/agy-squad/run-<uuid>`, slot isolation (`L3`) |
+| 43 | `package.json` | `DEP` | — | Package manifest: WSL dependencies, files allowlist, and 5-suite `npm test` script (`PR1-DEP-01 resolved`) |
+| 44 | `tests/legacy/test-security-canary-re-trial.mjs (deleted)` | `TEST` | — | Deleted legacy Docker container canary test |
+| 45 | `tests/test-briefs.mjs (deleted)` | `TEST` | — | Deleted retired `subagent_brief` tool test |
+| 46 | `tests/test-dispatch.mjs` | `TEST` | `RUN`, `MCP` | Tests Stage 1 (`all_l1`), Stage 2 (`<squadId>`), containment, error paths (`RUN-003`, `RUN-004`) |
+| 47 | `tests/test-handoffs.mjs` | `TEST` | `SVC` | Tests handoff reconciliation, 500-byte boundary, bundle digest verification (`SVC-002`, `SVC-003`, `R6-SVC-02`, `R7-SVC-02`, `R8-SVC-01`, `R8-SVC-02`, `SVC-NEW-03`) |
+| 48 | `tests/test-run.mjs` | `TEST` | `SVC`, `SCRIPT` | Comprehensive test of managed runs, launcher lifecycle, fake CLI PTY, teardown (`R6-SVC-01`, `R6-SCRIPT-01`, `R6-TEST-01`, `SVC-NEW-01`, `SVC-NEW-02`, `SCRIPT-NEW-01`) |
+| 49 | `tests/test-server.mjs` | `TEST` | `MCP` | Tests MCP server handshake, notification suppression, 10MB framing, exit on stdin close (`R6-MCP-01`, `R6-MCP-02`, `R6-TEST-GAP-03`) |
+| 50 | `tests/verify-package.mjs` | `TEST` | `DEP` | Wave R12 package-content assertion gate and positive/negative self-tests (`R12-TEST-01`) |
+| 51 | `zensical.toml` | `DEP` | `DOC` | Zensical static site configuration updated with new nav items (`L30`) |
 
 ---
 
@@ -149,7 +154,7 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 - **Scope:** Repository documentation (`README.md`, `docs/*.md`, `docs/plans/`, `docs/reviews/`), benchmark guides (`benchmarks/teamwork-vs-squad/README.md`), and telemetry records (`results/telemetry.json`).
 - **Coverage:** Complete
 - **P1:** None identified within reviewed scope.
-- **P2:** 5 closed findings (`R11-DOC-01`, `R11-DOC-02`, `R11-DOC-03`, `R11-DOC-04`, `R11-DOC-05`; 0 open findings):
+- **P2:** 6 closed findings (`R11-DOC-01` through `R11-DOC-05`, `R12-DOC-01`).
 
 #### `R11-DOC-01`
 1. **Title / Priority / Status:** Receipt examples use ASCII ` - ` instead of required em dash ` — `; **P2**, **Closed**.
@@ -211,7 +216,19 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 9. **Root Cause / Related IDs:** Incremental append anti-pattern across successive review waves; related `R11-DOC-15`..`R11-DOC-19`.
 10. **Closure:** Resolved. Harmonized review ledgers with complete 10-field records, accurate Section 5 counts, and canonical `Closed` statuses across `docs/reviews/pr1-production-readiness-review.md` and `docs/reviews/pr1-code-review-ledger.md`; rechecked via `diagnose.mjs --ledger` and closed.
 
-- **P3:** 15 closed findings (`R6-DOC-01`, `R11-DOC-06` through `R11-DOC-19`; 0 open findings):
+#### `R12-DOC-01`
+1. **Title / Priority / Status:** Final PR inventory/provenance excludes the last review commits; **P2**, **Closed**.
+2. **Contract Provenance:** PR Review Standard v1.3.0 (§1/§2/§7), including complete changed-file mapping, review checkpoints, and one canonical ID per finding.
+3. **Source Evidence:** At `74ff860`, GitHub reports 50 changed files/29 commits; both ledgers instead claim complete `ee10ebc..999c221` coverage (49 files/27 commits), omitting `docs/reviews/pr1-production-readiness-review.md`.
+4. **Trigger:** A release reviewer relies on the “all files reviewed” claims in either ledger after further changes were merged onto the PR branch.
+5. **Expected / Actual:** Expected complete final-tree file inventory with historical audit and R12 checkpoints distinguished; actual scope statements refer to the older RM1 tree.
+6. **Impact:** Release evidence omits files and misstates the reviewed commit range, weakening independent sign-off.
+7. **Required Remediation:** Reconcile both §2 inventories; add the production review and package verifier; maintain unique entries/counts; record final immutable head and CI in a post-push GitHub review.
+8. **Acceptance Evidence:** Every path from `git diff --name-only origin/main...HEAD` occurs exactly once in both §2 inventories; final GitHub review pins the checked head and green CI run URLs.
+9. **Root Cause / Related IDs:** Review ledgers were closed at an earlier SHA; related `R11-DOC-17`, `R11-DOC-19`.
+10. **Closure:** Historical and R12 checkpoints are distinguished; inventories and §7 counts reconciled; final head/CI to be pinned in the GitHub closure review after push.
+
+- **P3:** 17 closed findings (`R6-DOC-01`, `R11-DOC-06` through `R11-DOC-19`, `R12-DOC-02`, `R12-DOC-03`; 0 open findings):
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -230,6 +247,8 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 | `R11-DOC-17` | `R11 / Session 7` | `DOC` | **Closed** | Initial ledger §2 | Section 2 file inventory omitted 36 changed files in PR #1 diff against `main`. | Expanded inventory to cover all 49 changed files (addressed in this review). | `git diff` inspection @ `999c221` |
 | `R11-DOC-18` | `R11 / Session 7` | `DOC` | **Closed** | Initial ledger §4, §5 | Category verdicts used `PASS`/`APPROVE` instead of standard enum (`No findings within reviewed scope`, `Not applicable`). | Used standard category verdict enum across all 10 categories (addressed in this review). | Standard v1.3.0 inspection |
 | `R11-DOC-19` | `R11 / Session 7` | `DOC` | **Closed** | Initial ledger §1 | Session Provenance table lacked coverage for commits producing `2634683` / `f6ed11d`. | Appended Session 8 covering full base..head commit range (addressed in this review). | `git log` inspection @ `999c221` |
+| `R12-DOC-02` | `R12` | `DOC` | **Closed** | `README.md`, `docs/core-workflows.md`, `docs/index.md` | Correct `.agents/` registration cleanup paths and Linux/WSL2 primary support wording. | Updated cleanup paths from `.gemini/` to `.agents/plugins/` & `.agents/agents/` and clarified Linux/WSL2 support. | Verified via doc grep and checks |
+| `R12-DOC-03` | `R12` | `DOC` | **Closed** | `docs/reviews/pr1-production-readiness-review.md` | Correct five-versus-four SCRIPT P3 count and distinguish pre-fix packaging leak from post-fix exclusion verification. | Corrected SCRIPT P3 count to 5 and updated DEP verification and Section 6 reproduction text. | Document inspection |
 
 - **Verification:** Audited all markdown documentation against runtime code; reproduced `R11-DOC-02` command failure; verified ledger schema via `diagnose.mjs --ledger`.
 - **Verdict:** `No findings within reviewed scope`
@@ -479,7 +498,7 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 9. **Root Cause / Related IDs:** Symmetrical cleanup check with `diagnose.mjs`; related `SVC-NEW-02`.
 10. **Closure:** Closed in commit `2634683`.
 
-- **P3:** 4 closed findings (`R6-SCRIPT-01`, `R7-SCRIPT-01`, `R7-SCRIPT-02`, `R8-SCRIPT-01`, `R8-SCRIPT-02`):
+- **P3:** 5 closed findings (`R6-SCRIPT-01`, `R7-SCRIPT-01`, `R7-SCRIPT-02`, `R8-SCRIPT-01`, `R8-SCRIPT-02`):
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -498,14 +517,27 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 - **Scope:** Automated test harness files (`tests/test-*.mjs`), benchmark verification (`verify-benchmark.mjs`), test coverage, and test gating.
 - **Coverage:** Complete
 - **P1:** None identified within reviewed scope.
-- **P2:** None identified within reviewed scope.
+- **P2:** 1 closed finding (`R12-TEST-01`, verified via `tests/verify-package.mjs` and Node 22/24 CI).
+
+#### `R12-TEST-01`
+1. **Title / Priority / Status:** CI packages without verifying tarball contents; **P2**, **Closed**.
+2. **Contract Provenance:** `PR1-DEP-01`, `package.json` `files` allowlist, `.github/workflows/ci.yml` Node 22/24 matrix.
+3. **Source Evidence:** At `74ff860`, workflow `Verify npm package structure` runs only `npm pack --dry-run --json`, which can exit `0` even when forbidden paths appear.
+4. **Trigger:** An unintended allowlist expansion or packaging default includes `tests/`, `benchmarks/`, `.agents/teamwork/`, `scratch/`, or other unrelated files.
+5. **Expected / Actual:** Expected CI to fail on leaked file paths or missing runtime entrypoints; old CI ignored manifest contents.
+6. **Impact:** A packaging regression could pass CI and expose internal metadata or ship an incomplete runtime.
+7. **Required Remediation:** Add `tests/verify-package.mjs` with strict allowed roots, required entrypoints, and positive/negative `--self-test`; parse the real npm manifest in Node 22/24 CI.
+8. **Acceptance Evidence:** `node tests/verify-package.mjs --self-test` passes; real `npm pack` manifest passes; both matrix jobs pass after the replacement CI step; the negative controls fail inside the self-test as expected.
+9. **Root Cause / Related IDs:** Package command success was mistaken for content validation; related `PR1-DEP-01`.
+10. **Closure:** Added explicit package manifest assertions, self-tests, and CI gate; record final Node 22/24 run URLs in the post-push review.
+
 - **P3:** 1 closed finding (`R6-TEST-01`):
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `R6-TEST-01` | `R6 / Session 2` | `TEST` | **Closed** | `diagnose.mjs:802-886` | `runSquadCanaryAndOptimization()` tested report slots only under unmanaged root. | Updated canary runner to exercise managed plan-root slots across inspect, bundle, verify, and prune. | Verified in `tests/test-run.mjs` (`8ff52104a791...`) |
 
-- **Verification:** Verified by `npm test` synchronously executing all 5 test files (`test-dispatch.mjs`, `test-handoffs.mjs`, `test-run.mjs`, `test-server.mjs`, `verify-benchmark.mjs`) with 0 failures. Section 8 gaps `R6-TEST-GAP-02` (Closed by design) and `R6-TEST-GAP-03` (Closed post-remediation) verified intact.
+- **Verification:** Full automated suite passes synchronously via `npm test` (5 suites); packaging content gate passes via `tests/verify-package.mjs` (positive and 7 negative controls) and CI matrix.
 - **Verdict:** `No findings within reviewed scope`
 
 ---
@@ -529,7 +561,7 @@ PR #1 fundamentally re-architects Agy-Squad away from the abandoned Windows Dock
 10. **Closure:** Resolved. Added `"files": ["bin", "mcp", ".agents/skills", "docs"]` allowlist to `package.json`. Verified via `npm pack --dry-run --json` confirming zero `.agents/teamwork/` or test files in package tarball and closed.
 
 - **P3:** None identified within reviewed scope.
-- **Verification:** Inspected `package.json` and executed `npm pack --dry-run --json` confirming presence of internal agent files in tarball output.
+- **Verification:** The historical pre-allowlist `npm pack --dry-run --json` reproduced internal `.agents/teamwork/` metadata leakage. The post-fix release gate runs `tests/verify-package.mjs --self-test` and validates the real `npm pack --dry-run --json` file list, rejecting forbidden paths and missing runtime/skill entrypoints. Final Node 22/24 Actions URLs and the exact immutable tested head are recorded in the post-push GitHub closure review.
 - **Verdict:** `No findings within reviewed scope`
 
 ---
@@ -559,18 +591,18 @@ Analysis of the 20 open findings (6 P2 and 14 P3) reveals 4 underlying root caus
 | Category | P0 | P1 | P2 | P3 | Open (Pre-Remediation) | Closed | Category Verdict |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `ARCH` | 0 | 0 | 0 | 0 | 0 | 0 | **No findings within reviewed scope** |
-| `DOC` | 0 | 0 | 5 | 15 | 0 | 20 | **No findings within reviewed scope** |
+| `DOC` | 0 | 0 | 6 | 17 | 0 | 23 | **No findings within reviewed scope** |
 | `SKILL` | 0 | 0 | 0 | 0 | 0 | 0 | **No findings within reviewed scope** |
 | `MCP` | 0 | 0 | 1 | 1 | 0 | 2 | **No findings within reviewed scope** |
 | `RUN` | 0 | 0 | 2 | 0 | 0 | 2 | **No findings within reviewed scope** |
 | `SVC` | 0 | 2 | 8 | 1 | 0 | 11 | **No findings within reviewed scope** |
 | `DB` | 0 | 0 | 0 | 0 | 0 | 0 | **Not applicable** |
 | `SCRIPT` | 0 | 0 | 1 | 5 | 0 | 6 | **No findings within reviewed scope** |
-| `TEST` | 0 | 0 | 0 | 1 | 0 | 1 | **No findings within reviewed scope** |
+| `TEST` | 0 | 0 | 1 | 1 | 0 | 2 | **No findings within reviewed scope** |
 | `DEP` | 0 | 0 | 1 | 0 | 0 | 1 | **No findings within reviewed scope** |
-| **Total** | **0** | **2** | **18** | **23** | **0** | **43** | **READY TO MERGE** |
+| **Total** | **0** | **2** | **20** | **25** | **0** | **47** | **READY TO MERGE** |
 
-*Note on Section 8 Residuals:* In addition to the 43 defect findings above, Section 8 tracks 3 non-defect residual and gap items (`SCRIPT-GAP-002`, `R6-TEST-GAP-02`, `R6-TEST-GAP-03`), bringing total tracked items across PR #1 to 46.
+*Note on Section 8 Residuals:* In addition to the 47 defect findings above, Section 8 tracks 3 non-defect residual and gap items (`SCRIPT-GAP-002`, `R6-TEST-GAP-02`, `R6-TEST-GAP-03`), bringing total tracked items across PR #1 to 50.
 
 ---
 
@@ -614,11 +646,13 @@ Remediation must proceed in four prioritized phases to unblock PR #1 merge readi
    ```
    *Result:* Exited code `0` with `status: "HEALTHY"` across all review ledgers.
 
-3. **Reproduction of Package Leakage (`PR1-DEP-01`):**
+3. **Package content boundary (post-fix, `PR1-DEP-01` and `R12-TEST-01`):**
    ```bash
-   npm pack --dry-run --json | grep -E '\.agents/teamwork'
+   node tests/verify-package.mjs --self-test
+   npm pack --dry-run --json > /tmp/agy-squad-pack.json
+   node tests/verify-package.mjs /tmp/agy-squad-pack.json
    ```
-   *Result:* Confirmed multiple `.agents/teamwork/...` files bundled in package tarball due to missing allowlist.
+   *Result:* The self-test exercises a passing synthetic manifest and seven rejecting controls. The real tarball manifest is checked against allowed production roots and required runtime files by CI on Node 22 and 24. The previously observed `.agents/teamwork/` inclusion is a historical pre-allowlist reproduction, **not** the current post-fix result; final run URLs are in the GitHub closure review.
 
 4. **Reproduction of Benchmark CLI Usage Error (`R11-DOC-02`):**
    ```bash
@@ -637,7 +671,7 @@ Remediation must proceed in four prioritized phases to unblock PR #1 merge readi
 ### 7.1 Overall Merge Readiness Disposition
 **READY TO MERGE**
 
-PR #1 is **READY TO MERGE**. Following Wave RM1 remediation and Wave RM2 independent review, challenge, and victory audit, all 43 findings across PR #1 (including `PR1-DEP-01`, `R11-DOC-01`..`05`, and `R11-DOC-06`..`19`) are verified **Closed**. Zero blocking defects remain. Automated test suites pass 100% (`npm test`), packaging boundaries are enforced via `package.json` allowlist (30 files), and diagnostic schemas validate cleanly.
+PR #1's historical RM1/RM2 reviews closed 43 defects; Wave R12 independently identified and remediated two additional P2 and two P3 release-evidence findings. After verification, the cumulative ledger contains **47 distinct closed defects**, zero open blocking findings, and three separately tracked informational/verification-gap items. The package content boundary is enforced by the manifest assertion script and the Node 22/24 CI matrix, not by `npm pack` exit status alone. Final code/CI sign-off is recorded in the post-push GitHub review for the immutable release-candidate head. Native WSL2 authenticated-`agy` E2E remains a separate supervised release-channel acceptance boundary (`SCRIPT-GAP-002`).
 
 ---
 
@@ -665,6 +699,8 @@ PR #1 is **READY TO MERGE**. Following Wave RM1 remediation and Wave RM2 indepen
 | `R11-DOC-04` | `DOC` | `P2` | Wave R11 / Session 7 | `docs/concepts.md:67` | Active docs assign meanings to `L7`/`L29`/`L30`/`L40`/`L41` contradicting `LEDGER.md`. | **Closed** |
 | `R11-DOC-05` | `DOC` | `P2` | Wave R11 / Session 7 | Ledger §5, §7, §8 | Ledger finding counts, statuses, and record densities inconsistent across waves. | **Closed** |
 | `PR1-DEP-01` | `DEP` | `P2` | Holistic PR Review / M1 | `package.json` | Package missing `"files"` allowlist; npm packing leaks internal metadata. | **Closed** |
+| `R12-DOC-01` | `DOC` | `P2` | Independent Wave R12 review `5829814649` | `docs/reviews/pr1-code-review-ledger.md`; `docs/reviews/pr1-production-readiness-review.md` | Reconcile release-candidate file inventories, historical audit checkpoints, R12 provenance and final head-pinned sign-off. | **Closed** |
+| `R12-TEST-01` | `TEST` | `P2` | Independent Wave R12 review `5829814649` | `.github/workflows/ci.yml`; `tests/verify-package.mjs` | Make Node 22/24 CI assert actual npm pack file list; prove forbidden files/missing runtime fail with synthetic controls. | **Closed** |
 | `R6-MCP-02` | `MCP` | `P3` | `R6-MCP-02` / Claim 4 | `mcp/index.js:139` | Enforce 10MB stdio payload ceiling incrementally on `stdin` chunks before newline assembly. | **Closed** |
 | `R6-SVC-02` | `SVC` | `P3` | `R6-SVC-02` | `mcp/handoffs.mjs:8` | Honor custom `AGY_SQUAD_SCRATCH_ROOT` and `record.reportRoot` in report resolution. | **Closed** |
 | `R6-SCRIPT-01` | `SCRIPT` | `P3` | `R6-SCRIPT-01` / Claim 8 | `bin/terminal.py:146` | Treat child `agy` exit before `submitted == True` as non-zero startup failure. | **Closed** |
@@ -688,6 +724,8 @@ PR #1 is **READY TO MERGE**. Following Wave RM1 remediation and Wave RM2 indepen
 | `R11-DOC-17` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §2 | File inventory omitted 36 changed files in PR #1 net diff against `main`. | **Closed** |
 | `R11-DOC-18` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §4, §5 | Verdicts use `PASS`/`APPROVE` instead of standard enum; `DB` should be `Not applicable`. | **Closed** |
 | `R11-DOC-19` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §1 | No session row covers `ed94e83..f6ed11d` (remediated commit `2634683`). | **Closed** |
+| `R12-DOC-02` | `DOC` | `P3` | Independent Wave R12 review `5829814649` | `README.md`; `docs/core-workflows.md`; `docs/index.md` | Correct `.agents/` registration cleanup paths and Linux/WSL2 primary support wording. | **Closed** |
+| `R12-DOC-03` | `DOC` | `P3` | Independent Wave R12 review `5829814649` | `docs/reviews/pr1-production-readiness-review.md` | Correct five-versus-four SCRIPT P3 count and distinguish pre-fix packaging leak from post-fix exclusion verification. | **Closed** |
 
 ---
 

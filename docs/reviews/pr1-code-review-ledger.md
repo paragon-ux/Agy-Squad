@@ -1,7 +1,9 @@
 # Agy-Squad PR #1 Consolidation, Remediation & Reverification Ledger
 
-**Disposition:** `READY TO MERGE — Wave RM2 Independent Review & Final Closure: All 43 Findings (PR1-DEP-01, R11-DOC-01..19, and 23 prior code/architecture findings) Verified Closed; Package Scoped to 30 Production Files; 5/5 Test Suites Passing; Zero Unresolved Blocking Defects`
-**Wave R11 Reviewed Head SHA:** `999c221b0958174d058226a4e9ba7288fbb61612` (`rebuild/wsl-dispatch`, clean working tree)
+**Disposition:** `READY TO MERGE — Wave R12: 47 distinct defect findings closed (2 P1 / 20 P2 / 25 P3), 0 blocking residuals; Node 22/24 package-manifest assertion + self-test; final immutable head and CI run IDs in post-push GitHub review; native WSL2 agy smoke test remains separately tracked`
+**Wave RM1 historical audit checkpoint:** `999c221b0958174d058226a4e9ba7288fbb61612` (scope: 49 files / 27 commits at that historical checkpoint; not the final release head).
+**Wave R12 pre-remediation checkpoint:** `74ff8600dbc213bbe9b63342941ab96ebb54a1d2` (scope: 50 files / 29 commits at the start of R12).
+**Release-candidate SHA and final CI proof:** Recorded by a new, post-push GitHub PR review/comment, which pins the immutable final head and Actions run URLs.
 **Review Date:** `2026-11-09`
 **Repository / PR:** [paragon-ux/Agy-Squad #1](https://github.com/paragon-ux/Agy-Squad/pull/1) (`rebuild/wsl-dispatch` -> `main`)
 **Base Branch / SHA:** `main` at `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`
@@ -25,6 +27,7 @@
 | Session 7 (Wave R11 Documentation Consistency `/pr-review`) | `fa93e383-0b2c-4874-8568-cb1d93e98924` | None (independent review thread) | 2026-11-09 | `ee10ebc..f6ed11d` (clean working tree; no code changes) | Direct non-delegated `/pr-review` (Standard `v1.3.0`), `DOC`-scoped: active docs, benchmark README, skills, `docs/plans/`, and `docs/reviews/` cross-checked against `mcp/`, `bin/`, and `diagnose.mjs`; `npm test` + `diagnose.mjs --ledger` |
 | Session 8 (PR1 Holistic Production Readiness Review) | `8c066b81-f7fb-4384-accb-11df3c54c717` | `ef239063-b2ae-4e79-aef8-3343b9097b3e` | 2026-11-09 | `ee10ebc255f0d52dc93b51d7cf8198bb069c4532..999c221b0958174d058226a4e9ba7288fbb61612 (clean working tree)` | Full 10-category holistic production readiness review (Standard `v1.3.0`) + additive ledger reconciliation across all 49 changed files |
 | Session 9 (PR1 P2/P3 Defect Remediation & Verification) | `b3203b09-75c6-4b09-9e28-613a103ed37b` | `1cb74e5c-af0d-40d7-a66a-fc5571d15444` | 2026-11-09 | `ee10ebc255f0..999c221b0958` + packaging allowlist & doc fixes | Full remediation of PR1-DEP-01 (package allowlist), 5 P2 doc defects (R11-DOC-01..05), and 14 P3 doc consistency findings (R11-DOC-06..19); verified via npm test, diagnose.mjs, and npm pack |
+| Session 10 (Wave R12 Independent Release-Gate Closure) | External independent review: GitHub review `5829814649`; Argon follow-up implementation | Root operator / teamwork implementation | 2026-11-09 | `74ff860` pre-remediation baseline; final post-fix head/CI pinned in GitHub review | Targeted R12 TEST/DOC hardening; sole-owner ledger reconciliation; Node 22/24 pack-file assertion + self-test |
 
 - **Scope & Precedence:** Phase 2 began only after Phase 1 (PR #2) was remediated, reverified by a flat specialist squad, validated via `/self-diagnosis`, and merged into `rebuild/wsl-dispatch` (`3df852b9251170870d03c42e2a4e6d03440efbe2`).
 - **Phase 2 Step 1 — Reconciliation Against Completed PR #2 Baseline (`3df852b9251170870d03c42e2a4e6d03440efbe2`):**
@@ -37,7 +40,7 @@
 
 ## 2. File-to-Category Inventory & Coverage Matrix
 
-Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this inventory, resolving `R11-DOC-17`:
+This inventory covers the PR #1 release-candidate tree relative to base `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`, including the Wave R12 package verifier and this production-readiness review. The historical RM1 audit originally covered `ee10ebc..999c221`; use the final `git diff --name-only` comparison in §6 to confirm that every changed file is listed here.
 
 | Path | Primary Category | Cross-Referenced Categories | Review Package Reference |
 | --- | --- | --- | --- |
@@ -69,9 +72,10 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | `docs/getting-started.md` | `DOC` | — | Onboarding guide, installation instructions, prerequisites (`R11-DOC-01`, `R11-DOC-06`, `R11-DOC-07`, `R11-DOC-14`) |
 | `docs/index.md` | `DOC` | — | Documentation landing page reflecting native CLI and Pointer-Over-Wire handoffs (`R11-DOC-04`, `R11-DOC-14`) |
 | `docs/plans/LEDGER.md` | `ARCH` | `DOC` | Architectural decision ledger recording decisions L1 through L41 (`R11-DOC-13`) |
-| `docs/plans/docker-sandbox-plan.md` (deleted) | `ARCH` | — | Retired legacy Windows Docker Desktop container design document |
+| `docs/plans/docker-sandbox-plan.md (deleted)` | `ARCH` | — | Retired legacy Windows Docker Desktop container design document |
 | `docs/plans/wsl-cli-verification.md` | `DOC` | `SCRIPT` | Loopback fixture verification and supervised live trial checks (`R8-SCRIPT-02`) |
 | `docs/reviews/pr1-code-review-ledger.md` | `DOC` | — | Active PR #1 consolidation, remediation, and reverification ledger (R1-R11) |
+| `docs/reviews/pr1-production-readiness-review.md` | `DOC` | `TEST`, `DEP` | Wave RM1/RM2 production-readiness assessment, R12 provenance reconciliation and package-verification evidence |
 | `docs/reviews/pr2-documentation-review-ledger.md` | `DOC` | — | Review ledger for PR #2 (documentation and benchmark consolidation) |
 | `docs/reviews/rebuild-wsl-dispatch-review-r2.md` | `DOC` | `SKILL`, `SVC` | Historical R2 review report closing prior findings (`R6-DOC-01`) |
 | `docs/reviews/rebuild-wsl-dispatch-review.md` | `DOC` | — | Historical R1 review report for the initial rebuild commit |
@@ -83,12 +87,13 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | `mcp/index.js` | `MCP` | `RUN`, `SVC` | MCP server: stdio JSON-RPC, 10MB chunk-level framing, retired `subagent_brief` (`L6`, `R6-MCP-01`, `R6-MCP-02`) |
 | `mcp/run-state.mjs` | `SVC` | `RUN` | Managed run staging: creates `scratch/agy-squad/run-<uuid>`, slot isolation (`L3`) |
 | `package.json` | `DEP` | — | Package manifest: WSL dependencies, files allowlist, and 5-suite `npm test` script (`PR1-DEP-01 resolved`) |
-| `tests/legacy/test-security-canary-re-trial.mjs` (deleted) | `TEST` | — | Deleted legacy Docker container canary test |
-| `tests/test-briefs.mjs` (deleted) | `TEST` | — | Deleted retired `subagent_brief` tool test |
+| `tests/legacy/test-security-canary-re-trial.mjs (deleted)` | `TEST` | — | Deleted legacy Docker container canary test |
+| `tests/test-briefs.mjs (deleted)` | `TEST` | — | Deleted retired `subagent_brief` tool test |
 | `tests/test-dispatch.mjs` | `TEST` | `RUN`, `MCP` | Tests Stage 1 (`all_l1`), Stage 2 (`<squadId>`), containment, error paths (`RUN-003`, `RUN-004`) |
 | `tests/test-handoffs.mjs` | `TEST` | `SVC` | Tests handoff reconciliation, 500-byte boundary, bundle digest verification (`SVC-002`, `SVC-003`, `R6-SVC-02`, `R7-SVC-02`, `R8-SVC-01`, `R8-SVC-02`, `SVC-NEW-03`) |
 | `tests/test-run.mjs` | `TEST` | `SVC`, `SCRIPT` | Comprehensive test of managed runs, launcher lifecycle, fake CLI PTY, teardown (`R6-SVC-01`, `R6-SCRIPT-01`, `R6-TEST-01`, `SVC-NEW-01`, `SVC-NEW-02`, `SCRIPT-NEW-01`) |
 | `tests/test-server.mjs` | `TEST` | `MCP` | Tests MCP server handshake, notification suppression, 10MB framing, exit on stdin close (`R6-MCP-01`, `R6-MCP-02`, `R6-TEST-GAP-03`) |
+| `tests/verify-package.mjs` | `TEST` | `DEP` | Wave R12 npm package manifest allowlist, required-runtime assertions and synthetic positive/negative controls (`R12-TEST-01`) |
 | `zensical.toml` | `DEP` | `DOC` | Zensical static site configuration updated with new nav items (`L30`) |
 
 ---
@@ -112,7 +117,7 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 - **Verdict:** `No findings within reviewed scope` (0 findings).
 
 ### 4.2 `DOC` — Documentation & Review Ledgers
-- **Verdict:** `No findings within reviewed scope` (Wave R11 / Session 7: `5` `P2` and `14` `P3` documentation findings `R11-DOC-01`–`R11-DOC-19` remediated and closed; `R6-DOC-01` remains closed).
+- **Verdict:** `No findings within reviewed scope` (R6/R11 historical docs remain closed; Wave R12 closes one additional P2 `R12-DOC-01` and two P3 findings `R12-DOC-02`, `R12-DOC-03`; cumulative DOC: 6 P2 + 17 P3 = 23).
 
 #### `R6-DOC-01`
 - **Priority:** `P3` | **Status:** **Closed**
@@ -197,6 +202,32 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | `R11-DOC-17` | `R11 / Session 7` | `DOC` | **Closed** | This ledger §2 | File inventory omitted 36 changed files in PR #1 net diff against `main`. | Expand inventory to cover all 49 changed files (addressed in this review). | `git diff` inspection @ `999c221` |
 | `R11-DOC-18` | `R11 / Session 7` | `DOC` | **Closed** | This ledger §4, §5 | Verdicts used `PASS`/`APPROVE` instead of standard enum (`No findings within reviewed scope`, `Not applicable`). | Use standard category verdict enum across all 10 categories (addressed in this review). | Standard v1.3.0 inspection |
 | `R11-DOC-19` | `R11 / Session 7` | `DOC` | **Closed** | This ledger §1 | Session Provenance table lacked coverage for commits producing `2634683` / `f6ed11d`. | Append Session 8 covering full base..head commit range (addressed in this review). | `git log` inspection @ `999c221` |
+
+#### `R12-DOC-01`
+1. **Title / Priority / Status:** Final PR inventory/provenance excludes the last review commits; **P2**, **Closed**.
+2. **Contract Provenance:** PR Review Standard v1.3.0 (§1/§2/§7), including complete changed-file mapping, review checkpoints, and one canonical ID per finding.
+3. **Source Evidence:** At `74ff860`, GitHub reports 50 changed files/29 commits; both ledgers instead claim complete `ee10ebc..999c221` coverage (49 files/27 commits), omitting `docs/reviews/pr1-production-readiness-review.md`.
+4. **Trigger:** A release reviewer relies on the “all files reviewed” claims in either ledger after further changes were merged onto the PR branch.
+5. **Expected / Actual:** Expected complete final-tree file inventory with historical audit and R12 checkpoints distinguished; actual scope statements refer to the older RM1 tree.
+6. **Impact:** Release evidence omits files and misstates the reviewed commit range, weakening independent sign-off.
+7. **Required Remediation:** Reconcile both §2 inventories; add the production review and package verifier; maintain unique entries/counts; record final immutable head and CI in a post-push GitHub review.
+8. **Acceptance Evidence:** Every path from `git diff --name-only origin/main...HEAD` occurs exactly once in both §2 inventories; final GitHub review pins the checked head and green CI run URLs.
+9. **Root Cause / Related IDs:** Review ledgers were closed at an earlier SHA; related `R11-DOC-17`, `R11-DOC-19`.
+10. **Closure:** Historical and R12 checkpoints are distinguished; inventories and §7 counts reconciled; final head/CI to be pinned in the GitHub closure review after push.
+
+#### `R12-DOC-02`
+- **Priority:** `P3` | **Status:** **Closed**
+- **Original References:** Independent Wave R12 review `5829814649`
+- **Location:** `README.md`, `docs/core-workflows.md`, `docs/index.md`
+- **Defect Summary:** Correct `.agents/` registration cleanup paths and Linux/WSL2 primary support wording.
+- **Remediation & Reverification Evidence:** Replaced `.gemini/` cleanup references with `.agents/plugins/agy-squad-*/` and `.agents/agents/agy-squad-*.md`; corrected Linux/WSL2 wording across all public docs.
+
+#### `R12-DOC-03`
+- **Priority:** `P3` | **Status:** **Closed**
+- **Original References:** Independent Wave R12 review `5829814649`
+- **Location:** `docs/reviews/pr1-production-readiness-review.md`
+- **Defect Summary:** Correct five-versus-four SCRIPT P3 count and distinguish pre-fix packaging leak from post-fix exclusion verification.
+- **Remediation & Reverification Evidence:** Corrected SCRIPT P3 count to 5 and updated DEP verification and Section 6 reproduction text.
 
 ### 4.3 `SKILL` — Skills & Manifests
 - **Verdict:** `No findings within reviewed scope` (0 findings).
@@ -364,7 +395,19 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 - **Remediation & Reverification Evidence:** Added `AGY_SQUAD_READY_MARKER` and detailed startup timeout diagnostics in `bin/terminal.py`, verified in `tests/test-run.mjs:348-406`.
 
 ### 4.9 `TEST` — Automated Tests & Verification Gates
-- **Verdict:** `No findings within reviewed scope` (1 finding remediated and reverified: `R6-TEST-01`).
+- **Verdict:** `No findings within reviewed scope` (2 findings remediated and reverified: `R12-TEST-01` and `R6-TEST-01`).
+
+#### `R12-TEST-01`
+1. **Title / Priority / Status:** CI packages without verifying tarball contents; **P2**, **Closed**.
+2. **Contract Provenance:** `PR1-DEP-01`, `package.json` `files` allowlist, `.github/workflows/ci.yml` Node 22/24 matrix.
+3. **Source Evidence:** At `74ff860`, workflow `Verify npm package structure` runs only `npm pack --dry-run --json`, which can exit `0` even when forbidden paths appear.
+4. **Trigger:** An unintended allowlist expansion or packaging default includes `tests/`, `benchmarks/`, `.agents/teamwork/`, `scratch/`, or other unrelated files.
+5. **Expected / Actual:** Expected CI to fail on leaked file paths or missing runtime entrypoints; old CI ignored manifest contents.
+6. **Impact:** A packaging regression could pass CI and expose internal metadata or ship an incomplete runtime.
+7. **Required Remediation:** Add `tests/verify-package.mjs` with strict allowed roots, required entrypoints, and positive/negative `--self-test`; parse the real npm manifest in Node 22/24 CI.
+8. **Acceptance Evidence:** `node tests/verify-package.mjs --self-test` passes; real `npm pack` manifest passes; both matrix jobs pass after the replacement CI step; the negative controls fail inside the self-test as expected.
+9. **Root Cause / Related IDs:** Package command success was mistaken for content validation; related `PR1-DEP-01`.
+10. **Closure:** Added explicit package manifest assertions, self-tests, and CI gate; record final Node 22/24 run URLs in the post-push review.
 
 #### `R6-TEST-01`
 - **Priority:** `P3` | **Status:** **Closed**
@@ -390,16 +433,16 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | Category | P0 | P1 | P2 | P3 | Open (Pre-Remediation) | Closed | Verdict |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `ARCH` | 0 | 0 | 0 | 0 | 0 | 0 | **No findings within reviewed scope** |
-| `DOC` | 0 | 0 | 5 | 15 | 0 | 20 | **No findings within reviewed scope** |
+| `DOC` | 0 | 0 | 6 | 17 | 0 | 23 | **No findings within reviewed scope** |
 | `SKILL` | 0 | 0 | 0 | 0 | 0 | 0 | **No findings within reviewed scope** |
 | `MCP` | 0 | 0 | 1 | 1 | 0 | 2 | **No findings within reviewed scope** |
 | `RUN` | 0 | 0 | 2 | 0 | 0 | 2 | **No findings within reviewed scope** |
 | `SVC` | 0 | 2 | 8 | 1 | 0 | 11 | **No findings within reviewed scope** |
 | `DB` | 0 | 0 | 0 | 0 | 0 | 0 | **Not applicable** |
 | `SCRIPT` | 0 | 0 | 1 | 5 | 0 | 6 | **No findings within reviewed scope** |
-| `TEST` | 0 | 0 | 0 | 1 | 0 | 1 | **No findings within reviewed scope** |
+| `TEST` | 0 | 0 | 1 | 1 | 0 | 2 | **No findings within reviewed scope** |
 | `DEP` | 0 | 0 | 1 | 0 | 0 | 1 | **No findings within reviewed scope** |
-| **Total** | **0** | **2** | **18** | **23** | **0** | **43** | **READY TO MERGE** |
+| **Total** | **0** | **2** | **20** | **25** | **0** | **47** | **READY TO MERGE** |
 
 ---
 
@@ -455,6 +498,8 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | `R11-DOC-04` | `DOC` | `P2` | Wave R11 / Session 7 | `docs/concepts.md:67` | Active docs assign meanings to `L7`/`L29`/`L30`/`L40`/`L41` contradicting `LEDGER.md`. | **Closed** |
 | `R11-DOC-05` | `DOC` | `P2` | Wave R11 / Session 7 | Ledger §5, §7, §8 | Ledger finding counts, statuses, and record densities inconsistent across waves. | **Closed** |
 | `PR1-DEP-01` | `DEP` | `P2` | Holistic PR Review / M1 | `package.json` | Package missing `"files"` allowlist; npm packing leaks internal metadata. | **Closed** |
+| `R12-DOC-01` | `DOC` | `P2` | Independent Wave R12 review `5829814649` | `docs/reviews/pr1-code-review-ledger.md`; `docs/reviews/pr1-production-readiness-review.md` | Reconcile release-candidate file inventories, historical audit checkpoints, R12 provenance and final head-pinned sign-off. | **Closed** |
+| `R12-TEST-01` | `TEST` | `P2` | Independent Wave R12 review `5829814649` | `.github/workflows/ci.yml`; `tests/verify-package.mjs` | Make Node 22/24 CI assert actual npm pack file list; prove forbidden files/missing runtime fail with synthetic controls. | **Closed** |
 | `R6-MCP-02` | `MCP` | `P3` | `R6-MCP-02` / Claim 4 | `mcp/index.js:139` | Enforce 10MB stdio payload ceiling incrementally on `stdin` chunks before newline assembly. | **Closed** |
 | `R6-SVC-02` | `SVC` | `P3` | `R6-SVC-02` | `mcp/handoffs.mjs:8` | Honor custom `AGY_SQUAD_SCRATCH_ROOT` and `record.reportRoot` in report resolution. | **Closed** |
 | `R6-SCRIPT-01` | `SCRIPT` | `P3` | `R6-SCRIPT-01` / Claim 8 | `bin/terminal.py:146` | Treat child `agy` exit before `submitted == True` as non-zero startup failure. | **Closed** |
@@ -478,6 +523,8 @@ Every changed file across PR #1 (`ee10ebc..999c221`) is accounted for in this in
 | `R11-DOC-17` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §2 | File inventory omitted 36 changed files in PR #1 net diff against `main`. | **Closed** |
 | `R11-DOC-18` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §4, §5 | Verdicts use `PASS`/`APPROVE` instead of standard enum; `DB` should be `Not applicable`. | **Closed** |
 | `R11-DOC-19` | `DOC` | `P3` | Wave R11 / Session 7 | Ledger §1 | No session row covers `ed94e83..f6ed11d` (remediated commit `2634683`). | **Closed** |
+| `R12-DOC-02` | `DOC` | `P3` | Independent Wave R12 review `5829814649` | `README.md`; `docs/core-workflows.md`; `docs/index.md` | Correct `.agents/` registration cleanup paths and Linux/WSL2 primary support wording. | **Closed** |
+| `R12-DOC-03` | `DOC` | `P3` | Independent Wave R12 review `5829814649` | `docs/reviews/pr1-production-readiness-review.md` | Correct five-versus-four SCRIPT P3 count and distinguish pre-fix packaging leak from post-fix exclusion verification. | **Closed** |
 
 ---
 
