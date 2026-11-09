@@ -90,7 +90,11 @@ try {
     }
     const backedUp = fs.existsSync(targetPath + ".corrupt");
     assert.ok(threw || backedUp, "Fixed appendLedgerEntry must throw on corrupt JSON or preserve ledger.json.corrupt");
-    assert.notEqual(res?.count, 1, "Fixed appendLedgerEntry must not silently return { count: 1 } without backup");
+    if (backedUp) {
+      assert.equal(fs.readFileSync(targetPath + ".corrupt", "utf8"), "{corrupt-json", "Backup must hold the original bytes");
+    } else {
+      assert.notEqual(res?.count, 1, "Fixed appendLedgerEntry must not silently return { count: 1 } without backup");
+    }
   };
   if (expectFixed) {
     verifyFixedLedgerGuard(appendLedgerEntry, ledgerPath);
@@ -101,7 +105,7 @@ try {
     assert.deepEqual(JSON.parse(fs.readFileSync(ledgerPath, "utf8")), [
       { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
     ]);
-    // Also verify the fixed-mode grading check against a backup-preserving reference fix
+    // Also verify the fixed-mode grading check against both throw-and-backup and backup-and-continue reference fixes
     const fixedLedgerPath = path.join(tmp, "ledger-fixed.json");
     fs.writeFileSync(fixedLedgerPath, "{corrupt-json");
     verifyFixedLedgerGuard((p, entry) => {
@@ -114,6 +118,21 @@ try {
       return appendLedgerEntry(p, entry);
     }, fixedLedgerPath);
     assert.equal(fs.existsSync(fixedLedgerPath + ".corrupt"), true);
+
+    const fixedContinuePath = path.join(tmp, "ledger-fixed-continue.json");
+    fs.writeFileSync(fixedContinuePath, "{corrupt-json");
+    verifyFixedLedgerGuard((p, entry) => {
+      try {
+        JSON.parse(fs.readFileSync(p, "utf8"));
+      } catch {
+        fs.renameSync(p, p + ".corrupt");
+      }
+      return appendLedgerEntry(p, entry);
+    }, fixedContinuePath);
+    assert.equal(fs.readFileSync(fixedContinuePath + ".corrupt", "utf8"), "{corrupt-json");
+    assert.deepEqual(JSON.parse(fs.readFileSync(fixedContinuePath, "utf8")), [
+      { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
+    ]);
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

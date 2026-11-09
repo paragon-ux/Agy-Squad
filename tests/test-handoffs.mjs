@@ -99,7 +99,7 @@ try {
   }
   write(
     lead,
-    "Verdict: PASS\nSummary: blocked symlinks, result is fail-safe, and status: fail-fast were checked.\n~~~\nVerdict: FAIL\n~~~\nVerified that `FAIL` and `` `FAIL` `` inside CommonMark code spans do not reject synthesis."
+    "Verdict: PASS\nSummary: blocked symlinks, the endpoint does not pass invalid events, result is fail-safe, and status: fail-fast were checked.\n~~~\nVerdict: FAIL\n~~~\nVerified that `FAIL` and `` `FAIL` `` inside CommonMark code spans do not reject synthesis."
   );
 
   const initialBundle = bundleReports(root, record);
@@ -137,11 +137,13 @@ try {
   const archived = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
   assert.equal(archived.verdict, "PASS");
   assert.deepEqual(archived.reports.map(report => report.markdown), [firstEvidence, secondEvidence]);
-  // Verify B2: legacy bundle without verdict field still verifies when synthesis is PASS, and rejects explicit non-PASS verdict
+  // Verify B2: legacy bundle without verdict field still verifies when synthesis is PASS, and rejects explicit non-PASS or null verdict
   const { verdict: _omittedVerdict, ...legacyBundleObj } = archived;
   write(bundle, JSON.stringify(legacyBundleObj, null, 2) + "\n");
   assert.equal(verifyBundle(root, bundle).path, bundle);
   write(bundle, JSON.stringify({ ...legacyBundleObj, verdict: "FAIL" }, null, 2) + "\n");
+  assert.throws(() => verifyBundle(root, bundle), /independently verified PASS verdict/);
+  write(bundle, JSON.stringify({ ...legacyBundleObj, verdict: null }, null, 2) + "\n");
   assert.throws(() => verifyBundle(root, bundle), /independently verified PASS verdict/);
   write(bundle, JSON.stringify(archived, null, 2) + "\n");
   assert.ok(exists(lead) && exists("fixture.txt"));

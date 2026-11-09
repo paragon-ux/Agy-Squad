@@ -238,6 +238,21 @@ function readEvidence(root, report, verifiedDirs) {
   return bytes;
 }
 
+const NEGATIONS = new Set([
+  "not",
+  "no",
+  "non",
+  "never",
+  "isn't",
+  "wasn't",
+  "didn't",
+  "doesn't",
+  "cannot",
+  "can't",
+  "did not",
+  "does not"
+]);
+
 function readSynthesis(root, report, verifiedDirs) {
   const bytes = readEvidence(root, report, verifiedDirs);
   const markdown = decodeUtf8(bytes, report);
@@ -246,12 +261,10 @@ function readSynthesis(root, report, verifiedDirs) {
     .replace(/(`+)([^\r\n]*?)\1/g, " ");
   const verdicts = new Set();
   for (const line of clean.split(/\r?\n/)) {
-    if (
-      /\b(?:not|no|non|never|isn['’]?t|wasn['’]?t|did\s+not|didn['’]?t|does\s+not|doesn['’]?t|cannot|can['’]?t)[\s*_-]+PASS\b/i.test(
-        line
-      )
-    ) {
-      verdicts.add("FAIL");
+    for (const m of line.matchAll(/\b((?:did|does)\s+not|[A-Za-z]+(?:['’]t)?)[\s*_-]+PASS\b/g)) {
+      if (NEGATIONS.has(m[1].toLowerCase().replace(/\s+/g, " ").replace("’", "'"))) {
+        verdicts.add("FAIL");
+      }
     }
     for (const m of line.matchAll(
       /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)[*_\s]*(?:[:—–-]|\bis\b)[*_\s]*(PASS|FAIL|BLOCKED)(?![-\w])/gi
@@ -353,7 +366,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     throw new Error("Invalid bundle JSON object.");
   }
   const { squadId, synthesis, verifiedFiles, reports } = parsed;
-  const verdict = parsed.verdict ?? "PASS"; // legacy bundles; still gated by readSynthesis + hash below
+  const verdict = Object.hasOwn(parsed, "verdict") ? parsed.verdict : "PASS"; // legacy: field absent only
   if (verdict !== "PASS") {
     throw new Error("Bundle must record an independently verified PASS verdict.");
   }
