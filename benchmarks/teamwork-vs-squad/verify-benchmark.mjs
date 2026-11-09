@@ -92,6 +92,12 @@ try {
     assert.ok(threw || backedUp, "Fixed appendLedgerEntry must throw on corrupt JSON or preserve ledger.json.corrupt");
     if (backedUp) {
       assert.equal(fs.readFileSync(targetPath + ".corrupt", "utf8"), "{corrupt-json", "Backup must hold the original bytes");
+      if (!threw) {
+        assert.deepEqual(res, { duplicate: false, count: 1 });
+        assert.deepEqual(JSON.parse(fs.readFileSync(targetPath, "utf8")), [
+          { requestId: "r-new", tenantId: "t1", output: { ok: 2 } }
+        ]);
+      }
     } else {
       assert.notEqual(res?.count, 1, "Fixed appendLedgerEntry must not silently return { count: 1 } without backup");
     }
