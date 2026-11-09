@@ -11,7 +11,7 @@ description: >-
 
 # Agy-Squad PR Review Skill (Standard v1.3.0)
 
-Conduct pull request and branch reviews in `Agy-Squad` using the workflow below. Consult [references/pr-review-standard.md](./references/pr-review-standard.md) on demand for standard governance, versioning, or change-history rules. Passing tests, polished docs, and prior approvals are inputs—not proof that implementation satisfies architecture. Implementation status updates are separate from the review.
+Conduct pull request and branch reviews in `Agy-Squad` using the workflow below. Consult [references/pr-review-standard.md](./references/pr-review-standard.md) on demand for standard governance, versioning, or change-history rules, and see [Core workflows](../../../docs/core-workflows.md) for how this repository workflow standard (enforced by `diagnose.mjs` and `npm test`, not a GitHub branch-protection setting) integrates with `/self-diagnosis`. Passing tests, polished docs, and prior approvals are inputs, not proof that implementation satisfies architecture. Implementation status updates are separate from the review.
 
 ---
 

@@ -1,48 +1,96 @@
 {
-  "benchmark": "teamwork-vs-squad",
+  "benchmarkId": "teamwork-vs-agy-squad-2026-11-08",
   "date": "2026-11-08",
-  "operatorConversationId": "944c64a0-e4c9-4272-a701-e3a32108a31b",
+  "studyType": "Recorded sequential head-to-head audit on the two-domain 6-defect event-relay fixture",
+  "environment": {
+    "os": "WSL2 / Linux (Ubuntu on Windows)",
+    "node": ">=22.0.0",
+    "python": ">=3.9",
+    "agyCli": "Antigravity CLI (authenticated WSL session)",
+    "agyContextSaver": "1.8.1",
+    "rtk": "0.51.0",
+    "executionOrder": "Sequential on the same WSL2 host (Arm 1 Agy-Squad followed by Arm 2 Antigravity /teamwork control in separate fresh conversation contexts)"
+  },
+  "promptsAndConfiguration": {
+    "taskObjective": "Perform a read-only security, reliability, and cross-domain contract audit of benchmarks/teamwork-vs-squad/fixture (gateway/, worker/, and config.json). Identify all concrete defects with file/line evidence, severity (P1/P2), root cause, and remediation.",
+    "armConfiguration": "Both arms audited the unmodified fixture under the same objective. Arm 1 (Agy-Squad) dispatched from benchmarks/teamwork-vs-squad/manifest.json (1 lead and 2 domain specialists scoped to gateway/ and worker/). Arm 2 (/teamwork control) used native /teamwork [skip-interview] orchestration.",
+    "timingBoundaries": {
+      "activeWallClockSeconds": "Elapsed wall-clock seconds from initial cohort or teamwork invocation to final parent completion receipt.",
+      "timeToFirstDelegationSeconds": "Elapsed wall-clock seconds from initial invocation to the first child specialist spawn."
+    },
+    "metricDefinitions": {
+      "totalSteps": "Total transcript step records reported by agy-context-saver check_context_health across all spawned subagents in the arm.",
+      "totalTranscriptKb": "Sum of raw .system_generated/logs/transcript.jsonl sizes in decimal kilobytes (1,000 B) across all spawned subagents in the arm.",
+      "parentInjectedBytes": "Total UTF-8 bytes of child-to-parent wakeup messages delivered into the parent conversation context.",
+      "verifyMs": "Wall-clock milliseconds for SHA-256 input and report digest verification via node mcp/handoffs.mjs verify (artifact integrity check paired with parent code and test inspection).",
+      "leftoverUntrackedFiles": "Post-run git status untracked file count (secondary telemetry alongside the 3-scope teardown contract; .gitignore excludes scratch/)."
+    }
+  },
+  "provenancePolicy": {
+    "conversationIds": "Session conversationId UUIDs are local Antigravity conversation identifiers kept so operators can cross-check step and turn counts with agy-context-saver check_context_health.",
+    "redactionAndExclusions": "Host-specific absolute paths, OS usernames, environment credentials, and raw session transcripts are excluded from published repository files."
+  },
   "fixture": {
     "path": "benchmarks/teamwork-vs-squad/fixture",
-    "files": 6,
+    "domains": ["gateway", "worker"],
+    "filesCount": 6,
     "plantedNeedles": [
       {
         "id": "N1",
         "severity": "P1",
         "location": "gateway/gateway.mjs:10",
-        "summary": "crypto.timingSafeEqual called without checking actualBuf.length === expectedBuf.length, throwing uncaught RangeError on short or odd-length hex signatures."
+        "summary": "verifyWebhookSignature calls crypto.timingSafeEqual without checking buffer byte lengths, throwing an uncaught RangeError on malformed or truncated hex signatures.",
+        "agySquadFindingId": "SYN-01",
+        "teamworkFindingId": "SEC-01",
+        "adjudicationCriteria": "Identify gateway/gateway.mjs:10 crypto.timingSafeEqual uncaught RangeError when actualBuf.length !== expectedBuf.length."
       },
       {
         "id": "N2",
         "severity": "P2",
         "location": "gateway/gateway.mjs:25",
-        "summary": "createRateLimiter overwrites bucket.lastRefillMs = nowMs even when elapsedMs < refillIntervalMs (intervals === 0), starving token replenishment under steady sub-interval traffic."
+        "summary": "createRateLimiter unconditionally overwrites bucket.lastRefillMs = nowMs even when intervals === 0, causing permanent token starvation under steady sub-second traffic.",
+        "agySquadFindingId": "SYN-02",
+        "teamworkFindingId": "REL-01",
+        "adjudicationCriteria": "Identify gateway/gateway.mjs:25 unconditional bucket.lastRefillMs = nowMs update starving token refill when elapsedMs < refillIntervalMs."
       },
       {
         "id": "N3",
         "severity": "P1",
         "location": "gateway/gateway.mjs:40 vs worker/worker.mjs:4",
-        "summary": "buildWorkerEnvelope sets headers[\"x-idempotency-key\"] while processWorkerEnvelope requires headers[\"x-request-id\"], rejecting 100% of gateway envelopes with MISSING_REQUEST_ID."
+        "summary": "buildWorkerEnvelope sets headers['x-idempotency-key'] while processWorkerEnvelope reads headers['x-request-id'], causing 100% of gateway envelopes to fail with MISSING_REQUEST_ID.",
+        "agySquadFindingId": "SYN-03",
+        "teamworkFindingId": "CON-01",
+        "adjudicationCriteria": "Identify header key mismatch between gateway/gateway.mjs:40 ('x-idempotency-key') and worker/worker.mjs:4 ('x-request-id')."
       },
       {
         "id": "N4",
         "severity": "P1",
         "location": "gateway/gateway.mjs:43 vs worker/worker.mjs:9",
-        "summary": "buildWorkerEnvelope emits event.schemaVersion = \"2.0\" while processWorkerEnvelope rejects any version other than \"1.0\" with UNSUPPORTED_SCHEMA."
+        "summary": "buildWorkerEnvelope emits event.schemaVersion = \"2.0\" while processWorkerEnvelope rejects any version other than \"1.0\" with UNSUPPORTED_SCHEMA.",
+        "agySquadFindingId": "SYN-04",
+        "teamworkFindingId": "CON-02",
+        "adjudicationCriteria": "Identify schemaVersion mismatch between gateway/gateway.mjs:43 ('2.0') and worker/worker.mjs:9 ('1.0')."
       },
       {
         "id": "N5",
         "severity": "P1",
         "location": "worker/worker.mjs:12 vs config.json:3",
-        "summary": "processWorkerEnvelope compares millisecond delta Math.abs(nowMs - event.timestampMs) directly against config.maxSkewSeconds (300) without multiplying by 1000, shrinking the 5-minute window to 300ms."
+        "summary": "processWorkerEnvelope compares millisecond delta Math.abs(nowMs - event.timestampMs) directly against config.maxSkewSeconds (300) without multiplying by 1000, shrinking the 5-minute window to 300ms.",
+        "agySquadFindingId": "SYN-05",
+        "teamworkFindingId": "BUG-01",
+        "adjudicationCriteria": "Identify unit mismatch in worker/worker.mjs:12 comparing millisecond timestamp delta against config.maxSkewSeconds (300) without * 1000."
       },
       {
         "id": "N6",
         "severity": "P1",
         "location": "worker/ledger.mjs:9-21 vs worker/worker.mjs:16-28",
-        "summary": "readLedger swallows corrupt JSON as [] (wiping prior entries on next write), appendLedgerEntry uses non-atomic writeFileSync without locking, and processWorkerEnvelope uses attempt >= maxRetries on 1-based attempt (0 retries when maxRetries = 1)."
+        "summary": "readLedger swallows corrupt JSON as [] (wiping prior entries on next write), appendLedgerEntry uses non-atomic writeFileSync without locking, and processWorkerEnvelope uses attempt >= maxRetries on 1-based attempt (0 retries when maxRetries = 1).",
+        "agySquadFindingId": "SYN-06",
+        "teamworkFindingId": "REL-02 / BUG-02",
+        "adjudicationCriteria": "Identify worker/ledger.mjs:9-21 corrupt-JSON silent reset and non-atomic write plus worker/worker.mjs:16-28 1-based attempt >= maxRetries off-by-one retry termination."
       }
-    ]
+    ],
+    "extraFindingsNote": "Both arms caught 6/6 seeded defect categories. Total reported items (18 in Agy-Squad vs. 25 in Teamwork) include sub-defects split out from N6 plus secondary input-validation and hardening observations."
   },
   "arms": {
     "agySquad": {

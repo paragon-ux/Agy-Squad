@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// Offline consistency check for the Teamwork vs. Agy-Squad benchmark package:
+// 1. Runs both fixture happy-path unit suites (test-gateway.mjs, test-worker.mjs).
+// 2. Reproduces all 6 seeded defects in-process.
+// 3. Compiles Stage 1 (all_l1) and Stage 2 (ab_audit) from manifest.json.
+// 4. Verifies telemetry.json per-agent sums, rubric mappings, and provenance fields.
+// (Does not launch live Antigravity subagents or replay session transcripts.)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -85,9 +91,19 @@ const stage2 = handleDispatchSquad({ squadId: "ab_audit", manifestPath }, repoRo
 assert.equal(Boolean(stage2.isError), false);
 assert.equal(JSON.parse(stage2.content[0].text).Subagents.length, 2);
 
-// Verify recorded telemetry ledger integrity
+// Verify recorded telemetry ledger integrity, adjudication rubric, and provenance metadata
 const telemetry = JSON.parse(fs.readFileSync(path.join(benchDir, "results/telemetry.json"), "utf8"));
+assert.equal(typeof telemetry.studyType, "string");
+assert.ok(telemetry.studyType.length > 0);
+assert.equal(typeof telemetry.environment?.agyContextSaver, "string");
+assert.equal(typeof telemetry.promptsAndConfiguration?.taskObjective, "string");
+assert.equal(typeof telemetry.provenancePolicy?.conversationIds, "string");
 assert.equal(telemetry.fixture.plantedNeedles.length, 6);
+for (const needle of telemetry.fixture.plantedNeedles) {
+  assert.ok(needle.agySquadFindingId);
+  assert.ok(needle.teamworkFindingId);
+  assert.ok(needle.adjudicationCriteria);
+}
 for (const arm of [telemetry.arms.agySquad, telemetry.arms.teamworkControl]) {
   assert.equal(arm.agents.length, arm.subagentsSpawned);
   assert.equal(arm.agents.reduce((s, a) => s + a.steps, 0), arm.totalSteps);
@@ -97,4 +113,4 @@ for (const arm of [telemetry.arms.agySquad, telemetry.arms.teamworkControl]) {
   assert.equal(arm.needlesCaught, 6);
 }
 
-console.log("✓ Teamwork vs. Agy-Squad benchmark fixture, manifest stages, and telemetry ledger verified.");
+console.log("✓ Offline benchmark check passed (fixture suites, 6 seeded defects, manifest stages, and telemetry ledger arithmetic).");

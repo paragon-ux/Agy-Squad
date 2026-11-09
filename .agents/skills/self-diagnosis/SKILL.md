@@ -11,7 +11,7 @@ description: >-
 
 # Agy-Squad Self-Diagnosis & Optimization Skill
 
-Self-diagnose, review, and optimize `Agy-Squad` and its workspace skills (`self-diagnosis` and [`pr-review`](../pr-review/SKILL.md)) by dogfooding `Agy-Squad`'s staged payload compiler (`mcp/dispatch.mjs`), Pointer-Over-Wire verifier (`mcp/handoffs.mjs`), and the 10-category [Agy-Squad PR Review Standard v1.3.0](../pr-review/references/pr-review-standard.md). Consult the [Optimization & Review Rubric](./references/optimization-and-review-rubric.md) for quantitative budgets, latency targets, and category triage rules.
+Self-diagnose, review, and optimize `Agy-Squad` and its workspace skills (`self-diagnosis` and [`pr-review`](../pr-review/SKILL.md)) by dogfooding `Agy-Squad`'s staged payload compiler (`mcp/dispatch.mjs`), Pointer-Over-Wire verifier (`mcp/handoffs.mjs`), and the 10-category [Agy-Squad PR Review Standard v1.3.0](../pr-review/references/pr-review-standard.md). Consult the [Optimization & Review Rubric](./references/optimization-and-review-rubric.md) for quantitative budgets, latency targets, and category triage rules, and see [Core workflows](../../../docs/core-workflows.md) for how this operator-supervised workflow (never autonomous self-modifying code) pairs with the 3-scope evidence-retention and teardown contract (measured by durable `docs/reviews/` ledgers, verified SHA-256 bundles, `--teardown`, and child termination rather than `git status` untracked counts alone).
 
 ---
 

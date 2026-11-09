@@ -1,7 +1,7 @@
 [project]
 site_url = "https://paragon-ux.github.io/agy-squad/"
 site_name = "Agy-Squad Documentation"
-site_description = "Staged subagent dispatch for the Antigravity CLI on WSL"
+site_description = "Staged subagent orchestration and review harness for Antigravity Desktop and CLI on POSIX and WSL2"
 site_author = "paragon-ux"
 copyright = "Copyright &copy; 2026 paragon-ux. Released under the MIT License."
 
@@ -10,9 +10,12 @@ repo_name = "paragon-ux/agy-squad"
 
 nav = [
   { "Overview" = "index.md" },
-  { "Benchmarks" = "benchmarks.md" },
+  { "Getting Started" = "getting-started.md" },
+  { "Core Workflows" = "core-workflows.md" },
+  { "Concepts" = "concepts.md" },
   { "Tools" = "tools.md" },
   { "Stopping Agents" = "stopping-agents.md" },
+  { "Benchmarks" = "benchmarks.md" },
   { "WSL CLI Verification" = "plans/wsl-cli-verification.md" },
   { "Decision Ledger" = "plans/LEDGER.md" },
 ]
