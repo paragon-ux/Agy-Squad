@@ -521,7 +521,7 @@ process.stdin.on("data", chunk => {
     for (const [slot, text] of [
       [tdS1, "# Specialist 1\n\n| ID | Status |\n| --- | --- |\n| `SD-TEST-01` | **Closed** |\n"],
       [tdS2, "# Specialist 2\n\n### SD-HEAD-01 — Missing verification in plain heading\n\nVerified.\n"],
-      [tdLead, "# Lead Synthesis\n\nVerdict: PASS\n\n- **SD-BULLET-01**: Missing verification in bullet list\n"]
+      [tdLead, "# Lead Synthesis\n\n- **Verdict:** **PASS**\n\n- **SD-BULLET-01:** Missing verification in bullet list\n"]
     ]) {
       const abs = path.join(repoRoot, slot);
       fs.mkdirSync(path.dirname(abs), { recursive: true });

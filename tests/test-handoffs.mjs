@@ -80,6 +80,8 @@ try {
     "FAIL: output differs from expected.",
     "1. FAIL: output differs from expected.",
     "Output check — FAIL: output differs from expected.",
+    "- **Verdict:** **FAIL**",
+    "Verdict: PASS\n- **Verdict:** **FAIL**",
     "Verdict: BLOCKED — missing required fixture.",
     "BLOCKED: missing upstream schema.",
     "Verdict: PASS\nSecondary check: FAIL.",

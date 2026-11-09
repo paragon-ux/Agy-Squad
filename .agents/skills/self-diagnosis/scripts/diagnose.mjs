@@ -214,15 +214,15 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
     addCandidate(match[1]);
   }
   if (includeProseHeadingsAndBullets) {
-    // Plain or styled headings (e.g., "### SD-TEST-01 — Missing verification", "#### [P2] **SD-TEST-01**: ...")
+    // Plain, numbered, or styled headings (e.g., "### SD-TEST-01 — ...", "#### **SD-TEST-01:** ...", "### 2.1 SD-HEAD-02: ...")
     const headingRe =
-      /^#{2,6}\s+(?:(?:\*{1,2}|`)?\s*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)\s*(?:\*{1,2}|`)?\s*[:—–-]?\s*)?(?:\*{1,2}|`)?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?:\*{1,2}|`)?(?=$|\s*(?:[:—–(-]|\*{1,2}|`|\s))/gm;
+      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*(?=$|\s*(?:[:—–(-]|[*`]))/gm;
     for (const match of stripped.matchAll(headingRe)) {
       addCandidate(match[1]);
     }
-    // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **[P2] `SD-TEST-01`**: ...", "1. SD-TEST-01: ...")
+    // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **SD-TEST-01:** ...", "- **[P2] `SD-TEST-01` (`SVC`):** ...")
     const bulletRe =
-      /^\s*(?:[*+-]|\d+[.)])\s+(?:(?:\*{1,2}|`)?\s*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)\s*(?:\*{1,2}|`)?\s*[:—–-]?\s*)?(?:\*{1,2}|`)?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?:\*{1,2}|`)?\s*(?:\([^)]*\)\s*)?(?:\*{1,2}|`)?\s*(?:[:—–-]|$)/gm;
+      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*\s*(?:\([^)]*\)\s*)?[*`]*\s*(?:[:—–-]|[*`]+\s*[:—–-]|$)/gm;
     for (const match of stripped.matchAll(bulletRe)) {
       addCandidate(match[1]);
     }
@@ -365,7 +365,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
       for (const row of cohortTable.rows) {
         for (const colIdx of [4, 5]) {
           const cell = row[colIdx] ?? "";
-          for (const match of cell.matchAll(/[0-9a-f]{12,64}/gi)) {
+          for (const match of cell.matchAll(/(?<![0-9a-f-])[0-9a-f]{12,64}(?![0-9a-f-])/gi)) {
             recordedBundleShas.push(match[0].toLowerCase());
           }
         }
@@ -441,9 +441,19 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
         }
         const bundleJson = JSON.parse(fs.readFileSync(bundleAbs, "utf8"));
         const leadReportAbs = path.join(repoRoot, reportPath(id, undefined, scratchSquadRel));
+        const looseReports = [];
+        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+          if (entry.isDirectory() && /^specialist-[1-9]\d*$/.test(entry.name)) {
+            const repPath = path.join(absDir, entry.name, "report.md");
+            if (fs.existsSync(repPath)) {
+              looseReports.push(fs.readFileSync(repPath, "utf8"));
+            }
+          }
+        }
         const cohortMarkdowns = [
           ...(fs.existsSync(leadReportAbs) ? [fs.readFileSync(leadReportAbs, "utf8")] : []),
-          ...(Array.isArray(bundleJson.reports) ? bundleJson.reports.map(r => r.markdown || "") : [])
+          ...(Array.isArray(bundleJson.reports) ? bundleJson.reports.map(r => r.markdown || "") : []),
+          ...looseReports
         ];
         const cohortFindingIds = new Set();
         for (const md of cohortMarkdowns) {

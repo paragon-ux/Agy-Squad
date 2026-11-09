@@ -247,16 +247,16 @@ function readSynthesis(root, report, verifiedDirs) {
   const verdicts = new Set();
   for (const line of clean.split(/\r?\n/)) {
     for (const m of line.matchAll(
-      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:\*{1,2})?\s*(?:[:—–-]|\bis\b)\s*(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?![-\w])/gi
+      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)[*_\s]*(?:[:—–-]|\bis\b)[*_\s]*(PASS|FAIL|BLOCKED)(?![-\w])/gi
     )) {
       verdicts.add(m[1].toUpperCase());
     }
     for (const m of line.matchAll(
-      /(?:^\s*(?:(?:#+|>|[*+-]|\d+[.)])\s*)*|[:|—–]\s*)(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?:\*{1,2})?(?![-\w])/g
+      /(?:^\s*(?:(?:#+|>|[*+-]|\d+[.)])\s*)*|[:|—–][*_\s]*)[*_]*(PASS|FAIL|BLOCKED)[*_]*(?![-\w])/g
     )) {
       verdicts.add(m[1]);
     }
-    for (const m of line.matchAll(/\b(?:\*{1,2})?(PASS|FAIL|BLOCKED)(?:\*{1,2})?\s*[:—–-](?=\s|$)/g)) {
+    for (const m of line.matchAll(/\b[*_]*(PASS|FAIL|BLOCKED)[*_]*\s*[:—–-](?=\s|$)/g)) {
       verdicts.add(m[1]);
     }
   }
