@@ -5,7 +5,7 @@
 **Repository / PR:** [paragon-ux/Agy-Squad #1](https://github.com/paragon-ux/Agy-Squad/pull/1) (`rebuild/wsl-dispatch` -> `main`)
 **Base Branch / SHA:** `main` at `ee10ebc255f0d52dc93b51d7cf8198bb069c4532`
 **Reviewed Head SHA (Pre-R6 Baseline):** `c7acf464be46780b051b432d59ce657f4ee2880f` (reconciled against merged PR #2 baseline `3df852b9251170870d03c42e2a4e6d03440efbe2`)
-**Remediated & Reverified Commit SHA:** `541d6c01d0a4e2f157020b7428b77d8fa68b8f6d`
+**Remediated & Reverified Commit SHA:** `2634683f546a7751f98aa77ead2fc13b64f31f7c` (prior reverified wave SHAs: `541d6c0`, `9aa78af`, `c663bd2`, `1ade0f0`, `1a54322`, `ed94e83`)
 **Governing Standard:** Agy-Squad PR Review Standard `v1.3.0` (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/self-diagnosis/SKILL.md`)
 **Source Review Package:** `/home/paragon-ux/Antigravity/artifacts/to-fix/Agy_Squad_PR1_Code_Review_Devin_ChatGPT_2026-11-08` (`PR1_Agy_Squad_Code_Review_Ledger_R6.md`, `Devin_R6_Verification_Report.md`, `GitHub_PR1_Review_Comment.md`, `MANIFEST.json`)
 
