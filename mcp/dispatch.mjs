@@ -48,7 +48,69 @@ function manifestSquads(manifest) {
   if (Object.hasOwn(squads, "all_l1")) {
     throw new Error("Squad ID 'all_l1' is reserved for lead compilation.");
   }
+  if (Object.hasOwn(squads, "adversarial_l1")) {
+    throw new Error("Squad ID 'adversarial_l1' is reserved for adversarial lead compilation.");
+  }
+  if (Object.hasOwn(squads, "adversarial_flat")) {
+    throw new Error("Squad ID 'adversarial_flat' is reserved for flat adversarial review compilation.");
+  }
   return squads;
+}
+
+function defaultAdversarialSquad(squads, targetSquad) {
+  const targetIds = targetSquad
+    ? [targetSquad]
+    : Object.keys(squads).filter(id => id !== "adversarial_review");
+  const targetLabel = targetIds.length > 0 ? targetIds.join(", ") : "all squads";
+  return {
+    _synthesized: true,
+    lead: {
+      role: "Adversarial Review Lead",
+      objective: `Patrol and audit working squads (${targetLabel}) for Subagent Alignment Policy compliance, empirical execution, absence of parametric guessing or sycophancy, and absence of rubber-stamping.`,
+      scopeFiles: ["."],
+      instructions: "Audit working squad reports and tool execution traces across working squads. Verify empirical execution and anti-cheating compliance. Verify that lead syntheses independently checked evidence before issuing PASS. Reject ungrounded claims with FAIL or REQUEST_CHANGES.",
+      expectedDeliverable: "Adversarial synthesis report starting with Verdict: PASS or FAIL/BLOCKED, detailing compliance findings across working squad leads and specialists."
+    },
+    specialists: [
+      {
+        role: "Specialist Alignment & Anti-Cheating Auditor",
+        objective: `Audit working specialists' reports in (${targetLabel}) for Subagent Alignment Policy compliance. Verify empirical tool execution: every finding must cite executed tool commands, exit codes, and primary source lines. Report any parametric guessing, sycophantic flattery, or unverified claims.`,
+        scopeFiles: ["."],
+        expectedDeliverable: "Markdown evidence report detailing alignment and tool-execution compliance findings across all working specialists."
+      },
+      {
+        role: "Lead Synthesis & Grounding Auditor",
+        objective: `Audit working squad leads' syntheses and verifiedFiles in (${targetLabel}). Verify that claims are backed by specialist evidence, independent checks were performed, no rubber-stamping occurred, and SHA-256 hashes match.`,
+        scopeFiles: ["."],
+        expectedDeliverable: "Markdown evidence report detailing synthesis grounding, audit independence, and hash verification across working leads."
+      }
+    ]
+  };
+}
+
+function resolveFlatAdversarialSpecialist(squads, targetSquad) {
+  if (squads.adversarial_review !== undefined && !squads.adversarial_review._synthesized) {
+    const customSpecs = squads.adversarial_review.children ?? squads.adversarial_review.specialists;
+    if (Array.isArray(customSpecs) && customSpecs.length > 0) {
+      return customSpecs.map((spec, index) => ({ spec, id: "adversarial_review", number: index + 1 }));
+    }
+  }
+  const targetIds = targetSquad
+    ? [targetSquad]
+    : Object.keys(squads).filter(id => id !== "adversarial_review");
+  const targetLabel = targetIds.length > 0 ? targetIds.join(", ") : "all squads";
+  return [
+    {
+      spec: {
+        role: "Adversarial Review Specialist",
+        objective: `Patrol and audit working squad specialists in (${targetLabel}) for Subagent Alignment Policy compliance, empirical execution, absence of parametric guessing or sycophancy, and truthfulness of reported evidence.`,
+        scopeFiles: ["."],
+        expectedDeliverable: "Markdown evidence report detailing alignment, tool-execution compliance, and evidence validity across working specialists."
+      },
+      id: "adversarial_review",
+      number: 1
+    }
+  ];
 }
 
 function loadSquads(root, manifestPath) {
@@ -136,10 +198,22 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       throw new Error("Provide exactly one of manifest or manifestPath in a managed run.");
     }
     const root = fs.realpathSync(workspace);
-    const { squads, selectedManifest } = manifest === undefined
+    const { squads: loadedSquads, selectedManifest } = manifest === undefined
       ? loadSquads(root, manifestPath)
       : { squads: manifestSquads(manifest) };
-    const staged = run ? stagePlan(root, run, squads) : undefined;
+    const squads = { ...loadedSquads };
+    const isAdvLead = squadId === "adversarial_l1";
+    const isAdvFlat = squadId === "adversarial_flat" || squadId.startsWith("adversarial_flat:");
+    const flatTarget = isAdvFlat && squadId.includes(":") ? squadId.slice(squadId.indexOf(":") + 1).trim() : undefined;
+
+    if (!squads.adversarial_review) {
+      squads.adversarial_review = defaultAdversarialSquad(squads, flatTarget);
+    }
+    if (flatTarget && !Object.hasOwn(squads, flatTarget)) {
+      throw new Error(`Unknown targetSquad '${flatTarget}'.`);
+    }
+
+    const staged = run ? stagePlan(root, run, loadedSquads) : undefined;
     const requestedManifest = manifestPath && path.relative(root, path.resolve(root, manifestPath));
     if (staged && requestedManifest?.startsWith(`${run}/plan-`) &&
         (requestedManifest !== staged.manifestPath || requestedManifest !== selectedManifest)) {
@@ -150,17 +224,27 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
     let assignments;
     if (squadId === "all_l1") {
-      assignments = Object.entries(squads).map(([id, squad]) => ({
+      const workingSquads = Object.entries(squads).filter(([id]) => id !== "adversarial_review");
+      assignments = workingSquads.map(([id, squad]) => ({
         spec: resolveSquadLead(squad, id, true),
         id
       }));
+    } else if (isAdvLead) {
+      assignments = [{
+        spec: resolveSquadLead(squads.adversarial_review, "adversarial_review", true),
+        id: "adversarial_review"
+      }];
+    } else if (isAdvFlat) {
+      assignments = resolveFlatAdversarialSpecialist(squads, flatTarget);
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
     const Subagents = assignments.map(build);
-    const children = squadId === "all_l1" ? assignments.flatMap(({ id }) => specialistAssignments(squads, id)) : [];
+    const children = (squadId === "all_l1" || isAdvLead)
+      ? assignments.flatMap(({ id }) => specialistAssignments(squads, id))
+      : [];
     for (const child of children) build(child);
-    if (squadId !== "all_l1" && !alreadyStaged) {
+    if (squadId !== "all_l1" && !isAdvLead && !alreadyStaged) {
       for (const [id, squad] of Object.entries(squads)) {
         const leadSpec = resolveSquadLead(squad, id, false);
         if (leadSpec) build({ spec: leadSpec, id });

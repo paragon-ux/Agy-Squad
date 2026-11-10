@@ -17,6 +17,24 @@ Self-diagnose, review, and optimize `Agy-Squad` and its workspace skills (`self-
 
 ## Workflow
 
+### Step 0: Pre-Flight Intake Interview (Operator Alignment Gate)
+To eliminate hesitation, ambiguity, and false starts, the agent MUST immediately conduct a structured intake round before compiling manifests or launching subagents (trigger via `ask_question` or multiple-choice prompt):
+1. **Topology & Delegation Mode:**
+   - `(Recommended) Layered Squad Dispatch (all_l1)`: 1 Lead per squad (`3` leads total). Leads manage specialists, conduct transcript patrol, and synthesize findings.
+   - `Flat Specialist Dispatch (all_specialists)`: Direct specialist dispatch (`6` specialists in one flat wave). The primary agent acts as lead across all squads.
+   - `Targeted Single Squad Dispatch`: Run only one focused squad (`skill_and_pr_review_audit`, `runtime_and_contract_diagnosis`, or `token_and_execution_optimization`).
+   - `Local Profiler Dry-Run Only`: Run `diagnose.mjs` locally without spawning subagents.
+2. **Teardown & Provenance Policy:**
+   - `(Recommended) Retain Full Evidence & Provenance (--keep-reports)`: Preserve all specialist and lead evidence reports in `scratch/agy-squad/` alongside bundle records for auditability and research.
+   - `Automatic Atomic Teardown (--teardown)`: Prune loose reports from `scratch/` upon successful cryptographic bundle verification.
+3. **Adversarial Rigor:**
+   - `(Recommended) Mandatory Adversarial Review Squad Enabled`: Stage independent adversarial audit squad after working squads complete, enforcing PASS verdict before acceptance.
+   - `Working Squad Self-Synthesis Only`: Skip secondary adversarial squad.
+4. **Self-Contained Instruction Standard:**
+   - Never use unanchored abbreviations, unexpanded section codes (e.g., 'H4', 'D2'), or undefined internal tokens in objectives or instructions. Every deliverable requirement must be fully self-contained and explicit so subagents do not waste tokens searching the codebase for phantom acronyms.
+
+---
+
 ### Step 1: Run the Automated Self-Diagnosis & Optimization Profiler (`L7`-Safe)
 Run [`diagnose.mjs`](./scripts/diagnose.mjs) from the repository root (launches zero real subagents per `L7`; pass `--allow-active-cohort` if running mid-cohort while `scratch/agy-squad/squad-*` slots are in flight):
 

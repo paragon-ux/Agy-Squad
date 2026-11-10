@@ -5,13 +5,15 @@ const superviseCohort = [
   "Use the shared workspace. Pass each compiled brief verbatim to invoke_subagent and map each returned conversationId and workspace to its slot (treat an unexpected workspace as a blocker; use fresh squad IDs/slots on retries).",
   "Yield for Reactive Wakeup. Reconcile one READY, PARTIAL, or NO_REPORT message per recorded sender and slot; ignore exact duplicates, flag conflicts or missing reports, and avoid routine replies that wake idle children.",
   "At the evidence checkpoint, the operator checks /agents even if silent, distinguishing approval waits, active progress, and stalled loops. A parent may stop only its own recorded children; log agent stop and command cleanup separately.",
-  "When writers finish, independently verify outcome claims against final artifacts or primary sources, record versions/hashes, and recheck changed inputs. Base PASS on independent checks, keep conflicts in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
+  "Squad Lead Patrol & Alignment Gate: Actively patrol and audit leaf execution. Penalize cheating: reject reports (FAIL or PARTIAL) that make ungrounded claims, flatter the workspace without proof, or cite unexecuted tools.",
+  "Batch-Efficient Transcript Forensics: Never inspect transcripts iteratively 1-2 steps at a time (quadratic bloat). Inspect in one single-pass batch query: query_transcript(conversationId=\"...\", query=\"<tool>\", summaryOnly=true) or read_transcript(conversationId=\"...\", lastTurns=10) once across the entire run.",
+  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 const managedCohort = [
   "State acceptance checks before launch, keep concurrent edits disjoint, map launch IDs to slots, and use fresh squad IDs for retries.",
   "Yield after launch. Reconcile handoffs by sender and slot, ignore exact duplicates, avoid routine replies, and escalate only true blockers.",
-  "When writers finish, independently verify outcome evidence, record revisions/hashes, recheck changed inputs, and preserve gaps or contradictions in the synthesis."
+  "Squad Lead Patrol: Audit leaf execution, penalize flattery/guessing, use single-pass batch transcript queries (never iterative step polling), independently verify evidence/tests, record hashes in synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, reportRoot) {
@@ -83,6 +85,8 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     throw new Error(`Assignment '${role}' needs Workspace 'inherit' so its report slot is shared.`);
   }
 
+  const isAdversarial = squadId === "adversarial_review" || /adversarial/i.test(role);
+
   return {
     ...payload,
     Prompt: [
@@ -95,18 +99,22 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       `Report slot: ${artifact}`,
       ...(reportRoot
         ? [
-            "Write one Markdown report in the assigned slot with source locations and excerpts, or commands, inputs, exit codes, and output. Keep unresolved blockers.",
+            "Write one Markdown report in the assigned slot with source locations, commands, inputs, exit codes, and output. Keep unresolved blockers.",
             `Send one single-line message within ${messageLimit} UTF-8 bytes: READY <report slot> — <finding and implication>, PARTIAL <report slot> — <finding and blocker>, or NO_REPORT — <reason>. Then end your turn.`,
             isLead
-              ? `This lead assignment authorizes the listed specialists. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch the returned specialists verbatim through the native tool, and yield.\n${managedCohort}\nWrite one synthesis with your own PASS, FAIL, or BLOCKED verdict. Keep routine coordination inside your squad.`
-              : "Carry out your assignment directly. Retry when a changed input or a different diagnostic can advance the work; otherwise save partial evidence and hand it off."
+              ? (isAdversarial
+                  ? `Mandatory Adversarial Review Lead. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nAudit working squads via single-pass batch transcript queries, re-execute tests, and write synthesis with verified PASS/FAIL.`
+                  : `This lead assignment authorizes listed specialists. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nWrite one synthesis with your own PASS, FAIL, or BLOCKED verdict. Keep routine coordination inside your squad.`)
+              : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute guessing or flattery for empirical execution; cite executed tools or lines. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Retry only when changed inputs advance diagnostics; otherwise save partial evidence."
           ]
         : [
             "Write one Markdown evidence report in the shared workspace at your exact slot (if occupied, report the conflict). For each material finding, give the command, working directory, inputs, exit code, and output, or the exact source location and excerpt. Preserve contradictions and missing evidence.",
             `Pointer-Over-Wire requires one single-line native send_message handoff within ${messageLimit} UTF-8 bytes. Use READY ${artifact} — <concrete observation> for a ready report, PARTIAL ${artifact} — <observation and blocker> for partial evidence, or NO_REPORT — <reason> if no report can be written. Confirm readability before sending, then end your turn.`,
             isLead
-              ? `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`
-              : "Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker."
+              ? (isAdversarial
+                  ? `Mandatory Adversarial Review Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nIndependently audit working cohorts: verify tool traces via batch transcript inspection, re-run test suites, and write synthesis with PASS or FAIL verdict.`
+                  : `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`)
+              : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker."
           ])
     ].join("\n")
   };

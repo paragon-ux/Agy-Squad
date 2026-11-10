@@ -9,13 +9,33 @@ Agy-Squad combines four connected workflows inside one workspace harness across 
 
 ## 1. Orchestrate proportional specialist or lead cohorts
 
-`dispatch_squad` compiles a stage of direct specialists (`--squad <id>`) or a stage of squad leads (`--squad all_l1`) from a task or manifest ([`docs/tools.md`](tools.md)):
+Agy-Squad organizes execution into a strict 4-phase lifecycle: **Pre-Flight Intake Interview -> Working Cohort -> Mandatory Adversarial Review Squad -> Acceptance & Bundling**:
 
-- **Writable workspace report slots:** Every specialist is compiled with `TypeName: "self"` and `Workspace: "inherit"` so it writes its evidence report directly to `scratch/agy-squad/.../specialist-<N>/report.md`.
-- **500-byte receipt ceiling (`Pointer-Over-Wire`):** Each child sends one single-line message (`READY`, `PARTIAL`, or `NO_REPORT`) under `500` UTF-8 bytes back to its parent via `send_message`, waking the parent via Reactive Wakeup without dumping multi-kilobyte transcripts into the parent context.
-- **Two-part verification:**
-  1. **Semantic correctness check:** The parent or squad lead inspects the cited source lines and test outputs directly before writing `lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED`).
-  2. **Cryptographic integrity check:** `node mcp/handoffs.mjs` (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`) verifies that `lead/report.md` contains an unambiguous `PASS` verdict (with no conflicting or negated verdicts), computes SHA-256 digests for all cited `verifiedFiles` and specialist reports in `lead/report.sources.json`, and prunes loose `specialist-<N>/report.md` files.
+- **Phase 0 — Pre-Flight Intake Interview (Operator Alignment Gate):**
+  - Before compiling manifests or launching subagents, the primary agent initiates an interactive intake round (via `ask_question` or multiple-choice prompt) to establish:
+    1. **Topology:** Layered (`all_l1` — leads managing specialists) vs. Flat (`all_specialists` — operator managing specialists) vs. Single-Squad targeted run.
+    2. **Teardown & Provenance Policy:** Full Evidence Retention (`--keep-reports` preserving all loose reports in `scratch/agy-squad/` for auditability and research) vs. Automatic Atomic Teardown (`--teardown` upon acceptance).
+    3. **Adversarial Rigor:** Mandatory Adversarial Review Squad enabled (PASS gate) vs. single-squad self-synthesis.
+    4. **Self-Contained Instruction Standard:** Briefs must be strictly self-contained; unanchored abbreviations or phantom section codes (e.g. 'H4', 'D2') are prohibited.
+
+- **Stage 1 — Working Cohort Execution:**
+  - `dispatch_squad` compiles a stage of direct working specialists (`squadId: "<id>"`) or a stage of working squad leads (`squadId: "all_l1"`) from a task or manifest ([`docs/tools.md`](tools.md)).
+  - **Standardized Brief Invariants:** Every compiled specialist and lead brief includes structurally enforced alignment rules, flattery penalties, and batch-efficient transcript forensic requirements in `mcp/briefs.mjs`, ensuring consistent execution without requiring the operator to manually repeat boilerplate instructions.
+  - **Batch-Efficient Transcript Forensics:** Leads and reviewers are structurally prohibited from polling transcripts 1-2 steps iteratively (quadratic token burn). Instead, audits are conducted via single-pass batch queries (`query_transcript` with `summaryOnly: true` or `read_transcript` with `lastTurns: 10`).
+  - **Writable workspace report slots:** Every specialist is compiled with `TypeName: "self"` and `Workspace: "inherit"` so it writes its evidence report directly to `scratch/agy-squad/.../specialist-<N>/report.md`.
+  - **500-byte receipt ceiling (`Pointer-Over-Wire`):** Each child sends one single-line message (`READY`, `PARTIAL`, or `NO_REPORT`) under `500` UTF-8 bytes back to its parent via `send_message`, waking the parent via Reactive Wakeup without dumping multi-kilobyte transcripts into the parent context.
+  - **Squad Lead Patrol & Semantic Correctness Gate:** The squad lead actively audits leaf execution traces, penalizing sycophancy or ungrounded claims. Specialists must follow the Subagent Alignment Policy: parametric guessing and unverified flattery are rejected; every claim must cite an executed tool command or primary source line. The lead independently verifies outcome claims against artifacts before writing `lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED` when checks fail or evidence is missing).
+
+- **Stage 2 — Mandatory Adversarial Review Squad:**
+  - Runs **after all working squads have completed**, and **before acceptance**.
+  - **Topology Parity:**
+    - **Layered Dispatch:** Dispatched via `squadId: "adversarial_l1"`. Compiles the Layered Adversarial Review Lead, which dispatches `Specialist Alignment & Anti-Cheating Auditor` and `Lead Synthesis & Grounding Auditor` via `squadId: "adversarial_review"`. The lead reconciles findings and writes an adversarial synthesis report (`squad-adversarial_review/lead/report.md`) with `Verdict: PASS` or `FAIL`.
+    - **Flat Dispatch:** Dispatched via `squadId: "adversarial_flat"` (or `adversarial_flat:<targetSquad>`). Spawns a flat `Adversarial Review Specialist` directly to the operator, writing its audit report (`squad-adversarial_review/specialist-1/report.md`) with `Verdict: PASS` or `FAIL`.
+  - **Audited Invariants:** Patrols working squads to verify that specialists actually ran tools rather than guessing parametrically, did not engage in sycophantic flattery or ungrounded assertions, and confirms working leads independently audited evidence rather than rubber-stamping.
+
+- **Stage 3 — Acceptance & Cryptographic Bundling:**
+  - **Adversarial Acceptance Gate:** `node mcp/handoffs.mjs` verifies that the adversarial review squad has run and reported an unambiguous `PASS` verdict. If the adversarial review reported `FAIL` or `BLOCKED`, bundling is hard-blocked.
+  - **Cryptographic integrity check:** Computes SHA-256 digests for all cited `verifiedFiles`, specialist reports, and the adversarial review report in `lead/report.sources.json`, and prunes loose `specialist-<N>/report.md` files upon primary acceptance.
 
 ## 2. Diagnose and optimize the harness (`self-diagnosis`)
 
