@@ -756,6 +756,23 @@ The integrity warning and role text increase the compiled prompt size. Update `d
 
 ## 11. Acceptance test (after P1–P7)
 
+### 11.1 Who runs what
+
+`LEDGER.md` L7 is explicit: automated tests launch **zero real subagents**; any live trial is supervised and run separately by the user. Do not use the Antigravity CLI for deterministic unit tests, and do not let the implementing agent run the acceptance trial or mark it passed.
+
+| Gate | Owner | Environment | What | Pass condition |
+| --- | --- | --- | --- | --- |
+| **A. Static/offline** | Implementer | WSL2, Node only | `node --check` on modified files; `npm test`; new verdict/bundle/CLI tests; fake-agy launcher test | All green; no live subagents |
+| **B. Implementation smoke** | Implementer | WSL2, fixtures/fake CLI | Negative fixtures: compound verdict, `INTEGRITY VIOLATION`, missing report, stale target, `--keep-reports`; `agy-squad dispatch` output; managed launcher dry-run | Deterministic fixtures pass; no Antigravity cohort |
+| **C. Live acceptance** | **User** | WSL2 + Antigravity CLI or Desktop; fresh session; disposable workspace | The same comparative research task, no operator notices; inspect `/agents`, transcripts, reports, bundle, `verify`; inject an integrity-violation fixture | §11.2 criteria |
+| **D. Independent review** | Reviewer / `full-review` | Reads Gate C evidence | Re-review PR #3 against Standard v1.3.0 | Approve or request changes with evidence |
+
+**Hold Gate C until A and B are green.** The implementer should not ask the user to debug a half-applied branch, and the user should not run the live trial until the deterministic suite is clean. The implementer must not perform Gate C and call it acceptance; it knows the expected behavior. Gate C is the user’s independent trial, and Gate D reads its evidence.
+
+`agy` CLI versus Desktop: use whichever is available and authenticated. CLI is preferred for transcript and `/agents` evidence; Desktop is acceptable for the GUI-visibility check. The important properties are a **fresh session**, a **disposable workspace**, and **no operator operational notices**. If `agy` is unavailable or unauthenticated, stop at Gate B and report the live gate blocked; do not fake a live pass.
+
+### 11.2 Acceptance procedure
+
 Run on WSL2 with a real Antigravity cohort, not on Windows:
 
 1. Apply P1–P7; run `npm test` (including the new verdict/CLI tests).
