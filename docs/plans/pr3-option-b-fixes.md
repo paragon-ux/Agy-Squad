@@ -265,7 +265,7 @@ function bundleReports(root, record) {
       throw new Error("Acceptance blocked: integrity violation recorded. Reject the cohort and re-run.");
     }
   } else {
-    if (integrityVerdict !== "CLEAN") {
+    if (integrityVerdict !== "CLEAN" && integrityVerdict !== "CLEAR") {
       throw new Error("Acceptance blocked: an integrity verdict of CLEAN is required before content acceptance.");
     }
     if (!integrityReport) {
@@ -364,7 +364,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (integrityReport.verdict !== integrityVerdict) {
     throw new Error("Bundle integrity verdict does not match the report.");
   }
-  if (integrity.targetSquad !== squadId) {
+  if (kind === "content" && integrity.targetSquad !== squadId) {
     throw new Error(`Bundle integrity report targets '${integrity.targetSquad}', not '${squadId}'.`);
   }
   if (kind === "content") {
