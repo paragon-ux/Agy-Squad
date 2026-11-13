@@ -55,7 +55,7 @@ const TOOLS = [{
   inputSchema: {
     type: "object",
     properties: {
-      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, or one squad ID for specialists." },
+      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, 'integrity_auditor[:<target>]' for audit, or a squad ID." },
       manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." },
       ...(managedRun ? {
         manifest: {

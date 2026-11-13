@@ -86,6 +86,16 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   }
 
   const isAdversarial = squadId === "adversarial_review" || /adversarial/i.test(role);
+  const isIntegrityAuditor =
+    squadId === "integrity_auditor" ||
+    squadId.startsWith("integrity_auditor-") ||
+    /integrity.*auditor/i.test(role);
+
+  const alignmentLine = isIntegrityAuditor
+    ? "Integrity Auditor Policy: Audit working reports and tool traces via single-pass batch queries (query_transcript summaryOnly=true or read_transcript lastTurns=10). Never emit a content PASS; record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+    : reportRoot
+      ? "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute guessing or flattery for empirical execution; cite executed tools or lines. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Retry only when changed inputs advance diagnostics; otherwise save partial evidence."
+      : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker.";
 
   return {
     ...payload,
@@ -102,19 +112,23 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
             "Write one Markdown report in the assigned slot with source locations, commands, inputs, exit codes, and output. Keep unresolved blockers.",
             `Send one single-line message within ${messageLimit} UTF-8 bytes: READY <report slot> — <finding and implication>, PARTIAL <report slot> — <finding and blocker>, or NO_REPORT — <reason>. Then end your turn.`,
             isLead
-              ? (isAdversarial
-                  ? `Mandatory Adversarial Review Lead. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nAudit working squads via single-pass batch transcript queries, re-execute tests, and write synthesis with verified PASS/FAIL.`
-                  : `This lead assignment authorizes listed specialists. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nWrite one synthesis with your own PASS, FAIL, or BLOCKED verdict. Keep routine coordination inside your squad.`)
-              : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute guessing or flattery for empirical execution; cite executed tools or lines. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Retry only when changed inputs advance diagnostics; otherwise save partial evidence."
+              ? (isIntegrityAuditor
+                  ? `Independent Integrity Auditor Lead. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nNever emit a content PASS; record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+                  : isAdversarial
+                    ? `Mandatory Adversarial Review Lead. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nAudit working squads via single-pass batch transcript queries, re-execute tests, and write synthesis with verified PASS/FAIL.`
+                    : `This lead assignment authorizes listed specialists. Call dispatch_squad once with ${JSON.stringify({ squadId, manifestPath })}, launch specialists, and yield.\n${managedCohort}\nWrite one synthesis with your own PASS, FAIL, or BLOCKED verdict. Keep routine coordination inside your squad.`)
+              : alignmentLine
           ]
         : [
             "Write one Markdown evidence report in the shared workspace at your exact slot (if occupied, report the conflict). For each material finding, give the command, working directory, inputs, exit code, and output, or the exact source location and excerpt. Preserve contradictions and missing evidence.",
             `Pointer-Over-Wire requires one single-line native send_message handoff within ${messageLimit} UTF-8 bytes. Use READY ${artifact} — <concrete observation> for a ready report, PARTIAL ${artifact} — <observation and blocker> for partial evidence, or NO_REPORT — <reason> if no report can be written. Confirm readability before sending, then end your turn.`,
             isLead
-              ? (isAdversarial
-                  ? `Mandatory Adversarial Review Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nIndependently audit working cohorts: verify tool traces via batch transcript inspection, re-run test suites, and write synthesis with PASS or FAIL verdict.`
-                  : `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`)
-              : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker."
+              ? (isIntegrityAuditor
+                  ? `Independent Integrity Auditor Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nNever emit a content PASS; record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+                  : isAdversarial
+                    ? `Mandatory Adversarial Review Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nIndependently audit working cohorts: verify tool traces via batch transcript inspection, re-run test suites, and write synthesis with PASS or FAIL verdict.`
+                    : `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`)
+              : alignmentLine
           ])
     ].join("\n")
   };

@@ -6,8 +6,8 @@ Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness
 
 - **[Getting started (Desktop IDE & CLI on POSIX / WSL2)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Antigravity Desktop IDE registration, and CLI commands for offline tests (`npm test`), payload preview (without `--launch`), and live delegation (`--launch`).
 - **[Core workflows](core-workflows.md):** Task-proportional orchestration, recursive harness [`self-diagnosis`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md), the ten-category [`pr-review` Standard v1.3.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), and the 3-scope evidence-retention and teardown contract.
-- **[Concepts and terminology](concepts.md):** Plain-language definitions for stages (`all_l1` vs. `<squadId>`), report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L41`).
-- **[Manifest and tool contract](tools.md):** Schema and CLI flags for `dispatch_squad` and `node mcp/handoffs.mjs`.
+- **[Concepts and terminology](concepts.md):** Plain-language definitions for stages (`all_l1` vs. `<squadId>` vs. `integrity_auditor`), report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L42`).
+- **[Manifest and tool contract](tools.md):** Schema and CLI flags for `dispatch_squad`, `node bin/agy-squad.mjs`, and `node mcp/handoffs.mjs`.
 - **[Benchmarks](benchmarks.md):** Canonical comparison table, unit definitions, and reproduction guide for the November 8, 2026 audit against Antigravity `/teamwork`.
 
 ## Core capabilities
@@ -23,7 +23,7 @@ Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness
 
 1. **Staged compilation (`Agy-Squad`):** `dispatch_squad` compiles workspace report slots (`scratch/agy-squad/...`) and `<= 500` UTF-8 byte `Pointer-Over-Wire` briefs (`TypeName: "self"`, `Workspace: "inherit"`).
 2. **Subagent execution governance (`Agy-Context-Saver`):** Inside Antigravity Desktop IDE sessions or when `--launch` is active in the CLI, `Agy-Context-Saver`'s PreToolUse hook rewrites child `run_command` calls via pinned `RTK` (`v0.51.0`), routes workspace file reads to `rtk read`, and enforces proportional backoff on `manage_task` and `schedule`. During CLI payload preview (`agy-squad run` without `--launch`), `bin/agy-squad.mjs` sets `inheritCustomizations: false` so read-only workspace inspection works without `run_command`, then enables `inheritCustomizations: true` (plus `schedule` and `call_mcp_tool`) on `--launch`.
-3. **Cryptographic bundling and pruning (`Agy-Squad`):** `node mcp/handoffs.mjs` (`inspect -> bundle -> verify -> prune`) records SHA-256 digests of every specialist report and cited `verifiedFiles` in `report.sources.json` and removes loose specialist reports (`L1, L2`), keeping raw child prose out of parent context.
+3. **Cryptographic bundling and pruning (`Agy-Squad`):** `node bin/agy-squad.mjs` (`verdict -> fingerprint -> inspect -> bundle -> verify -> prune [--keep-reports]`) enforces strict single-line verdicts, binds `integrityAudit` SHA-256 digests (`CLEAN` + `Target Squad`), records digests of every specialist report and cited `verifiedFiles` in `report.sources.json`, and optionally removes loose specialist reports (`L1, L2, L42`).
 4. **Session and child transcript forensics (`Agy-Context-Saver`):** Lazy MCP tools (`get_installation_status`, `sync_installation`, `check_context_health`, `read_transcript`, `query_transcript`) audit parent or subagent `conversationId` telemetry without reading `.system_generated/` directly (`L6`). Run `sync_installation` once on a new host so the pinned `rtk` binary is active before live dispatch.
 
 ## Recorded comparison vs. Antigravity `/teamwork`

@@ -10,8 +10,10 @@ const REQUIRED = [
   "mcp/index.js",
   "mcp/dispatch.mjs",
   "mcp/handoffs.mjs",
+  "mcp/verdicts.mjs",
   ".agents/skills/pr-review/SKILL.md",
   ".agents/skills/self-diagnosis/SKILL.md",
+  ".agents/skills/swarm-governance/SKILL.md",
   ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
 ];
 

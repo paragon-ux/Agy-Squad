@@ -113,6 +113,39 @@ function resolveFlatAdversarialSpecialist(squads, targetSquad) {
   ];
 }
 
+function resolveIntegrityAuditor(squads, targetSquad) {
+  const slotId = targetSquad ? `integrity_auditor-${targetSquad}` : "integrity_auditor";
+  const targetIds = targetSquad
+    ? [targetSquad]
+    : Object.keys(squads).filter(
+        id => id !== "adversarial_review" && id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
+      );
+  if (!targetSquad && targetIds.length > 1) {
+    throw new Error(
+      `Multiple working squads found (${targetIds.join(", ")}); specify 'integrity_auditor:<targetSquad>' for each squad.`
+    );
+  }
+  if (squads.integrity_auditor !== undefined && !squads.integrity_auditor._synthesized) {
+    const customSpecs = squads.integrity_auditor.children ?? squads.integrity_auditor.specialists;
+    if (Array.isArray(customSpecs) && customSpecs.length > 0) {
+      return customSpecs.map((spec, index) => ({ spec, id: slotId, number: index + 1 }));
+    }
+  }
+  const resolvedTarget = targetIds[0] ?? "all";
+  return [
+    {
+      spec: {
+        role: "Integrity Auditor",
+        objective: `Audit working squad (${resolvedTarget}) for Subagent Alignment Policy compliance, empirical execution, absence of guessing or sycophancy, and truthfulness of reported evidence.`,
+        scopeFiles: ["."],
+        expectedDeliverable: `Markdown audit report recording 'Target Squad: ${resolvedTarget}' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+      },
+      id: slotId,
+      number: 1
+    }
+  ];
+}
+
 function loadSquads(root, manifestPath) {
   if (manifestPath !== undefined) {
     return readManifest(root, manifestPath);
@@ -204,13 +237,24 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
     const squads = { ...loadedSquads };
     const isAdvLead = squadId === "adversarial_l1";
     const isAdvFlat = squadId === "adversarial_flat" || squadId.startsWith("adversarial_flat:");
-    const flatTarget = isAdvFlat && squadId.includes(":") ? squadId.slice(squadId.indexOf(":") + 1).trim() : undefined;
+    const isIntegrityAuditor = squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor:");
+    const hasTargetColon = (isAdvFlat || isIntegrityAuditor) && squadId.includes(":");
+    const flatTarget = hasTargetColon ? squadId.slice(squadId.indexOf(":") + 1).trim() : undefined;
+    if (hasTargetColon && !flatTarget) {
+      throw new Error(`Specify a non-empty target squad after ':' in '${squadId}'.`);
+    }
+    if (
+      flatTarget &&
+      (flatTarget === "adversarial_review" ||
+        flatTarget === "integrity_auditor" ||
+        flatTarget.startsWith("integrity_auditor-") ||
+        !Object.hasOwn(squads, flatTarget))
+    ) {
+      throw new Error(`Unknown targetSquad '${flatTarget}'.`);
+    }
 
     if (!squads.adversarial_review) {
       squads.adversarial_review = defaultAdversarialSquad(squads, flatTarget);
-    }
-    if (flatTarget && !Object.hasOwn(squads, flatTarget)) {
-      throw new Error(`Unknown targetSquad '${flatTarget}'.`);
     }
 
     const staged = run ? stagePlan(root, run, loadedSquads) : undefined;
@@ -224,7 +268,9 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
     let assignments;
     if (squadId === "all_l1") {
-      const workingSquads = Object.entries(squads).filter(([id]) => id !== "adversarial_review");
+      const workingSquads = Object.entries(squads).filter(
+        ([id]) => id !== "adversarial_review" && id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
+      );
       assignments = workingSquads.map(([id, squad]) => ({
         spec: resolveSquadLead(squad, id, true),
         id
@@ -236,6 +282,8 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       }];
     } else if (isAdvFlat) {
       assignments = resolveFlatAdversarialSpecialist(squads, flatTarget);
+    } else if (isIntegrityAuditor) {
+      assignments = resolveIntegrityAuditor(squads, flatTarget);
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
