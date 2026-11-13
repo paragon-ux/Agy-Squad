@@ -7,9 +7,9 @@
  * - Tier 1: Feature Coverage & Completeness (R1, R2, R3, R4)
  * - Tier 2: Boundary & Format Checks (Score bounds, receipt byte budget, markdown integrity)
  * - Tier 3: Cross-Feature Consistency & Internal Coherence (Score parity, rubric anchors, yield points)
- * - Tier 4: Real-World Workload & Empirical Citation Validation (Benchmark metrics, codebase paths, L1–L41)
+ * - Tier 4: Real-World Workload & Empirical Citation Validation (Benchmark metrics, codebase paths, L1–L43)
  * 
- * Standard: Agy-Squad PR Review Standard v1.3.0 & Architectural Decision Ledger (L1–L41)
+ * Standard: Agy-Squad PR Review Standard v1.3.0 & Architectural Decision Ledger (L1–L43; historical dossier L1–L41)
  */
 
 import assert from "node:assert/strict";
@@ -521,10 +521,16 @@ runner.run("Tier 4 (Real-World & Citations)", "Codebase Verification: Referenced
   }
 });
 
-runner.run("Tier 4 (Real-World & Citations)", "Standard & Ledger: Architectural Decision Citations (L1–L41)", () => {
-  assert.match(content, /L41/i, "Must cite decision L41 (governed teardown / lifecycle cleanup contract).");
+runner.run("Tier 4 (Real-World & Citations)", "Standard & Ledger: Architectural Decision Citations (L1–L43)", () => {
+  assert.match(content, /L41/i, "Dossier must cite decision L41 (governed teardown / lifecycle cleanup contract).");
   assert.match(content, /L1.*L41|Architectural\s+Decision\s+Ledger/i,
-    "Must cite the Architectural Decision Ledger (L1–L41).");
+    "Dossier must cite the Architectural Decision Ledger (L1–L41).");
+  const ledgerPath = path.resolve(process.cwd(), "docs/plans/LEDGER.md");
+  assert.ok(fs.existsSync(ledgerPath), "docs/plans/LEDGER.md must exist.");
+  const ledger = fs.readFileSync(ledgerPath, "utf8");
+  assert.match(ledger, /^\|\s*L17\s*\|.*\|\s*Retired\b/im, "LEDGER.md must mark L17 retired.");
+  assert.match(ledger, /^\|\s*L42\s*\|.*\|\s*Active\b/im, "LEDGER.md must list L42 Active.");
+  assert.match(ledger, /^\|\s*L43\s*\|.*\|\s*Active\b/im, "LEDGER.md must list L43 Active.");
 });
 
 // Final summary and process exit

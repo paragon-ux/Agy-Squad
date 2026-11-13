@@ -585,6 +585,35 @@ function walkFiles(dir) {
   return results;
 }
 
+const RETIRED_SKILL_SYMBOL_RE =
+  /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?)\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
+const HISTORICAL_NOTICE_RE =
+  /\b(?:retired|historical|deprecated|removed|superseded|obsolete|replaced\s+by|do\s+not\s+use|never\s+use)\b/i;
+
+function findSkillDriftMatches(markdown) {
+  const matched = new Set();
+  let activeHistoricalBlock = false;
+  for (const line of markdown.split(/\r?\n/)) {
+    if (/^\s*#{1,6}\s+/.test(line)) {
+      activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+    }
+    if (activeHistoricalBlock) continue;
+    const segments = line.trim().startsWith("|")
+      ? line.split(/(?<!\\)\|/)
+      : line.split(/(?<=[.!?;])\s+/);
+    for (const segment of segments) {
+      RETIRED_SKILL_SYMBOL_RE.lastIndex = 0;
+      if (!RETIRED_SKILL_SYMBOL_RE.test(segment)) continue;
+      if (HISTORICAL_NOTICE_RE.test(segment)) continue;
+      RETIRED_SKILL_SYMBOL_RE.lastIndex = 0;
+      for (const match of segment.matchAll(RETIRED_SKILL_SYMBOL_RE)) {
+        matched.add(match[0].replace(/`/g, "").replace(/\s+/g, " ").trim());
+      }
+    }
+  }
+  return [...matched];
+}
+
 function auditSkills(ledgerArg) {
   const skillsRoot = path.join(repoRoot, ".agents/skills");
   const skillDirs = fs.readdirSync(skillsRoot, { withFileTypes: true }).filter(d => d.isDirectory());
@@ -655,12 +684,25 @@ function auditSkills(ledgerArg) {
         summary: `Invalid YAML frontmatter in .agents/skills/${entry.name}/SKILL.md (expected name '${entry.name}' and non-empty description).`
       });
     }
-    if (/\b(?:call|use)\s+`?(?:subagent_brief|spawnPacingMs)`?/i.test(content)) {
+    const refsDir = path.join(dir, "references");
+    const driftTargets = [
+      skillMd,
+      ...allFiles.filter(f => f.endsWith(".md") && f.startsWith(refsDir + path.sep))
+    ];
+    const driftEntries = [];
+    for (const targetFile of driftTargets) {
+      const fileText = targetFile === skillMd ? content : fs.readFileSync(targetFile, "utf8");
+      const symbols = findSkillDriftMatches(fileText);
+      if (symbols.length > 0) {
+        driftEntries.push(`${path.relative(repoRoot, targetFile)} (${symbols.join(", ")})`);
+      }
+    }
+    if (driftEntries.length > 0) {
       findings.push({
         id: `SKILL-DRIFT-${entry.name}`,
         category: "SKILL",
         priority: "P2",
-        summary: `.agents/skills/${entry.name}/SKILL.md instructs use of retired tool/parameter (subagent_brief or spawnPacingMs).`
+        summary: `Skill instructions in ${driftEntries.join("; ")} reference retired Phase 1/2 symbol(s) without an explicit retired/historical notice.`
       });
     }
     if (brokenLinks.length) {

@@ -24,6 +24,14 @@ function defaultScratchBase() {
   return raw;
 }
 
+function normalizeReportRoot(reportRoot) {
+  const trimmed = typeof reportRoot === "string" ? reportRoot.trim().replace(/\/+$/, "") : "";
+  if (!isValidRelativePrefix(trimmed)) {
+    throw new Error(`Expected a workspace-relative reportRoot: ${reportRoot}`);
+  }
+  return trimmed;
+}
+
 function defaultReportRoot() {
   return `${defaultScratchBase()}/agy-squad`;
 }
@@ -33,12 +41,13 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
   if (specialistNumber !== undefined && (!Number.isInteger(specialistNumber) || specialistNumber < 1)) {
     throw new Error("Specialist number must be a positive integer.");
   }
+  const normalizedRoot = normalizeReportRoot(reportRoot);
   const directory = `squad-${encodeURIComponent(squadId)}`;
   if (Buffer.byteLength(directory) > 255) {
     throw new Error("Squad ID must fit in one workspace directory name.");
   }
   const slot = specialistNumber === undefined ? "lead" : `specialist-${specialistNumber}`;
-  return `${reportRoot}/${directory}/${slot}/report.md`;
+  return `${normalizedRoot}/${directory}/${slot}/report.md`;
 }
 
 function resolveReportRoot(recordOrPath, allowCustomPrefix = false) {
@@ -53,13 +62,7 @@ function resolveReportRoot(recordOrPath, allowCustomPrefix = false) {
     return defaultReportRoot();
   }
   if (recordOrPath?.reportRoot !== undefined) {
-    const trimmed = typeof recordOrPath.reportRoot === "string"
-      ? recordOrPath.reportRoot.trim().replace(/\/+$/, "")
-      : "";
-    if (!isValidRelativePrefix(trimmed)) {
-      throw new Error(`Expected a workspace-relative reportRoot: ${recordOrPath.reportRoot}`);
-    }
-    return trimmed;
+    return normalizeReportRoot(recordOrPath.reportRoot);
   }
   const firstSlot = recordOrPath?.assignments?.[0]?.report;
   return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : defaultReportRoot();
@@ -69,13 +72,12 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
   if (!Array.isArray(assignments) || !assignments.length || !Array.isArray(handoffs)) {
     throw new Error("Provide the ordered launch assignments and their handoffs.");
   }
-  const allowedRoots = new Set(["scratch/agy-squad", defaultReportRoot()]);
-  if (typeof customReportRoot === "string" && customReportRoot.trim()) {
-    const trimmed = customReportRoot.trim().replace(/\/+$/, "");
-    if (!isValidRelativePrefix(trimmed)) {
-      throw new Error(`Expected a workspace-relative reportRoot: ${customReportRoot}`);
+  let allowedRoots = new Set(["scratch/agy-squad", defaultReportRoot()]);
+  if (customReportRoot !== undefined) {
+    const trimmed = normalizeReportRoot(customReportRoot);
+    if (trimmed !== "scratch/agy-squad") {
+      allowedRoots = new Set([trimmed]);
     }
-    allowedRoots.add(trimmed);
   }
   const expected = new Map();
   const slots = new Set();
@@ -601,4 +603,4 @@ if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(
   }
 }
 
-export { bundleReports, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, pruneReports, publish, readFile, reportPath, verifyBundle };
+export { bundleReports, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, reportPath, verifyBundle };

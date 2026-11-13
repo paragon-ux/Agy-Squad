@@ -89,7 +89,7 @@
     "token_and_execution_optimization": {
       "lead": {
         "role": "Token & Execution Optimization Lead",
-        "objective": "Profile and optimize Agy-Squad's context footprint, compiled brief byte budgets, squad manifest topology, and filesystem/IPC hot paths without weakening L1-L41 guarantees.",
+        "objective": "Profile and optimize Agy-Squad's context footprint, compiled brief byte budgets, squad manifest topology, and filesystem/IPC hot paths without weakening L1-L43 guarantees.",
         "scopeFiles": [
           "mcp/briefs.mjs",
           "mcp/dispatch.mjs",

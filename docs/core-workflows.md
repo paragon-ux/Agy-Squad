@@ -2,7 +2,7 @@
 
 Agy-Squad combines four connected workflows inside one workspace harness across **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **POSIX systems (Linux, macOS, and WSL2)**:
 
-1. **Task-proportional subagent orchestration** (`dispatch_squad` + `mcp/handoffs.mjs`)
+1. **Task-proportional orchestration** (`squad_planner` / `agy-squad plan`, `dispatch_squad`, and `mcp/handoffs.mjs`)
 2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))
 3. **Governed PR review under Standard v1.3.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md))
 4. **Three-scope evidence retention and teardown** (`L41`)
@@ -15,7 +15,7 @@ Agy-Squad organizes execution into a strict 4-phase lifecycle: **Pre-Flight Inta
   - Before compiling manifests or launching subagents, the primary agent initiates an interactive intake round (via `ask_question` or multiple-choice prompt) to establish:
     1. **Topology:** Layered (`all_l1` — leads managing specialists) vs. Flat (`all_specialists` — operator managing specialists) vs. Single-Squad targeted run.
     2. **Teardown & Provenance Policy:** Full Evidence Retention (`--keep-reports` preserving all loose reports in `scratch/agy-squad/` for auditability and research) vs. Automatic Atomic Teardown (`--teardown` upon acceptance).
-    3. **Adversarial Rigor:** Mandatory Adversarial Review Squad enabled (PASS gate) vs. single-squad self-synthesis.
+    3. **Integrity Rigor:** Independent flat `integrity_auditor` gate (`CLEAN` / `INTEGRITY VIOLATION`, enforced by `bin/agy-squad.mjs bundle`) vs. `--allow-unaudited` opt-out.
     4. **Self-Contained Instruction Standard:** Briefs must be strictly self-contained; unanchored abbreviations or phantom section codes (e.g. 'H4', 'D2') are prohibited.
 
 - **Stage 1 — Working Cohort Execution:**
@@ -42,7 +42,7 @@ The [`self-diagnosis` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.
 
 ### Run the zero-subagent profiler
 
-From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, managed and unmanaged dispatch compilation, handoff pipeline canaries, and the v1.3.0 review ledger schema:
+From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, `dispatch_squad` and `squad_planner` compilation, handoff pipeline canaries, and the v1.3.0 review ledger schema:
 
 ```bash
 # Markdown diagnostic report:
@@ -79,7 +79,7 @@ Every diagnostic pass follows a strict sequence:
 The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and its [PR Review Standard v1.3.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository's review contract:
 
 - **Commit and session provenance (Section 1):** Every review pins base/head SHAs, dirty working-tree deltas, CI run IDs, and an append-only `Session Provenance` table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`).
-- **Architecture-before-runtime trace (Sections 2 & 3):** Reviewers trace active WSL and POSIX decisions (`L1-L7, L17, L21, L29-L31, L40, L41` in [`docs/plans/LEDGER.md`](plans/LEDGER.md)) to public contracts, implementation, and tests before evaluating runtime code.
+- **Architecture-before-runtime trace (Sections 2 & 3):** Reviewers trace active WSL and POSIX decisions (`L1-L7, L21, L29-L31, L40-L43` in [`docs/plans/LEDGER.md`](plans/LEDGER.md); `L17` is retired) to public contracts, implementation, and tests before evaluating runtime code.
 - **Ten mandatory review categories (Section 4):** Every changed file maps to one primary category across `ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, and `DEP`.
 - **`1 ID = 1 Row` durability (Sections 7, 8, & 9):** Every distinct `P0` through `P3` finding gets its own row (umbrella/range IDs are rejected by `diagnose.mjs`) and carries one of six canonical statuses: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` / `Informational`. Section 8 serves as the mandatory table for post-remediation residuals and deferred items; Section 9 records `/self-diagnosis` cohort provenance and bundle SHA-256 digests.
 
@@ -91,8 +91,8 @@ Agy-Squad defines explicit rules for what evidence is kept, when loose reports a
 
 | Lifecycle scope | Governing tool | What is cleaned up | What is retained and gated |
 | --- | --- | --- | --- |
-| **1. Managed CLI session** | `bin/agy-squad.mjs` | Removes unchanged `.agents/plugins/agy-squad-*/` registration files and `.agents/agents/agy-squad-*.md` agent profiles on session exit; modified registrations are retained for inspection | Preserves staged run plans and specialist/lead reports under `scratch/agy-squad/run-<uuid>/` |
-| **2. Handoff bundle** | `node mcp/handoffs.mjs` | `prune` deletes loose `specialist-<N>/report.md` files only after `bundle` and `verify` succeed | Preserves `lead/report.md` (`Verdict: PASS`) and `lead/report.sources.json` (SHA-256 digests of all inputs and specialist reports) |
+| **1. Native `/swarm` planning & workspace** | `agy-squad plan` (`squad_planner`) + Antigravity `/swarm` | Native `/swarm` owns worker lifecycles and `kill` cleanup (`workspace: "share"` / `"branch"` worktrees); `agy-squad` creates no temporary `.agents/plugins/`, `.agents/agents/`, or `run-<uuid>/` session directories (`L17` retired, `L42`/`L43` active) | Preserves workspace-relative specialist/lead reports and parent-authored `provenanceScaffold` under `scratch/agy-squad/squad-<id>/` (or custom `reportRoot`) |
+| **2. Handoff & integrity bundle** | `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) | `prune` deletes loose `specialist-<N>/report.md` files only after `bundle` and `verify` succeed (unless `--keep-reports` / `retainReports: true`) | Preserves `lead/report.md` (`Content Verdict: PASS`), `lead/report.sources.json` (SHA-256 digests of all inputs and specialist reports), and verified `integrityAudit` evidence (`Integrity Verdict: CLEAN`) |
 | **3. Self-diagnosis wave** | `diagnose.mjs --teardown` | Removes `scratch/agy-squad/squad-<id>` and empty `scratch/` parents | Refuses deletion (unless `--force` is passed) until `lead/report.sources.json` verifies and the target `docs/reviews/<slug>.md` ledger is schema-valid, newer than the bundle, and records the cohort's findings |
 
 To tear down completed self-diagnosis cohorts after updating the target review ledger:

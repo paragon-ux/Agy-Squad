@@ -4,11 +4,46 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bundleReports, fingerprint, inspectHandoffs, reportPath } from "../mcp/handoffs.mjs";
 
 const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cli-diag-")));
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const diagnoseCli = path.join(repoRoot, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
+
+function copyIsolatedRepo(targetDir) {
+  for (const rel of ["bin", "mcp", ".agents", "docs", "tests", "package.json", "README.md"]) {
+    fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
+  }
+  return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
+}
+
+function buildTestLedger({ bundleSha = "pending", includeFindingRow = false } = {}) {
+  const findingRow = includeFindingRow
+    ? "| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| `SD-TEST-01` | Wave 1 | `TEST` | `Closed` | `target.txt#L1` | Synthetic test finding | Verified | `bundle` |"
+    : "None (0 wave findings)";
+  return [
+    "# Synthetic Test Review Ledger",
+    "",
+    "## 1. Review Metadata & Session Provenance",
+    "",
+    "| Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |",
+    "| --- | --- | --- | --- | --- | --- |",
+    "| Session 1 | `test-op-1` | `root` | `2026-11-13` | `main..HEAD` | `self-diagnosis` |",
+    "",
+    "## 8. Post-Remediation Residuals & Deferred Dispositions",
+    "",
+    "None (0 open residuals, 0 deferred items)",
+    "",
+    "## 9. `/self-diagnosis` Cohort & Bundle Ledger",
+    "",
+    "| Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    `| Wave 1 | \`sess-1\` | \`skill_and_pr_review_audit\` | \`s1, s2\` | \`${bundleSha}\` | \`N/A\` | Pending |`,
+    "",
+    findingRow,
+    ""
+  ].join("\n");
+}
 
 try {
   // 1. CLI --help, retired `run` rejection, and `plan` task execution
@@ -32,63 +67,225 @@ try {
   assert.equal(planJson.modelProvenance.pinningSupported, true);
   assert.equal(planJson.workers[0].specialists[0].swarmAdd.model, "gemini-3.8-flash-high");
 
-  // 2. diagnose.mjs --help, flag validation, and HEALTHY execution (without touching tracked repo mtimes)
-  const diagHelp = spawnSync(process.execPath, [diagnoseCli, "--help"], { cwd: repoRoot, encoding: "utf8" });
+  // 2. diagnose.mjs --help, flag validation, HEALTHY execution, --print-dispatch, and drift checks (all isolated in os.tmpdir)
+  const isoRepo = path.join(temporary, "iso-repo");
+  const isoDiag = copyIsolatedRepo(isoRepo);
+
+  const diagHelp = spawnSync(process.execPath, [isoDiag, "--help"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagHelp.status, 0, diagHelp.stderr);
   assert.match(diagHelp.stdout, /Usage:/);
 
-  const testScratchRel = `scratch-test-${process.pid}`;
-  const diagEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: testScratchRel };
-
-  const diagRun = spawnSync(process.execPath, [diagnoseCli], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const diagRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagRun.status, 0, diagRun.stderr);
   const diagParsed = JSON.parse(diagRun.stdout);
   assert.equal(diagParsed.status, "HEALTHY");
   assert.ok(diagParsed.promptBudgets.specialistTemplateBytes > 0);
   assert.ok(diagParsed.promptBudgets.leadTemplateBytes > 0);
   assert.equal(typeof diagParsed.timings.squadPlannerMs, "number");
-  assert.equal(fs.existsSync(path.join(repoRoot, testScratchRel)), false);
+  assert.equal(fs.existsSync(path.join(isoRepo, "scratch")), false);
 
-  const diagMd = spawnSync(process.execPath, [diagnoseCli, "--markdown"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const diagMd = spawnSync(process.execPath, [isoDiag, "--markdown"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagMd.status, 0, diagMd.stderr);
   assert.match(diagMd.stdout, /# Agy-Squad Self-Diagnosis & Optimization Report/);
   assert.match(diagMd.stdout, /HEALTHY/);
 
-  const badFlags = spawnSync(process.execPath, [diagnoseCli, "--markdown", "--teardown"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const badFlags = spawnSync(process.execPath, [isoDiag, "--markdown", "--teardown"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badFlags.status, 1);
   assert.match(badFlags.stderr, /mutually exclusive/);
-  const badShortVal = spawnSync(process.execPath, [diagnoseCli, "--print-dispatch", "all_l1", "--parent-id", "-h"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const badShortVal = spawnSync(process.execPath, [isoDiag, "--print-dispatch", "all_l1", "--parent-id", "-h"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badShortVal.status, 1);
   assert.match(badShortVal.stderr, /valid conversationId/);
-  const badAcceptAll = spawnSync(process.execPath, [diagnoseCli, "--teardown", "all", "--accept", "0".repeat(64)], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const badAcceptAll = spawnSync(process.execPath, [isoDiag, "--teardown", "all", "--accept", "0".repeat(64)], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badAcceptAll.status, 1);
   assert.match(badAcceptAll.stderr, /single squadId/);
-  const badLedgerDispatch = spawnSync(process.execPath, [diagnoseCli, "--print-dispatch", "all_l1", "--ledger", "docs/reviews/x.md"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+  const badLedgerDispatch = spawnSync(process.execPath, [isoDiag, "--print-dispatch", "all_l1", "--ledger", "docs/reviews/x.md"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badLedgerDispatch.status, 1);
   assert.match(badLedgerDispatch.stderr, /not valid with '--print-dispatch'/);
 
-  // Mid-cohort --allow-active-cohort check using isolated temporary scratch root
-  fs.mkdirSync(path.join(repoRoot, testScratchRel, "agy-squad/squad-skill_and_pr_review_audit"), { recursive: true });
+  // Mid-cohort --allow-active-cohort check inside os.tmpdir()
+  fs.mkdirSync(path.join(isoRepo, "scratch/agy-squad/squad-skill_and_pr_review_audit"), { recursive: true });
   try {
-    const allowCohortRun = spawnSync(process.execPath, [diagnoseCli, "--allow-active-cohort"], { cwd: repoRoot, env: diagEnv, encoding: "utf8" });
+    const allowCohortRun = spawnSync(process.execPath, [isoDiag, "--allow-active-cohort"], { cwd: isoRepo, encoding: "utf8" });
     assert.equal(allowCohortRun.status, 0, allowCohortRun.stderr);
     assert.equal(JSON.parse(allowCohortRun.stdout).status, "HEALTHY");
   } finally {
-    fs.rmSync(path.join(repoRoot, testScratchRel), { recursive: true, force: true });
+    fs.rmSync(path.join(isoRepo, "scratch"), { recursive: true, force: true });
   }
 
-  // 3. TEST-P2-01: Test newest-ledger precedence in an isolated temp copy (never mutate tracked repo mtimes)
-  const isoRepo = path.join(temporary, "iso-repo");
-  for (const rel of ["bin", "mcp", ".agents", "docs", "tests", "package.json", "README.md"]) {
-    fs.cpSync(path.join(repoRoot, rel), path.join(isoRepo, rel), { recursive: true });
+  // Positive --print-dispatch tests (all_l1, single squad, all_specialists with --parent-id)
+  const dispatchAllL1 = spawnSync(
+    process.execPath,
+    [isoDiag, "--print-dispatch", "all_l1", "--parent-id", "parent-conv-123"],
+    { cwd: isoRepo, encoding: "utf8" }
+  );
+  assert.equal(dispatchAllL1.status, 0, dispatchAllL1.stderr);
+  const l1Json = JSON.parse(dispatchAllL1.stdout);
+  assert.equal(l1Json.Subagents.length, 3);
+  for (const agent of l1Json.Subagents) {
+    assert.match(agent.Prompt, /Parent conversation ID \(send_message Recipient\): parent-conv-123/);
   }
-  const isoDiag = path.join(isoRepo, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
+
+  const dispatchSingle = spawnSync(
+    process.execPath,
+    [isoDiag, "--print-dispatch", "skill_and_pr_review_audit"],
+    { cwd: isoRepo, encoding: "utf8" }
+  );
+  assert.equal(dispatchSingle.status, 0, dispatchSingle.stderr);
+  assert.equal(JSON.parse(dispatchSingle.stdout).Subagents.length, 2);
+
+  const dispatchAllSpec = spawnSync(
+    process.execPath,
+    [isoDiag, "--print-dispatch", "all_specialists", "--parent-id", "parent-conv-456"],
+    { cwd: isoRepo, encoding: "utf8" }
+  );
+  assert.equal(dispatchAllSpec.status, 0, dispatchAllSpec.stderr);
+  const specJson = JSON.parse(dispatchAllSpec.stdout);
+  assert.equal(specJson.Subagents.length, 6);
+  for (const agent of specJson.Subagents) {
+    assert.match(agent.Prompt, /Parent conversation ID \(send_message Recipient\): parent-conv-456/);
+  }
+
+  // SKILL-PR5-04: Verify skill drift check catches retired Phase 2 symbols in references/*.md without false positives on retired notices
+  const driftRefDir = path.join(isoRepo, ".agents/skills/swarm-governance/references");
+  const driftRefFile = path.join(driftRefDir, "drift-probe.md");
+  fs.mkdirSync(driftRefDir, { recursive: true });
+  try {
+    fs.writeFileSync(driftRefFile, "Run `bin/terminal.py` and wait for `.mcp-ready` before dispatch.\n");
+    const driftBad = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(driftBad.status, 1, driftBad.stderr);
+    const driftBadJson = JSON.parse(driftBad.stdout);
+    assert.equal(driftBadJson.status, "CHANGES_REQUIRED");
+    const driftFinding = driftBadJson.findings.find(f => f.id === "SKILL-DRIFT-swarm-governance");
+    assert.ok(driftFinding, "Expected SKILL-DRIFT-swarm-governance for active retired Phase 2 symbol reference");
+    assert.match(driftFinding.summary, /terminal\.py/);
+    assert.match(driftFinding.summary, /\.mcp-ready/);
+
+    fs.writeFileSync(driftRefFile, "Historical note: `bin/terminal.py` and `.mcp-ready` are retired in Phase 2.\n");
+    const driftOk = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(driftOk.status, 0, driftOk.stderr);
+    assert.equal(JSON.parse(driftOk.stdout).status, "HEALTHY");
+  } finally {
+    fs.rmSync(driftRefDir, { recursive: true, force: true });
+  }
+
+  // 3. TEST-PR5-02: Isolated --teardown positive & negative gating tests
+  const tdRepo = path.join(temporary, "teardown-repo");
+  const tdDiag = copyIsolatedRepo(tdRepo);
+  const tdReviewsDir = path.join(tdRepo, "docs/reviews");
+  for (const name of fs.readdirSync(tdReviewsDir)) {
+    fs.rmSync(path.join(tdReviewsDir, name), { recursive: true, force: true });
+  }
+  const tdLedgerRel = "docs/reviews/test-teardown-ledger.md";
+  const tdLedgerAbs = path.join(tdRepo, tdLedgerRel);
+  fs.writeFileSync(tdLedgerAbs, buildTestLedger());
+
+  // 3a. Refusal on unbundled evidence
+  const squadId = "skill_and_pr_review_audit";
+  const s1Slot = reportPath(squadId, 1, "scratch/agy-squad");
+  const s2Slot = reportPath(squadId, 2, "scratch/agy-squad");
+  const leadSlot = reportPath(squadId, undefined, "scratch/agy-squad");
+  for (const [slot, body] of [
+    [s1Slot, "# Specialist 1\nVerified target.txt.\n"],
+    [s2Slot, "# Specialist 2\nVerified target.txt.\n"],
+    [leadSlot, "# Lead Synthesis\nContent Verdict: PASS\n- `SD-TEST-01`: Verified target.txt.\n"]
+  ]) {
+    const abs = path.join(tdRepo, slot);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+  }
+  const refuseUnbundled = spawnSync(process.execPath, [tdDiag, "--teardown", squadId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(refuseUnbundled.status, 1);
+  assert.match(refuseUnbundled.stderr, /unbundled evidence/);
+
+  // Create valid bundle for skill_and_pr_review_audit
+  fs.writeFileSync(path.join(tdRepo, "target.txt"), "verified content\n");
+  const verifiedFiles = fingerprint(tdRepo, ["target.txt"]);
+  const tdRecord = {
+    workspace: tdRepo,
+    squadId,
+    verdict: "PASS",
+    requireIntegrityAudit: false,
+    verifiedFiles,
+    assignments: [
+      { conversationId: "s1-id", report: s1Slot },
+      { conversationId: "s2-id", report: s2Slot }
+    ],
+    handoffs: [
+      { sender: "s1-id", message: `READY ${s1Slot} — Specialist 1 verified target.txt.` },
+      { sender: "s2-id", message: `READY ${s2Slot} — Specialist 2 verified target.txt.` }
+    ]
+  };
+  inspectHandoffs(tdRepo, tdRecord);
+  const bundled = bundleReports(tdRepo, tdRecord);
+  const bundleAbs = path.join(tdRepo, bundled.path);
+  const bundleMtimeSec = Math.floor(fs.statSync(bundleAbs).mtimeMs / 1000);
+
+  // 3b. Refusal when bundle digest is missing from Section 9
+  fs.writeFileSync(tdLedgerAbs, buildTestLedger({ bundleSha: "pending", includeFindingRow: true }));
+  fs.utimesSync(tdLedgerAbs, bundleMtimeSec + 5, bundleMtimeSec + 5);
+  const refuseMissingSha = spawnSync(process.execPath, [tdDiag, "--teardown", squadId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(refuseMissingSha.status, 1);
+  assert.match(refuseMissingSha.stderr, /not recorded in Section 9/);
+
+  // 3c. Refusal when cohort finding ID (SD-TEST-01) is missing from ledger
+  fs.writeFileSync(tdLedgerAbs, buildTestLedger({ bundleSha: bundled.sha256, includeFindingRow: false }));
+  fs.utimesSync(tdLedgerAbs, bundleMtimeSec + 5, bundleMtimeSec + 5);
+  const refuseMissingFinding = spawnSync(process.execPath, [tdDiag, "--teardown", squadId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(refuseMissingFinding.status, 1);
+  assert.match(refuseMissingFinding.stderr, /cohort finding ID\(s\) \[SD-TEST-01\] are missing/);
+
+  // 3d. Refusal when ledger mtime < bundle mtime
+  fs.writeFileSync(tdLedgerAbs, buildTestLedger({ bundleSha: bundled.sha256, includeFindingRow: true }));
+  fs.utimesSync(tdLedgerAbs, bundleMtimeSec - 10, bundleMtimeSec - 10);
+  const refuseStaleLedger = spawnSync(process.execPath, [tdDiag, "--teardown", squadId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(refuseStaleLedger.status, 1);
+  assert.match(refuseStaleLedger.stderr, /before updating the durable target PR review ledger/);
+
+  // 3e. Refusal on wrong --accept digest when ledger is valid and newer
+  fs.utimesSync(tdLedgerAbs, bundleMtimeSec + 5, bundleMtimeSec + 5);
+  const refuseWrongAccept = spawnSync(
+    process.execPath,
+    [tdDiag, "--teardown", squadId, "--accept", "0".repeat(64), "--ledger", tdLedgerRel],
+    { cwd: tdRepo, encoding: "utf8" }
+  );
+  assert.equal(refuseWrongAccept.status, 1);
+  assert.match(refuseWrongAccept.stderr, /Bundle differs from the primary's accepted digest/);
+
+  // 3f. Success with valid bundle + newer ledger + matching --accept + empty parent cleanup
+  const tdSuccess = spawnSync(
+    process.execPath,
+    [tdDiag, "--teardown", squadId, "--accept", bundled.sha256, "--ledger", tdLedgerRel],
+    { cwd: tdRepo, encoding: "utf8" }
+  );
+  assert.equal(tdSuccess.status, 0, tdSuccess.stderr);
+  const tdSuccessJson = JSON.parse(tdSuccess.stdout);
+  assert.equal(tdSuccessJson.status, "TORN_DOWN");
+  assert.deepEqual(tdSuccessJson.tornDown, [`scratch/agy-squad/squad-${squadId}`]);
+  assert.deepEqual(tdSuccessJson.removedParents, ["scratch/agy-squad", "scratch"]);
+  assert.equal(fs.existsSync(path.join(tdRepo, "scratch")), false);
+
+  // 3g. --force bypass removes unbundled squad and canary directories + empty parents
+  const forceSquadFile = path.join(tdRepo, "scratch/agy-squad/squad-runtime_and_contract_diagnosis/specialist-1/report.md");
+  const forceCanaryFile = path.join(tdRepo, "scratch/agy-squad/self-diag-canary-999/artifact.txt");
+  fs.mkdirSync(path.dirname(forceSquadFile), { recursive: true });
+  fs.mkdirSync(path.dirname(forceCanaryFile), { recursive: true });
+  fs.writeFileSync(forceSquadFile, "unbundled");
+  fs.writeFileSync(forceCanaryFile, "canary");
+  const tdForce = spawnSync(process.execPath, [tdDiag, "--teardown", "all", "--force"], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(tdForce.status, 0, tdForce.stderr);
+  const tdForceJson = JSON.parse(tdForce.stdout);
+  assert.equal(tdForceJson.status, "TORN_DOWN");
+  assert.ok(tdForceJson.tornDown.includes("scratch/agy-squad/squad-runtime_and_contract_diagnosis"));
+  assert.ok(tdForceJson.tornDown.includes("scratch/agy-squad/self-diag-canary-999"));
+  assert.equal(fs.existsSync(path.join(tdRepo, "scratch")), false);
+
+  // 4. TEST-P2-01: Test newest-ledger precedence in an isolated temp copy (never mutate tracked repo mtimes)
   const r1Iso = path.join(isoRepo, "docs/reviews/rebuild-wsl-dispatch-review.md");
   const r2Iso = path.join(isoRepo, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
   const baseSec = Math.floor(Date.now() / 1000) + 5;
   fs.utimesSync(r2Iso, baseSec, baseSec);
   fs.utimesSync(r1Iso, baseSec + 2, baseSec + 2);
-  // Remove any newer pr4 ledger in isoCopy so rebuild-wsl-dispatch-review* precedence is isolated cleanly
+  // Remove any newer ledger in isoCopy so rebuild-wsl-dispatch-review* precedence is isolated cleanly
   for (const name of fs.readdirSync(path.join(isoRepo, "docs/reviews"))) {
     if (!name.startsWith("rebuild-wsl-dispatch-review")) {
       fs.rmSync(path.join(isoRepo, "docs/reviews", name));
@@ -98,7 +295,7 @@ try {
   assert.equal(isoDiagRun.status, 0, isoDiagRun.stderr);
   assert.equal(JSON.parse(isoDiagRun.stdout).targetReviewLedger, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
 
-  console.log("✓ CLI planner/governance, retired run rejection, and isolated self-diagnosis checks");
+  console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

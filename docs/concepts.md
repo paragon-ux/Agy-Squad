@@ -15,7 +15,7 @@ flowchart LR
 ## Core orchestration terms
 
 ### Parent session
-The top-level Antigravity conversation (started via native `/swarm` or in **Antigravity Desktop (IDE)**; legacy `node bin/agy-squad.mjs run` is deprecated per `L42`) that owns user approvals, invokes `dispatch_squad` or native `swarm`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
+The top-level Antigravity conversation (started via native `/swarm` or in **Antigravity Desktop (IDE)**; legacy `node bin/agy-squad.mjs run` is retired in Phase 2 per `L17` / `L42`) that owns user approvals, invokes `squad_planner`, `dispatch_squad`, or native `swarm`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
 
 ### Squad lead
 An intermediate subagent compiled when `dispatch_squad` runs with `squadId: "all_l1"` on a manifest defining one or more squads. Each squad lead dispatches its own domain specialists, verifies their cited files, writes `scratch/agy-squad/.../lead/report.md` (`Content Verdict: PASS`, `FAIL`, or `BLOCKED`; `Verdict:` also accepted), pairs with an independent flat `integrity_auditor` (`Integrity Verdict: CLEAN` | `INTEGRITY VIOLATION`), and bundles SHA-256 digests via `node bin/agy-squad.mjs bundle` (or `node mcp/handoffs.mjs`).
@@ -61,8 +61,8 @@ Agy-Squad's built-in harness diagnostic and optimization skill (`.agents/skills/
 ### PR Review Standard `v1.3.0` (`/pr-review`)
 The repository's formal review specification (`.agents/skills/pr-review/SKILL.md` and `references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` finding records in `docs/reviews/`.
 
-### Decision ledger codes (`L1` through `L41`)
+### Decision ledger codes (`L1` through `L43`)
 Short identifiers referencing architectural decisions in [`docs/plans/LEDGER.md`](plans/LEDGER.md):
 
-- **Active architecture (`L1-L7, L17, L21, L29-L31, L40, L41`):** Define host-enforced boundaries, 500-byte receipt ceiling, and SHA-256 bundling (`L1, L2`), native stop controls (`L3, L5`), scratch isolation (`L4`), transcript boundaries (`L6`), zero real subagents in automated tests (`L7`), CLI sandbox execution (`L17`), deny-by-default permissions (`L21, L40`), private distribution (`L29`), Zensical docs (`L30`), `Agy-Context-Saver` separation (`L31`), and deterministic scratch teardown (`L41`).
-- **Retired historical IDs (`L8-L12, L16, L18-L20, L22-L24, L28, L35-L39`):** Record earlier Windows/Docker trials and migration steps retained in `docs/plans/LEDGER.md` for historical provenance.
+- **Active architecture (`L1-L7, L21, L29-L31, L40-L43`):** Define host-enforced boundaries, 500-byte receipt ceiling, and SHA-256 bundling (`L1, L2`), native stop controls (`L3, L5`), scratch isolation (`L4`), transcript boundaries (`L6`), zero real subagents in automated tests (`L7`), deny-by-default permissions (`L21, L40`), private distribution (`L29`), Zensical docs (`L30`), `Agy-Context-Saver` separation with `dispatch_squad` and `squad_planner` (`L31`), deterministic scratch teardown (`L41`), native `/swarm` governance & SHA-256 verification CLI (`L42`), and `squad_planner` explicit model pinning, writable `scopeFiles` overlap detection, and `L6`-safe provenance scaffolding (`L43`).
+- **Retired historical IDs (`L8-L12, L16, L17, L18-L20, L22-L24, L28, L35-L39`):** Record earlier Windows/Docker trials, the retired `agy-squad run` CLI PTY launcher (`L17`), and migration steps retained in `docs/plans/LEDGER.md` for historical provenance.

@@ -104,11 +104,20 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? "Integrity Auditor Policy: Audit working reports and execution traces via single-pass batch queries (query_transcript summaryOnly=true or read_transcript lastTurns=10, or swarm board/status). Never copy raw .system_generated/ transcripts into scratch files. Never emit a content PASS; record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
     : "Subagent Alignment Policy: Follow squad lead policy. Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker.";
 
+  const hasManifestFile =
+    typeof manifestPath === "string" &&
+    manifestPath.trim().length > 0 &&
+    manifestPath !== "inline-manifest" &&
+    manifestPath !== "inline-task";
+  const dispatchCall = hasManifestFile
+    ? `Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.`
+    : null;
+
   const leadBody = isIntegrityAuditor
-    ? `Independent Integrity Auditor Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseIntegrityCohort}`
+    ? `Independent Integrity Auditor Lead.${dispatchCall ? ` ${dispatchCall}` : ""}\n${superviseIntegrityCohort}`
     : isAdversarial
-      ? `Mandatory Adversarial Review Lead. Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nIndependently audit working cohorts: verify tool traces via batch transcript inspection, re-run test suites, and write synthesis with PASS or FAIL verdict.`
-      : `When authorized to delegate, call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`;
+      ? `Mandatory Adversarial Review Lead.${dispatchCall ? ` ${dispatchCall}` : ""}\n${superviseCohort}\nIndependently audit working cohorts: verify tool traces via batch transcript inspection, re-run test suites, and write synthesis with PASS or FAIL verdict.`
+      : `${dispatchCall ? `When authorized to delegate, ${dispatchCall[0].toLowerCase()}${dispatchCall.slice(1)}` : "Coordinate the pre-compiled specialists for this squad."}\n${superviseCohort}\nUse your report slot for the synthesis and your own verified PASS, FAIL, or BLOCKED verdict.`;
 
   return {
     ...payload,

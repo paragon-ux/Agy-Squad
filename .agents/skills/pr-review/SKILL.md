@@ -42,8 +42,8 @@ For every behavior change, trace:
 `design thesis / invariant -> current architecture decision -> public contract -> implementation -> verification`
 
 - Distinguish `docs/plans/LEDGER.md` IDs:
-  - **Active WSL architecture (`L1–L7, L17, L21, L29–L31, L40, L41`)**
-  - **Retired/superseded Docker and Windows architecture:** WSL trial checks passed (`L18–L20, L22–L24, L28, L37, L39`), rebuild branch (`L16`), and superseded Windows/Docker decisions (`L8–L12, L35, L36, L38` in `docs/plans/LEDGER.md`)
+  - **Active WSL architecture (`L1–L7, L21, L29–L31, L40–L43`)**
+  - **Retired/superseded decisions:** Retired Phase 1 PTY launcher (`L17`), WSL trial checks passed (`L18–L20, L22–L24, L28, L37, L39`), rebuild branch (`L16`), and superseded Windows/Docker decisions (`L8–L12, L35, L36, L38` in `docs/plans/LEDGER.md`)
   - **External/shared ledger allocations (`L13–L15, L25–L27, L32–L34` in `Agy-Context-Saver`)**
 - Existing implementation does not override a higher-priority contract. Never resolve a contract mismatch by silently rewriting documentation to match code.
 

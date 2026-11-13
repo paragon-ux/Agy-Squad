@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
+const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-handoffs-")));
 const squadId = "trial-a";
@@ -301,6 +302,33 @@ try {
     })[0].status,
     "PARTIAL"
   );
+
+  // Verify RUN-PR5-01: reportPath rejects traversal/invalid roots and normalizes trailing slashes
+  for (const badRoot of ["", "   ", "../../etc", "/tmp/evil", "foo\\bar", "a/../b", "/", null]) {
+    assert.throws(() => reportPath("alpha", 1, badRoot), /workspace-relative reportRoot/);
+  }
+  assert.equal(reportPath("alpha", 1, "custom/out/"), "custom/out/squad-alpha/specialist-1/report.md");
+
+  // Verify RUN-PR5-02: inspectHandoffs restricts allowedRoots when custom reportRoot differs from default
+  const defaultSlot = reportPath("alpha", 1);
+  write(defaultSlot, "Default slot evidence.\n");
+  assert.throws(
+    () => inspectHandoffs(root, {
+      workspace: root,
+      reportRoot: "custom/out",
+      assignments: [{ conversationId: "mismatch-1", report: defaultSlot }],
+      handoffs: [{ sender: "mismatch-1", message: `READY ${defaultSlot} — Mismatched root.` }]
+    }),
+    /exact compiled report slots/
+  );
+
+  // Verify SCRIPT-PR5-01: bin/agy-squad.mjs bundle rejects null/non-object JSON cleanly without TypeError
+  write("null-record.json", "null\n");
+  const nullBundle = spawnSync(process.execPath, [agySquadCli, "bundle", "null-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(nullBundle.status, 1);
+  assert.match(nullBundle.stderr, /Provide a valid bundle record\./);
+  assert.ok(!/TypeError/.test(nullBundle.stderr));
+
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

@@ -84,6 +84,9 @@ async function main(args) {
     const positional = rest.filter(arg => arg !== "--allow-unaudited");
     if (positional.length !== 1) throw new Error("Usage: agy-squad bundle <record.json> [--allow-unaudited]");
     const record = JSON.parse(readFile(root, positional[0]).toString("utf8"));
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("Provide a valid bundle record.");
+    }
     const bundleInput = allowUnaudited
       ? { ...record, requireIntegrityAudit: false }
       : (record.requireIntegrityAudit === false ? record : { ...record, requireIntegrityAudit: true });

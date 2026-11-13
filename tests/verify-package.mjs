@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { text } from "node:stream/consumers";
 
 const REQUIRED = [
   "package.json",
@@ -76,8 +77,15 @@ function selfTest() {
 if (process.argv[2] === "--self-test") {
   selfTest();
 } else {
-  assert.equal(process.argv.length, 3,
-    "Usage: node tests/verify-package.mjs <npm-pack-json> | --self-test");
-  const packages = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  const usage = "Usage: node tests/verify-package.mjs [<npm-pack-json> | - | --self-test]";
+  assert.ok(process.argv.length === 2 || process.argv.length === 3, usage);
+  const useStdin = process.argv.length === 2 || process.argv[2] === "-";
+  if (process.argv.length === 2 && process.stdin.isTTY) {
+    assert.fail(usage);
+  }
+  const raw = useStdin
+    ? await text(process.stdin)
+    : fs.readFileSync(process.argv[2], "utf8");
+  const packages = JSON.parse(raw);
   console.log(`Package boundary verified (${validate(packages)} files)`);
 }

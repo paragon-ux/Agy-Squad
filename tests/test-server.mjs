@@ -62,6 +62,18 @@ console.log("Agy-Squad MCP server tests\n");
   const res = await send("tools/call", { name: "dispatch_squad", arguments: { squadId: "all_l1", mode: "direct" } });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
+  const dispatchOk = await send("tools/call", {
+    name: "dispatch_squad",
+    arguments: {
+      squadId: "all_l1",
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json"
+    }
+  });
+  assert.equal(Boolean(dispatchOk.result.isError), false, dispatchOk.result.content[0].text);
+  const dispatchPayload = JSON.parse(dispatchOk.result.content[0].text);
+  assert.ok(Array.isArray(dispatchPayload.Subagents) && dispatchPayload.Subagents.length >= 1);
+  assert.equal(typeof dispatchPayload.Subagents[0].Role, "string");
+  assert.equal(typeof dispatchPayload.Subagents[0].Prompt, "string");
   const planRes = await send("tools/call", {
     name: "squad_planner",
     arguments: {
@@ -97,13 +109,15 @@ console.log("Agy-Squad MCP server tests\n");
 }
 {
   // F-07(6): Non-positive or invalid AGY_MAX_STDIO_PAYLOAD_BYTES falls back safely to 10MB default.
-  const invalidLimit = spawnSync(process.execPath, [server], {
-    env: { ...process.env, AGY_MAX_STDIO_PAYLOAD_BYTES: "-1" },
-    input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n",
-    encoding: "utf8"
-  });
-  assert.equal(invalidLimit.status, 0, invalidLimit.stderr);
-  assert.deepEqual(JSON.parse(invalidLimit.stdout.trim()).result, {});
+  for (const badEnv of ["-1", "abc", "0"]) {
+    const invalidLimit = spawnSync(process.execPath, [server], {
+      env: { ...process.env, AGY_MAX_STDIO_PAYLOAD_BYTES: badEnv },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n",
+      encoding: "utf8"
+    });
+    assert.equal(invalidLimit.status, 0, invalidLimit.stderr);
+    assert.deepEqual(JSON.parse(invalidLimit.stdout.trim()).result, {});
+  }
   console.log("✓ invalid or non-positive AGY_MAX_STDIO_PAYLOAD_BYTES safely falls back to 10MB default");
 }
 {

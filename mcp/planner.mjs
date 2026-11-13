@@ -9,7 +9,7 @@ import {
   resolveSquadLead,
   specialistAssignments
 } from "./dispatch.mjs";
-import { reportPath } from "./handoffs.mjs";
+import { normalizeReportRoot, reportPath } from "./handoffs.mjs";
 
 const ALLOWED_PLANNER_KEYS = new Set([
   "manifestPath",
@@ -33,8 +33,75 @@ function slugifyName(value, fallback) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  return slug || fallback;
+    .slice(0, 32)
+    .replace(/-+$/, "");
+  if (slug) return slug;
+  const fallbackSlug = String(fallback ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/, "");
+  return fallbackSlug || "worker";
+}
+
+function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
+  const base = slugifyName(rawValue, fallback);
+  if (!usedWorkerNames.has(base)) {
+    usedWorkerNames.add(base);
+    return base;
+  }
+  const safeFallback = slugifyName(fallback, "worker");
+  for (let counter = 2; ; counter++) {
+    const suffix = `-${counter}`;
+    const maxPrefixLen = Math.max(1, 32 - suffix.length);
+    const prefix =
+      base.slice(0, maxPrefixLen).replace(/-+$/, "") ||
+      safeFallback.slice(0, maxPrefixLen).replace(/-+$/, "") ||
+      "w";
+    const candidate = `${prefix}${suffix}`;
+    if (!usedWorkerNames.has(candidate)) {
+      usedWorkerNames.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+function normalizeExplicitModel(rawModel) {
+  if (typeof rawModel !== "string") return undefined;
+  const trimmed = rawModel.trim();
+  return trimmed && trimmed !== "inherit" ? trimmed : undefined;
+}
+
+function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overriddenSubagentModels) {
+  if (specModelRaw !== undefined && typeof specModelRaw !== "string") {
+    return {
+      requested: requestedModel ?? "inherit",
+      effective: "inherit",
+      swarmPin: requestedModel,
+      compiledModel: specModelRaw
+    };
+  }
+  const explicitSpecModel = normalizeExplicitModel(specModelRaw);
+  const targetModel = requestedModel ?? explicitSpecModel;
+  if (executionMode === "subagent") {
+    const effectiveModel = targetModel && SUBAGENT_MODEL_ALIASES.has(targetModel) ? targetModel : "inherit";
+    if (!requestedModel && explicitSpecModel && !SUBAGENT_MODEL_ALIASES.has(explicitSpecModel)) {
+      overriddenSubagentModels.push(explicitSpecModel);
+    }
+    return {
+      requested: targetModel ?? "inherit",
+      effective: effectiveModel,
+      swarmPin: undefined,
+      compiledModel: effectiveModel
+    };
+  }
+  return {
+    requested: targetModel ?? "inherit",
+    effective: targetModel ?? "inherit",
+    swarmPin: targetModel,
+    compiledModel: targetModel ?? (specModelRaw ?? "inherit")
+  };
 }
 
 function normalizeScopePath(scopeEntry) {
@@ -81,7 +148,10 @@ function stripPlannerFields(spec) {
 
 function deriveTaskSquads(task, roles, scopeFiles) {
   const validatedScopes = validateScopeFiles(scopeFiles ?? ["."], "task");
-  const roleList = Array.isArray(roles) && roles.length > 0 ? roles : ["Task Worker"];
+  if (roles !== undefined && (!Array.isArray(roles) || roles.length === 0)) {
+    throw new Error("roles must be a non-empty array of non-empty strings.");
+  }
+  const roleList = roles ?? ["Task Worker"];
   const specialists = roleList.map((role, index) => {
     if (typeof role !== "string" || !role.trim()) {
       throw new Error(`Role at index ${index} must be a non-empty string.`);
@@ -162,9 +232,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   if (includeIntegrityAuditor !== undefined && typeof includeIntegrityAuditor !== "boolean") {
     throw new Error("includeIntegrityAuditor must be a boolean.");
   }
-  if (reportRoot !== undefined) {
-    reportPath("probe", undefined, reportRoot);
-  }
+  const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
   const root = fs.realpathSync(workspace);
   let loadedSquads;
@@ -246,10 +314,16 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
           : {})
       };
 
+  const manifestPathForBrief =
+    selectedManifest === "inline-manifest" || selectedManifest === "inline-task"
+      ? undefined
+      : selectedManifest;
   const writableScopeEntries = [];
   const workers = [];
   const provenanceEntries = [];
   const bundleRecordTemplates = {};
+  const usedWorkerNames = new Set();
+  const overriddenSubagentModels = [];
   let totalSpecialists = 0;
 
   for (const id of targetWorkingIds) {
@@ -258,14 +332,24 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     const specs = specialistAssignments(loadedSquads, id);
     totalSpecialists += specs.length;
 
-    const leadSlot = reportPath(id, undefined, reportRoot);
+    const leadSlot = reportPath(id, undefined, normalizedReportRoot);
     let compiledLead;
+    let leadModel;
+    let leadWorkerName;
     if (leadSpec) {
+      const rawLead = stripPlannerFields(leadSpec);
+      leadModel = resolveWorkerModels(
+        executionMode,
+        requestedModel,
+        rawLead.model ?? rawLead.Model,
+        overriddenSubagentModels
+      );
       const cleanedLead = {
-        ...stripPlannerFields(leadSpec),
-        model: executionMode === "subagent" ? effectiveSubagentModel : (leadSpec.model ?? leadSpec.Model ?? "inherit")
+        ...rawLead,
+        model: leadModel.compiledModel
       };
-      compiledLead = buildSubagentSpec(cleanedLead, id, selectedManifest, undefined, reportRoot);
+      compiledLead = buildSubagentSpec(cleanedLead, id, manifestPathForBrief, undefined, normalizedReportRoot);
+      leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`);
     }
 
     const compiledSpecialists = [];
@@ -279,16 +363,24 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
           scopeFiles: specScope
         });
       }
+      const specModel = resolveWorkerModels(
+        executionMode,
+        requestedModel,
+        rawSpec.model ?? rawSpec.Model,
+        overriddenSubagentModels
+      );
       const subSpec = {
         ...rawSpec,
-        model: executionMode === "subagent"
-          ? effectiveSubagentModel
-          : (rawSpec.model ?? rawSpec.Model ?? "inherit")
+        model: specModel.compiledModel
       };
-      const compiled = buildSubagentSpec(subSpec, id, selectedManifest, number, reportRoot);
-      const slot = reportPath(id, number, reportRoot);
-      const workerName = slugifyName(`${id}-${rawSpec.role ?? rawSpec.Role ?? number}`, `${id}-worker-${number}`);
-      compiledSpecialists.push({ slot, workerName, rawSpec, compiled });
+      const compiled = buildSubagentSpec(subSpec, id, manifestPathForBrief, number, normalizedReportRoot);
+      const slot = reportPath(id, number, normalizedReportRoot);
+      const workerName = allocateWorkerName(
+        usedWorkerNames,
+        `${id}-${rawSpec.role ?? rawSpec.Role ?? number}`,
+        `${id}-worker-${number}`
+      );
+      compiledSpecialists.push({ slot, workerName, specModel, compiled });
       assignmentsTemplate.push({
         conversationId: executionMode === "swarm" ? `<swarm-worker:${workerName}:conversationId>` : `<invoke_subagent:${workerName}:conversationId>`,
         report: slot
@@ -299,8 +391,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
         workerName,
         role: compiled.Role,
         reportSlot: slot,
-        requestedModel: requestedModel ?? (rawSpec.model ?? rawSpec.Model ?? "inherit"),
-        effectiveModel: executionMode === "swarm" ? (requestedModel ?? rawSpec.model ?? rawSpec.Model ?? "inherit") : effectiveSubagentModel,
+        requestedModel: specModel.requested,
+        effectiveModel: specModel.effective,
         conversationId: "<record-after-launch>",
         resolvedModel: executionMode === "swarm" ? "<verify-via-swarm-status>" : "<inherited-from-parent-unverified>"
       });
@@ -310,11 +402,11 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
       provenanceEntries.push({
         squadId: id,
         slotType: "lead",
-        workerName: slugifyName(`${id}-lead`, `${id}-lead`),
+        workerName: leadWorkerName,
         role: compiledLead.Role,
         reportSlot: leadSlot,
-        requestedModel: requestedModel ?? "inherit",
-        effectiveModel: executionMode === "swarm" ? (requestedModel ?? "inherit") : effectiveSubagentModel,
+        requestedModel: leadModel.requested,
+        effectiveModel: leadModel.effective,
         conversationId: "<record-after-launch>",
         resolvedModel: executionMode === "swarm" ? "<verify-via-swarm-status>" : "<inherited-from-parent-unverified>"
       });
@@ -322,8 +414,24 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
 
     workers.push({
       squadId: id,
-      lead: compiledLead ? { reportSlot: leadSlot, Subagent: compiledLead } : null,
-      specialists: compiledSpecialists.map(({ slot, workerName, compiled }) => ({
+      lead: compiledLead
+        ? {
+            workerName: leadWorkerName,
+            reportSlot: leadSlot,
+            ...(executionMode === "swarm"
+              ? {
+                  swarmAdd: {
+                    action: "add",
+                    name: leadWorkerName,
+                    ...(leadModel.swarmPin ? { model: leadModel.swarmPin } : {}),
+                    workspace: "inherit",
+                    brief: buildSwarmWorkerBrief(compiledLead, leadModel.swarmPin, "inherit", leadSlot)
+                  }
+                }
+              : { Subagent: compiledLead })
+          }
+        : null,
+      specialists: compiledSpecialists.map(({ slot, workerName, specModel, compiled }) => ({
         workerName,
         reportSlot: slot,
         ...(executionMode === "swarm"
@@ -331,9 +439,9 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
               swarmAdd: {
                 action: "add",
                 name: workerName,
-                ...(requestedModel ? { model: requestedModel } : {}),
+                ...(specModel.swarmPin ? { model: specModel.swarmPin } : {}),
                 workspace: workspaceIsolation,
-                brief: buildSwarmWorkerBrief(compiled, requestedModel, workspaceIsolation, slot)
+                brief: buildSwarmWorkerBrief(compiled, specModel.swarmPin, workspaceIsolation, slot)
               }
             }
           : { Subagent: compiled })
@@ -343,13 +451,72 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     bundleRecordTemplates[id] = {
       squadId: id,
       workspace: root,
-      ...(reportRoot ? { reportRoot } : {}),
+      ...(normalizedReportRoot ? { reportRoot: normalizedReportRoot } : {}),
       verdict: "PASS",
       verifiedFiles: {},
       assignments: assignmentsTemplate,
       handoffs: [],
       requireIntegrityAudit: includeIntegrityAuditor
     };
+  }
+
+  const integrityAuditPlan = includeIntegrityAuditor
+    ? targetWorkingIds.flatMap(id => {
+        const auditSpecs = resolveIntegrityAuditor(
+          loadedSquads,
+          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined
+        );
+        return auditSpecs.map(auditItem => {
+          const auditSquadId = auditItem.id;
+          const auditSlot = reportPath(auditSquadId, auditItem.number, normalizedReportRoot);
+          const rawAudit = stripPlannerFields(auditItem.spec);
+          const auditModel = resolveWorkerModels(
+            executionMode,
+            requestedModel,
+            rawAudit.model ?? rawAudit.Model,
+            overriddenSubagentModels
+          );
+          const targetScopeNote = `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and spot-check traces ONLY via read_board/swarm status or single-pass query_transcript(summaryOnly=true) on coordinator-recorded conversationIds. NEVER copy .system_generated/ transcripts into scratch/.`;
+          const compiledAudit = buildSubagentSpec(
+            {
+              ...rawAudit,
+              model: auditModel.compiledModel,
+              instructions: [rawAudit.instructions, targetScopeNote].filter(Boolean).join("\n")
+            },
+            auditSquadId,
+            manifestPathForBrief,
+            auditItem.number,
+            normalizedReportRoot
+          );
+          const rawAuditName =
+            auditSpecs.length > 1
+              ? `integrity-auditor-${id}-${rawAudit.role ?? rawAudit.Role ?? auditItem.number}`
+              : `integrity-auditor-${id}`;
+          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "integrity-auditor");
+          return {
+            targetSquad: id,
+            dispatchSquadId: allWorkingIds.length > 1 ? `integrity_auditor:${id}` : "integrity_auditor",
+            reportSlot: auditSlot,
+            workerName: auditWorkerName,
+            ...(executionMode === "swarm"
+              ? {
+                  swarmAdd: {
+                    action: "add",
+                    name: auditWorkerName,
+                    ...(auditModel.swarmPin ? { model: auditModel.swarmPin } : {}),
+                    workspace: "inherit",
+                    brief: buildSwarmWorkerBrief(compiledAudit, auditModel.swarmPin, "inherit", auditSlot)
+                  }
+                }
+              : { Subagent: compiledAudit })
+          };
+        });
+      })
+    : [];
+
+  if (executionMode === "subagent" && !modelProvenance.warning && overriddenSubagentModels.length > 0) {
+    const uniqueOverridden = [...new Set(overriddenSubagentModels)];
+    modelProvenance.warning = `Manifest model(s) (${uniqueOverridden.join(", ")}) cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`;
   }
 
   const scopeOverlaps = findScopeOverlaps(writableScopeEntries);
@@ -367,43 +534,6 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   if (modelProvenance.warning) {
     warnings.push(modelProvenance.warning);
   }
-
-  const integrityAuditPlan = includeIntegrityAuditor
-    ? targetWorkingIds.map(id => {
-        const auditSpecs = resolveIntegrityAuditor(loadedSquads, allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined);
-        const auditSquadId = auditSpecs[0].id;
-        const auditSlot = reportPath(auditSquadId, 1, reportRoot);
-        const targetScopeNote = `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and spot-check traces ONLY via read_board/swarm status or single-pass query_transcript(summaryOnly=true) on coordinator-recorded conversationIds. NEVER copy .system_generated/ transcripts into scratch/.`;
-        const compiledAudit = buildSubagentSpec(
-          {
-            ...auditSpecs[0].spec,
-            model: executionMode === "subagent" ? effectiveSubagentModel : (requestedModel ?? "inherit"),
-            instructions: [auditSpecs[0].spec.instructions, targetScopeNote].filter(Boolean).join("\n")
-          },
-          auditSquadId,
-          selectedManifest,
-          1,
-          reportRoot
-        );
-        return {
-          targetSquad: id,
-          dispatchSquadId: allWorkingIds.length > 1 ? `integrity_auditor:${id}` : "integrity_auditor",
-          reportSlot: auditSlot,
-          workerName: slugifyName(`integrity-auditor-${id}`, "integrity-auditor"),
-          ...(executionMode === "swarm"
-            ? {
-                swarmAdd: {
-                  action: "add",
-                  name: slugifyName(`integrity-auditor-${id}`, "integrity-auditor"),
-                  ...(requestedModel ? { model: requestedModel } : {}),
-                  workspace: "inherit",
-                  brief: buildSwarmWorkerBrief(compiledAudit, requestedModel, "inherit", auditSlot)
-                }
-              }
-            : { Subagent: compiledAudit })
-        };
-      })
-    : [];
 
   return {
     plannerVersion: "2.0.0",
