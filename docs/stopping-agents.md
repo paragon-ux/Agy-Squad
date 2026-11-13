@@ -1,62 +1,7 @@
-# Stopping Agents
+# Stopping agents
 
-There are three ways to stop agents, from narrowest to broadest.
+Use the Antigravity CLI's `/agents` panel to monitor and stop subagents. The native `manage_subagents` tool also supports listing and stopping subagents. Keep those controls available during a supervised trial.
 
-| What you want | How | What keeps running |
-|---|---|---|
-| Stop one agent or squad | `manage_subagents`, or Antigravity's agent controls | Everything else |
-| Stop every sandboxed subagent at once | The **panic** command *(planned, see below)* | The main agent and the language server. Subagent conversations stay open but can't act. |
-| End **every** agent conversation, including the main agent | End the language server (below) | Nothing. All conversations stop. |
+Verify that stopping an agent also stops any command it started. A disposable workspace and a bounded test command make cleanup observable. Record agent and command cleanup separately in the [verification checklist](plans/wsl-cli-verification.md).
 
-## Stop one agent: `manage_subagents`
-
-`manage_subagents` is Antigravity's own control, and it stays unblockable. No hook from Agy-Squad or Agy-Context-Saver ever matches it (ledger L3).
-
-Each agent has its own container (ledger L35), so stopping one agent removes only that agent's container. Stopping a squad removes every container labeled with that squad.
-
-A lead stops its own leaves the same way, never from inside its container: no container has Docker access or root (ledger L37).
-- **A leaf's conversation:** the lead uses `manage_subagents`.
-- **A leaf's runaway command:** the lead calls Agy-Squad's stop tool. The server checks that the target is one of that lead's own leaves before acting.
-
-## Panic: kill everything the sandbox spawned
-
-!!! warning "Planned, not built yet"
-    The panic command arrives with the sandbox runtime (plan phase P2). Until then, Agy-Squad starts no containers or processes.
-
-Panic is not a normal stop. It kills **every process the system spawned**, at once and without asking (ledger L24):
-
-- **every container**, removed by label (`docker rm -f`), which kills everything running inside it;
-- **every host-side helper** (prepare steps, `docker exec` clients, reapers). These run inside one Windows Job Object, so the whole process tree dies together.
-
-Panic never waits on a hook, the language server or an agent.
-
-Panic doesn't end subagent conversations, because they live inside the language server, not as processes Windows can kill. After a panic they are **inert**: their sandbox tools fail and their host tools are denied, so the most they can do is send a message (ledger L28). To end the conversations too, end the language server.
-
-## End the language server
-
-Ending the language server stops **every** conversation, including the main agent. Do it when you want everything gone, not just the subagents.
-
-=== "Antigravity desktop app"
-
-    The desktop app (2.11) has no menu command for this. Run this in PowerShell:
-
-    ```powershell
-    Get-Process language_server* | Where-Object { $_.Path -like '*antigravity*' } | Stop-Process -Force
-    ```
-
-    The `Path` filter matters: other editors (Windsurf, for example) ship a process with the same name. Antigravity starts a new language server the next time you open a conversation.
-
-=== "Antigravity IDE"
-
-    Open the Command Palette (++ctrl+shift+p++) and run one of:
-
-    - **Kill Language Server and Reload Window** (`antigravity.killLanguageServerAndReloadWindow`): ends it immediately.
-    - **Restart Language Server** (`antigravity.restartLanguageServer`): ends it and starts a fresh one.
-
-    Neither has a default shortcut. To bind one, open **Preferences: Open Keyboard Shortcuts (JSON)** and add:
-
-    ```json
-    { "key": "ctrl+alt+shift+k", "command": "antigravity.killLanguageServerAndReloadWindow" }
-    ```
-
-    The PowerShell command from the desktop tab works here too.
+Record an evidence checkpoint with the operator before launch. Reactive Wakeup delivers a message when a child sends one. At the checkpoint, the operator checks `/agents` for silent children, approvals, and repeated activity. An active parent may stop its own children using the IDs from the native launch receipts. Preserve partial evidence and confirm whether commands stopped.

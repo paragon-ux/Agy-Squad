@@ -1,6 +1,9 @@
 node_modules/
 site/
 scratch/
+.agents/plugins/agy-squad-*/
+.agents/agents/agy-squad-*.md
 *.log
 *.tgz
 .DS_Store
+.agents/teamwork/

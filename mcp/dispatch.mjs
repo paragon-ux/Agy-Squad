@@ -1,145 +1,186 @@
-// dispatch_squad: compiles a staged squad from a manifest into an invoke_subagent payload.
-// Stage 1 ('all_l1') returns only the L1 Squad Leads; Stage 2 (a squad ID) returns that squad's L2 leaves.
-//
-// Payload mode only. The direct mode that spawned agents through the language server's private RPC
-// caused the 2026-10-14 breach and was not carried over (see docs/plans/LEDGER.md).
 import fs from "node:fs";
 import path from "node:path";
-import { buildSubagentSpecObject } from "./briefs.mjs";
+import { buildSubagentSpec } from "./briefs.mjs";
+import { reportPath } from "./handoffs.mjs";
+import { stagePlan } from "./run-state.mjs";
 
-function manifestSearchBases() {
-  const bases = [process.cwd(), process.env.VSCODE_CWD, process.env.PWD, process.env.INIT_CWD];
-  return [...new Set(bases.filter(Boolean).map((b) => path.resolve(b)))];
+const defaultManifests = [
+  "task-01-manifest.json",
+  "swarm-manifest.json",
+  ".scratch/swarm-manifest.json",
+  "suite-manifest.json"
+];
+
+function assertWithinWorkspace(root, file) {
+  const relative = path.relative(root, file);
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    throw new Error("Manifest path must stay inside the workspace.");
+  }
 }
 
-function resolveManifestFile(customPath) {
-  const bases = manifestSearchBases();
-  if (customPath) {
-    // Absolute path: use as-is. Relative path: try every plausible workspace base.
-    const tried = path.isAbsolute(customPath)
-      ? [customPath]
-      : bases.map((b) => path.resolve(b, customPath));
-    for (const p of tried) {
-      if (fs.existsSync(p)) return p;
-    }
-    // Report what the caller asked for (not an unrelated default) so the error is accurate.
-    return tried[0];
-  }
-  const cwd = bases[0];
-  const candidates = [
-    path.join(cwd, "task-01-manifest.json"),
-    path.join(cwd, "swarm-manifest.json"),
-    path.join(cwd, ".scratch", "swarm-manifest.json"),
-    path.join(cwd, "suite-manifest.json")
-  ];
-  // First pass: prefer a candidate that actually defines squads
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(c, "utf-8"));
-        if (parsed.squads && typeof parsed.squads === "object" && Object.keys(parsed.squads).length > 0) {
-          return c;
-        }
-      } catch {}
-    }
-  }
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return candidates[0];
-}
-
-function handleDispatchSquad({ squadId, manifestPath } = {}) {
-  const startTime = Date.now();
-  const resolvedManifest = resolveManifestFile(manifestPath);
-
-  if (!fs.existsSync(resolvedManifest)) {
-    return {
-      isError: true,
-      content: [{
-        type: "text",
-        text: [
-          `dispatch_squad error: Manifest not found at ${resolvedManifest}.`,
-          `- manifestPath given: ${manifestPath || "(none; default candidates searched)"}`,
-          `- MCP server platform: ${process.platform} (cwd: ${process.cwd()})`,
-          `- Search bases: ${manifestSearchBases().join(" | ")}`,
-          `- Hint: pass an absolute manifestPath.`
-        ].join("\n")
-      }]
-    };
-  }
-
+function readManifest(root, filename) {
+  const candidate = path.resolve(root, filename);
+  assertWithinWorkspace(root, candidate);
+  const file = fs.realpathSync(candidate);
+  assertWithinWorkspace(root, file);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   let manifest;
   try {
-    manifest = JSON.parse(fs.readFileSync(resolvedManifest, "utf-8"));
-  } catch (err) {
-    return {
-      isError: true,
-      content: [{ type: "text", text: `dispatch_squad error: Failed to parse manifest JSON at ${resolvedManifest}: ${err.message}` }]
-    };
-  }
-
-  const squads = manifest.squads || {};
-  let targetSpecs = [];
-  let stageLabel = "";
-
-  // Strict 2-stage gating: never compile L1 and L2 in the same call
-  if (squadId === "all_l1") {
-    stageLabel = "Stage 1 (L0 -> L1 Squad Leads Only)";
-    targetSpecs = Object.entries(squads).map(([id, sq]) => {
-      const base = sq.lead ? { ...sq, ...sq.lead } : sq;
-      // The L1 Lead scaffolds its workspace first, then calls dispatch_squad({ squadId: id })
-      return { ...base, squadId: id, tier: "L1_lead", children: [] };
-    });
-  } else if (squads[squadId]) {
-    const sq = squads[squadId];
-    const leaves = Array.isArray(sq.children)
-      ? sq.children
-      : (Array.isArray(sq.specialists) ? sq.specialists : null);
-    if (!leaves) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `dispatch_squad error: Squad '${squadId}' has no children or specialists defined in manifest.` }]
-      };
+    if (!fs.fstatSync(fd).isFile()) {
+      throw new Error("Manifest path must name a regular file.");
     }
-    stageLabel = `Stage 2 (L1 '${squadId}' -> L2 Terminal Leaves)`;
-    targetSpecs = leaves.map((leaf) => ({ ...leaf, tier: "L2_leaf" }));
-  } else {
-    return {
-      isError: true,
-      content: [{
-        type: "text",
-        text: `dispatch_squad error: Unknown squadId '${squadId}'. Available targets: 'all_l1' or [${Object.keys(squads).join(", ")}].`
-      }]
-    };
+    // On WSL, check the opened descriptor in case a path changed after realpath.
+    if (process.platform === "linux") {
+      assertWithinWorkspace(root, fs.realpathSync(`/proc/self/fd/${fd}`));
+    }
+    manifest = JSON.parse(fs.readFileSync(fd, "utf8"));
+  } finally {
+    fs.closeSync(fd);
   }
-
-  let compiledSpecs;
-  try {
-    compiledSpecs = targetSpecs.map((s) => buildSubagentSpecObject(s));
-  } catch (err) {
-    return {
-      isError: true,
-      content: [{ type: "text", text: `dispatch_squad manifest validation error: ${err.message}` }]
-    };
-  }
-
-  return {
-    content: [{
-      type: "text",
-      text: [
-        `### 🎯 Staged Squad Payload Ready: \`${squadId}\` (${stageLabel})`,
-        `- Manifest: \`${path.basename(resolvedManifest)}\``,
-        `- Agents Compiled: ${compiledSpecs.length} (compiled in ${Date.now() - startTime} ms)`,
-        `- Lifecycle Tracking: **Native** (\`invoke_subagent\` + \`manage_subagents\` enabled)`,
-        "",
-        "Pass this exact payload to `invoke_subagent`:",
-        "```json",
-        JSON.stringify({ Subagents: compiledSpecs }, null, 2),
-        "```"
-      ].join("\n")
-    }]
-  };
+  return { squads: manifestSquads(manifest), selectedManifest: path.relative(root, file) };
 }
 
-export { handleDispatchSquad, resolveManifestFile };
+function manifestSquads(manifest) {
+  const squads = manifest?.squads;
+  if (!squads || typeof squads !== "object" || Array.isArray(squads) || Object.keys(squads).length === 0) {
+    throw new Error("Manifest must define at least one squad.");
+  }
+  if (Object.hasOwn(squads, "all_l1")) {
+    throw new Error("Squad ID 'all_l1' is reserved for lead compilation.");
+  }
+  return squads;
+}
+
+function loadSquads(root, manifestPath) {
+  if (manifestPath !== undefined) {
+    return readManifest(root, manifestPath);
+  }
+
+  let firstError;
+  for (const candidate of defaultManifests) {
+    try {
+      return readManifest(root, candidate);
+    } catch (error) {
+      if (error.code !== "ENOENT") firstError ??= error;
+    }
+  }
+  throw firstError ?? new Error("No squad manifest found. Pass a workspace-relative manifestPath.");
+}
+
+const inlineLeadKeys = [
+  "role",
+  "Role",
+  "objective",
+  "Objective",
+  "scopeFiles",
+  "ScopeFiles",
+  "instructions",
+  "Instructions",
+  "expectedDeliverable",
+  "ExpectedDeliverable",
+  "typeName",
+  "TypeName",
+  "model",
+  "Model",
+  "workspace",
+  "Workspace"
+];
+
+function resolveSquadLead(squad, squadId, requireLead) {
+  if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
+    throw new Error(`Squad '${squadId}' must be an object.`);
+  }
+  const hasInlineLead = inlineLeadKeys.some(key => squad[key] !== undefined);
+  if (squad.lead !== undefined && hasInlineLead) {
+    throw new Error(`Squad '${squadId}' cannot mix 'lead' with top-level lead fields.`);
+  }
+  if (squad.lead !== undefined) {
+    if (!squad.lead || typeof squad.lead !== "object" || Array.isArray(squad.lead)) {
+      throw new Error(`Lead for '${squadId}' must be an object.`);
+    }
+    return squad.lead;
+  }
+  return hasInlineLead || requireLead ? squad : undefined;
+}
+
+function specialistAssignments(squads, squadId) {
+  if (!Object.hasOwn(squads, squadId)) throw new Error(`Unknown squadId '${squadId}'.`);
+  const squad = squads[squadId];
+  if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
+    throw new Error(`Squad '${squadId}' must be an object.`);
+  }
+  if (squad.children !== undefined && squad.specialists !== undefined) {
+    throw new Error(`Squad '${squadId}' cannot define both 'children' and 'specialists'.`);
+  }
+  const specialists = squad.children !== undefined ? squad.children : squad.specialists;
+  if (!Array.isArray(specialists) || specialists.length === 0) {
+    throw new Error(`Squad '${squadId}' must define children or specialists.`);
+  }
+  return specialists.map((spec, index) => ({ spec, id: squadId, number: index + 1 }));
+}
+
+function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd(), run) {
+  try {
+    if (!args || typeof args !== "object" || Array.isArray(args) ||
+        Object.keys(args).some(key => key !== "squadId" && key !== "manifestPath" && !(run && key === "manifest"))) {
+      throw new Error(run ? "Only squadId, manifestPath, and manifest are supported." : "Only squadId and manifestPath are supported.");
+    }
+    const { squadId, manifestPath, manifest } = args;
+    if (typeof squadId !== "string" || !squadId.trim()) {
+      throw new Error("Provide a squadId or use all_l1 for the leads.");
+    }
+    if (manifestPath !== undefined && (typeof manifestPath !== "string" || !manifestPath.trim())) {
+      throw new Error("manifestPath must be a nonempty string.");
+    }
+    if (run && (manifestPath === undefined) === (manifest === undefined)) {
+      throw new Error("Provide exactly one of manifest or manifestPath in a managed run.");
+    }
+    const root = fs.realpathSync(workspace);
+    const { squads, selectedManifest } = manifest === undefined
+      ? loadSquads(root, manifestPath)
+      : { squads: manifestSquads(manifest) };
+    const staged = run ? stagePlan(root, run, squads) : undefined;
+    const requestedManifest = manifestPath && path.relative(root, path.resolve(root, manifestPath));
+    if (staged && requestedManifest?.startsWith(`${run}/plan-`) &&
+        (requestedManifest !== staged.manifestPath || requestedManifest !== selectedManifest)) {
+      throw new Error("The prepared manifest changed. Start a fresh assignment.");
+    }
+    const alreadyStaged = Boolean(staged && requestedManifest === staged.manifestPath);
+    const build = ({ spec, id, number }) =>
+      buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
+    let assignments;
+    if (squadId === "all_l1") {
+      assignments = Object.entries(squads).map(([id, squad]) => ({
+        spec: resolveSquadLead(squad, id, true),
+        id
+      }));
+    } else {
+      assignments = specialistAssignments(squads, squadId);
+    }
+    const Subagents = assignments.map(build);
+    const children = squadId === "all_l1" ? assignments.flatMap(({ id }) => specialistAssignments(squads, id)) : [];
+    for (const child of children) build(child);
+    if (squadId !== "all_l1" && !alreadyStaged) {
+      for (const [id, squad] of Object.entries(squads)) {
+        const leadSpec = resolveSquadLead(squad, id, false);
+        if (leadSpec) build({ spec: leadSpec, id });
+        if (id !== squadId) {
+          for (const sibling of specialistAssignments(squads, id)) build(sibling);
+        }
+      }
+    }
+    if (staged) {
+      const slots = [...assignments, ...children].map(({ id, number }) => reportPath(id, number, staged.reportRoot));
+      staged.prepare(slots, { skipManifestPublish: alreadyStaged });
+    }
+    return {
+      content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }],
+      ...(staged ? { structuredContent: { manifestPath: staged.manifestPath } } : {})
+    };
+  } catch (error) {
+    const message = error.code === "ENOENT" ? "Manifest or workspace not found." : error.message;
+    return { isError: true, content: [{ type: "text", text: `dispatch_squad: ${message}` }] };
+  }
+}
+
+export { handleDispatchSquad };

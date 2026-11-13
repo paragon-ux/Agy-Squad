@@ -1,40 +1,33 @@
 # Agy-Squad
 
-Agent teams for Google Antigravity on Windows, without trusting any agent.
+Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (macOS support is best-effort and untested)**. It compiles coding or review tasks into scoped specialist or lead cohorts (`dispatch_squad`), enforces a `500` UTF-8 byte `Pointer-Over-Wire` receipt ceiling, bundles SHA-256 input and report digests via `node mcp/handoffs.mjs`, and pairs with `Agy-Context-Saver` (`v1.8.1+`) for `RTK` command rewriting and Reactive Wakeup governance.
 
-Antigravity can delegate work to subagents. Agy-Squad organizes those subagents into staged squads (a lead plus its specialists). The goal is for every subagent to run its commands and edits inside its own Docker container, enforced by the host rather than promised by the agent.
+## Start here
 
-!!! danger "Under construction, not installable"
-    Today Agy-Squad only builds briefs and payloads. The Docker sandbox and the spawn gate that would confine subagents don't exist yet. A payload used now would start an **unsandboxed** subagent on your machine, so nothing registers Agy-Squad with Antigravity until plan phase P3 is done (ledger L23, L29).
+- **[Getting started (Desktop IDE & CLI on POSIX / WSL2)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Antigravity Desktop IDE registration, and CLI commands for offline tests (`npm test`), payload preview (without `--launch`), and live delegation (`--launch`).
+- **[Core workflows](core-workflows.md):** Task-proportional orchestration, recursive harness [`self-diagnosis`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md), the ten-category [`pr-review` Standard v1.3.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), and the 3-scope evidence-retention and teardown contract.
+- **[Concepts and terminology](concepts.md):** Plain-language definitions for stages (`all_l1` vs. `<squadId>`), report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L41`).
+- **[Manifest and tool contract](tools.md):** Schema and CLI flags for `dispatch_squad` and `node mcp/handoffs.mjs`.
+- **[Benchmarks](benchmarks.md):** Canonical comparison table, unit definitions, and reproduction guide for the November 8, 2026 audit against Antigravity `/teamwork`.
 
-## How it relates to Agy-Context-Saver
+## Core capabilities
 
-[Agy-Context-Saver](https://paragon-ux.github.io/agy-context-saver/) is complete without subagents: RTK command rewriting, lifecycle governance and transcript tools. The subagent tools moved here on 2026-10-15 so that what works stays separate from what's under construction (ledger L26). Each is its own package, and the two will install side by side.
+1. **Proportional subagent dispatch (Desktop IDE & CLI):** Compile direct specialists (`1` to `N`) or domain squad leads (`all_l1`) that write full evidence to `scratch/agy-squad/.../report.md` and return a single-line `<= 500` B `READY` receipt.
+2. **Recursive harness self-diagnosis (`/self-diagnosis`):** Run `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown` for a zero-subagent health and token-budget check, or dispatch supervised specialist cohorts to audit skills, runtime contracts, and execution efficiency.
+3. **Repository PR review standard (`/pr-review` v1.3.0):** Enforce commit and session provenance, architecture-before-runtime tracing, ten review categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` durable finding ledgers under `docs/reviews/`.
+4. **Governed evidence retention and teardown:** Clean up temporary CLI session registrations on exit, verify SHA-256 source and report digests before pruning loose specialist reports, and gate `diagnose.mjs --teardown` on a verified bundle and updated `docs/reviews/` ledger.
 
-## What's here today
+## Companion integration: Agy-Context-Saver
 
-| Tool | What it does |
-|---|---|
-| [`subagent_brief`](tools.md#subagent_brief) | Turns an objective and a file scope into a scope-isolated brief plus a ready-to-use `invoke_subagent` payload. Handles single subagents, batches, and leads with pre-compiled children. |
-| [`dispatch_squad`](tools.md#dispatch_squad) | Reads a squad manifest and returns one stage at a time: first the leads, then each lead's specialists. |
+`Agy-Squad` and `Agy-Context-Saver` remain separate packages ([`L31`](plans/LEDGER.md)) that connect across four execution stages:
 
-Neither tool starts an agent. Spawning stays with Antigravity's own `invoke_subagent`, so `manage_subagents` and Reactive Wakeup keep working.
+1. **Staged compilation (`Agy-Squad`):** `dispatch_squad` compiles workspace report slots (`scratch/agy-squad/...`) and `<= 500` UTF-8 byte `Pointer-Over-Wire` briefs (`TypeName: "self"`, `Workspace: "inherit"`).
+2. **Subagent execution governance (`Agy-Context-Saver`):** Inside Antigravity Desktop IDE sessions or when `--launch` is active in the CLI, `Agy-Context-Saver`'s PreToolUse hook rewrites child `run_command` calls via pinned `RTK` (`v0.51.0`), routes workspace file reads to `rtk read`, and enforces proportional backoff on `manage_task` and `schedule`. During CLI payload preview (`agy-squad run` without `--launch`), `bin/agy-squad.mjs` sets `inheritCustomizations: false` so read-only workspace inspection works without `run_command`, then enables `inheritCustomizations: true` (plus `schedule` and `call_mcp_tool`) on `--launch`.
+3. **Cryptographic bundling and pruning (`Agy-Squad`):** `node mcp/handoffs.mjs` (`inspect -> bundle -> verify -> prune`) records SHA-256 digests of every specialist report and cited `verifiedFiles` in `report.sources.json` and removes loose specialist reports (`L1, L2`), keeping raw child prose out of parent context.
+4. **Session and child transcript forensics (`Agy-Context-Saver`):** Lazy MCP tools (`get_installation_status`, `sync_installation`, `check_context_health`, `read_transcript`, `query_transcript`) audit parent or subagent `conversationId` telemetry without reading `.system_generated/` directly (`L6`). Run `sync_installation` once on a new host so the pinned `rtk` binary is active before live dispatch.
 
-## Where it's going
+## Recorded comparison vs. Antigravity `/teamwork`
 
-- **One workspace volume per squad, one container per agent.**
-  - Each agent works in its own folder, a clone that borrows the squad's read-only copy of the repo.
-  - The lead can read its leaves' work but not change it.
-  - Siblings can't see each other's files or processes.
-  - No container gets host folders, network or Docker access.
-- **A spawn gate** on `invoke_subagent`, so the host decides which subagents start, and how.
-- **Deny by default.** A subagent gets only what its role allows; anything more needs your approval.
-- **A panic command** that kills everything the system spawned. See [Stopping Agents](stopping-agents.md).
+In one recorded sequential audit on November 8, 2026 against the six-defect event-relay fixture ([`benchmarks.md`](benchmarks.md)), both arms caught all six planted defect categories (`6 / 6`). **Agy-Squad + Agy-Context-Saver (`v1.8.1`, `rtk 0.51.0`)** finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, used **`64` vs. `645` transcript steps** (`90.1%` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`249 B` vs. `4,940 B` into the parent context** (`95.0%` fewer wakeup bytes). The squad lead verified the cited fixture lines directly and ran a `20 ms` SHA-256 bundle digest check (`handoffs.mjs verify`) before pruning loose reports under the 3-scope teardown contract.
 
-The design, the evidence behind it, and the phases are in [Sandbox Design](plans/docker-sandbox-plan.md). Every decision and its status is in the [Decision Ledger](plans/LEDGER.md).
-
-## Requirements (planned)
-
-- Windows 11 with Antigravity, desktop app or IDE (developed on 21H2)
-- Node.js 22+
-- Docker Desktop (needed from phase P2 on)
+See [Benchmarks](benchmarks.md) for the full metric table, unit definitions, prompts, and offline vs. live verification steps.
