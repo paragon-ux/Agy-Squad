@@ -13,7 +13,7 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
     "docs": "zensical serve"
   },
   "repository": {

@@ -38,7 +38,7 @@ const write = (file, value) => {
 try {
   write(first, firstEvidence);
   write(second, secondEvidence);
-  write(lead, "PASS after independent inspection of fixture.txt.");
+  write(lead, "Verdict: PASS\nPASS after independent inspection of fixture.txt.");
   write("fixture.txt", "ALPHA-é");
   record.verifiedFiles = fingerprint(root, ["fixture.txt"]);
   const inspect = (...handoffs) => inspectHandoffs(root, { ...record, handoffs }).map(({ status }) => status);
@@ -103,7 +103,7 @@ try {
   );
 
   const initialBundle = bundleReports(root, record);
-  write(lead, "PASS after independent inspection and recheck of fixture.txt.");
+  write(lead, "Verdict: PASS\nPASS after independent inspection and recheck of fixture.txt.");
   const accepted = bundleReports(root, record);
   assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
@@ -141,7 +141,7 @@ try {
   write(lead, "FAIL: synthesis changed after bundling.");
   assert.throws(() => verifyBundle(root, bundle), /unambiguous PASS verdict/);
   assert.throws(() => pruneReports(root, bundle, accepted.sha256), /unambiguous PASS verdict/);
-  write(lead, "PASS after independent inspection and recheck of fixture.txt.");
+  write(lead, "Verdict: PASS\nPASS after independent inspection and recheck of fixture.txt.");
   assert.ok(exists(first) && exists(second));
   assert.throws(() => pruneReports(root, bundle), /accepted bundle digest/);
   assert.throws(() => pruneReports(root, bundle, "0".repeat(64)), /accepted digest/);

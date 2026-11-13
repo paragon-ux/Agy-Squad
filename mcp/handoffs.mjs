@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "./verdicts.mjs";
 
 const messageLimit = 500;
 
@@ -248,52 +249,38 @@ function readEvidence(root, report, verifiedDirs) {
   return bytes;
 }
 
-const NEGATIONS = new Set([
-  "not",
-  "no",
-  "non",
-  "never",
-  "isn't",
-  "wasn't",
-  "didn't",
-  "doesn't",
-  "cannot",
-  "can't",
-  "did not",
-  "does not"
-]);
-
 function readSynthesis(root, report, verifiedDirs) {
   const bytes = readEvidence(root, report, verifiedDirs);
   const markdown = decodeUtf8(bytes, report);
-  const clean = markdown
-    .replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "")
-    .replace(/(`+)([^\r\n]*?)\1/g, " ");
-  const verdicts = new Set();
-  for (const line of clean.split(/\r?\n/)) {
-    for (const m of line.matchAll(/\b((?:did|does)\s+not|[A-Za-z]+(?:['’]t)?)[\s*_-]+PASS\b/g)) {
-      if (NEGATIONS.has(m[1].toLowerCase().replace(/\s+/g, " ").replace("’", "'"))) {
-        verdicts.add("FAIL");
-      }
-    }
-    for (const m of line.matchAll(
-      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)[*_\s]*(?:[:—–-]|\bis\b)[*_\s]*(PASS|FAIL|BLOCKED)(?![-\w])/gi
-    )) {
-      verdicts.add(m[1].toUpperCase());
-    }
-    for (const m of line.matchAll(
-      /(?:^\s*(?:(?:#+|>|[*+-]|\d+[.)])\s*)*|[:|—–][*_\s]*)[*_]*(PASS|FAIL|BLOCKED)[*_]*(?![-\w])/g
-    )) {
-      verdicts.add(m[1]);
-    }
-    for (const m of line.matchAll(/\b[*_]*(PASS|FAIL|BLOCKED)[*_]*\s*[:—–-](?=\s|$)/g)) {
-      verdicts.add(m[1]);
-    }
+  let verdict;
+  try {
+    verdict = parseContentVerdict(markdown);
+  } catch (error) {
+    throw new Error(`Synthesis report must record an unambiguous PASS verdict. (${error.message})`);
   }
-  if (verdicts.size !== 1 || !verdicts.has("PASS")) {
+  if (verdict !== "PASS") {
     throw new Error("Synthesis report must record an unambiguous PASS verdict.");
   }
   return { bytes, verdict: "PASS" };
+}
+
+function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs) {
+  const bytes = readEvidence(root, report, verifiedDirs);
+  const markdown = decodeUtf8(bytes, report);
+  let verdict;
+  try {
+    verdict = parseIntegrityVerdict(markdown);
+  } catch (error) {
+    throw new Error(`Acceptance blocked: Integrity audit verdict is not CLEAN. (${error.message})`);
+  }
+  if (verdict !== "CLEAN") {
+    throw new Error(`Acceptance blocked: Integrity audit verdict is ${verdict}.`);
+  }
+  const targetSquad = parseTargetSquad(markdown);
+  if (targetSquad && expectedSquadId && targetSquad !== expectedSquadId) {
+    throw new Error(`Acceptance blocked: Integrity audit Target Squad '${targetSquad}' does not match '${expectedSquadId}'.`);
+  }
+  return { bytes, verdict: "CLEAN", targetSquad };
 }
 
 function inspectReports(root, record, verifiedDirs = new Set()) {
@@ -322,7 +309,16 @@ function bundleReports(root, record) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle record.");
   }
-  const { squadId, verdict, verifiedFiles, requireAdversarialReview, adversarialReport } = record;
+  const {
+    squadId,
+    verdict,
+    verifiedFiles,
+    requireAdversarialReview,
+    adversarialReport,
+    requireIntegrityAudit,
+    integrityReport,
+    retainReports
+  } = record;
   if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
@@ -350,31 +346,66 @@ function bundleReports(root, record) {
   }
   const synthesis = sha256(synthesisCheck.bytes);
 
+  let integrityAudit;
   let adversarialReview;
-  if (squadId !== "adversarial_review") {
-    const leadAdvSlot = reportPath("adversarial_review", undefined, rootPrefix);
-    const flatAdvSlot = reportPath("adversarial_review", 1, rootPrefix);
-    const candidate = adversarialReport ?? (
-      fs.existsSync(path.join(root, leadAdvSlot))
-        ? leadAdvSlot
-        : fs.existsSync(path.join(root, flatAdvSlot))
-          ? flatAdvSlot
+  if (squadId !== "adversarial_review" && squadId !== "integrity_auditor") {
+    const intSlot1 = reportPath("integrity_auditor", 1, rootPrefix);
+    const intLeadSlot = reportPath("integrity_auditor", undefined, rootPrefix);
+    const integrityCandidate = integrityReport ?? (
+      fs.existsSync(path.join(root, intSlot1))
+        ? intSlot1
+        : fs.existsSync(path.join(root, intLeadSlot))
+          ? intLeadSlot
           : undefined
     );
-    if (requireAdversarialReview && !candidate) {
-      throw new Error("Acceptance blocked: Mandatory adversarial review report missing. Run adversarial review before bundling.");
+    if (requireIntegrityAudit && !integrityCandidate) {
+      throw new Error("Acceptance blocked: Mandatory integrity audit report missing. Run integrity_auditor before bundling.");
     }
-    if (candidate) {
-      let advSynthesis;
-      try {
-        advSynthesis = readSynthesis(root, candidate, verifiedDirs);
-      } catch {
-        throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+    if (integrityCandidate) {
+      const audit = readIntegrityAudit(root, integrityCandidate, squadId, verifiedDirs);
+      integrityAudit = {
+        path: integrityCandidate,
+        sha256: sha256(audit.bytes),
+        verdict: audit.verdict,
+        ...(audit.targetSquad ? { targetSquad: audit.targetSquad } : {})
+      };
+    } else {
+      const leadAdvSlot = reportPath("adversarial_review", undefined, rootPrefix);
+      const flatAdvSlot = reportPath("adversarial_review", 1, rootPrefix);
+      const advCandidate = adversarialReport ?? (
+        fs.existsSync(path.join(root, leadAdvSlot))
+          ? leadAdvSlot
+          : fs.existsSync(path.join(root, flatAdvSlot))
+            ? flatAdvSlot
+            : undefined
+      );
+      if (requireAdversarialReview && !advCandidate) {
+        throw new Error("Acceptance blocked: Mandatory adversarial review report missing. Run adversarial review before bundling.");
       }
-      if (advSynthesis.verdict !== "PASS") {
-        throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+      if (advCandidate) {
+        const advBytes = readEvidence(root, advCandidate, verifiedDirs);
+        const advMarkdown = decodeUtf8(advBytes, advCandidate);
+        if (/^\s*(?:[-*+]\s+)?(?:[*_]{1,3})?\s*Integrity Verdict\s*(?:[*_]{1,3})?\s*:/im.test(advMarkdown)) {
+          const audit = readIntegrityAudit(root, advCandidate, squadId, verifiedDirs);
+          integrityAudit = {
+            path: advCandidate,
+            sha256: sha256(audit.bytes),
+            verdict: audit.verdict,
+            ...(audit.targetSquad ? { targetSquad: audit.targetSquad } : {})
+          };
+        } else {
+          let advSynthesis;
+          try {
+            advSynthesis = readSynthesis(root, advCandidate, verifiedDirs);
+          } catch {
+            throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+          }
+          if (advSynthesis.verdict !== "PASS") {
+            throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+          }
+          adversarialReview = { path: advCandidate, sha256: sha256(advSynthesis.bytes) };
+        }
       }
-      adversarialReview = { path: candidate, sha256: sha256(advSynthesis.bytes) };
     }
   }
 
@@ -389,6 +420,8 @@ function bundleReports(root, record) {
         verdict: synthesisCheck.verdict,
         synthesis,
         verifiedFiles,
+        ...(retainReports ? { retainReports: true } : {}),
+        ...(integrityAudit ? { integrityAudit } : {}),
         ...(adversarialReview ? { adversarialReview } : {}),
         reports
       },
@@ -437,13 +470,23 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     throw new Error("Synthesis changed after bundling.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
+  if (parsed.integrityAudit) {
+    const audit = parsed.integrityAudit;
+    if (!audit || typeof audit !== "object" || typeof audit.path !== "string" || typeof audit.sha256 !== "string") {
+      throw new Error("Invalid integrityAudit entry in bundle.");
+    }
+    const auditCheck = readIntegrityAudit(root, audit.path, audit.targetSquad ?? squadId, verifiedDirs);
+    if (sha256(auditCheck.bytes) !== audit.sha256) {
+      throw new Error(`Integrity audit report changed: ${audit.path}`);
+    }
+  }
   if (parsed.adversarialReview) {
     const adv = parsed.adversarialReview;
     if (!adv || typeof adv !== "object" || typeof adv.path !== "string" || typeof adv.sha256 !== "string") {
       throw new Error("Invalid adversarialReview entry in bundle.");
     }
-    const bytes = readIfPresent(root, adv.path, verifiedDirs);
-    if (bytes && sha256(bytes) !== adv.sha256) {
+    const bytes = readEvidence(root, adv.path, verifiedDirs);
+    if (sha256(bytes) !== adv.sha256) {
       throw new Error(`Adversarial review report changed: ${adv.path}`);
     }
   }
@@ -463,7 +506,8 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     path: relative,
     sha256: digest,
     reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })),
-    loosePresent
+    loosePresent,
+    retainReports: Boolean(parsed.retainReports)
   };
 }
 
@@ -472,9 +516,12 @@ function verifyBundle(root, relative, acceptedHash) {
   return { path: p, sha256: s, reports };
 }
 
-function pruneReports(root, relative, acceptedHash) {
+function pruneReports(root, relative, acceptedHash, options = {}) {
   if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { loosePresent } = verifyBundleInternal(root, relative, acceptedHash);
+  const { loosePresent, retainReports } = verifyBundleInternal(root, relative, acceptedHash);
+  if (options.keepReports || retainReports) {
+    return { removed: [], retained: loosePresent };
+  }
   const removed = [];
   for (const report of loosePresent) {
     try {
@@ -504,8 +551,11 @@ if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(
     else if (action === "inspect" && args.length === 1) result = inspectHandoffs(root, JSON.parse(readFile(root, args[0])));
     else if (action === "bundle" && args.length === 1) result = bundleReports(root, JSON.parse(readFile(root, args[0])));
     else if (action === "verify" && args.length === 1) result = verifyBundle(root, args[0]);
-    else if (action === "prune" && args.length === 2) result = pruneReports(root, ...args);
-    else throw new Error("Usage: fingerprint <file...> | inspect <record.json> | bundle <record.json> | verify <bundle.json> | prune <bundle.json> <accepted-sha256>");
+    else if (action === "prune" && (args.length === 2 || (args.length === 3 && args[2] === "--keep-reports"))) {
+      result = pruneReports(root, args[0], args[1], { keepReports: args[2] === "--keep-reports" });
+    } else {
+      throw new Error("Usage: fingerprint <file...> | inspect <record.json> | bundle <record.json> | verify <bundle.json> | prune <bundle.json> <accepted-sha256> [--keep-reports]");
+    }
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     console.error(error.message);
