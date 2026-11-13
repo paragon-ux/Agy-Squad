@@ -13,7 +13,7 @@ Native `/swarm` handles worker spawning, worktree/branch isolation (`workspace: 
 
 ## 1. Planning & Explicit Model Pinning (`squad_planner` / `agy-squad plan`)
 
-- Run `squad_planner` (or `node bin/agy-squad.mjs plan --manifest <path> --model gemini-3.8-flash-high`) before spawning workers:
+- Run `squad_planner` (or `node bin/agy-squad.mjs plan --manifest <path> --model gemini-4-hydrogen-high`) before spawning workers:
   - Under `executionMode: "swarm"` (default), `squad_planner` emits `swarmAdd` with explicit `model` pinning and instructs verification via `swarm{action: "status"}`.
   - Under `executionMode: "subagent"`, `invoke_subagent` accepts only `inherit|flash_lite|flash|pro`; `modelProvenance` explicitly flags when an exact model ID cannot be pinned or verified per-child.
   - Record parent-known worker names and `conversationId`s in `provenanceScaffold` and pass them to `integrity-auditor`—never copy raw `.system_generated/` transcripts into `scratch/` (`L6`).

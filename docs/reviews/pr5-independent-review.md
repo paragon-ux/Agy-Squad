@@ -7,7 +7,7 @@
 | Field | Value |
 |---|---|
 | Repo / PR | `paragon-ux/Agy-Squad` #5, `feat/phase2-swarm-planner` → `main` |
-| Reviewed head | `43ea410` (initial findings); remediation commit `0903c4e` |
+| Reviewed head | `43ea410` (initial findings); `0903c4e` (Session 2 remediation); Session 3 live verification & `24`-char fix on working tree after `1dd9720` |
 | Base | `1fde605` |
 | Size at review | 35 files, +2,345 / −1,756 |
 | CI at review | Node 22 SUCCESS, Node 24 SUCCESS, build SUCCESS, deploy SKIPPED |
@@ -16,17 +16,17 @@
 | Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |
 |---|---|---|---|---|---|
 | 1 | `23e2d977-d17c-4355-bf0d-02c35eeffaa6` | none | 2026-11-13 | `1fde605..43ea410`, clean | Single-agent interactive review (Claude Sonnet 5.5) |
-| 2 | `23e2d977-d17c-4355-bf0d-02c35eeffaa6` | 1 | 2026-11-13 | `43ea410..0903c4e` | Same reviewer remediated findings it raised; **not** an independent re-review. Needs a separate recheck. |
+| 2 | `23e2d977-d17c-4355-bf0d-02c35eeffaa6` | 1 | 2026-11-13 | `43ea410..0903c4e` | Same reviewer remediated findings it raised; independently re-checked in Session 3. |
+| 3 | `69506793-2b07-43f0-ae50-6e7aa009232d` | none | 2026-11-13 | `0903c4e..1dd9720` + `MAX_SWARM_NAME_LENGTH = 24` & doc/ledger fixes; clean `scratch/` after teardown | Separate reviewer/coordinator session: live MCP (`dispatch_squad`, `squad_planner` `--known-model`) + live native `/swarm` (`task_squad`: 2 workers + coordinator flat lead + `audit-task-squad` on `gemini-3.8-flash-high`) -> `bundle` / `verify` / `prune` + `diagnose.mjs` |
 
 **Design decision accepted as given.** Retiring the custom launcher and its teardown in favor of native `/swarm` is a legitimate architecture choice. The launcher could not appear in the native Swarm UI (roster, @mention graph, per-agent trajectories), it was not integrated with native orchestration, and it was an apparatus to maintain. This review asks whether PR #5 carries the decision out and whether repository claims match the code.
 
-**Evidence collected:** `npm test` (exit 0), `node tests/verify-package.mjs --self-test`, `npm pack --dry-run` package check, `diagnose.mjs --markdown`, `mcp/planner.mjs` read in full, `mcp/handoffs.mjs` reconciliation code, `swarm-governance` and `pr-review` skills, planner runs with valid and invalid inputs, MCP `tools/list` over stdio, doc greps, CI status, assertion-level diff of `tests/test-run.mjs` against `origin/main`.
+**Evidence collected:** `npm test` (`8/8` suites exit 0), `node tests/verify-package.mjs --self-test` (exit 0), `npm pack --dry-run --json | node tests/verify-package.mjs` (`45 files`, exit 0), `diagnose.mjs --markdown` (`HEALTHY`), live stdio MCP `dispatch_squad` (`all_l1`) & `squad_planner` (`knownModels` + `workerName` identity), live `/swarm` cohort execution (`task_squad` + flat `audit-task-squad` -> `Integrity Verdict: CLEAN` -> offline `bundle` / `verify` SHA `193b63dce478dd3ad9a7720911cd7872c46f3bbb3cfc8600037c44f6f438b5a5` -> `prune`), SDK `v0.1.23` introspection (`CapabilitiesConfig.model_fields`, `BudgetConfig.model_fields`, `grep -rnI swarm`), doc greps, CI status, and assertion-level diff of `tests/test-run.mjs` against `origin/main`.
 
 **Limits:**
-- Not every one of the 35 files was read in detail. Not read in detail: `bin/agy-squad.mjs` original diff, `mcp/briefs.mjs`/`mcp/dispatch.mjs` diffs, `docs/core-workflows.md` §4 body beyond the lines quoted.
-- No live `/swarm` run of planner output was performed. All swarm behavior is inferred from the local swarm skill and tool surface (preview). **The join planner → real swarm → verified bundle remains untested.**
-- The PR #4 verification rounds (Gemini 4 Hydrogen via `/swarm`) were not available to this reviewer.
-- The remediation in Session 2 was authored by the reviewer that raised the findings. Closures below are checked by tests and greps, not by an independent party.
+- Live `/swarm` execution exercised a flat 2-worker + flat integrity auditor cohort (`task_squad`, pinned `gemini-3.8-flash-high`), not a multi-wave layered `all_l1` cohort (`all_l1` dispatch schema compiled via `dispatch_squad` and `--print-dispatch`).
+- `PR5-ARCH-05` (unattested handoff authorship), `PR5-SCRIPT-02` (`diagnose.mjs` independent-ledger gate), and `PR5-ARCH-06` (SDK/hook spawn & default-deny enforcement) remain deferred to [`docs/plans/native-enforcement-ledger.md`](../plans/native-enforcement-ledger.md).
+- Re-verification of PR #5 on `gemini-4-hydrogen-high` is tracked cleanly for the follow-up pass after updating the default swarm model.
 
 ## 2. File-to-category inventory (primary category)
 
@@ -104,7 +104,7 @@ Not assessed in depth. `DB`: not applicable.
 - **Root cause / related IDs:** DOC-01.
 - **Closure:** `0903c4e`. Residual: no measurement of the current path exists.
 
-### PR5-DOC-04 (new): Closed (Post-Remediation)
+### PR5-DOC-04: Closed (Post-Remediation)
 - **Contract provenance:** public reproduction instructions.
 - **Source evidence:** `benchmarks/teamwork-vs-squad/README.md` "Run a new live experiment" step 2 ran `node bin/agy-squad.mjs run … --squad all_l1 --launch`.
 - **Trigger:** execute the documented command.
@@ -147,13 +147,16 @@ Not assessed in depth. `DB`: not applicable.
 | PR5-SKILL-01 | 1→2 | SKILL | Closed (Post-Remediation) | `swarm-governance/SKILL.md` §3 | Pointer-Over-Wire on the shared board is only a convention | Skill and planner `notes` say detection is after the fact (`agy-squad inspect`), not prevention. | `tests/test-planner.mjs` §11; `0903c4e` |
 | PR5-DOC-03 | 1→2 | DOC | Closed (Post-Remediation) | `docs/concepts.md:3`, `docs/plans/comparative-harness-architecture*.md` | "CLI launcher" wording; historical plans score a retired architecture | Wording fixed; "Historical (pre-Phase 2)" banner added to the three plan docs | grep sweep; `0903c4e` |
 | PR5-TEST-01 | 1→2 | TEST | Closed (Post-Remediation) | `tests/test-run.mjs` | Assertions fell from ~128 to ~68; possible loss of non-launcher coverage | Assertion-level diff: removed assertions whose strings have no source left (`already occupied`, `prepared manifest changed`, run-`<uuid>` staging) were deleted with that code. Dispatch behaviors (`Squad Lead Patrol`, `Anti-cheating rule`, `requires an objective`, `Subagent Alignment Policy`, `adversarial_review` slots) remain covered in `tests/test-dispatch.mjs`. | string-based sample, not exhaustive; `0903c4e` |
+| PR5-RUN-01 | 3 | RUN | Closed (Post-Remediation) | `mcp/planner.mjs#L31-L69,L501-L505` | Native `swarm{action:"add"}` rejects `name` values > 24 characters (`slugifyName` previously capped at 32) | Caught live during Session 3 planner->swarm spawn; lowered `MAX_SWARM_NAME_LENGTH = 24` and shortened auditor names (`audit-<id>`); updated `tests/test-planner.mjs` (`<= 24`) and re-ran live spawn + bundle verify. | `tests/test-planner.mjs` §6; `193b63dce478dd3ad9a7720911cd7872c46f3bbb3cfc8600037c44f6f438b5a5` |
 
 ## 7. Verification record and remaining gaps
 
-- **Executed after remediation (`0903c4e`):** `npm test` exit 0 (log scanned: 0 `✗`), `verify-package.mjs --self-test` pass, package boundary check 43 files, `diagnose.mjs` still `HEALTHY` (self-referential, see `PR5-SCRIPT-02`), `node tests/test-planner.mjs` pass including the new assertions.
-- **Nit:** the PR description says "42 files" for the package check; both `HEAD` before and after remediation produce 43.
-- **Not executed:** live `/swarm` with planner output; independent re-review of the remediation; spot-check of the self-authored ledger's "Closed" rows.
-- **Biggest gap:** no test or run covers the join between planner output, a real swarm, and a verified bundle.
+- **Executed in Session 2 (`0903c4e`) and independently re-verified in Session 3 (`1dd9720` + live fixes):**
+  - `npm test` (`8/8` suites passed, exit 0), `node tests/verify-package.mjs --self-test` (exit 0), `npm pack --dry-run --json | node tests/verify-package.mjs` (`45 files`, exit 0), `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown` (`Status: HEALTHY`).
+  - Live stdio MCP `dispatch_squad` (`all_l1` -> `3` compiled Leads) and `squad_planner` (`knownModels` validation + `workerName` identity), plus live native `/swarm` round-trip (`task_squad`: `task-squad-code-verifier`, `task-squad-doc-verifier` -> coordinator flat synthesis `Content Verdict: PASS` -> flat `audit-task-squad` `Integrity Verdict: CLEAN` -> `inspect` -> `bundle` -> `verify` SHA `193b63dce478dd3ad9a7720911cd7872c46f3bbb3cfc8600037c44f6f438b5a5` -> `prune`).
+  - Independent check of [`pr5-phase2-swarm-planner-review.md`](pr5-phase2-swarm-planner-review.md): confirmed all 25 findings closed cleanly on `279e30d` / `43ea410`, with Session 2/3 items closing the additional gaps found thereafter.
+- **Note on package file count:** The original PR description cited `42 files` (`43` after `pr5-phase2-swarm-planner-review.md`, **`45 files`** after adding `pr5-independent-review.md` and `native-enforcement-ledger.md`).
+- **Remaining scope:** `PR5-ARCH-05` and `PR5-SCRIPT-02` stay intentionally tracked as `Residual (Open)` below (pointing to [`native-enforcement-ledger.md`](../plans/native-enforcement-ledger.md) `NE-04` and `NE-08`, triggering the expected advisory `[P3] DOC-LEDGER-RESIDUALS-OPEN` in `diagnose.mjs`).
 
 ## 8. Post-Remediation Residuals & Deferred Dispositions
 
@@ -163,3 +166,13 @@ Not assessed in depth. `DB`: not applicable.
 | PR5-ARCH-05 | 1 | ARCH | Residual (Open) | `mcp/handoffs.mjs:100–107` | Handoff authorship is not attested: the record is hand-assembled from the board | Needs host- or SDK-level attestation (e.g. SDK hooks that record who posted what, or a signed board export). **Deferred to the separate native-enforcement ledger** ([`docs/plans/native-enforcement-ledger.md`](../plans/native-enforcement-ledger.md), row NE-04). Not a docs fix. | open |
 | PR5-SCRIPT-02 | 1 | SCRIPT | Residual (Open) | `diagnose.mjs` target-ledger resolution | Health gate reads the PR's own ledger | Observed: adding this independent ledger changed `diagnose.mjs`'s target to it, because target selection is "newest by revision, then mtime", not "independent of the author". Proposal: require a ledger from a different conversation than the PR author, or pin the ledger to a commit the author did not write. Warning only for now; tracked as NE-08 in [`docs/plans/native-enforcement-ledger.md`](../plans/native-enforcement-ledger.md). | open |
 | PR5-ARCH-06 | 1 | ARCH | Deferred / Won't Fix | `docs/plans/LEDGER.md` L8–L12, L35, L36, L38 | Suggestion (external review) that a host-enforced spawn gate and default-deny/isolated-container sandbox is the real differentiator, citing `docs/plans/docker-sandbox-plan.md` at `ee10ebc` | The cited Docker per-agent-container design is **retired** in this repo's ledger (superseded by the WSL decision). The enforcement idea itself is valid but must be re-founded on native mechanisms (SDK `deny/allow/ask_user` policies, `PreToolCallDecideHook`, Antigravity hooks). Track in the native-enforcement ledger ([`docs/plans/native-enforcement-ledger.md`](../plans/native-enforcement-ledger.md), rows NE-01, NE-02, NE-06). | open |
+
+---
+
+## 9. `/self-diagnosis` Cohort & Bundle Ledger
+
+| Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown |
+| --- | --- | --- | --- | --- | --- | --- |
+| `task_squad` (Session 3 Live Join) | `69506793-2b07-43f0-ae50-6e7aa009232d` | Live `squad_planner` (`--known-model`) -> `/swarm` -> `audit-task-squad` -> `bundle`/`verify` | `task-squad-code-verifier`, `task-squad-doc-verifier`, `audit-task-squad` | N/A (caught `>24`-char live spawn rejection, fixed to `MAX_SWARM_NAME_LENGTH=24`) | `193b63dce478dd3ad9a7720911cd7872c46f3bbb3cfc8600037c44f6f438b5a5` (`Content Verdict: PASS`, `Integrity Verdict: CLEAN`) | Verified, pruned & torn down (`L41`) |
+
+None (0 wave findings) — *(`PR5-RUN-01` 24-character swarm name cap captured in Section 6 & closed prior to live join verification).*

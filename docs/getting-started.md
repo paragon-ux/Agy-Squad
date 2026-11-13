@@ -60,7 +60,7 @@ For native `/swarm` workflows and CI verification, `bin/agy-squad.mjs` exposes o
 ```bash
 node bin/agy-squad.mjs plan \
   --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
-  --model gemini-3.8-flash-high
+  --model gemini-4-hydrogen-high
 ```
 
 Or plan directly from a freeform task description:
@@ -68,7 +68,7 @@ Or plan directly from a freeform task description:
 ```bash
 node bin/agy-squad.mjs plan \
   --mode swarm \
-  --model gemini-3.8-flash-high \
+  --model gemini-4-hydrogen-high \
   --scope src/app.js --scope docs/tools.md \
   --role "Implementer" --role "Reviewer" \
   "Verify Phase 2 runtime fixes and update documentation."

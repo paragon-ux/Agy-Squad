@@ -92,7 +92,7 @@ try {
   assert.equal(parsed.workers[0].specialists[0].swarmAdd.workspace, "share");
   assert.ok(parsed.warnings.some(w => /merge or collect report slots/.test(w)));
 
-  // 6. SVC-PR5-01: Cohort-wide unique workerNames on self-diagnosis-manifest.json, duplicate roles, and >32-char prefix roles
+  // 6. SVC-PR5-01 / PR5-RUN-SWARM-01: Cohort-wide unique workerNames (<=24 chars for native /swarm) on self-diagnosis-manifest.json, duplicate roles, and >24-char prefix roles
   const selfDiagPlan = planSquadCohort({
     manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
     model: "gemini-3.8-flash-high"
@@ -105,7 +105,7 @@ try {
     ...selfDiagPlan.integrityAuditPlan.map(a => a.workerName)
   ];
   assert.equal(new Set(allSelfDiagNames).size, allSelfDiagNames.length, "self-diagnosis-manifest workerNames must be globally unique");
-  assert.ok(allSelfDiagNames.every(n => typeof n === "string" && n.length > 0 && n.length <= 32));
+  assert.ok(allSelfDiagNames.every(n => typeof n === "string" && n.length > 0 && n.length <= 24));
   for (const w of selfDiagPlan.workers) {
     if (w.lead) assert.equal(w.lead.swarmAdd.name, w.lead.workerName);
     for (const s of w.specialists) assert.equal(s.swarmAdd.name, s.workerName);
@@ -122,7 +122,7 @@ try {
   }, root);
   const dupNames = dupRolesPlan.workers[0].specialists.map(s => s.workerName);
   assert.equal(new Set(dupNames).size, 3);
-  assert.ok(dupNames.every(n => n.length <= 32));
+  assert.ok(dupNames.every(n => n.length <= 24));
 
   const longPrefixPlan = planSquadCohort({
     task: "Long prefix role test",
@@ -133,7 +133,7 @@ try {
   }, root);
   const longNames = longPrefixPlan.workers[0].specialists.map(s => s.workerName);
   assert.equal(new Set(longNames).size, 2);
-  assert.ok(longNames.every(n => n.length <= 32));
+  assert.ok(longNames.every(n => n.length <= 24));
 
   // 7. RUN-PR5-01: reportRoot validation and trailing-slash normalization
   for (const badRoot of ["../../etc", "/tmp/evil", "", "   ", "foo\\bar", "a/../b", "/", null]) {

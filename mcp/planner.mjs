@@ -28,20 +28,21 @@ const ALLOWED_PLANNER_KEYS = new Set([
 
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
+const MAX_SWARM_NAME_LENGTH = 24;
 
 function slugifyName(value, fallback) {
   const slug = String(value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 32)
+    .slice(0, MAX_SWARM_NAME_LENGTH)
     .replace(/-+$/, "");
   if (slug) return slug;
   const fallbackSlug = String(fallback ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 32)
+    .slice(0, MAX_SWARM_NAME_LENGTH)
     .replace(/-+$/, "");
   return fallbackSlug || "worker";
 }
@@ -55,7 +56,7 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
   const safeFallback = slugifyName(fallback, "worker");
   for (let counter = 2; ; counter++) {
     const suffix = `-${counter}`;
-    const maxPrefixLen = Math.max(1, 32 - suffix.length);
+    const maxPrefixLen = Math.max(1, MAX_SWARM_NAME_LENGTH - suffix.length);
     const prefix =
       base.slice(0, maxPrefixLen).replace(/-+$/, "") ||
       safeFallback.slice(0, maxPrefixLen).replace(/-+$/, "") ||
@@ -499,9 +500,9 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
           );
           const rawAuditName =
             auditSpecs.length > 1
-              ? `integrity-auditor-${id}-${rawAudit.role ?? rawAudit.Role ?? auditItem.number}`
-              : `integrity-auditor-${id}`;
-          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "integrity-auditor");
+              ? `audit-${id}-${rawAudit.role ?? rawAudit.Role ?? auditItem.number}`
+              : `audit-${id}`;
+          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "audit");
           return {
             targetSquad: id,
             dispatchSquadId: allWorkingIds.length > 1 ? `integrity_auditor:${id}` : "integrity_auditor",

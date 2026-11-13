@@ -924,7 +924,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const canaryPlan = planSquadCohort({
       manifest,
       executionMode: "swarm",
-      model: "gemini-3.8-flash-high",
+      model: "gemini-4-hydrogen-high",
       includeIntegrityAuditor: true
     }, canaryDir);
     if (!canaryPlan.modelProvenance?.pinningSupported || !canaryPlan.integrityAuditPlan?.length) {

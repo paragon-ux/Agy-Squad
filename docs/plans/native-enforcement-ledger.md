@@ -38,8 +38,8 @@ Agy-Squad delegates orchestration to Antigravity (native `/swarm`, `invoke_subag
 | V-04 | `LocalAgentConfig` accepts `policies`, `hooks`, `triggers`, `mcp_servers`, `subagents`, `workspaces`, `env`, `budget_config`, `retry_config`, `model`/`models`, `api_key`, `vertex`, `conversation_id` | Introspected signature | `API-verified` |
 | V-05 | `CapabilitiesConfig` includes `enable_subagents`, `allowed_subagents`, `max_subagent_depth`, `enabled_tools`, `disabled_tools`, `run_command_config`, MCP options | Introspected fields | `API-verified` |
 | V-06 | `BudgetConfig` has `max_model_calls`, `max_tool_calls`, `max_input_tokens`, `max_output_tokens`, `max_total_tokens`, `scope` | Introspected fields | `API-verified` |
-| V-07 | Hook types: `PreToolCallDecideHook`, `PostToolCallHook`, `PostTurnHook`, `StopHook`, `OnToolErrorHook`, `OnSessionStartHook`/`OnSessionEndHook`, `OnInteractionHook`, `OnCompactionHook`. Policy helpers: `allow`, `deny`, `ask_user`, `allow_all`, `deny_all`, `workspace_only`, `safe_defaults`, `confirm_run_command`. `Decision` = `APPROVE`/`ASK_USER`/`DENY`. `HookContext` carries a `parent` | Introspected exports | `API-verified` |
-| V-08 | `BuiltinTools` includes `INVOKE_SUBAGENT`; **no reference to "swarm" exists anywhere in the SDK source** | `grep -ri swarm` over the installed package returned nothing | Verified for v0.1.23 |
+| V-07 | Hook types: `PreToolCallDecideHook`, `PostToolCallHook`, `PreTurnHook`, `PostTurnHook`, `StopHook`, `OnToolErrorHook`, `OnSessionStartHook`/`OnSessionEndHook`, `OnInteractionHook`, `OnCompactionHook`. Policy helpers: `allow`, `deny`, `ask_user`, `allow_all`, `deny_all`, `workspace_only`, `safe_defaults`, `confirm_run_command`. `Decision` = `APPROVE`/`ASK_USER`/`DENY`. `HookContext` carries a `parent` | Introspected exports | `API-verified` |
+| V-08 | `BuiltinTools` includes `INVOKE_SUBAGENT`; **no reference to "swarm" exists anywhere in the SDK Python sources** (`grep -rnI swarm` returns empty; raw binary `bin/localharness` matches the byte string `"swarm"`) | `grep -rnI swarm` over installed package | Verified for v0.1.23 |
 | V-09 | `Agent` exposes `chat`, `conversation`, `conversation_id`, `sandbox_status`, `is_started`, `beta` | Introspected | `API-verified` |
 | V-10 | Native swarm: `swarm{action:"status"}` lists each worker's state and model; `add` refuses a model whose quota is exhausted; `kill` deletes a worker's workspace | Local swarm skill and `swarm` tool description | Documented, not tested |
 | W-01 | (Web, secondary sources) tool calls inside spawned subagents may bypass workspace-level hooks unless registered globally or via plugin; blocking a spawn tool with `PreToolUse` may not stop the spawn under some runtime flags (e.g. `--dangerously-skip-permissions`); `PostToolUse` cannot block | One search summary; redirect-only citations | **Unverified. Treat as a risk to test, not a fact.** |
@@ -87,11 +87,11 @@ Threat sources: PR #3 evidence (model deleted `FAIL` to evade the verdict parser
 | S2 | `SubagentConfig` child with a restricted profile; parent hook; assert child tool calls reach the parent's hook | NE-01, NE-10 | S1 |
 | S3 | `BudgetConfig` with tiny limits; record behavior at the limit | NE-06 | S1 |
 | S4 | `PostToolCallHook` writing to a path outside the agent's `workspaces`; forge a handoff and run `verify` | NE-04, NE-09 | S1 |
-| S5 | Plane B on a **disposable** `<repo>/.agents/hooks.json` with a marker `PreToolUse` on `invoke_subagent`, then on `post_message`; observe whether a native subagent or swarm worker triggers it | NE-01b, NE-04 (B), NE-07 (B), NE-10 (B) | App session; no live-config edits |
+| S5 | First verify hook discovery (`<repo>/.agents/hooks.json` vs plugin/global hooks) using a benign marker on `run_command`; then test marker `PreToolUse` on `invoke_subagent` and `post_message` across native subagents and swarm workers | NE-01b, NE-04 (B), NE-07 (B), NE-10 (B) | App session; no live-config edits |
 | S6 | Pinned-model readback via SDK response metadata and `swarm status` | NE-05 | S0 (A), swarm run (B) |
 | S7 | `diagnose.mjs` independent-ledger rule | NE-08 | In-repo change |
 
-S5 must not edit or probe the live `~/.gemini/config/hooks.json`. Use a repo-scoped, disposable hook file.
+S5 must not edit or probe the live `~/.gemini/config/hooks.json`. First establish whether Antigravity loads repo-scoped `.agents/hooks.json` at all so a silently ignored file is not mistaken for hook bypass.
 
 ## 6. Closure criteria
 
@@ -110,13 +110,15 @@ S5 must not edit or probe the live `~/.gemini/config/hooks.json`. Use a repo-sco
 ```bash
 ~/.local/share/patchdiff-runtime/venv/bin/pip install --target scratch/sdk_pkgs google-antigravity
 PYTHONPATH=scratch/sdk_pkgs ~/.local/share/patchdiff-runtime/venv/bin/python - <<'EOF'
-import inspect, dataclasses, google.antigravity as ag
-print(inspect.signature(ag.LocalAgentConfig))
+import inspect, google.antigravity as ag
 import google.antigravity.types as t
-print([f.name for f in dataclasses.fields(t.CapabilitiesConfig)])
-print([f.name for f in dataclasses.fields(t.BudgetConfig)])
+import google.antigravity.hooks as h
+print(inspect.signature(ag.LocalAgentConfig))
+print(list(t.CapabilitiesConfig.model_fields.keys()))
+print(list(t.BudgetConfig.model_fields.keys()))
+print([x for x in dir(h) if x.endswith("Hook")])
 EOF
-grep -ri swarm scratch/sdk_pkgs/google/antigravity   # expect: no output (V-08)
+grep -rnI swarm scratch/sdk_pkgs/google/antigravity   # expect: no output (V-08)
 ```
 
 The system Python on the review host (3.14, Debian) has no `ensurepip`, so `python3 -m venv` fails. `--target` into the gitignored `scratch/` avoids touching system packages.

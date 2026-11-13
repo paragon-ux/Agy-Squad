@@ -72,7 +72,7 @@ Use `node bin/agy-squad.mjs` directly from the workspace root (legacy `agy-squad
 ```bash
 # Plan a swarm cohort with explicit model pinning and L6 provenance scaffold:
 node bin/agy-squad.mjs plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
-  --model gemini-3.8-flash-high
+  --model gemini-4-hydrogen-high
 
 # Verify strict verdicts, fingerprint verified files, and bundle/verify/prune SHA-256 evidence:
 node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
