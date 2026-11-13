@@ -295,6 +295,24 @@ try {
   assert.equal(isoDiagRun.status, 0, isoDiagRun.stderr);
   assert.equal(JSON.parse(isoDiagRun.stdout).targetReviewLedger, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
 
+  // Fresh clone / equal-mtime checkout: prN-* ledgers must beat legacy cross-family -r2 ledgers
+  const freshRepo = path.join(temporary, "fresh-repo");
+  fs.mkdirSync(freshRepo, { recursive: true });
+  const freshDiag = copyIsolatedRepo(freshRepo);
+  try {
+    const sameSec = Math.floor(Date.now() / 1000) + 10;
+    for (const name of fs.readdirSync(path.join(freshRepo, "docs/reviews"))) {
+      if (name.endsWith(".md")) {
+        fs.utimesSync(path.join(freshRepo, "docs/reviews", name), sameSec, sameSec);
+      }
+    }
+    const freshRun = spawnSync(process.execPath, [freshDiag], { cwd: freshRepo, encoding: "utf8" });
+    assert.equal(freshRun.status, 0, freshRun.stderr);
+    assert.match(JSON.parse(freshRun.stdout).targetReviewLedger, /^docs\/reviews\/pr5-/);
+  } finally {
+    fs.rmSync(freshRepo, { recursive: true, force: true });
+  }
+
   console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });

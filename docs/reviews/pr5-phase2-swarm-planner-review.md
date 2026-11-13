@@ -415,7 +415,6 @@ All four root-cause clusters from Session 1 (`657b037`) were resolved cleanly in
 ### Remaining Verification Gaps
 
 - Remote GitHub Actions CI run logs for PR #5 and live `agy` PTY sessions (`L7`) were not executed in this review.
-- Flat `integrity_auditor` verification of cohort `pr5_review` is the remaining gate before final acceptance bundling.
 
 ---
 

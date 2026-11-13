@@ -338,6 +338,31 @@ try {
   const cliBadModel = spawnSync(process.execPath, [cli, "plan", "Audit", "--model", "typo-model", "--known-model", "gemini-3.8-flash-high"], { cwd: root, encoding: "utf8" });
   assert.notEqual(cliBadModel.status, 0);
 
+  // Per-spec model pinning without top-level args.model updates caveat and is checked against knownModels
+  const perSpecPinned = planSquadCohort({
+    manifest: {
+      squads: {
+        s1: {
+          specialists: [{ role: "Auditor", objective: "Audit mcp", scopeFiles: ["mcp"], model: "gemini-4-hydrogen-high" }]
+        }
+      }
+    },
+    knownModels: ["gemini-4-hydrogen-high"]
+  }, root);
+  assert.equal(perSpecPinned.modelValidation.status, "checked-against-supplied-list");
+  assert.match(perSpecPinned.modelProvenance.requestedModel, /per-worker \(gemini-4-hydrogen-high\)/);
+  assert.doesNotMatch(perSpecPinned.modelProvenance.caveat, /No explicit model passed/);
+  assert.throws(() => planSquadCohort({
+    manifest: {
+      squads: {
+        s1: {
+          specialists: [{ role: "Auditor", objective: "Audit mcp", scopeFiles: ["mcp"], model: "typo-spec-model" }]
+        }
+      }
+    },
+    knownModels: ["gemini-4-hydrogen-high"]
+  }, root), /not in knownModels: typo-spec-model/);
+
   // 10. PR5-ARCH-02: swarm bundle templates use the board (member) name as identity
   const swarmIdentity = planSquadCohort({ task: "audit", roles: ["A", "B"], scopeFiles: ["src"] }, root);
   for (const w of swarmIdentity.workers) {

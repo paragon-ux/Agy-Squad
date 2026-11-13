@@ -80,13 +80,26 @@ console.log("Agy-Squad MCP server tests\n");
       task: "Audit server boundaries",
       scopeFiles: ["mcp/index.js"],
       roles: ["Inspector"],
-      model: "gemini-3.8-flash-high"
+      model: "gemini-4-hydrogen-high",
+      knownModels: ["gemini-4-hydrogen-high"]
     }
   });
   assert.equal(Boolean(planRes.result.isError), false, planRes.result.content[0].text);
   const planPayload = JSON.parse(planRes.result.content[0].text);
   assert.equal(planPayload.executionMode, "swarm");
   assert.equal(planPayload.modelProvenance.pinningSupported, true);
+  assert.equal(planPayload.modelValidation.status, "checked-against-supplied-list");
+  const badKnownModel = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      task: "Audit server boundaries",
+      scopeFiles: ["mcp/index.js"],
+      model: "typo-model",
+      knownModels: ["gemini-4-hydrogen-high"]
+    }
+  });
+  assert.equal(badKnownModel.result.isError, true);
+  assert.match(badKnownModel.result.content[0].text, /not in knownModels: typo-model/);
   const badPlan = await send("tools/call", {
     name: "squad_planner",
     arguments: { task: "conflict", manifestPath: "x.json" }

@@ -556,6 +556,11 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   let modelValidation;
   if (executionMode === "swarm" && pinnedModels.size > 0) {
     const pinned = [...pinnedModels];
+    if (!requestedModel) {
+      modelProvenance.requestedModel = `per-worker (${pinned.join(", ")})`;
+      modelProvenance.caveat =
+        "Top-level model omitted, but worker/lead specs pin explicit models; verify actual running IDs via swarm{action:\"status\"}.";
+    }
     if (knownModels !== undefined) {
       const known = new Set(knownModels.map(m => m.trim()));
       const unknown = pinned.filter(m => !known.has(m));

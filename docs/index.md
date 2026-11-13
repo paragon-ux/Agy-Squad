@@ -4,7 +4,7 @@ Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness
 
 ## Start here
 
-- **[Getting started (Desktop IDE & CLI on POSIX / WSL2)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Antigravity Desktop IDE registration, and CLI commands for offline tests (`npm test`), payload preview (without `--launch`), and live delegation (`--launch`).
+- **[Getting started (Desktop IDE & CLI on POSIX / WSL2)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Antigravity Desktop IDE registration, and CLI commands for offline tests (`npm test`), `/swarm` cohort planning (`plan`), and governance/verification subcommands (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`).
 - **[Core workflows](core-workflows.md):** Task-proportional orchestration, recursive harness [`self-diagnosis`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md), the ten-category [`pr-review` Standard v1.3.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), and the 3-scope evidence-retention and teardown contract.
 - **[Concepts and terminology](concepts.md):** Plain-language definitions for stages (`all_l1` vs. `<squadId>` vs. `integrity_auditor`), `squad_planner`, report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L43`).
 - **[Manifest and tool contract](tools.md):** Schema and CLI flags for `dispatch_squad`, `squad_planner`, `node bin/agy-squad.mjs`, and `node mcp/handoffs.mjs`.

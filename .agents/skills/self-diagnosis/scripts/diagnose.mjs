@@ -107,8 +107,10 @@ function resolveTargetReviewLedger(ledgerArg) {
     if (stat.isFile()) {
       const revMatch = /-r(\d+)\.md$/i.exec(entry.name);
       const revision = revMatch ? Number.parseInt(revMatch[1], 10) : 1;
+      const prMatch = /^pr(\d+)-/i.exec(entry.name);
+      const prNumber = prMatch ? Number.parseInt(prMatch[1], 10) : 0;
       const family = entry.name.replace(/-r\d+(?=\.md$)/i, "").toLowerCase();
-      candidates.push({ relative: `docs/reviews/${entry.name}`, absolute: real, stat, family, revision });
+      candidates.push({ relative: `docs/reviews/${entry.name}`, absolute: real, stat, family, revision, prNumber });
     }
   }
   const latestByFamily = new Map();
@@ -122,6 +124,9 @@ function resolveTargetReviewLedger(ledgerArg) {
   activeCandidates.sort((a, b) => {
     if (Math.abs(b.stat.mtimeMs - a.stat.mtimeMs) > 2000) {
       return b.stat.mtimeMs - a.stat.mtimeMs;
+    }
+    if (b.prNumber !== a.prNumber) {
+      return b.prNumber - a.prNumber;
     }
     if (b.revision !== a.revision) {
       return b.revision - a.revision;
@@ -326,6 +331,16 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
       }
     }
   };
+
+  for (const secNum of [5, 6, 7]) {
+    const sec = extractTopLevelSection(markdown, secNum);
+    if (!sec) continue;
+    for (const table of parseMarkdownTables(sec.body)) {
+      if ((table.headers[0] === "ID" || table.headers[0] === "Finding ID") && table.headers.includes("Status")) {
+        validateFindingTable(table, `Section ${secNum}`, { section8Only: false });
+      }
+    }
+  }
 
   const sec8 = extractTopLevelSection(markdown, 8);
   const expectedSec8Headers = [
