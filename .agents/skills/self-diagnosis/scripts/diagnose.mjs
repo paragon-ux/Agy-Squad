@@ -9,6 +9,7 @@ import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../../../../mcp/dispatch.mjs";
 import {
   bundleReports,
+  ensureDirectory,
   fingerprint,
   inspectHandoffs,
   messageLimit,
@@ -16,7 +17,7 @@ import {
   reportPath,
   verifyBundle
 } from "../../../../mcp/handoffs.mjs";
-import { createRun, ensureDirectory } from "../../../../mcp/run-state.mjs";
+import { planSquadCohort } from "../../../../mcp/planner.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = fs.realpathSync(path.resolve(scriptDir, "../../../.."));
@@ -753,7 +754,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     }
   }
 
-  // 1. Measure unmanaged stage compilation latency & validate payloads
+  // 1. Measure dispatch_squad & squad_planner latency + validate payloads
   const t0 = performance.now();
   const leadRes = handleDispatchSquad({ squadId: "all_l1", manifestPath: manifestRelative }, repoRoot);
   if (leadRes.isError) {
@@ -768,13 +769,24 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     }
     stagePayloads[id] = JSON.parse(res.content[0].text).Subagents;
   }
-  timings.unmanagedCompileMs = Number((performance.now() - t0).toFixed(2));
-  if (timings.unmanagedCompileMs > 25) {
+  timings.dispatchCompileMs = Number((performance.now() - t0).toFixed(2));
+  if (timings.dispatchCompileMs > 25) {
     findings.push({
       id: "RUN-LATENCY-COMPILE",
       category: "RUN",
       priority: "P3",
-      summary: `Unmanaged stage compilation took ${timings.unmanagedCompileMs} ms (target < 10 ms, flag > 25 ms).`
+      summary: `Stage compilation took ${timings.dispatchCompileMs} ms (target < 10 ms, flag > 25 ms).`
+    });
+  }
+  const tPlan = performance.now();
+  const planned = planSquadCohort({ manifestPath: manifestRelative, executionMode: "swarm" }, repoRoot);
+  timings.squadPlannerMs = Number((performance.now() - tPlan).toFixed(2));
+  if (!planned?.provenanceScaffold?.entries?.length) {
+    findings.push({
+      id: "RUN-PLANNER-SCAFFOLD",
+      category: "RUN",
+      priority: "P2",
+      summary: "squad_planner returned an empty provenanceScaffold."
     });
   }
 
@@ -831,28 +843,18 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
 
   // 3. Measure prompt overhead budgets (mcp/briefs.mjs)
   const minimalAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
-  const unmanagedSpecPromptBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", 1, undefined).Prompt,
+  const specialistTemplateBytes = Buffer.byteLength(
+    buildSubagentSpec(minimalAgent, "s", "m.json", 1).Prompt,
     "utf8"
   );
-  const managedSpecPromptBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", 1, "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000").Prompt,
-    "utf8"
-  );
-  const unmanagedLeadPromptBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", undefined, undefined).Prompt,
-    "utf8"
-  );
-  const managedLeadPromptBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", undefined, "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000").Prompt,
+  const leadTemplateBytes = Buffer.byteLength(
+    buildSubagentSpec(minimalAgent, "s", "m.json", undefined).Prompt,
     "utf8"
   );
 
   for (const [budgetId, actual, limit, label] of [
-    ["RUN-BUDGET-UNMANAGED-SPEC", unmanagedSpecPromptBytes, 1800, "Unmanaged specialist template"],
-    ["RUN-BUDGET-MANAGED-SPEC", managedSpecPromptBytes, 1000, "Managed specialist template"],
-    ["RUN-BUDGET-UNMANAGED-LEAD", unmanagedLeadPromptBytes, 3300, "Unmanaged lead template"],
-    ["RUN-BUDGET-MANAGED-LEAD", managedLeadPromptBytes, 1800, "Managed lead template"]
+    ["RUN-BUDGET-SPEC", specialistTemplateBytes, 1800, "Specialist brief template"],
+    ["RUN-BUDGET-LEAD", leadTemplateBytes, 3300, "Lead brief template"]
   ]) {
     if (actual > limit) {
       findings.push({
@@ -864,7 +866,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     }
   }
 
-  // 4. Execute isolated workspace-local managed + Pointer-Over-Wire canary with deterministic teardown (L4, L41)
+  // 4. Execute isolated workspace-local Pointer-Over-Wire & squad_planner canary with deterministic teardown (L4, L41)
   const created = [];
   const canaryRel = `${scratchSquadRel}/self-diag-canary-${randomUUID()}`;
   const canaryDir = ensureDirectory(repoRoot, canaryRel, created);
@@ -877,37 +879,24 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
   process.once("exit", cleanupCanary);
   try {
     fs.writeFileSync(path.join(canaryDir, "target.txt"), "self-diagnosis-canary\n");
-    const run = createRun(canaryDir);
-    const managedLeads = handleDispatchSquad({ squadId: "all_l1", manifest }, canaryDir, run.relative);
-    if (managedLeads.isError) {
-      throw new Error(`Managed self-diagnosis stage failed: ${managedLeads.content[0].text}`);
-    }
-    for (const id of squadIds) {
-      const managedSpec = handleDispatchSquad(
-        { squadId: id, manifestPath: managedLeads.structuredContent.manifestPath },
-        canaryDir,
-        run.relative
-      );
-      if (managedSpec.isError) {
-        throw new Error(`Managed specialist stage failed for '${id}': ${managedSpec.content[0].text}`);
-      }
+    const canaryPlan = planSquadCohort({
+      manifest,
+      executionMode: "swarm",
+      model: "gemini-3.8-flash-high",
+      includeIntegrityAuditor: true
+    }, canaryDir);
+    if (!canaryPlan.modelProvenance?.pinningSupported || !canaryPlan.integrityAuditPlan?.length) {
+      throw new Error("Self-diagnosis squad_planner swarm canary validation failed.");
     }
 
-    const managedReportRoot = path.posix.dirname(managedLeads.structuredContent.manifestPath);
     for (const id of squadIds) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
       const leadSlot = reportPath(id);
-      const ms1 = reportPath(id, 1, managedReportRoot);
-      const ms2 = reportPath(id, 2, managedReportRoot);
-      const mleadSlot = reportPath(id, undefined, managedReportRoot);
       for (const [slot, text] of [
         [s1, `# ${id} Specialist 1\nVerified target.txt.\n`],
         [s2, `# ${id} Specialist 2\nVerified target.txt.\n`],
-        [leadSlot, `# ${id} Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`],
-        [ms1, `# ${id} Managed Specialist 1\nVerified target.txt.\n`],
-        [ms2, `# ${id} Managed Specialist 2\nVerified target.txt.\n`],
-        [mleadSlot, `# ${id} Managed Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`]
+        [leadSlot, `# ${id} Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`]
       ]) {
         const full = path.join(canaryDir, slot);
         fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -920,8 +909,6 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const leadAssignments = [];
     const leadHandoffs = [];
 
-    // Smoke-test Single-Squad (2 specialists), Flat Full-Squad (6 specialists across all 3 squads),
-    // Layered Full-Squad (3 leads -> 6 specialists), and Managed Plan-Root handoff/bundle/verify/prune pipelines
     for (const id of squadIds) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
@@ -954,30 +941,42 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       });
     }
 
-    const managedId = squadIds[0];
-    const ms1 = reportPath(managedId, 1, managedReportRoot);
-    const ms2 = reportPath(managedId, 2, managedReportRoot);
-    const managedRecord = {
+    // Verify custom reportRoot handoff/bundle/verify/prune pipeline
+    const customId = squadIds[0];
+    const customRoot = "scratch/agy-squad/custom-cohort";
+    const cs1 = reportPath(customId, 1, customRoot);
+    const cs2 = reportPath(customId, 2, customRoot);
+    const cLead = reportPath(customId, undefined, customRoot);
+    for (const [slot, text] of [
+      [cs1, `# ${customId} Custom 1\nVerified target.txt.\n`],
+      [cs2, `# ${customId} Custom 2\nVerified target.txt.\n`],
+      [cLead, `# ${customId} Custom Lead\nVerdict: PASS\nVerified custom reportRoot.\n`]
+    ]) {
+      const full = path.join(canaryDir, slot);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, text);
+    }
+    const customRecord = {
       workspace: canaryDir,
-      squadId: managedId,
-      reportRoot: managedReportRoot,
+      squadId: customId,
+      reportRoot: customRoot,
       verdict: "PASS",
       verifiedFiles,
       assignments: [
-        { conversationId: `${managedId}-mchild-1`, report: ms1 },
-        { conversationId: `${managedId}-mchild-2`, report: ms2 }
+        { conversationId: `${customId}-c1`, report: cs1 },
+        { conversationId: `${customId}-c2`, report: cs2 }
       ],
       handoffs: [
-        { sender: `${managedId}-mchild-1`, message: `READY ${ms1} — Managed Specialist 1 verified ${managedId}.` },
-        { sender: `${managedId}-mchild-2`, message: `READY ${ms2} — Managed Specialist 2 verified ${managedId}.` }
+        { sender: `${customId}-c1`, message: `READY ${cs1} — Custom 1 verified.` },
+        { sender: `${customId}-c2`, message: `READY ${cs2} — Custom 2 verified.` }
       ]
     };
-    inspectHandoffs(canaryDir, managedRecord);
-    const managedBundled = bundleReports(canaryDir, managedRecord);
-    const managedVerified = verifyBundle(canaryDir, managedBundled.path, managedBundled.sha256);
-    const managedPruned = pruneReports(canaryDir, managedBundled.path, managedVerified.sha256);
-    if (managedPruned.removed.length !== 2) {
-      throw new Error(`Expected 2 pruned managed reports in self-diagnosis canary for '${managedId}', got ${managedPruned.removed.length}`);
+    inspectHandoffs(canaryDir, customRecord);
+    const customBundled = bundleReports(canaryDir, customRecord);
+    const customVerified = verifyBundle(canaryDir, customBundled.path, customBundled.sha256);
+    const customPruned = pruneReports(canaryDir, customBundled.path, customVerified.sha256);
+    if (customPruned.removed.length !== 2) {
+      throw new Error(`Expected 2 pruned custom-root reports for '${customId}', got ${customPruned.removed.length}`);
     }
 
     // Verify Layered Full-Squad (all_l1) 3-lead receipt reconciliation
@@ -1059,14 +1058,10 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       squads: compiledSquads
     },
     promptBudgets: {
-      unmanagedSpecialistTemplateBytes: unmanagedSpecPromptBytes,
-      unmanagedSpecialistEstimatedTokens: estimateTokens(unmanagedSpecPromptBytes),
-      managedSpecialistTemplateBytes: managedSpecPromptBytes,
-      managedSpecialistEstimatedTokens: estimateTokens(managedSpecPromptBytes),
-      unmanagedLeadTemplateBytes: unmanagedLeadPromptBytes,
-      unmanagedLeadEstimatedTokens: estimateTokens(unmanagedLeadPromptBytes),
-      managedLeadTemplateBytes: managedLeadPromptBytes,
-      managedLeadEstimatedTokens: estimateTokens(managedLeadPromptBytes),
+      specialistTemplateBytes,
+      specialistEstimatedTokens: estimateTokens(specialistTemplateBytes),
+      leadTemplateBytes,
+      leadEstimatedTokens: estimateTokens(leadTemplateBytes),
       mcpToolsListResponseBytes: schemaBytes,
       mcpToolsListEstimatedTokens: estimateTokens(schemaBytes)
     },
@@ -1109,10 +1104,13 @@ function parseCliArgs(argv) {
   let ledgerPath;
   let force = false;
   let allowActiveCohort = false;
+  let help = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--markdown") {
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--markdown") {
       markdown = true;
     } else if (arg === "--allow-active-cohort") {
       allowActiveCohort = true;
@@ -1187,9 +1185,13 @@ function parseCliArgs(argv) {
     acceptedHash,
     ledgerPath,
     force,
-    allowActiveCohort
+    allowActiveCohort,
+    help
   };
 }
+
+const USAGE =
+  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
 
 let cli;
 try {
@@ -1197,6 +1199,11 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exit(1);
+}
+
+if (cli.help) {
+  console.log(USAGE);
+  process.exit(0);
 }
 
 if (cli.teardown) {
@@ -1277,7 +1284,7 @@ if (cli.markdown) {
     `- **Status:** \`${report.status}\` (PR Review Standard \`v${report.standardVersion}\`)`,
     `- **Self-Diagnosis Manifest:** \`${report.manifestPath}\``,
     `- **Target PR Review Ledger:** \`${report.targetReviewLedger ?? "MISSING"}\``,
-    `- **Timings:** compile \`${report.timings.unmanagedCompileMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
+    `- **Timings:** dispatch \`${report.timings.dispatchCompileMs} ms\`, squad_planner \`${report.timings.squadPlannerMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
     "",
     "## 1. Workspace Skills Progressive Disclosure & Token Audit",
     "",
@@ -1292,10 +1299,8 @@ if (cli.markdown) {
     "",
     "## 2. Compiled Brief & MCP Schema Budgets",
     "",
-    `- **Unmanaged Specialist Template:** \`${report.promptBudgets.unmanagedSpecialistTemplateBytes} B\` (~${report.promptBudgets.unmanagedSpecialistEstimatedTokens} tokens)`,
-    `- **Managed Specialist Template:** \`${report.promptBudgets.managedSpecialistTemplateBytes} B\` (~${report.promptBudgets.managedSpecialistEstimatedTokens} tokens)`,
-    `- **Unmanaged Lead Template:** \`${report.promptBudgets.unmanagedLeadTemplateBytes} B\` (~${report.promptBudgets.unmanagedLeadEstimatedTokens} tokens)`,
-    `- **Managed Lead Template:** \`${report.promptBudgets.managedLeadTemplateBytes} B\` (~${report.promptBudgets.managedLeadEstimatedTokens} tokens)`,
+    `- **Specialist Template:** \`${report.promptBudgets.specialistTemplateBytes} B\` (~${report.promptBudgets.specialistEstimatedTokens} tokens)`,
+    `- **Lead Template:** \`${report.promptBudgets.leadTemplateBytes} B\` (~${report.promptBudgets.leadEstimatedTokens} tokens)`,
     `- **MCP \`tools/list\` Response:** \`${report.promptBudgets.mcpToolsListResponseBytes} B\` (~${report.promptBudgets.mcpToolsListEstimatedTokens} tokens)`,
     "",
     "## 3. PR-Review Standard v1.3.0 Category Matrix",

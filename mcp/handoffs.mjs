@@ -41,16 +41,21 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
   return `${reportRoot}/${directory}/${slot}/report.md`;
 }
 
-function resolveReportRoot(recordOrPath) {
+function resolveReportRoot(recordOrPath, allowCustomPrefix = false) {
   if (typeof recordOrPath === "string") {
-    const match = /^(.+\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?)\/squad-[^/\s]+\//.exec(recordOrPath);
+    const pattern = allowCustomPrefix
+      ? /^(.+)\/squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/
+      : /^(.+\/agy-squad(?:\/[^/\s]+)*)\/squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/;
+    const match = pattern.exec(recordOrPath);
     if (match && isValidRelativePrefix(match[1])) {
       return match[1];
     }
     return defaultReportRoot();
   }
-  if (typeof recordOrPath?.reportRoot === "string" && recordOrPath.reportRoot.trim()) {
-    const trimmed = recordOrPath.reportRoot.trim().replace(/\/+$/, "");
+  if (recordOrPath?.reportRoot !== undefined) {
+    const trimmed = typeof recordOrPath.reportRoot === "string"
+      ? recordOrPath.reportRoot.trim().replace(/\/+$/, "")
+      : "";
     if (!isValidRelativePrefix(trimmed)) {
       throw new Error(`Expected a workspace-relative reportRoot: ${recordOrPath.reportRoot}`);
     }
@@ -64,13 +69,13 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
   if (!Array.isArray(assignments) || !assignments.length || !Array.isArray(handoffs)) {
     throw new Error("Provide the ordered launch assignments and their handoffs.");
   }
-  const allowedBases = new Set(["scratch", defaultScratchBase()]);
+  const allowedRoots = new Set(["scratch/agy-squad", defaultReportRoot()]);
   if (typeof customReportRoot === "string" && customReportRoot.trim()) {
     const trimmed = customReportRoot.trim().replace(/\/+$/, "");
-    const baseMatch = /^(.+)\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?$/.exec(trimmed);
-    if (baseMatch && isValidRelativePrefix(baseMatch[1])) {
-      allowedBases.add(baseMatch[1]);
+    if (!isValidRelativePrefix(trimmed)) {
+      throw new Error(`Expected a workspace-relative reportRoot: ${customReportRoot}`);
     }
+    allowedRoots.add(trimmed);
   }
   const expected = new Map();
   const slots = new Set();
@@ -78,16 +83,14 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     const { conversationId, report } = item ?? {};
     const slotMatch =
       typeof report === "string"
-        ? /^(.+)\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.exec(
-            report
-          )
+        ? /^(.+)\/squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.exec(report)
         : null;
     if (
       typeof conversationId !== "string" ||
       !conversationId.trim() ||
       expected.has(conversationId) ||
       !slotMatch ||
-      !allowedBases.has(slotMatch[1]) ||
+      !allowedRoots.has(slotMatch[1]) ||
       slots.has(report)
     ) {
       throw new Error("Launch assignments must have distinct native IDs and their exact compiled report slots.");
@@ -287,13 +290,37 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs) {
   return { bytes, verdict: "CLEAN", targetSquad };
 }
 
+function ensureDirectory(root, relative, created = [], verifiedDirs) {
+  if (typeof relative !== "string" || relative.includes("\\")) {
+    throw new Error(`Invalid workspace directory: ${relative}`);
+  }
+  let directory = root;
+  for (const part of relative.split("/")) {
+    if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
+    directory = path.join(directory, part);
+    if (verifiedDirs?.has(directory)) continue;
+    try {
+      fs.mkdirSync(directory, { mode: 0o700 });
+      created.push(directory);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (!fs.lstatSync(directory).isDirectory()) {
+        throw new Error(`Expected a real workspace directory: ${directory}`);
+      }
+    }
+    verifiedDirs?.add(directory);
+  }
+  return directory;
+}
+
 function inspectReports(root, record, verifiedDirs = new Set()) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
-  const { workspace, assignments, handoffs, reportRoot } = record;
+  const { workspace, assignments, handoffs } = record;
   if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
-  const received = reconcileHandoffs(assignments, handoffs, reportRoot);
+  const resolvedRoot = resolveReportRoot(record);
+  const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;
@@ -393,7 +420,8 @@ function bundleReports(root, record) {
     if (advCandidate) {
       const advBytes = readEvidence(root, advCandidate, verifiedDirs);
       const advMarkdown = stripCode(decodeUtf8(advBytes, advCandidate));
-      if (/^\s*(?:[-*+]\s+|#+\s+)?(?:[*_]{1,3})?\s*Integrity Verdict\s*(?:[*_]{1,3})?\s*:/im.test(advMarkdown)) {
+      const hasIntegrityHeader = /^\s*(?:[-*+]\s+|#+\s+)?(?:[*_]{1,3})?\s*Integrity Verdict\s*(?:[*_]{1,3})?\s*:/im.test(advMarkdown);
+      if (!integrityCandidate && !adversarialReport && !requireAdversarialReview && hasIntegrityHeader) {
         const audit = readIntegrityAudit(root, advCandidate, squadId, verifiedDirs);
         integrityAudit = {
           path: advCandidate,
@@ -406,9 +434,6 @@ function bundleReports(root, record) {
         try {
           advSynthesis = readSynthesis(root, advCandidate, verifiedDirs);
         } catch {
-          throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
-        }
-        if (advSynthesis.verdict !== "PASS") {
           throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
         }
         adversarialReview = { path: advCandidate, sha256: sha256(advSynthesis.bytes) };
@@ -460,7 +485,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (verdict !== "PASS") {
     throw new Error("Bundle must record an independently verified PASS verdict.");
   }
-  const rootPrefix = resolveReportRoot(relative);
+  const rootPrefix = resolveReportRoot(relative, true);
   if (
     relative !== bundlePath(squadId, rootPrefix) ||
     !Array.isArray(reports) ||
@@ -576,4 +601,4 @@ if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(
   }
 }
 
-export { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, publish, readFile, reportPath, verifyBundle };
+export { bundleReports, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, pruneReports, publish, readFile, reportPath, verifyBundle };

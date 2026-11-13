@@ -6,19 +6,16 @@
 | --- | --- |
 | `squadId` | Required. Use `all_l1` for working leads, `integrity_auditor` (or `integrity_auditor:<targetSquad>`) for a flat independent integrity auditor, `adversarial_l1` / `adversarial_flat` / `adversarial_review` for legacy adversarial cohorts, or a squad ID for that squad's specialists. |
 | `manifestPath` | Optional. A relative or absolute path inside the configured workspace. Symlinks must also resolve inside the workspace. |
-| `manifest` | Managed runs only. An inline object with a `squads` map; mutually exclusive with `manifestPath`. |
 
-The server uses `AGY_SQUAD_WORKSPACE` from its launch environment or its working directory. For CLI registration, set the environment variable to the absolute path of the intended workspace. With no explicit `manifestPath`, the server looks for `task-01-manifest.json`, `swarm-manifest.json`, `.scratch/swarm-manifest.json`, and `suite-manifest.json`, in that order, and uses the first valid squad manifest.
+The server uses `AGY_SQUAD_WORKSPACE` from its launch environment or its working directory. With no explicit `manifestPath`, the server looks for `task-01-manifest.json`, `swarm-manifest.json`, `.scratch/swarm-manifest.json`, and `suite-manifest.json`, in that order, and uses the first valid squad manifest.
 
-## Managed runs (legacy `agy-squad run` — deprecated in favor of `/swarm`)
+## `squad_planner` (MCP tool & `agy-squad plan` CLI)
 
-For native Antigravity `/swarm` execution, pair the `swarm-governance` skill with `node bin/agy-squad.mjs` (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`, `verdict`) instead of launching a local session wrapper (`L42`).
+`squad_planner` pairs Agy-Squad governance with Antigravity native `/swarm` (`executionMode: "swarm"`, default) or `invoke_subagent` (`executionMode: "subagent"`), replacing the retired `agy-squad run` PTY launcher (`L17`, `L42`, `L43`). Provide **exactly one** of `manifestPath`, `manifest` (inline `{ squads }`), or `task` (plus optional `scopeFiles`, `roles`), alongside optional `squadId`, `executionMode`, `model`, `workspaceIsolation` (`inherit` | `share` | `branch`), `includeIntegrityAuditor`, and `reportRoot`.
 
-The legacy `agy-squad run` launcher gives its dispatcher a fresh run directory (`AGY_SQUAD_RUN_DIR`) in the selected workspace and gates tool visibility to the matching `AGY_SQUAD_SESSION` so neighboring CLI processes see an empty tool list. In that session, pass exactly one of `manifestPath` or `manifest`, an inline object with the shape below. The dispatcher saves the plan by content hash under the run directory and prepares unused report slots. Compiled leads reuse that snapshot to compile their own specialists (`all_l1` also validates every squad's specialists upfront). Use a fresh squad ID when retrying an assignment.
-
-The returned native payload still contains only the five native brief fields on each member of `Subagents`, and the MCP response adds `structuredContent: { manifestPath }` pointing to the staged snapshot (`scratch/agy-squad/run-…/plan-…/manifest.json`). Managed slots use `scratch/agy-squad/run-…/plan-…/squad-…/<assignment>/report.md`. Compiled agents default to `self` so they can write evidence. A custom agent type needs access to its report slot and native messaging. A custom lead also needs access to the dispatcher and native launch. Agents share the selected workspace through `Workspace: "inherit"`. File ownership for concurrent work belongs in the assignments.
-
-The managed dispatcher performs staging and compilation. The Antigravity session controls agent execution and approvals. The launcher removes its registration at session exit and keeps the staged evidence.
+- **Explicit Model Pinning & Provenance:** Under `executionMode: "swarm"`, `squad_planner` compiles `swarmAdds` entries with explicit `model` pinning and instructs live verification via `swarm{action: "status"}`. Under `executionMode: "subagent"`, `invoke_subagent` accepts only `inherit`, `flash`, `flash_lite`, or `pro`; `modelProvenance` explicitly discloses when a requested model ID cannot be pinned or inspected per child (`read_transcript` and `manage_subagents` do not expose child model IDs).
+- **Writable `scopeFiles` Overlap Diagnostics:** Detects overlapping `scopeFiles` across concurrent working specialists while exempting read-only audit squads (`integrity_auditor*`, `adversarial_review`) and explicit `readOnly: true` specs.
+- **`L6`-Safe `provenanceScaffold` & `bundleRecordTemplates`:** Generates a parent-authored provenance scaffold recording worker names, report slots, and model expectations without copying raw `.system_generated/` transcripts into `scratch/`, plus pre-populated `bundleRecordTemplates` for `agy-squad bundle`.
 
 ## Manifest
 
@@ -43,7 +40,7 @@ The managed dispatcher performs staging and compilation. The Antigravity session
 }
 ```
 
-`children` is an alias for `specialists` (a squad cannot define both). A lead can also be specified directly on the squad object rather than under `lead` (a squad cannot mix `lead` with top-level lead fields, and `all_l1` is reserved for lead compilation and cannot be used as a squad ID in `squads`). Upfront compilation validates all squads and lead specs in the manifest (skipping redundant sibling recompilation when dispatching from an already-staged `plan-<hash>/manifest.json`). Each agent needs an objective and at least one workspace-relative scope file or directory (`"."` is allowed; absolute paths, `\` separators, `.` segments, `..` segments, and newlines are rejected). Optional fields include `role`, `instructions`, `expectedDeliverable`, `typeName`, `model`, and `workspace` (canonical camelCase fields also accept non-conflicting PascalCase aliases). The native `typeName` defaults to `self` for leads and specialists (`research` is rejected because it is read-only). `model` defaults to `inherit`, and `workspace` must be `inherit` so report slots stay in the shared workspace.
+`children` is an alias for `specialists` (a squad cannot define both). A lead can also be specified directly on the squad object rather than under `lead` (a squad cannot mix `lead` with top-level lead fields, and `all_l1` is reserved for lead compilation and cannot be used as a squad ID in `squads`). Compiling a single working squad validates its specialists and its own lead (when defined) without rebuilding unrelated sibling squads. Each agent needs an objective and at least one workspace-relative scope file or directory (`"."` is allowed; absolute paths, `\` separators, `.` segments, `..` segments, and newlines are rejected). Optional fields include `role`, `instructions`, `expectedDeliverable`, `typeName`, `model`, and `workspace` (canonical camelCase fields also accept non-conflicting PascalCase aliases). The native `typeName` defaults to `self` for leads and specialists (disallowed built-in read-only/sandboxed presets `research`, `browser`, and `image-generator` are rejected). `model` defaults to `inherit`, and `workspace` must be `inherit` so report slots stay in the shared workspace.
 
 ## Stages and Pointer-Over-Wire
 
@@ -57,11 +54,13 @@ The managed dispatcher performs staging and compilation. The Antigravity session
    - **Legacy Adversarial Dispatch:** `adversarial_l1` and `adversarial_flat` remain supported for backward compatibility.
    - **Acceptance Gate:** `node bin/agy-squad.mjs bundle <record.json>` enforces `requireIntegrityAudit: true` by default (pass `--allow-unaudited` or `requireIntegrityAudit: false` to opt out). `bundleReports` programmatically hashes the integrity report and embeds `integrityAudit: { path, sha256, verdict, targetSquad }`. `verify` requires the integrity report to remain present on disk with an unmodified SHA-256 hash, matching `Target Squad`, and `Integrity Verdict: CLEAN`.
 
-File scope in a brief describes the assignment. Use the [WSL verification checklist](plans/wsl-cli-verification.md) to establish what the CLI actually enforces.
+File scope in a brief describes the assignment (see [WSL verification checklist](plans/wsl-cli-verification.md) for historical CLI boundary trials).
 
 ## Governance CLI & report cleanup (`bin/agy-squad.mjs` & `mcp/handoffs.mjs`)
 
-Run `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) from the shared workspace root. Bundling and pruning support both unmanaged (`scratch/agy-squad/squad-…`) and managed (`scratch/agy-squad/run-…/plan-…/squad-…`) report layouts.
+Run `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) from the shared workspace root. Bundling and pruning support both default (`scratch/agy-squad/squad-…`) and custom `reportRoot` layouts.
+
+- `plan ...` exposes `squad_planner` from the CLI (`--manifest` or `<task>`, `--squad`, `--mode swarm|subagent`, `--model`, `--workspace-isolation`, `--scope`, `--role`, `--no-integrity`, `--report-root`).
 
 - `verdict [--integrity] <report.md>` strictly parses a single-line `Content Verdict: PASS|FAIL|BLOCKED` (or `Verdict: ...`), or `Integrity Verdict: CLEAN|INTEGRITY VIOLATION` with `--integrity`, rejecting hedged or contradictory lines.
 - `fingerprint <file...>` returns workspace-relative paths mapped to SHA-256. Capture hashes before and after independent checks on final work inputs.

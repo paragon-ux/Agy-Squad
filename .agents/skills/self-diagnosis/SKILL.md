@@ -40,27 +40,28 @@ Run [`diagnose.mjs`](./scripts/diagnose.mjs) from the repository root (launches 
 
 ```bash
 node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown
-# Machine-readable JSON telemetry:
+# Machine-readable JSON telemetry or CLI help:
 node .agents/skills/self-diagnosis/scripts/diagnose.mjs
+node .agents/skills/self-diagnosis/scripts/diagnose.mjs --help
 ```
 
 The profiler audits four surfaces in one pass:
 1. **Skill & Progressive Disclosure (`SKILL`, `DOC`):** Validates YAML frontmatter, relative Markdown links across `SKILL.md` and `references/`, target `docs/reviews/` ledger presence + `v1.3.0` schema (Section 1 Session Provenance, Section 8 Residuals/Deferred, Section 9 Cohort Ledger, and `1 ID = 1 Row`), and `SKILL.md` entry share (total and prose).
-2. **Self-Dispatch & Pointer-Over-Wire Canary (`RUN`, `SVC`, `MCP`):** Compiles [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) (`all_l1` + all 3 squads, unmanaged and managed), checks `L41` scratch cleanliness and `scopeFiles` overlap, and smoke-tests `fingerprint -> inspect -> bundle -> verify -> prune` in `scratch/agy-squad/self-diag-canary-<uuid>` (`L4`) with `try/finally` cleanup.
-3. **Token & Latency Telemetry (`RUN`, `SKILL`, `SVC`):** Measures UTF-8 byte/token budgets across `mcp/briefs.mjs` templates, `mcp/index.js` `tools/list`, and stage/handoff latencies.
+2. **Self-Dispatch, `squad_planner` & Pointer-Over-Wire Canary (`RUN`, `SVC`, `MCP`):** Compiles [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) (`all_l1` + all 3 squads via `dispatch_squad` and `/swarm` planning via `squad_planner`), checks `L41` scratch cleanliness and `scopeFiles` overlap, and smoke-tests `fingerprint -> inspect -> bundle -> verify -> prune` in `scratch/agy-squad/self-diag-canary-<uuid>` (`L4`) with `try/finally` cleanup.
+3. **Token & Latency Telemetry (`RUN`, `SKILL`, `SVC`):** Measures UTF-8 byte/token budgets across `mcp/briefs.mjs` templates, `mcp/index.js` `tools/list`, and stage/planner/handoff latencies.
 4. **PR-Review v1.3.0 Matrix:** Maps findings across all 10 mandatory categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`).
 
 ---
 
 ### Step 2: Compile or Delegate an Agy-Squad Self-Diagnosis Stage
-Use [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) with `dispatch_squad` (or `diagnose.mjs --print-dispatch [squadId|all_l1|all_specialists] [--parent-id <conversationId>]`) to compile targeted or full-squad diagnostic cohorts:
+Use [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) with `dispatch_squad`, `squad_planner`, or `diagnose.mjs --print-dispatch [squadId|all_l1|all_specialists] [--parent-id <conversationId>]` to compile targeted or full-squad diagnostic cohorts:
 
 | Stage / Squad ID | Agents Compiled | Purpose | Primary `pr-review` Categories |
 | --- | --- | --- | --- |
 | `all_l1` (Layered Full Squad) | `3` Leads (`-> 6` Specialists) | Compile all 3 squad leads; each lead dispatches and bundles its own 2 specialists | All 10 categories (`ARCH`..`DEP`) |
 | `all_specialists` (Flat Full Squad) | `6` Specialists (across all `3` squads) | Compile all 6 specialists in one flat wave with the parent acting as lead across all 3 squads | All 10 categories (`ARCH`..`DEP`) |
 | `skill_and_pr_review_audit` | `2` Specialists | Audit `.agents/skills/self-diagnosis` and `.agents/skills/pr-review` for contract drift, broken links, and progressive disclosure | `SKILL`, `DOC`, `ARCH`, `SCRIPT` |
-| `runtime_and_contract_diagnosis` | `2` Specialists | Audit `mcp/index.js`, `mcp/dispatch.mjs`, `mcp/briefs.mjs`, `mcp/handoffs.mjs`, `mcp/run-state.mjs`, `bin/agy-squad.mjs`, and `bin/terminal.py` | `MCP`, `RUN`, `SVC`, `SCRIPT`, `TEST`, `DEP` |
+| `runtime_and_contract_diagnosis` | `2` Specialists | Audit `mcp/index.js`, `mcp/dispatch.mjs`, `mcp/briefs.mjs`, `mcp/handoffs.mjs`, `mcp/planner.mjs`, and `bin/agy-squad.mjs` | `MCP`, `RUN`, `SVC`, `SCRIPT`, `TEST`, `DEP` |
 | `token_and_execution_optimization` | `2` Specialists | Profile and optimize brief byte budgets, `SKILL.md` progressive disclosure, `scopeFiles` disjointness, and filesystem/IPC hot paths | `RUN`, `SKILL`, `SVC`, `ARCH` |
 
 - **Payload review mode (default per `L7`):** Compile the selected squad (`node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit`) and execute the checks directly or present the compiled `Subagents` payload.
@@ -73,10 +74,11 @@ Use [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) w
      - **Section 8 (`Post-Remediation Residuals & Deferred Dispositions` — Mandatory Sink for Non-Closed / Post-Remediation Items):** Every post-remediation finding surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), every `Deferred / Won't Fix` proposal, and every `Closed (By Design)` / `Informational` item **must** receive its own atomic row here—never silently omitted and never tucked into a `Closed` row's prose cell.
   4. **Deterministic Atomic Teardown (`L41`):** Immediately after updating the target `docs/reviews/` ledger (`mtime >= bundle mtime`) — and before mutating `verifiedFiles` during code remediation — tear down completed self-diagnosis directories and empty `scratch/agy-squad` / `scratch` parents:
      ```bash
-     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown all [--ledger docs/reviews/<target-review-slug>.md]
+     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown all [--ledger docs/reviews/<target-review-slug>.md] [--force]
      # Or for a single squad with explicit digest check:
-     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown <squadId> --accept <bundle-sha256> [--ledger docs/reviews/<target-review-slug>.md]
+     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown <squadId> --accept <bundle-sha256> [--ledger docs/reviews/<target-review-slug>.md] [--force]
      ```
+     *Note:* `--teardown` requires a fresh verified bundle on disk and ledger `mtime >= bundle mtime` unless `--force` is passed explicitly.
   5. **Kill Subagents After Final Closure (`manage_subagents`):** Only after `0` open blocking findings remain, the target `docs/reviews/` ledger is updated (`Open -> Closed`), and `--teardown` completes, terminate all spawned subagents via `manage_subagents(Action='kill', ConversationIds=[...])` (killing the `3` leads in `all_l1` mode automatically terminates their `6` specialist descendants).
 
 ---
@@ -84,6 +86,6 @@ Use [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) w
 ### Step 3: Evaluate Findings & Optimizations with the `pr-review` Skill
 Activate [`pr-review`](../pr-review/SKILL.md) and apply its architecture-before-runtime trace:
 
-1. **Trace before changing:** Verify `design thesis / invariant (active WSL IDs L1-L7, L17, L21, L29-L31, L40, L41) -> public contract -> implementation -> verification` before proposing any skill, prompt, or runtime change.
+1. **Trace before changing:** Verify `design thesis / invariant (active WSL IDs L1-L7, L21, L29-L31, L40-L43) -> public contract -> implementation -> verification` before proposing any skill, prompt, or runtime change.
 2. **Triage by category and priority (`P1` blocking / `P2` actionable / `P3` optimization):** Apply the thresholds and failure-to-category mappings in Sections 2 and 3 of the [Optimization & Review Rubric](./references/optimization-and-review-rubric.md).
 3. **Require measured before/after evidence:** Every optimization proposal must report exact before/after UTF-8 bytes, token estimates, or execution milliseconds from [`diagnose.mjs`](./scripts/diagnose.mjs) and pass `npm test`.

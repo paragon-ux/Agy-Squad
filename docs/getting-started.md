@@ -8,11 +8,10 @@ Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness
 | --- | --- | --- |
 | Operating system | Linux or WSL2 on Windows (primary verified targets; macOS is best-effort and untested) | `uname -a` |
 | Node.js | `>= 22.0.0` | `node --version` |
-| Python | `>= 3.9` (used by `bin/terminal.py` when launching the CLI PTY wrapper) | `python3 --version` |
-| Antigravity surface | Antigravity Desktop (IDE) or authenticated `agy` CLI on `PATH` ([CLI install guide](https://antigravity.google/docs/cli/install/)) | Open Desktop IDE or run `agy --version` |
+| Antigravity surface | Antigravity Desktop (IDE) with `/swarm` and/or `invoke_subagent` | Open Desktop IDE |
 | Agy-Context-Saver | `>= 1.8.1` (`HEALTHY & ACTIVE`) for live governed cohorts | Call `get_installation_status` or `sync_installation` MCP tool |
 | RTK binary | Pinned `0.51.0` (provisioned by `Agy-Context-Saver`) | `rtk --version` (or via `sync_installation`) |
-| Native permissions | Controlled by Desktop IDE approvals or CLI `--mode` (`auto` / `accept-edits`) and `/agents` | Review before launching subagents |
+| Native permissions | Controlled by Desktop IDE approvals and `/swarm` / `/agents` | Review before launching workers |
 
 ## 1. Clone and verify your checkout
 
@@ -22,12 +21,11 @@ Agy-Squad is a staged subagent orchestration, self-diagnosis, and review harness
 git clone https://github.com/paragon-ux/Agy-Squad.git
 cd Agy-Squad
 node --version
-python3 --version
 node bin/agy-squad.mjs --help
 npm test
 ```
 
-`npm test` runs locally in Node.js without starting `agy` or spawning subagents. It verifies the MCP server, dispatch compiler, handoff bundler, PTY launcher bridge (against a simulated CLI), `/self-diagnosis` profiler, and benchmark fixture.
+`npm test` runs locally in Node.js without spawning live subagents. It verifies the MCP server, `dispatch_squad` compiler, `squad_planner` cohort planner, handoff bundler, `/self-diagnosis` profiler, and benchmark fixture.
 
 ## 2. Use in Antigravity Desktop (IDE) or manual MCP registration
 
@@ -43,61 +41,48 @@ In **Antigravity Desktop (IDE)** (or any workspace on Linux, macOS, or WSL2), re
         "AGY_SQUAD_WORKSPACE": "/absolute/path/to/workspace"
       },
       "tools": {
-        "dispatch_squad": { "eager": true }
+        "dispatch_squad": { "eager": true },
+        "squad_planner": { "eager": true }
       }
     }
   }
 }
 ```
 
-In Desktop IDE sessions, use Antigravity native `/swarm` paired with the `swarm-governance` skill (or call `dispatch_squad` / `diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>`), enforce strict single-line verdicts and SHA-256 bundles via `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`), and stop completed subagents with `manage_subagents(Action='kill', ConversationIds=[...])`.
+In Desktop IDE sessions, use `squad_planner` paired with Antigravity native `/swarm` and the `swarm-governance` skill (or call `dispatch_squad` / `diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>`), enforce strict single-line verdicts and SHA-256 bundles via `node bin/agy-squad.mjs` (`plan`, `verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`), and stop completed subagents with `manage_subagents(Action='kill', ConversationIds=[...])`.
 
-## 3. CLI Governance & Legacy Runner (`bin/agy-squad.mjs`)
+## 3. CLI Planner & Governance (`bin/agy-squad.mjs`)
 
-For native `/swarm` workflows and CI verification, `bin/agy-squad.mjs` exposes offline governance subcommands (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`, `verdict`). The local PTY wrapper (`bin/agy-squad.mjs run`) is **deprecated** in favor of Antigravity native `/swarm` (`L42`), but remains available when running from an interactive WSL2 terminal with `agy` on `PATH`:
+For native `/swarm` workflows and CI verification, `bin/agy-squad.mjs` exposes offline planning and governance subcommands (`plan`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`, `verdict`). Legacy `agy-squad run` (`bin/terminal.py`) was retired in Phase 2 (`L17`, `L42`, `L43`).
 
-| Mode | Command | Starts `agy`? | Spawns subagents? | When to use |
-| --- | --- | :---: | :---: | --- |
-| **1. Offline test** | `npm test` | No | No | Verify code, schemas, and fixtures locally or in CI at zero model cost |
-| **2. Payload preview** | `node bin/agy-squad.mjs run --workspace "$PWD" "<task>"` | Yes | No | Inspect the compiled assignment plan and report slots in `agy` with child-launch, shell, and write tools disabled |
-| **3. Live delegation** | `node bin/agy-squad.mjs run --workspace "$PWD" --launch "<task>"` | Yes | Yes | Execute delegated specialist or lead cohorts under your `agy` permission settings |
-
-### Preview a task without launching children
-
-Run from your checkout using the included benchmark fixture (no external repositories required):
+### Generate a `/swarm` plan and provenance scaffold
 
 ```bash
-node bin/agy-squad.mjs run --workspace "$PWD" \
-  "Plan a read-only audit of benchmarks/teamwork-vs-squad/fixture and show the specialist scopes and report slots."
+node bin/agy-squad.mjs plan \
+  --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
+  --model gemini-3.8-flash-high
 ```
 
-Omitting `--launch` opens an `agy` session configured for payload preview: `invoke_subagent`, `run_command`, `write_file`, and `edit_file` are omitted from the agent profile (`inheritCustomizations: false`). Review the compiled plan and exit `agy`.
-
-### Launch a live cohort
-
-When your companion status is healthy and you are ready to authorize child agents:
+Or plan directly from a freeform task description:
 
 ```bash
-node bin/agy-squad.mjs run --workspace "$PWD" --launch \
-  "Perform a read-only audit of benchmarks/teamwork-vs-squad/fixture, write specialist evidence reports, and verify cross-module findings."
-```
-
-Or dispatch a caller-defined manifest stage directly:
-
-```bash
-node bin/agy-squad.mjs run --workspace "$PWD" \
-  --manifest benchmarks/teamwork-vs-squad/manifest.json --squad all_l1 --launch
+node bin/agy-squad.mjs plan \
+  --mode swarm \
+  --model gemini-3.8-flash-high \
+  --scope src/app.js --scope docs/tools.md \
+  --role "Implementer" --role "Reviewer" \
+  "Verify Phase 2 runtime fixes and update documentation."
 ```
 
 ## 4. What successful output looks like
 
-1. In Desktop IDE or CLI sessions, `dispatch_squad` compiles the target stage and prepares the `scratch/agy-squad/...` report directories.
-2. Each specialist writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and returns a single-line `<= 500` byte receipt:
+1. In Desktop IDE or CLI planning, `squad_planner` (or `dispatch_squad`) compiles worker specs, report slots under `scratch/agy-squad/...`, model provenance metadata, and an `L6`-safe `provenanceScaffold`.
+2. Each worker writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and returns a single-line `<= 500` byte receipt:
    ```text
-   READY scratch/agy-squad/run-.../plan-.../squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
+   READY scratch/agy-squad/squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
 3. The parent (or squad lead) inspects the cited source lines and tests to verify semantic correctness, records a strict `Content Verdict: PASS` (or `Verdict: PASS`) in `lead/report.md`, pairs with a flat `integrity_auditor` (`Integrity Verdict: CLEAN`), and runs `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
-4. Exiting a managed CLI session removes the temporary workspace plugin and agent profile while keeping staged evidence in `scratch/agy-squad/run-<uuid>/`. Use `manage_subagents` (in Desktop IDE) or `/agents` (in CLI) to inspect or stop running subagents, and see [Stopping agents](stopping-agents.md) to verify child process termination.
+4. Use `swarm status` / `manage_subagents` to verify running worker models or stop running children ([Stopping agents](stopping-agents.md)).
 
 ## When to use Agy-Squad vs. alternatives
 
@@ -113,9 +98,7 @@ node bin/agy-squad.mjs run --workspace "$PWD" \
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `agy-squad: Open an interactive terminal to start a squad run.` | `bin/agy-squad.mjs run` CLI wrapper was invoked outside an interactive TTY | Run `bin/agy-squad.mjs run` in an interactive terminal, or register `mcp/index.js` directly in Antigravity Desktop IDE / `.agents/mcp_config.json` |
-| `agy-squad: Antigravity CLI (agy) must be available on PATH.` or `agy-squad: Python 3 (python3) must be available on PATH.` | `agy` or `python3` is missing from `PATH` | Confirm `which agy` and `python3 --version` succeed in the same shell |
-| `Agy-Squad: the dispatcher was not discovered within 15 seconds (startup timeout: ...)` | `agy` is unauthenticated, awaiting first-run prompt, or MCP discovery stalled | Run `agy` directly once to complete sign-in, then retry `bin/agy-squad.mjs run` |
+| `Unknown command ...` or `'agy-squad run' was retired` | `agy-squad run` was invoked after Phase 2 retirement | Use `node bin/agy-squad.mjs plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
 | `read_file` denied by `Agy-Context-Saver` hook during live run | `Agy-Context-Saver` routes workspace reads to `rtk read` | Use `rtk read <file>` via `run_command`; run `sync_installation` if `rtk` (`0.51.0`) is missing |
-| `invoke_subagent` unavailable in CLI session | Session started in preview mode (without `--launch`) | Re-run with `--launch` to include `invoke_subagent`, `run_command`, `schedule`, and `call_mcp_tool` |
-| Specialist silent past checkpoint | Waiting on permission prompt or stuck command | Use `manage_subagents` (Desktop IDE) or `/agents` (CLI) to inspect or stop the child, then verify underlying processes exited ([Stopping agents](stopping-agents.md)) |
+| `Requested explicit model ... cannot be pinned under executionMode 'subagent'` | `invoke_subagent` accepts only `inherit|flash|flash_lite|pro` | Use `executionMode: "swarm"` (`--mode swarm`) in `squad_planner` to explicitly pin and verify exact model IDs via `swarm status` |
+| Specialist silent past checkpoint | Waiting on permission prompt or stuck command | Use `swarm status`, `manage_subagents` (Desktop IDE), or `/agents` to inspect or stop the child, then verify underlying processes exited ([Stopping agents](stopping-agents.md)) |

@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildSubagentSpec } from "./briefs.mjs";
-import { reportPath } from "./handoffs.mjs";
-import { stagePlan } from "./run-state.mjs";
 
 const defaultManifests = [
   "task-01-manifest.json",
@@ -88,17 +86,31 @@ function defaultAdversarialSquad(squads, targetSquad) {
   };
 }
 
+function appendTargetInstruction(spec, targetLine) {
+  if (!spec || typeof spec !== "object") return spec;
+  const usesPascal = spec.Instructions !== undefined;
+  const key = usesPascal ? "Instructions" : "instructions";
+  const existing = typeof spec[key] === "string" && spec[key].trim() ? `${spec[key].trim()}\n` : "";
+  return { ...spec, [key]: `${existing}${targetLine}` };
+}
+
 function resolveFlatAdversarialSpecialist(squads, targetSquad) {
+  const targetIds = targetSquad
+    ? [targetSquad]
+    : Object.keys(squads).filter(
+        id => id !== "adversarial_review" && id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
+      );
+  const targetLabel = targetIds.length > 0 ? targetIds.join(", ") : "all squads";
   if (squads.adversarial_review !== undefined && !squads.adversarial_review._synthesized) {
     const customSpecs = squads.adversarial_review.children ?? squads.adversarial_review.specialists;
     if (Array.isArray(customSpecs) && customSpecs.length > 0) {
-      return customSpecs.map((spec, index) => ({ spec, id: "adversarial_review", number: index + 1 }));
+      return customSpecs.map((spec, index) => ({
+        spec: targetSquad ? appendTargetInstruction(spec, `Target Squad: ${targetSquad}`) : spec,
+        id: "adversarial_review",
+        number: index + 1
+      }));
     }
   }
-  const targetIds = targetSquad
-    ? [targetSquad]
-    : Object.keys(squads).filter(id => id !== "adversarial_review");
-  const targetLabel = targetIds.length > 0 ? targetIds.join(", ") : "all squads";
   return [
     {
       spec: {
@@ -125,13 +137,24 @@ function resolveIntegrityAuditor(squads, targetSquad) {
       `Multiple working squads found (${targetIds.join(", ")}); specify 'integrity_auditor:<targetSquad>' for each squad.`
     );
   }
+  const resolvedTarget = targetIds[0] ?? "all";
   if (squads.integrity_auditor !== undefined && !squads.integrity_auditor._synthesized) {
     const customSpecs = squads.integrity_auditor.children ?? squads.integrity_auditor.specialists;
+    const customLead = resolveSquadLead(squads.integrity_auditor, "integrity_auditor", false);
     if (Array.isArray(customSpecs) && customSpecs.length > 0) {
-      return customSpecs.map((spec, index) => ({ spec, id: slotId, number: index + 1 }));
+      if (customLead) buildSubagentSpec(customLead, slotId, undefined);
+      return customSpecs.map((spec, index) => ({
+        spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
+        id: slotId,
+        number: index + 1
+      }));
+    }
+    if (customLead) {
+      throw new Error(
+        "Custom 'integrity_auditor' defines a lead without specialists or children; add specialists/children or omit the lead."
+      );
     }
   }
-  const resolvedTarget = targetIds[0] ?? "all";
   return [
     {
       spec: {
@@ -214,26 +237,21 @@ function specialistAssignments(squads, squadId) {
   return specialists.map((spec, index) => ({ spec, id: squadId, number: index + 1 }));
 }
 
-function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd(), run) {
+function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd()) {
   try {
     if (!args || typeof args !== "object" || Array.isArray(args) ||
-        Object.keys(args).some(key => key !== "squadId" && key !== "manifestPath" && !(run && key === "manifest"))) {
-      throw new Error(run ? "Only squadId, manifestPath, and manifest are supported." : "Only squadId and manifestPath are supported.");
+        Object.keys(args).some(key => key !== "squadId" && key !== "manifestPath")) {
+      throw new Error("Only squadId and manifestPath are supported.");
     }
-    const { squadId, manifestPath, manifest } = args;
+    const { squadId, manifestPath } = args;
     if (typeof squadId !== "string" || !squadId.trim()) {
       throw new Error("Provide a squadId or use all_l1 for the leads.");
     }
     if (manifestPath !== undefined && (typeof manifestPath !== "string" || !manifestPath.trim())) {
       throw new Error("manifestPath must be a nonempty string.");
     }
-    if (run && (manifestPath === undefined) === (manifest === undefined)) {
-      throw new Error("Provide exactly one of manifest or manifestPath in a managed run.");
-    }
     const root = fs.realpathSync(workspace);
-    const { squads: loadedSquads, selectedManifest } = manifest === undefined
-      ? loadSquads(root, manifestPath)
-      : { squads: manifestSquads(manifest) };
+    const { squads: loadedSquads, selectedManifest } = loadSquads(root, manifestPath);
     const squads = { ...loadedSquads };
     const isAdvLead = squadId === "adversarial_l1";
     const isAdvFlat = squadId === "adversarial_flat" || squadId.startsWith("adversarial_flat:");
@@ -257,15 +275,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       squads.adversarial_review = defaultAdversarialSquad(squads, flatTarget);
     }
 
-    const staged = run ? stagePlan(root, run, loadedSquads) : undefined;
-    const requestedManifest = manifestPath && path.relative(root, path.resolve(root, manifestPath));
-    if (staged && requestedManifest?.startsWith(`${run}/plan-`) &&
-        (requestedManifest !== staged.manifestPath || requestedManifest !== selectedManifest)) {
-      throw new Error("The prepared manifest changed. Start a fresh assignment.");
-    }
-    const alreadyStaged = Boolean(staged && requestedManifest === staged.manifestPath);
-    const build = ({ spec, id, number }) =>
-      buildSubagentSpec(spec, id, staged?.manifestPath ?? selectedManifest, number, staged?.reportRoot);
+    const build = ({ spec, id, number }) => buildSubagentSpec(spec, id, selectedManifest, number);
     let assignments;
     if (squadId === "all_l1") {
       const workingSquads = Object.entries(squads).filter(
@@ -288,26 +298,16 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       assignments = specialistAssignments(squads, squadId);
     }
     const Subagents = assignments.map(build);
-    const children = (squadId === "all_l1" || isAdvLead)
-      ? assignments.flatMap(({ id }) => specialistAssignments(squads, id))
-      : [];
-    for (const child of children) build(child);
-    if (squadId !== "all_l1" && !isAdvLead && !alreadyStaged) {
-      for (const [id, squad] of Object.entries(squads)) {
-        const leadSpec = resolveSquadLead(squad, id, false);
-        if (leadSpec) build({ spec: leadSpec, id });
-        if (id !== squadId) {
-          for (const sibling of specialistAssignments(squads, id)) build(sibling);
-        }
-      }
-    }
-    if (staged) {
-      const slots = [...assignments, ...children].map(({ id, number }) => reportPath(id, number, staged.reportRoot));
-      staged.prepare(slots, { skipManifestPublish: alreadyStaged });
+    if (squadId === "all_l1" || isAdvLead) {
+      const children = assignments.flatMap(({ id }) => specialistAssignments(squads, id));
+      for (const child of children) build(child);
+    } else if (!isAdvFlat && !isIntegrityAuditor) {
+      // Validate only the target squad's own lead (when present) without rebuilding unrelated sibling squads (S2-OPT2).
+      const leadSpec = resolveSquadLead(squads[squadId], squadId, false);
+      if (leadSpec) build({ spec: leadSpec, id: squadId });
     }
     return {
-      content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }],
-      ...(staged ? { structuredContent: { manifestPath: staged.manifestPath } } : {})
+      content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? "Manifest or workspace not found." : error.message;
@@ -315,4 +315,14 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
   }
 }
 
-export { handleDispatchSquad };
+export {
+  assertWithinWorkspace,
+  defaultAdversarialSquad,
+  handleDispatchSquad,
+  loadSquads,
+  manifestSquads,
+  readManifest,
+  resolveIntegrityAuditor,
+  resolveSquadLead,
+  specialistAssignments
+};

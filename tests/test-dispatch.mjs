@@ -92,6 +92,12 @@ try {
     squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), typeName: "research" }] } }
   }));
   rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /writable typeName/);
+  for (const builtinType of ["browser", "image-generator"]) {
+    fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+      squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), typeName: builtinType }] } }
+    }));
+    rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /writable typeName/);
+  }
   fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
     squads: { alpha: { lead: agent("Lead", "src"), specialists: [{ ...agent("First", "src/a.js"), workspace: "branch" }] } }
   }));
@@ -178,6 +184,30 @@ try {
   const targetedFlatAdv = payload({ squadId: "adversarial_flat:alpha", manifestPath });
   assert.equal(targetedFlatAdv.length, 1);
   assert.match(targetedFlatAdv[0].Prompt, /alpha/);
+
+  // F-05 & S2-OPT2: custom adversarial_review preserves targetSquad, lead-only integrity_auditor rejects loudly,
+  // and single-squad dispatch skips unrelated invalid sibling squads.
+  fs.writeFileSync(path.join(workspace, "custom-targets.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      broken_sibling: { specialists: [] },
+      adversarial_review: {
+        specialists: [{ role: "Custom Adv", objective: "Inspect reports", scopeFiles: ["src"] }]
+      }
+    }
+  }));
+  const alphaWithBrokenSibling = payload({ squadId: "alpha", manifestPath: "custom-targets.json" });
+  assert.equal(alphaWithBrokenSibling[0].Role, "First");
+  const customFlatAdv = payload({ squadId: "adversarial_flat:alpha", manifestPath: "custom-targets.json" });
+  assert.match(customFlatAdv[0].Prompt, /Target Squad: alpha/);
+
+  fs.writeFileSync(path.join(workspace, "lead-only-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: { lead: agent("Lead Only", ".") }
+    }
+  }));
+  rejects({ squadId: "integrity_auditor:alpha", manifestPath: "lead-only-auditor.json" }, /lead without specialists/);
 
   fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
     squads: { adversarial_l1: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }

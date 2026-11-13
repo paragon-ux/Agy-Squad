@@ -28,18 +28,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
 
       - name: Show toolchain
-        run: node --version && npm --version && python3 --version
+        run: node --version && npm --version
 
       - name: Run automated test suites
         run: npm test

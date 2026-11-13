@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
@@ -143,14 +144,25 @@ try {
   assert.throws(() => verifyBundle(root, bundled.path), /does not match bundle squad 'alpha'/);
   fs.writeFileSync(path.join(root, bundled.path), savedBundle);
 
-  // SVC-PR4-03 & SVC-PR4-04: explicit adversarialReport not shadowed by stale integrity report; fenced code ignored
+  // F-01 & SVC-PR4-03/04: explicit adversarialReport does not overwrite existing integrityAudit, and fenced code is ignored
   const advSlot = reportPath("adversarial_review", 1);
   write(advSlot, "Verdict: FAIL\n```\nIntegrity Verdict: CLEAN\n```\n");
   assert.throws(
     () => bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot }),
     /Mandatory adversarial review verdict is not PASS/
   );
+  write(advSlot, "Content Verdict: PASS\nIndependent adversarial verification passed.\n");
+  const bothBundle = bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot });
+  const bothJson = JSON.parse(fs.readFileSync(path.join(root, bothBundle.path), "utf8"));
+  assert.equal(bothJson.integrityAudit.path, scopedIntAlpha);
+  assert.equal(bothJson.adversarialReview.path, advSlot);
+  write(advSlot, "Integrity Verdict: CLEAN\nAttempted role conflation.\n");
+  assert.throws(
+    () => bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot }),
+    /Mandatory adversarial review verdict is not PASS/
+  );
   fs.unlinkSync(path.join(root, advSlot));
+  bundleReports(root, record);
 
   // Deleting integrity report from disk must fail verifyBundle (no silent deletion pass)
   fs.unlinkSync(path.join(root, scopedIntAlpha));
@@ -212,7 +224,16 @@ try {
   const customLeadRes = handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "single-squad.json" }, root);
   assert.equal(customLeadRes.isError, undefined);
 
-  // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, ARCH-PR4-03, TEST-PR4-01)
+  // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
+  const intLeadCompiled = buildSubagentSpec(
+    { role: "Integrity Auditor Lead", objective: "Audit alpha", scopeFiles: ["."] },
+    "integrity_auditor-alpha",
+    "single-squad.json"
+  );
+  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof/);
+  assert.match(intLeadCompiled.Prompt, /never emit a content PASS/i);
+
+  // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, SCRIPT-P3-04, ARCH-PR4-03, TEST-PR4-01)
   assert.equal(JSON.parse(runCli(["verdict", lead])).verdict, "PASS");
   assert.equal(JSON.parse(runCli(["verdict", "--integrity", scopedIntAlpha])).verdict, "CLEAN");
   assert.deepEqual(Object.keys(JSON.parse(runCli(["fingerprint", "src/app.js"]))), ["src/app.js"]);
@@ -220,11 +241,13 @@ try {
   const unauditedRecord = { ...record };
   delete unauditedRecord.requireIntegrityAudit;
   write("unaudited-record.json", JSON.stringify(unauditedRecord));
+  write("strict-record.json", JSON.stringify(record));
   fs.unlinkSync(path.join(root, scopedIntAlpha));
   // ARCH-PR4-03: CLI bundle enforces requireIntegrityAudit: true by default
   assert.notEqual(runCliFail(["bundle", "unaudited-record.json"]).status, 0);
-  // --allow-unaudited allows explicit opt-out
+  // --allow-unaudited allows explicit opt-out even when record sets requireIntegrityAudit: true (SCRIPT-P3-04)
   assert.equal(runCliFail(["bundle", "unaudited-record.json", "--allow-unaudited"]).status, 0);
+  assert.equal(runCliFail(["bundle", "strict-record.json", "--allow-unaudited"]).status, 0);
 
   // Restore audit and run full CLI cycle including inspect & destructive prune
   write(scopedIntAlpha, "Target Squad: alpha\nIntegrity Verdict: CLEAN\nAll traces grounded.\n");
@@ -252,7 +275,7 @@ try {
     assert.notEqual(runCliFail(badArgs).status, 0, `Expected failure for: ${badArgs.join(" ")}`);
   }
 
-  for (const sub of ["fingerprint", "inspect", "bundle", "verify", "prune", "verdict"]) {
+  for (const sub of ["plan", "fingerprint", "inspect", "bundle", "verify", "prune", "verdict"]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
     assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);

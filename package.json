@@ -2,7 +2,7 @@
   "name": "agy-squad",
   "version": "0.1.0",
   "private": true,
-  "description": "Staged subagent payloads and Pointer-Over-Wire briefs for the Antigravity CLI on WSL.",
+  "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Antigravity.",
   "main": "mcp/index.js",
   "bin": { "agy-squad": "bin/agy-squad.mjs" },
   "files": [
@@ -13,7 +13,7 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
     "docs": "zensical serve"
   },
   "repository": {

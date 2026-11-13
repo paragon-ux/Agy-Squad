@@ -30,10 +30,10 @@
           "objective": "Empirically audit Devin/Sol (sandboxed SWE workspace), Claude Code / SWE-agent (interactive command execution), and Google Antigravity Native /teamwork. Compare their evidence retention, sandbox boundaries, and context compaction against Agy-Squad.",
           "scopeFiles": [
             "bin/agy-squad.mjs",
-            "bin/terminal.py",
+            "mcp/planner.mjs",
             "benchmarks/teamwork-vs-squad/README.md"
           ],
-          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's terminal PTY and L41 teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's swarm planning and L41 teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
           "expectedDeliverable": "Markdown evidence report with comparative matrix, blast-radius analysis, and 5-axis ratings for the 3 coding agent harnesses."
         }
       ]

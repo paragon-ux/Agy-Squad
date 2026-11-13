@@ -189,7 +189,7 @@ try {
   fs.unlinkSync(symlinkCli);
   assert.throws(() => verifyBundle(root, "scratch\\agy-squad\\bundle.json"), /workspace-relative/);
 
-  // Verify managed-run slot bundling, CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
+  // Verify custom reportRoot slot bundling (F-02), CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
   assert.throws(() => inspectHandoffs(root, {
     workspace: root,
     assignments: [{ conversationId: "child-1", report: first }],
@@ -201,26 +201,28 @@ try {
     handoffs: [{ sender: "child-1", message: `NO_REPORT — line one\u2028line two` }]
   }), /one line within 500 UTF-8 bytes/);
   assert.throws(() => reportPath("alpha", -1), /positive integer/);
-  const managedRoot = "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000";
-  const mFirst = reportPath("alpha", 1, managedRoot);
-  const mLead = reportPath("alpha", undefined, managedRoot);
-  write(mFirst, "Managed specialist evidence.\n");
-  write(mLead, "Verdict: PASS\nManaged lead synthesis.\n");
-  const mRecordPath = path.join(root, "managed-record.json");
+  const cohortRoot = "custom-reports/cohort-alpha";
+  const mFirst = reportPath("alpha", 1, cohortRoot);
+  const mLead = reportPath("alpha", undefined, cohortRoot);
+  write(mFirst, "Cohort specialist evidence.\n");
+  write(mLead, "Verdict: PASS\nCohort lead synthesis.\n");
+  const mRecordPath = path.join(root, "cohort-record.json");
   fs.writeFileSync(mRecordPath, JSON.stringify({
     workspace: root,
+    reportRoot: cohortRoot,
     squadId: "alpha",
     verdict: "PASS",
     verifiedFiles: fingerprint(root, ["fixture.txt"]),
     assignments: [{ conversationId: "m-1", report: mFirst }],
-    handoffs: [{ sender: "m-1", message: `READY ${mFirst} — Managed specialist verified.` }]
+    handoffs: [{ sender: "m-1", message: `READY ${mFirst} — Cohort specialist verified.` }]
   }));
-  const cliInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  const cliInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "cohort-record.json"], { cwd: root, encoding: "utf8" });
   assert.equal(cliInspect.status, 0, cliInspect.stderr);
-  const cliBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(JSON.parse(cliInspect.stdout)[0].status, "READY");
+  const cliBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "cohort-record.json"], { cwd: root, encoding: "utf8" });
   assert.equal(cliBundle.status, 0, cliBundle.stderr);
   const mBundled = JSON.parse(cliBundle.stdout);
-  assert.ok(mBundled.path.startsWith(managedRoot + "/"));
+  assert.ok(mBundled.path.startsWith(cohortRoot + "/"));
   const cliPrune = spawnSync(process.execPath, [handoffsCli, "prune", mBundled.path, mBundled.sha256], { cwd: root, encoding: "utf8" });
   assert.equal(cliPrune.status, 0, cliPrune.stderr);
   assert.deepEqual(JSON.parse(cliPrune.stdout), { removed: [mFirst] });

@@ -7,11 +7,20 @@ description: Apply Agy-Squad governance, role separation, Pointer-Over-Wire repo
 
 Agy-Squad serves as the **governance, integrity auditing, and cryptographic proof layer** on top of Antigravity's native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`).
 
-Native `/swarm` handles worker spawning, worktree/branch isolation (`workspace: "share"` / `"branch"`), live model switching, and stall monitoring. Do **not** use the deprecated local launcher (`agy-squad run`); use native `/swarm` for execution and apply these Agy-Squad controls for rigor and auditability.
+Native `/swarm` handles worker spawning, worktree/branch isolation (`workspace: "share"` / `"branch"`), live model switching, and stall monitoring. Use `squad_planner` (MCP tool or `node bin/agy-squad.mjs plan`) + native `/swarm` to pin worker models explicitly (`swarm add`), detect writable `scopeFiles` overlaps, scaffold `L6`-safe `provenanceScaffold` (without copying raw `.system_generated/` transcripts), and bind SHA-256 bundles (`L42`, `L43`). The legacy `agy-squad run` PTY launcher (`L17`) is retired.
 
 ---
 
-## 1. Strict Role Separation
+## 1. Planning & Explicit Model Pinning (`squad_planner` / `agy-squad plan`)
+
+- Run `squad_planner` (or `node bin/agy-squad.mjs plan --manifest <path> --model gemini-3.8-flash-high`) before spawning workers:
+  - Under `executionMode: "swarm"` (default), `squad_planner` emits `swarmAdds` with explicit `model` pinning and instructs verification via `swarm{action: "status"}`.
+  - Under `executionMode: "subagent"`, `invoke_subagent` accepts only `inherit|flash_lite|flash|pro`; `modelProvenance` explicitly flags when an exact model ID cannot be pinned or verified per-child.
+  - Record parent-known worker names and `conversationId`s in `provenanceScaffold` and pass them to `integrity-auditor`—never copy raw `.system_generated/` transcripts into `scratch/` (`L6`).
+
+---
+
+## 2. Strict Role Separation
 
 Never conflate content acceptance with integrity auditing:
 
@@ -25,7 +34,7 @@ Never conflate content acceptance with integrity auditing:
 
 ---
 
-## 2. Pointer-Over-Wire on the Swarm Board
+## 3. Pointer-Over-Wire on the Swarm Board
 
 Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiting worker to ingest them on subsequent turns, causing quadratic token bloat.
 
@@ -38,7 +47,7 @@ Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiti
 
 ---
 
-## 3. Post-Swarm Cryptographic Proof Bundling
+## 4. Post-Swarm Cryptographic Proof Bundling
 
 Since `agy-squad` is a workspace-private package (`"private": true`), invoke the CLI directly via `node bin/agy-squad.mjs` (or `npm link` + `npx --no-install agy-squad`):
 

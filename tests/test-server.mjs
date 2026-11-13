@@ -8,7 +8,6 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { handleRequest } from "../mcp/index.js";
-import { createRun } from "../mcp/run-state.mjs";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mcp/index.js");
 const proc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
@@ -49,17 +48,39 @@ console.log("Agy-Squad MCP server tests\n");
 }
 {
   const res = await send("tools/list");
-  assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad"]);
+  assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad", "squad_planner"]);
   const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
   assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
   assert.equal(dispatch.inputSchema.properties.squadId.minLength, 1);
   assert.equal(dispatch.inputSchema.properties.manifestPath.minLength, 1);
-  console.log("✓ tools/list exposes only dispatch_squad, with no spawn options");
+  const planner = res.result.tools.find((t) => t.name === "squad_planner");
+  assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
+  assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
+  console.log("✓ tools/list exposes dispatch_squad and squad_planner");
 }
 {
   const res = await send("tools/call", { name: "dispatch_squad", arguments: { squadId: "all_l1", mode: "direct" } });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
+  const planRes = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      task: "Audit server boundaries",
+      scopeFiles: ["mcp/index.js"],
+      roles: ["Inspector"],
+      model: "gemini-3.8-flash-high"
+    }
+  });
+  assert.equal(Boolean(planRes.result.isError), false, planRes.result.content[0].text);
+  const planPayload = JSON.parse(planRes.result.content[0].text);
+  assert.equal(planPayload.executionMode, "swarm");
+  assert.equal(planPayload.modelProvenance.pinningSupported, true);
+  const badPlan = await send("tools/call", {
+    name: "squad_planner",
+    arguments: { task: "conflict", manifestPath: "x.json" }
+  });
+  assert.equal(badPlan.result.isError, true);
+  assert.match(badPlan.result.content[0].text, /exactly one/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
   assert.equal(unknown.error.code, -32601);
   for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }, { id: 99, method: "ping" }]) {
@@ -72,106 +93,18 @@ console.log("Agy-Squad MCP server tests\n");
   const afterMalformed = await send("ping");
   assert.deepEqual(afterMalformed.result, {});
   assert.equal(unsolicited.pop()?.error?.code, -32700);
-  console.log("✓ tools/call rejects direct mode, retired subagent_brief, and malformed JSON-RPC requests");
+  console.log("✓ tools/call executes squad_planner, rejects direct mode, retired subagent_brief, and malformed JSON-RPC");
 }
 {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-server-managed-")));
-  try {
-    const run = createRun(tmp);
-    const active = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: run.relative },
-      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
-      encoding: "utf8"
-    });
-    assert.equal(active.status, 0, active.stderr);
-    const listed = JSON.parse(active.stdout.trim()).result.tools[0];
-    assert.deepEqual(Object.keys(listed.inputSchema.properties).sort(), ["manifest", "manifestPath", "squadId"]);
-    assert.equal(listed.inputSchema.properties.manifest.properties.squads.minProperties, 1);
-    const leadSchema = listed.inputSchema.properties.manifest.properties.squads.additionalProperties.properties.lead;
-    assert.deepEqual(leadSchema.properties.workspace.enum, ["inherit"]);
-    assert.deepEqual(leadSchema.properties.Workspace.enum, ["inherit"]);
-    assert.equal(leadSchema.required, undefined, "PascalCase-only inline manifests must not fail camelCase required check");
-    assert.equal(leadSchema.allOf.length, 2);
-    assert.equal(fs.readFileSync(path.join(tmp, run.relative, ".mcp-ready"), "utf8"), "ready\n");
-
-    const pascalCall = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: run.relative },
-      input: [
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 10,
-          method: "tools/call",
-          params: {
-            name: "dispatch_squad",
-            arguments: {
-              squadId: "all_l1",
-              manifest: {
-                squads: {
-                  alpha: {
-                    Role: "Alpha Lead",
-                    Objective: "Verify PascalCase inline lead",
-                    ScopeFiles: ["README.md"],
-                    specialists: [
-                      {
-                        Role: "Alpha Specialist",
-                        Objective: "Verify PascalCase inline specialist",
-                        ScopeFiles: ["README.md"]
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }),
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 11,
-          method: "tools/call",
-          params: {
-            name: "dispatch_squad",
-            arguments: {
-              squadId: "all_l1",
-              manifest: {
-                squads: {
-                  alpha: {
-                    objective: "camel",
-                    Objective: "Pascal conflict",
-                    scopeFiles: ["README.md"],
-                    specialists: [{ objective: "spec", scopeFiles: ["README.md"] }]
-                  }
-                }
-              }
-            }
-          }
-        })
-      ].join("\n") + "\n",
-      encoding: "utf8"
-    });
-    assert.equal(pascalCall.status, 0, pascalCall.stderr);
-    const [pascalOk, pascalConflict] = pascalCall.stdout.trim().split("\n").map(JSON.parse);
-    assert.equal(Boolean(pascalOk.result.isError), false);
-    assert.equal(pascalConflict.result.isError, true);
-    assert.match(pascalConflict.result.content[0].text, /conflicting objective and Objective fields/);
-
-    const neighbor = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: "other-session" },
-      input: [
-        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dispatch_squad", arguments: { squadId: "all_l1" } } })
-      ].join("\n") + "\n",
-      encoding: "utf8"
-    });
-    const [neighborList, neighborCall] = neighbor.stdout.trim().split("\n").map(JSON.parse);
-    assert.deepEqual(neighborList.result.tools, []);
-    assert.equal(neighborCall.error.code, -32601);
-    console.log("✓ managed-run session gating, PascalCase inline manifest schema, and .mcp-ready publication");
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  // F-07(6): Non-positive or invalid AGY_MAX_STDIO_PAYLOAD_BYTES falls back safely to 10MB default.
+  const invalidLimit = spawnSync(process.execPath, [server], {
+    env: { ...process.env, AGY_MAX_STDIO_PAYLOAD_BYTES: "-1" },
+    input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n",
+    encoding: "utf8"
+  });
+  assert.equal(invalidLimit.status, 0, invalidLimit.stderr);
+  assert.deepEqual(JSON.parse(invalidLimit.stdout.trim()).result, {});
+  console.log("✓ invalid or non-positive AGY_MAX_STDIO_PAYLOAD_BYTES safely falls back to 10MB default");
 }
 {
   const capped = spawn(process.execPath, [server], {
