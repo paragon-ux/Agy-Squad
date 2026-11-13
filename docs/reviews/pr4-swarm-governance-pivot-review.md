@@ -8,19 +8,23 @@
 - **Reviewer:** `review-lead` (with `runtime-auditor` and `cli-docs-auditor` specialist audits, subject to flat `integrity-auditor` verification)
 - **Standard Version:** Agy-Squad PR Review Standard `v1.3.0` (`.agents/skills/pr-review/SKILL.md`, `.agents/skills/swarm-governance/SKILL.md`)
 - **Pinned Base SHA:** `d675580cdb2ffc8272a14325231673779ec9b2c3` (`feat/squad-alignment`)
-- **Pinned Head SHA:** `8fce168be1ca1e5914ff1d5511f690406f0c96e9` (`feat(governance): implement Option B-Lite stabilization and native /swarm governance pivot`)
-- **Working-Tree State:** Clean on all tracked files (`git diff --stat d675580..8fce168`: `9` files changed, `+518 / -81`); review scratch reports under `scratch/agy-squad/pr4-review/` and this review file under `docs/reviews/`.
+- **Initial Audited Head SHA:** `8fce168be1ca1e5914ff1d5511f690406f0c96e9` (`feat(governance): implement Option B-Lite stabilization and native /swarm governance pivot`)
+- **Re-Verified Head SHA (Pass 1):** `146938b81faf8dbdbac865549b64c4b36be315d3` (remediation commits `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`, `146938b81faf8dbdbac865549b64c4b36be315d3`)
+- **Final Verified Head SHA (Pass 2):** `de82071d723ab34803828c9cdd29899639946975` (`fix(governance): close SKILL-PR4-02 verifiedFiles schema and RUN-PR4-06 negation casing`; full delta `d675580..de82071`)
+- **Working-Tree State:** Clean on tracked files prior to Session 3 ledger closure; review scratch reports under `scratch/agy-squad/pr4-review/` and this review file under `docs/reviews/`.
 
 ### Session Provenance
 
 | Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |
 | --- | --- | --- | --- | --- | --- |
 | Session 1 | `a17ebb12-8e95-4697-9094-c4f40e3c864e` | Coordinator `/swarm` session | `2026-11-13` | `d675580cdb2ffc8272a14325231673779ec9b2c3..8fce168be1ca1e5914ff1d5511f690406f0c96e9` (tracked tree clean; review scratch in `scratch/agy-squad/pr4-review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` (native `/swarm`: `coordinator` -> `runtime-auditor`, `cli-docs-auditor` -> `review-lead` -> `integrity-auditor`) |
+| Session 2 (Re-Verification) | `a17ebb12-8e95-4697-9094-c4f40e3c864e` | Coordinator `/swarm` session | `2026-11-13` | `8fce168be1ca1e5914ff1d5511f690406f0c96e9..146938b81faf8dbdbac865549b64c4b36be315d3` (remediation `3bffc5d` + `146938b`; review scratch in `scratch/agy-squad/pr4-review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` re-verification (`coordinator` -> `runtime-auditor`, `cli-docs-auditor` -> `review-lead` -> `integrity-auditor`) |
+| Session 3 (Final Re-Verification) | `a17ebb12-8e95-4697-9094-c4f40e3c864e` | Coordinator `/swarm` session | `2026-11-13` | `146938b81faf8dbdbac865549b64c4b36be315d3..de82071d723ab34803828c9cdd29899639946975` (final remediation `de82071`; review scratch in `scratch/agy-squad/pr4-review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` final verification (`coordinator` -> `runtime-auditor`, `cli-docs-auditor` -> `review-lead` -> `integrity-auditor`) |
 
 ### Evidence Available & Limits
 
-- **Directly Inspected Sources:** `git diff d675580..8fce168` across all `9` modified files (`+518 / -81`), plus unchanged dependencies: `mcp/index.js`, `docs/plans/LEDGER.md`, `.agents/skills/self-diagnosis/SKILL.md`, `.agents/skills/self-diagnosis/scripts/diagnose.mjs`, `.agents/skills/pr-review/SKILL.md`, `tests/verify-package.mjs`, `docs/tools.md`, `docs/core-workflows.md`, `docs/getting-started.md`, `docs/concepts.md`, `docs/index.md`, `README.md`, and `docs/reviews/pr3-squad-alignment-full-review.md`.
-- **Directly Executed Checks (on `8fce168be1ca1e5914ff1d5511f690406f0c96e9`):** `npm test` (6/6 suites), `node tests/verify-package.mjs --self-test`, `npm pack --dry-run --json` -> `node tests/verify-package.mjs`, `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --allow-active-cohort`, targeted Node reproduction probes for `mcp/verdicts.mjs`, `mcp/handoffs.mjs`, `mcp/dispatch.mjs`, and `bin/agy-squad.mjs` CLI subcommands.
+- **Directly Inspected Sources:** Full PR delta `d675580..de82071` and final remediation `146938b..de82071` (`3` files changed, `+7 / -3`), including `.agents/skills/swarm-governance/SKILL.md`, `.agents/skills/self-diagnosis/SKILL.md`, `bin/agy-squad.mjs`, `mcp/verdicts.mjs`, `mcp/handoffs.mjs`, `mcp/dispatch.mjs`, `mcp/briefs.mjs`, `mcp/index.js`, `tests/test-verdicts-and-pivot.mjs`, `tests/verify-package.mjs`, `docs/plans/LEDGER.md`, active docs (`README.md`, `docs/index.md`, `docs/getting-started.md`, `docs/concepts.md`, `docs/core-workflows.md`, `docs/tools.md`), and `docs/reviews/pr3-squad-alignment-full-review.md`.
+- **Directly Executed Checks (on `de82071d723ab34803828c9cdd29899639946975`):** `npm test` (`6/6` suites exit `0`), `node tests/verify-package.mjs --self-test` (exit `0`), `npm pack --dry-run --json` -> `node tests/verify-package.mjs` (`43` files, exit `0`), `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --allow-active-cohort` (exit `0`, `HEALTHY`), `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --ledger docs/reviews/pr4-swarm-governance-pivot-review.md --allow-active-cohort` (exit `0`, `HEALTHY`), and end-to-end Node probes for `SKILL-PR4-02` (`<bundle-record.json>` schema) and `RUN-PR4-06` (case-insensitive negation prefixes).
 - **Unavailable / Out-of-Scope Inputs:** External GitHub Actions CI run logs for PR #4 and live `agy` PTY execution (`L7` prohibits automated subagent launches in tests).
 
 ---
@@ -47,21 +51,21 @@
 | `.agents/skills/self-diagnosis/SKILL.md` *(unchanged)* | `0 / 0` | `SKILL` | `ARCH` | Complete | Audited Step 0 Option 3 against `integrity_auditor` role separation |
 | `tests/verify-package.mjs` *(unchanged)* | `0 / 0` | `TEST` | `DEP` | Complete | Audited `REQUIRED` file list for new PR #4 artifacts |
 
-### Category Coverage Matrix
+### Category Coverage Matrix (Final Verified `de82071`)
 
-| Category | Scope Status | P1 | P2 | P3 | Verdict |
+| Category | Scope Status | Open P1 | Open P2 | Open P3 | Verdict |
 | --- | --- | :---: | :---: | :---: | --- |
-| `ARCH` | Complete | 0 | 3 | 0 | No findings within reviewed scope |
-| `DOC` | Complete | 0 | 3 | 0 | No findings within reviewed scope |
-| `SKILL` | Complete | 1 | 3 | 0 | No findings within reviewed scope |
-| `MCP` | Complete | 0 | 2 | 1 | No findings within reviewed scope |
-| `RUN` | Complete | 1 | 1 | 3 | No findings within reviewed scope |
-| `SVC` | Complete | 2 | 3 | 1 | No findings within reviewed scope |
+| `ARCH` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `DOC` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `SKILL` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `MCP` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `RUN` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `SVC` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
 | `DB` | Not applicable | 0 | 0 | 0 | Not applicable |
-| `SCRIPT` | Complete | 1 | 0 | 2 | No findings within reviewed scope |
-| `TEST` | Complete | 0 | 1 | 1 | No findings within reviewed scope |
+| `SCRIPT` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
+| `TEST` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
 | `DEP` | Complete | 0 | 0 | 0 | No findings within reviewed scope |
-| **Total** | **10 / 10 covered** | **5** | **16** | **8** | **Request changes (`29` open findings)** |
+| **Total** | **10 / 10 covered** | **0** | **0** | **0** | **Approve (`30` closed, `0` open findings)** |
 
 ---
 
@@ -119,8 +123,8 @@
      - **Root cause / related IDs:** Legacy backwards-compatibility default carried over from `requireAdversarialReview`; related to `SKILL-PR4-02`.
      - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`; verified by `npm test`, `verify-package.mjs`, and `diagnose.mjs`.
 5. **P3 — low priority:** None identified within reviewed scope.
-6. **Verification:** Empirical Node probe confirmed `integrity_auditor` on `[alpha, beta]` emits `Target Squad: alpha'`, and `all_l1` excludes `integrity_auditor` and `adversarial_review`.
-7. **Verdict:** `Changes required` (`3` open `P2` findings).
+6. **Verification:** Empirical Node probes on `146938b` confirmed `integrity_auditor:alpha` and `integrity_auditor:beta` compile to disjoint slots, untargeted `integrity_auditor` rejects multi-squad manifests, `agy-squad bundle` enforces `requireIntegrityAudit: true` by default, and `all_l1` excludes `integrity_auditor` and `adversarial_review`.
+7. **Verdict:** `No findings within reviewed scope` (`ARCH-PR4-01`–`03` verified `Closed` on `146938b`).
 
 ---
 
@@ -161,8 +165,8 @@
      - **Root cause / related IDs:** `diagnose.mjs` resolves the latest review file under `docs/reviews/` and rejects an empty Section 9 heading.
      - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`; verified by `npm test`, `verify-package.mjs`, and `diagnose.mjs`.
 5. **P3 — low priority:** None identified within reviewed scope.
-6. **Verification:** Executed `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --allow-active-cohort` (`exit 1`, `DOC-LEDGER-SCHEMA` on `pr3-squad-alignment-full-review.md`) and inspected all listed active docs and `docs/plans/LEDGER.md`.
-7. **Verdict:** `Changes required` (`3` open `P2` findings).
+6. **Verification:** Inspected `README.md`, `docs/index.md`, `docs/getting-started.md`, `docs/concepts.md`, `docs/core-workflows.md`, `docs/tools.md`, `docs/plans/LEDGER.md` (`L17` deprecated in favor of active `L42`), and `docs/reviews/pr3-squad-alignment-full-review.md` on `146938b`; `node .agents/skills/self-diagnosis/scripts/diagnose.mjs` exited `0` (`"status": "HEALTHY"`).
+7. **Verdict:** `No findings within reviewed scope` (`DOC-PR4-01`–`03` verified `Closed` on `146938b`).
 
 ---
 
@@ -182,16 +186,16 @@
      - **Root cause / related IDs:** Author assumed `bundle.json` filename instead of `report.sources.json`; related to `SKILL-PR4-02`.
      - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`; verified by `npm test`, `verify-package.mjs`, and `diagnose.mjs`.
 4. **P2 — medium priority:**
-   - **Title, priority, status:** `SKILL-PR4-02` — `swarm-governance/SKILL.md` omits `<bundle-record.json>` schema and teaches `@lead ` prefix incompatible with `reconcileHandoffs` (`P2`, `Closed`).
-     - **Contract provenance:** `reconcileHandoffs` (`mcp/handoffs.mjs#L107-L120`) and `bundleReports` (`mcp/handoffs.mjs#L308-L363`).
-     - **Source evidence:** [`.agents/skills/swarm-governance/SKILL.md#L34-L36,L49-L50`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/.agents/skills/swarm-governance/SKILL.md#L34-L36).
-     - **Trigger:** Constructing `<bundle-record.json>` from `swarm-governance/SKILL.md` using the board messages from §2 (`@lead READY <report-path> — <obs>`).
-     - **Expected / actual:** Expected skill to document required `<bundle-record.json>` keys (`squadId`, `workspace`, `verdict`, `verifiedFiles`, `assignments`, `handoffs`, `requireIntegrityAudit: true`), how to generate `verifiedFiles` (`fingerprint`), and that `handoffs[].message` must strip `@lead `; actual omits the schema and `fingerprint` step, and `@lead READY ...` fails `reconcileHandoffs` (`startsWith("READY ...")`).
-     - **Impact:** Operators cannot assemble a valid `<bundle-record.json>` from the skill alone.
-     - **Required remediation:** Add a concise `<bundle-record.json>` example/schema, document `fingerprint`, and note stripping the native `@lead ` mention prefix when recording `handoffs[].message`.
-     - **Acceptance evidence:** Following the documented steps verbatim produces a valid bundle via `agy-squad bundle`.
-     - **Root cause / related IDs:** Skill abstracted `/swarm` board syntax without bridging to `bundleReports` input schema; related to `SKILL-PR4-01`, `ARCH-PR4-03`.
-     - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`; verified by `npm test`, `verify-package.mjs`, and `diagnose.mjs`.
+   - **Title, priority, status:** `SKILL-PR4-02` — `swarm-governance/SKILL.md` `<bundle-record.json>` schema documents object `verifiedFiles` rejected by `bundleReports` (`P2`, `Closed`).
+     - **Contract provenance:** `fingerprint` / `verifyFiles` (`mcp/handoffs.mjs#L174-L189`) and `reconcileHandoffs` (`mcp/handoffs.mjs#L107-L120`).
+     - **Source evidence:** [`.agents/skills/swarm-governance/SKILL.md#L70`](https://github.com/paragon-ux/Agy-Squad/blob/de82071d723ab34803828c9cdd29899639946975/.agents/skills/swarm-governance/SKILL.md#L70) vs. [`mcp/handoffs.mjs#L174-L189`](https://github.com/paragon-ux/Agy-Squad/blob/de82071d723ab34803828c9cdd29899639946975/mcp/handoffs.mjs#L174-L189).
+     - **Trigger:** Constructing `<bundle-record.json>` using the example schema in `.agents/skills/swarm-governance/SKILL.md#L64-L74` and running `node bin/agy-squad.mjs bundle <bundle-record.json>`.
+     - **Expected / actual:** Expected `"verifiedFiles": { "<file>": "<64-hex>" }` matching `node bin/agy-squad.mjs fingerprint` output and `verifyFiles` (`hash !== verifiedFiles[file]`); `3bffc5d` introduced `{ sha256, bytes }` at line `70`, which was fixed to flat `"verifiedFiles": { "<file>": "<64-hex>" }` in `de82071`.
+     - **Impact:** Operators or CI scripts following the `<bundle-record.json>` example schema previously failed `agy-squad bundle`.
+     - **Required remediation:** Update `.agents/skills/swarm-governance/SKILL.md#L70` to `"verifiedFiles": { "<file>": "<64-hex>" }`.
+     - **Acceptance evidence:** Verified end-to-end on `de82071` with `bundleReports`/`verifyBundle` and `cli-docs-auditor` isolated CLI E2E run (`bundle`, `verify`, `prune --keep-reports` exited `0`).
+     - **Root cause / related IDs:** Schema example drafted with `{ sha256, bytes }` object instead of flat `fingerprint()` map; related to `SKILL-PR4-01`.
+     - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1` and `de82071d723ab34803828c9cdd29899639946975`; verified on `de82071`.
    - **Title, priority, status:** `SKILL-PR4-03` — `self-diagnosis/SKILL.md` still instructs pre-pivot `PASS` adversarial review gate (`P2`, `Closed`).
      - **Contract provenance:** PR #4 role separation (`swarm-governance/SKILL.md` §1, `mcp/verdicts.mjs`).
      - **Source evidence:** [`.agents/skills/self-diagnosis/SKILL.md#L31-L32`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/.agents/skills/self-diagnosis/SKILL.md#L31-L32).
@@ -213,8 +217,8 @@
      - **Root cause / related IDs:** `L29` private package status overlooked in skill examples.
      - **Closure:** Closed in `3bffc5d46c3f34373dd5eaaeef2fc8a5e671baa1`; verified by `npm test`, `verify-package.mjs`, and `diagnose.mjs`.
 5. **P3 — low priority:** None identified within reviewed scope.
-6. **Verification:** Inspected `swarm-governance/SKILL.md`, `self-diagnosis/SKILL.md`, `pr-review/SKILL.md`, `package.json`, and verified `bundleReports` returns `scratch/agy-squad/squad-alpha/lead/report.sources.json`.
-7. **Verdict:** `Changes required` (`1` open `P1`, `3` open `P2` findings).
+6. **Verification:** Inspected `swarm-governance/SKILL.md`, `self-diagnosis/SKILL.md`, `pr-review/SKILL.md`, and `package.json` on `de82071`; empirically verified `SKILL-PR4-01`–`04` closed including end-to-end bundling with `.agents/skills/swarm-governance/SKILL.md#L64-L74` verbatim (`40e8a9eb...`).
+7. **Verdict:** `No findings within reviewed scope` (`SKILL-PR4-01`–`04` verified `Closed` on `de82071`).
 
 ---
 
@@ -250,8 +254,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `MCP-PR4-03` | Session 1 | `MCP` | `Closed` | [`mcp/index.js#L58`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/mcp/index.js#L58) | `dispatch_squad` discovery schema `squadId.description` omits `integrity_auditor` and `integrity_auditor:<target>`. | Update `squadId.description` in `mcp/index.js#L58` (staying under MCP `tools/list` byte budget). | Inspected `mcp/index.js#L58`; `503 B` `tools/list` measured. |
 
-6. **Verification:** Empirically invoked `handleDispatchSquad` with `integrity_auditor:` and `integrity_auditor:adversarial_review` (both returned `isError: false`); inspected `mcp/index.js#L58`.
-7. **Verdict:** `Changes required` (`2` open `P2`, `1` open `P3` findings).
+6. **Verification:** Empirical Node probes on `146938b` confirmed `handleDispatchSquad` returns `isError: true` for `integrity_auditor:` and `integrity_auditor:adversarial_review`; inspected `mcp/index.js#L58` (`tools/list` `527 B`).
+7. **Verdict:** `No findings within reviewed scope` (`MCP-PR4-01`–`03` verified `Closed` on `146938b`).
 
 ---
 
@@ -288,9 +292,10 @@
 | `RUN-PR4-03` | Session 1 | `RUN` | `Closed` | [`mcp/verdicts.mjs#L10-L14`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/mcp/verdicts.mjs#L10-L14) | `stripCode` strips fenced blocks before inline spans, so an inline `` ` ``` ` `` swallows subsequent lines until the next triple backtick. | Strip fenced blocks line-by-line (tracking matching fence tokens) before inline code spans. | Inspected `mcp/verdicts.mjs#L10-L14`. |
 | `RUN-PR4-04` | Session 1 | `RUN` | `Closed` | [`mcp/verdicts.mjs#L29-L31`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/mcp/verdicts.mjs#L29-L31) | `exactRe` rejects trailing punctuation (`Content Verdict: PASS.`) as hedged and ignores Markdown heading declarations (`## Content Verdict: PASS`). | Explicitly allow optional trailing `.` or document strict exclusion for punctuation/headings. | Inspected `mcp/verdicts.mjs#L29-L31`. |
 | `RUN-PR4-05` | Session 1 | `RUN` | `Closed` | [`mcp/briefs.mjs#L111-L125`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/mcp/briefs.mjs#L111-L125) | `buildSubagentSpec` `isLead` branches check only `isAdversarial`, instructing a custom `squads.integrity_auditor` lead to emit `PASS, FAIL, or BLOCKED`. | Handle `isIntegrityAuditor` in `isLead` branches (or disallow `lead` on `integrity_auditor`). | Inspected `mcp/briefs.mjs#L111-L125`; prompt budgets verified `<= 1800 B` / `<= 3300 B`. |
+| `RUN-PR4-06` | Session 2 | `RUN` | `Closed` | [`mcp/verdicts.mjs#L90-L94`](https://github.com/paragon-ux/Agy-Squad/blob/de82071d723ab34803828c9cdd29899639946975/mcp/verdicts.mjs#L90-L94) | Lowercase-only negation prefix tokens missed sentence-initial `"Not PASS on smoke."`. | Closed in `de82071` via case-insensitive negation prefix regex + regression test (`tests/test-verdicts-and-pivot.mjs#L50`). | Verified on `de82071`: `"Not PASS on smoke."` throws; `"does not pass invalid events."` returns `"PASS"`. |
 
-6. **Verification:** Empirical Node probes reproduced `RUN-PR4-01` (`conflicting content verdicts: PASS, FAIL` and fabricated `BLOCKED`) and `RUN-PR4-02` (`did not pass` returning `PASS`); `diagnose.mjs` confirmed all prompt byte budgets remain within limits (`1545 B` unmanaged specialist, `950 B` managed specialist, `2767 B` unmanaged lead, `1398 B` managed lead).
-7. **Verdict:** `Changes required` (`1` open `P1`, `1` open `P2`, `3` open `P3` findings).
+6. **Verification:** Empirical Node probes on `de82071` verified `RUN-PR4-01`–`06` closed (`"Not PASS on smoke."` and `"Cannot PASS smoke."` throw while `"The endpoint does not pass invalid events."` returns `"PASS"`); `npm test` (`6/6`) and `diagnose.mjs` prompt budgets pass.
+7. **Verdict:** `No findings within reviewed scope` (`RUN-PR4-01`–`06` verified `Closed` on `de82071`).
 
 ---
 
@@ -356,8 +361,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `SVC-PR4-06` | Session 1 | `SVC` | `Closed` | [`mcp/handoffs.mjs#L423,L510,L522`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/mcp/handoffs.mjs#L423) | `bundleReports` and `verifyBundleInternal` coerce `retainReports` via truthy/`Boolean(...)` instead of rejecting non-boolean values (e.g., `"false"` string silently retains reports). | Validate `retainReports === undefined \|\| typeof retainReports === "boolean"` in `bundleReports` and `verifyBundleInternal`. | Inspected `mcp/handoffs.mjs#L423,L510,L522`. |
 
-6. **Verification:** Empirical Node probes confirmed `SVC-PR4-01` and `SVC-PR4-02`; `test-handoffs.mjs` and `test-verdicts-and-pivot.mjs` verified symlink containment (`O_NOFOLLOW`, `realpathSync`, `/proc/self/fd`) and `pruneReports` deletion protection on `synthesis`/`integrityAudit`.
-7. **Verdict:** `Changes required` (`2` open `P1`, `3` open `P2`, `1` open `P3` findings).
+6. **Verification:** Empirical Node probes and `npm test` on `146938b` verified `SVC-PR4-01`–`06` closed (bold/bullet `Target Squad`, missing/conflicting `Target Squad` rejection, `verifyBundle` `squadId` binding, explicit `requireAdversarialReview`, stripped `advMarkdown`, `adversarialReview` `readSynthesis` check, and boolean `retainReports`).
+7. **Verdict:** `No findings within reviewed scope` (`SVC-PR4-01`–`06` verified `Closed` on `146938b`).
 
 ---
 
@@ -396,8 +401,8 @@
 | `SCRIPT-PR4-02` | Session 1 | `SCRIPT` | `Closed` | [`bin/agy-squad.mjs#L213,L220-L250`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/bin/agy-squad.mjs#L213) | `bundle --help`, `verify --help`, `prune --help`, and `verdict --help` do not print usage (`exit 0`), failing instead with `ENOENT` or arg-count errors (`exit 1`); `verdict ""` throws `EISDIR`. | Handle `--help`/`-h` before positional reads in subcommands; routing via `readFile` fixes `""`. | Observed `cli-docs-auditor` probe and inspected `bin/agy-squad.mjs#L213-L250`. |
 | `SCRIPT-PR4-03` | Session 1 | `SCRIPT` | `Closed` | [`bin/agy-squad.mjs#L16-L28,L220-L260`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/bin/agy-squad.mjs#L16) | `agy-squad` CLI omits `fingerprint` and `inspect` subcommands (forcing separate `node mcp/handoffs.mjs` calls), and deprecated `run` emits no stderr deprecation warning. | Consider exposing `fingerprint`/`inspect` on `bin/agy-squad.mjs` and warning to stderr in `run`. | Inspected `bin/agy-squad.mjs#L16-L28,L220-L260` vs. `mcp/handoffs.mjs#L550-L557`. |
 
-6. **Verification:** Executed `node bin/agy-squad.mjs verdict ../outside.md` (reproduced `SCRIPT-PR4-01` exit `0`) and `node bin/agy-squad.mjs --help` (exit `0`).
-7. **Verdict:** `Changes required` (`1` open `P1`, `2` open `P3` findings).
+6. **Verification:** Isolated CLI probes on `146938b` verified `SCRIPT-PR4-01`–`03` closed (`verdict ../outside`, `/abs`, symlink, and `""` exit `1`; `--help` on all `6` governance subcommands exits `0`; `fingerprint`/`inspect` work; `run` prints deprecation warning to stderr).
+7. **Verdict:** `No findings within reviewed scope` (`SCRIPT-PR4-01`–`03` verified `Closed` on `146938b`).
 
 ---
 
@@ -423,8 +428,8 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `TEST-PR4-02` | Session 1 | `TEST` | `Closed` | [`tests/verify-package.mjs#L5-L16`](https://github.com/paragon-ux/Agy-Squad/blob/8fce168be1ca1e5914ff1d5511f690406f0c96e9/tests/verify-package.mjs#L5-L16) | `REQUIRED` package-boundary assertions omit PR #4's new runtime module `mcp/verdicts.mjs` and `.agents/skills/swarm-governance/SKILL.md`. | Add `"mcp/verdicts.mjs"` and `".agents/skills/swarm-governance/SKILL.md"` to `REQUIRED`. | Inspected `tests/verify-package.mjs#L5-L16`; ran `--self-test` (`exit 0`). |
 
-6. **Verification:** Executed `npm test` (6/6 suites exited `0`), `node tests/verify-package.mjs --self-test` (`exit 0`), and `npm pack --dry-run --json` -> `node tests/verify-package.mjs` (`exit 0`, `42` files).
-7. **Verdict:** `Changes required` (`1` open `P2`, `1` open `P3` findings).
+6. **Verification:** Executed `npm test` (`6/6` suites exited `0`), `node tests/verify-package.mjs --self-test` (`exit 0`), and `npm pack --dry-run --json` -> `node tests/verify-package.mjs` (`exit 0`, `43` files) on `146938b`.
+7. **Verdict:** `No findings within reviewed scope` (`TEST-PR4-01`–`02` verified `Closed` on `146938b`).
 
 ---
 
@@ -451,29 +456,29 @@
 
 ## 6. Verification Record and Remaining Gaps
 
-### Executed Checks (Head `8fce168be1ca1e5914ff1d5511f690406f0c96e9`)
+### Executed Checks (Final Verified Head `de82071d723ab34803828c9cdd29899639946975`)
 
 | Check | Outcome | Observed Result |
 | --- | :---: | --- |
 | `npm test` | Pass (`0`) | 6/6 suites passed (`test-verdicts-and-pivot.mjs`, `test-dispatch.mjs`, `test-handoffs.mjs`, `test-run.mjs`, `test-server.mjs`, `verify-benchmark.mjs`) |
 | `node tests/verify-package.mjs --self-test` | Pass (`0`) | `Package verifier self-test passed (positive + 7 negatives)` |
-| `npm pack --dry-run --json` -> `node tests/verify-package.mjs` | Pass (`0`) | `Package boundary verified (42 files)` |
-| `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --allow-active-cohort` | Fail (`1`) | `status: "CHANGES_REQUIRED"` due to `DOC-LEDGER-SCHEMA` on `pr3-squad-alignment-full-review.md`; prompt budgets (`1545 B`, `950 B`, `2767 B`, `1398 B`, `503 B`) and `brokenLinksCount: 0` passed |
-| Empirical Node probes (`verdicts`, `handoffs`, `dispatch`, `agy-squad`) | Reproduced | Confirmed `RUN-PR4-01`, `RUN-PR4-02`, `SVC-PR4-01`, `SVC-PR4-02`, `ARCH-PR4-02`, `MCP-PR4-01`, `MCP-PR4-02`, `SCRIPT-PR4-01`, and `bundleReports` path `scratch/agy-squad/squad-alpha/lead/report.sources.json` |
+| `npm pack --dry-run --json > /tmp/pack-verify.json && node tests/verify-package.mjs /tmp/pack-verify.json && rm -f /tmp/pack-verify.json` | Pass (`0`) | `Package boundary verified (43 files)` |
+| `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --allow-active-cohort` | Pass (`0`) | `status: "HEALTHY"`, `findings: []`; prompt budgets (`1545 B`, `950 B`, `2767 B`, `1398 B`, `527 B`) and `brokenLinksCount: 0` passed |
+| `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --ledger docs/reviews/pr4-swarm-governance-pivot-review.md --allow-active-cohort` | Pass (`0`) | `status: "HEALTHY"`, `targetReviewLedger: "docs/reviews/pr4-swarm-governance-pivot-review.md"`, `findings: []` |
+| Empirical Node probes (`SKILL-PR4-02`, `RUN-PR4-06`, + carried-forward `146938b` probes) | `30/30` Closed | Verified `bundleReports`/`verifyBundle` using `.agents/skills/swarm-governance/SKILL.md#L64-L74` verbatim (`40e8a9eb...`), and `"Not PASS on smoke."` / `"Cannot PASS smoke."` throwing while `"does not pass invalid events."` returns `"PASS"` |
 
 ### Remaining Verification Gaps
 
-- Negative CLI security and `integrity_auditor` dispatch edge cases are not yet covered by `npm test` (`TEST-PR4-01`).
 - External GitHub Actions CI run logs for PR #4 and live `agy` PTY sessions (`L7`) were not executed in this review.
 
 ---
 
 ## 7. Overall Disposition and Finding Closure Table
 
-- **Overall Disposition:** **Approve** (`0` open `P1`/`P2`/`P3`; `29` closed in `3bffc5d`).
+- **Overall Disposition:** **Approve** (`0` open `P1`/`P2`/`P3`; `30` closed across `3bffc5d`, `146938b`, `de82071`).
 - **Content Verdict:** `PASS`
 
-### PR #4 Atomic Finding Ledger (`29` Findings — `1 ID = 1 Row`)
+### PR #4 Atomic Finding Ledger (`30` Findings — `1 ID = 1 Row`)
 
 | ID | Category | Severity | Status | Source | Summary | Target Remediation |
 | --- | --- | :---: | --- | --- | --- | --- |
@@ -484,7 +489,7 @@
 | `DOC-PR4-02` | `DOC` | `P2` | `Closed` | `docs/plans/LEDGER.md#L14` | `L17` (`agy-squad run`) remains `Active` with no `/swarm` governance pivot entry | Mark `L17` superseded/deprecated and add active pivot decision ID |
 | `DOC-PR4-03` | `DOC` | `P2` | `Closed` | `docs/reviews/pr3-squad-alignment-full-review.md#L718-L720` | Empty Section 9 heading causes `diagnose.mjs` `DOC-LEDGER-SCHEMA` exit `1` | Remove empty Section 9 (or populate tables) and validate PR #4 ledger |
 | `SKILL-PR4-01` | `SKILL` | `P1` | `Closed` | `.agents/skills/swarm-governance/SKILL.md#L53,L56` | `verify` and `prune` examples hardcode nonexistent `bundle.json` instead of `lead/report.sources.json` | Update paths to `scratch/agy-squad/squad-<id>/lead/report.sources.json` |
-| `SKILL-PR4-02` | `SKILL` | `P2` | `Closed` | `.agents/skills/swarm-governance/SKILL.md#L34-L36,L49-L50` | Skill omits `<bundle-record.json>` schema/`fingerprint` and teaches `@lead ` prefix rejected by `reconcileHandoffs` | Document `<bundle-record.json>` fields, `fingerprint`, and stripping `@lead ` |
+| `SKILL-PR4-02` | `SKILL` | `P2` | `Closed` | `.agents/skills/swarm-governance/SKILL.md#L70` | `3bffc5d` added schema/`fingerprint`/`@lead ` stripping; `de82071` fixed line `70` to flat `<64-hex>` string matching `fingerprint()`/`verifyFiles()` | Update `.agents/skills/swarm-governance/SKILL.md#L70` to `"verifiedFiles": { "<file>": "<64-hex>" }` |
 | `SKILL-PR4-03` | `SKILL` | `P2` | `Closed` | `.agents/skills/self-diagnosis/SKILL.md#L31-L32` | Step 0 Option 3 teaches pre-pivot `PASS` adversarial audit gate | Update Step 0 Option 3 to `integrity_auditor` (`Integrity Verdict: CLEAN`) |
 | `SKILL-PR4-04` | `SKILL` | `P2` | `Closed` | `.agents/skills/swarm-governance/SKILL.md#L47-L56`, `package.json#L4` | Skill instructs `npx agy-squad` on a `"private": true` unpublished package | Document `node <repo>/bin/agy-squad.mjs` or `npm link` + `npx --no-install` |
 | `MCP-PR4-01` | `MCP` | `P2` | `Closed` | `mcp/dispatch.mjs#L233-L235` | Empty target `integrity_auditor:` / `adversarial_flat:` silently compiles untargeted auditor | Reject empty target string whenever `squadId.includes(":")` |
@@ -495,6 +500,7 @@
 | `RUN-PR4-03` | `RUN` | `P3` | `Closed` | `mcp/verdicts.mjs#L10-L14` | `stripCode` strips fenced blocks before inline spans, letting inline `` ` ``` ` `` swallow lines | Strip fenced blocks line-by-line before inline code spans |
 | `RUN-PR4-04` | `RUN` | `P3` | `Closed` | `mcp/verdicts.mjs#L29-L31` | `exactRe` rejects `Content Verdict: PASS.` and ignores `## Content Verdict: PASS` headings | Clarify or support trailing period and document heading exclusion |
 | `RUN-PR4-05` | `RUN` | `P3` | `Closed` | `mcp/briefs.mjs#L111-L125` | `isLead` branches omit `isIntegrityAuditor`, instructing custom `integrity_auditor` lead to emit `PASS` | Handle `isIntegrityAuditor` in `isLead` branches |
+| `RUN-PR4-06` | `RUN` | `P3` | `Closed` | `mcp/verdicts.mjs#L90-L94` | `de82071` added case-insensitive negation prefix regex + regression test catching `"Not PASS on smoke."` | Add case-insensitive matching on negation prefix group at `mcp/verdicts.mjs#L90` |
 | `SVC-PR4-01` | `SVC` | `P1` | `Closed` | `mcp/verdicts.mjs#L99-L107`, `mcp/handoffs.mjs#L279-L282` | `parseTargetSquad` + `readIntegrityAudit` fail open on formatted, missing, or conflicting `Target Squad` | Support bullet/bold syntax, reject conflicts, and fail closed when `expectedSquadId` set |
 | `SVC-PR4-02` | `SVC` | `P1` | `Closed` | `mcp/handoffs.mjs#L478` | `verifyBundleInternal` passes untrusted `audit.targetSquad ?? squadId` to `readIntegrityAudit` | Pass `squadId` unconditionally and assert `audit.targetSquad === squadId` if present |
 | `SVC-PR4-03` | `SVC` | `P2` | `Closed` | `mcp/handoffs.mjs#L351-L385` | Stale `integrity_auditor` report on disk shadows explicit `requireAdversarialReview` / `adversarialReport` | Evaluate explicit `requireAdversarialReview` / `adversarialReport` outside `else` |
