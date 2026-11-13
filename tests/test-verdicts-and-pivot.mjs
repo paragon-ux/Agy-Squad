@@ -45,8 +45,9 @@ try {
     "PASS"
   );
   assert.throws(() => parseContentVerdict("Nothing was BLOCKED during run."));
-  // RUN-PR4-02: lowercase negation at clause end caught while verb phrase "does not pass invalid events" allowed
+  // RUN-PR4-02 & RUN-PR4-06: sentence-initial & lowercase negation at clause end caught; verb phrase allowed
   assert.throws(() => parseContentVerdict("Content Verdict: PASS\nThe check did not pass."));
+  assert.throws(() => parseContentVerdict("Content Verdict: PASS\nNot PASS on smoke."));
   assert.equal(
     parseContentVerdict("Content Verdict: PASS\nThe endpoint does not pass invalid events."),
     "PASS"

@@ -67,7 +67,7 @@ node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.js
   "workspace": "<realpath-to-workspace>",
   "verdict": "PASS",
   "requireIntegrityAudit": true,
-  "verifiedFiles": { "<file>": { "sha256": "<64-hex>", "bytes": 123 } },
+  "verifiedFiles": { "<file>": "<64-hex>" },
   "assignments": [{ "conversationId": "<worker-id>", "report": "scratch/agy-squad/squad-<id>/specialist-1/report.md" }],
   "handoffs": [{ "sender": "<worker-id>", "message": "READY scratch/agy-squad/squad-<id>/specialist-1/report.md — <summary>" }]
 }

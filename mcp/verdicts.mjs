@@ -87,7 +87,10 @@ function parseContentVerdict(markdown) {
   const clean = stripCode(markdown);
   for (const line of clean.split(/\r?\n/)) {
     // Reject explicit negations targeting PASS (uppercase PASS, or lowercase "pass" at clause end)
-    if (/\b(?:not|no|never|isn't|wasn't|didn't|doesn't|cannot|can't|did not|does not)\s+(?:PASS\b|pass(?=\s*(?:[.,;:!?]|$)))/.test(line)) {
+    const negMatch = line.match(
+      /\b(not|no|never|isn't|wasn't|didn't|doesn't|cannot|can't|did\s+not|does\s+not)\s+(pass)\b(?:\s*([.,;:!?]|$))?/i
+    );
+    if (negMatch && (negMatch[2] === "PASS" || negMatch[3] !== undefined)) {
       found.add("FAIL");
     }
     // Reject secondary labeled verdict/status/check lines or table cells asserting FAIL/BLOCKED
