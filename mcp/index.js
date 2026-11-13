@@ -47,7 +47,8 @@ const TOOLS = [
         scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
         roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
         includeIntegrityAuditor: { type: "boolean" },
-        reportRoot: { type: "string", minLength: 1 }
+        reportRoot: { type: "string", minLength: 1 },
+        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Optional authoritative model IDs (for example from swarm{action:\"models\"}); the planner rejects pinned models outside this list." }
       },
       anyOf: [
         { required: ["manifestPath"] },

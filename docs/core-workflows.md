@@ -85,6 +85,9 @@ The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agent
 
 `pr-review` is a repository workflow standard enforced by `diagnose.mjs` and `npm test` (not a GitHub branch-protection setting).
 
+> [!WARNING]
+> `diagnose.mjs` status (`HEALTHY`, finding counts) reflects the structure and contents of the target review ledger, which the author of a change usually writes. It checks that the ledger is well-formed and internally consistent. It does not independently re-review the code. Treat `HEALTHY` as evidence that the process was followed, not as an independent review. An independent reviewer's findings take precedence over a self-authored ledger's counts.
+
 ## 4. Three-scope evidence retention and teardown contract
 
 Agy-Squad defines explicit rules for what evidence is kept, when loose reports are pruned, and when scratch directories are deleted:

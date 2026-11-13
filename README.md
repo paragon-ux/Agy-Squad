@@ -8,7 +8,7 @@ Beyond task delegation, the core harness includes:
 
 - **[`self-diagnosis`](.agents/skills/self-diagnosis/SKILL.md):** A zero-subagent diagnostic profiler (`diagnose.mjs`) and three targeted specialist cohorts for operator-supervised harness auditing and token/runtime optimization.
 - **[`pr-review`](.agents/skills/pr-review/SKILL.md) ([Standard v1.3.0](.agents/skills/pr-review/references/pr-review-standard.md)):** The repository's review specification covering ten mandatory categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), commit and session provenance, and `1 ID = 1 Row` durable finding ledgers under `docs/reviews/`.
-- **[Three-scope teardown lifecycle](docs/core-workflows.md#4-three-scope-evidence-retention-and-teardown-contract):** Automatic cleanup of temporary CLI session registrations, SHA-256-verified report bundling and pruning, and ledger-gated `diagnose.mjs --teardown` before child termination.
+- **[Evidence retention and teardown lifecycle](docs/core-workflows.md#4-three-scope-evidence-retention-and-teardown-contract):** SHA-256-verified report bundling and pruning, and ledger-gated `diagnose.mjs --teardown` before child termination. Native `/swarm` owns worker lifecycle and `kill` cleanup; the Phase 1 temporary CLI session registrations were retired with the launcher (`L17`).
 
 ## Documentation
 

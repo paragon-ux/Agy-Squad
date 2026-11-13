@@ -60,7 +60,7 @@ File scope in a brief describes the assignment (see [WSL verification checklist]
 
 Run `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) from the shared workspace root. Bundling and pruning support both default (`scratch/agy-squad/squad-…`) and custom `reportRoot` layouts.
 
-- `plan ...` exposes `squad_planner` from the CLI (`--manifest` or `<task>`, `--squad`, `--mode swarm|subagent`, `--model`, `--workspace-isolation`, `--scope`, `--role`, `--no-integrity`, `--report-root`).
+- `plan ...` exposes `squad_planner` from the CLI (`--manifest` or `<task>`, `--squad`, `--mode swarm|subagent`, `--model`, `--workspace-isolation`, `--scope`, `--role`, `--no-integrity`, `--report-root`, `--known-model <id>...`). In swarm mode the planner marks pinned models `unverified` unless you pass the IDs from `swarm{action:"models"}` as `--known-model` (CLI) or `knownModels` (MCP); with a list supplied, a pinned model outside it is rejected. Swarm bundle templates use the swarm member name as `assignments[].conversationId` and `handoffs[].sender`.
 
 - `verdict [--integrity] <report.md>` strictly parses a single-line `Content Verdict: PASS|FAIL|BLOCKED` (or `Verdict: ...`), or `Integrity Verdict: CLEAN|INTEGRITY VIOLATION` with `--integrity`, rejecting hedged or contradictory lines.
 - `fingerprint <file...>` returns workspace-relative paths mapped to SHA-256. Capture hashes before and after independent checks on final work inputs.

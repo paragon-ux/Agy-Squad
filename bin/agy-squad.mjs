@@ -7,7 +7,7 @@ import { parseContentVerdict, parseIntegrityVerdict } from "../mcp/verdicts.mjs"
 
 const usage = [
   "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm):",
-  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>]",
+  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...]",
   "  agy-squad fingerprint <file...>                                        Compute SHA-256 fingerprints for verifiedFiles",
   "  agy-squad inspect <record.json>                                        Reconcile handoff readiness for a cohort",
   "  agy-squad bundle <record.json> [--allow-unaudited]                     Create a SHA-256 verified proof bundle",
@@ -29,7 +29,8 @@ function runPlanCommand(rest, root) {
       scope: { type: "string", multiple: true },
       role: { type: "string", multiple: true },
       "no-integrity": { type: "boolean", default: false },
-      "report-root": { type: "string" }
+      "report-root": { type: "string" },
+      "known-model": { type: "string", multiple: true }
     }
   });
   const task = positionals.join(" ").trim();
@@ -43,7 +44,8 @@ function runPlanCommand(rest, root) {
     ...(values.scope !== undefined ? { scopeFiles: values.scope } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
-    ...(values["report-root"] !== undefined ? { reportRoot: values["report-root"] } : {})
+    ...(values["report-root"] !== undefined ? { reportRoot: values["report-root"] } : {}),
+    ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {})
   };
   return planSquadCohort(planArgs, root);
 }

@@ -22,7 +22,8 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "scopeFiles",
   "roles",
   "includeIntegrityAuditor",
-  "reportRoot"
+  "reportRoot",
+  "knownModels"
 ]);
 
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
@@ -206,8 +207,15 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     scopeFiles,
     roles,
     includeIntegrityAuditor = true,
-    reportRoot
+    reportRoot,
+    knownModels
   } = args;
+
+  if (knownModels !== undefined) {
+    if (!Array.isArray(knownModels) || knownModels.length === 0 || knownModels.some(m => typeof m !== "string" || !m.trim())) {
+      throw new Error("knownModels must be a non-empty array of non-empty model ID strings (for example the model IDs returned by swarm{action:\"models\"}).");
+    }
+  }
 
   const sources = [
     manifestPath !== undefined ? "manifestPath" : null,
@@ -382,7 +390,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
       );
       compiledSpecialists.push({ slot, workerName, specModel, compiled });
       assignmentsTemplate.push({
-        conversationId: executionMode === "swarm" ? `<swarm-worker:${workerName}:conversationId>` : `<invoke_subagent:${workerName}:conversationId>`,
+        // Swarm identifies members on the board by roster name, so the name is the sender identity.
+        conversationId: executionMode === "swarm" ? workerName : `<invoke_subagent:${workerName}:conversationId>`,
         report: slot
       });
       provenanceEntries.push({
@@ -535,6 +544,48 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     warnings.push(modelProvenance.warning);
   }
 
+  const pinnedModels = new Set();
+  if (executionMode === "swarm") {
+    for (const w of workers) {
+      if (w.lead?.swarmAdd?.model) pinnedModels.add(w.lead.swarmAdd.model);
+      for (const s of w.specialists) if (s.swarmAdd?.model) pinnedModels.add(s.swarmAdd.model);
+    }
+    for (const a of integrityAuditPlan) if (a.swarmAdd?.model) pinnedModels.add(a.swarmAdd.model);
+  }
+  let modelValidation;
+  if (executionMode === "swarm" && pinnedModels.size > 0) {
+    const pinned = [...pinnedModels];
+    if (knownModels !== undefined) {
+      const known = new Set(knownModels.map(m => m.trim()));
+      const unknown = pinned.filter(m => !known.has(m));
+      if (unknown.length > 0) {
+        throw new Error(`Pinned model(s) not in knownModels: ${unknown.join(", ")}. Run swarm{action:"models"} and pass its model IDs, or fix the model name.`);
+      }
+      modelValidation = { status: "checked-against-supplied-list", pinned, source: "knownModels argument" };
+    } else {
+      modelValidation = {
+        status: "unverified",
+        pinned,
+        reason: "The planner has no access to the host's swarm{action:\"models\"} list, so pinned model names are not checked here."
+      };
+      warnings.push(
+        `Pinned model(s) ${pinned.join(", ")} are unverified. Run swarm{action:"models"} before the first swarm add, or pass its IDs as knownModels so the planner can reject typos.`
+      );
+    }
+  }
+
+  const notes = [];
+  if (executionMode === "swarm" && workers.some(w => w.lead)) {
+    notes.push(
+      "Layered plan: each working squad has its own lead on top of the swarm coordinator. Single-squad plans have no squad lead (the coordinator acts as lead). The extra layer costs tokens and is unmeasured; prefer a flat plan unless domains need separate synthesis."
+    );
+  }
+  if (executionMode === "swarm") {
+    notes.push(
+      "Pointer-Over-Wire on the swarm board is a convention, not enforced: workers can post anything. 'agy-squad inspect' detects violations after the fact; it does not prevent them."
+    );
+  }
+
   return {
     plannerVersion: "2.0.0",
     source: selectedManifest,
@@ -547,10 +598,18 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
       scopeOverlaps
     },
     modelProvenance,
+    ...(modelValidation ? { modelValidation } : {}),
     warnings,
+    notes,
+    ...(executionMode === "swarm"
+      ? { preflight: ["swarm{action:\"models\"}  // confirm pinned model IDs and quota before the first add", "swarm{action:\"status\"}  // after spawning, confirm each worker runs the pinned model"] }
+      : {}),
     workers,
     provenanceScaffold: {
       transcriptIsolation: "L6 enforced: raw transcripts stay in .system_generated/; never copy transcripts into scratch/ or lead/leaf directories.",
+      identity: executionMode === "swarm"
+        ? "Swarm identifies members by roster name: bundle assignments[].conversationId and handoffs[].sender use the swarm member name shown above and on the board."
+        : "invoke_subagent returns a conversationId per child; record it in assignments[].conversationId and use it as handoffs[].sender.",
       coordinatorSessionModel: "<record-coordinator-model-from-swarm-status>",
       entries: provenanceEntries
     },

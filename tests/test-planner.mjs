@@ -316,6 +316,51 @@ try {
   const badCliFlag = spawnSync(process.execPath, [cli, "plan", "Task", "--unknown-flag"], { cwd: root, encoding: "utf8" });
   assert.notEqual(badCliFlag.status, 0);
 
+  // 9. PR5-MCP-01: pinned swarm models are unverified unless the caller supplies the host's list
+  const unverified = planSquadCohort({ task: "audit", model: "bogus-model" }, root);
+  assert.equal(unverified.modelValidation.status, "unverified");
+  assert.deepEqual(unverified.modelValidation.pinned, ["bogus-model"]);
+  assert.ok(unverified.warnings.some(w => /unverified/.test(w)));
+  assert.ok(unverified.preflight.some(p => /swarm\{action:"models"\}/.test(p)));
+  const checked = planSquadCohort({ task: "audit", model: "gemini-3.8-flash-high", knownModels: ["gemini-3.8-flash-high", "claude-sonnet-5-5-high"] }, root);
+  assert.equal(checked.modelValidation.status, "checked-against-supplied-list");
+  assert.ok(!checked.warnings.some(w => /unverified/.test(w)));
+  assert.throws(() => planSquadCohort({ task: "audit", model: "bogus-model", knownModels: ["gemini-3.8-flash-high"] }, root), /not in knownModels: bogus-model/);
+  assert.throws(() => planSquadCohort({ task: "audit", knownModels: [] }, root), /knownModels must be a non-empty array/);
+  const noModel = planSquadCohort({ task: "audit" }, root);
+  assert.equal(noModel.modelValidation, undefined);
+  const subagentNoValidation = planSquadCohort({ task: "audit", executionMode: "subagent", model: "bogus-model" }, root);
+  assert.equal(subagentNoValidation.modelValidation, undefined);
+  assert.equal(subagentNoValidation.preflight, undefined);
+  const cliModel = spawnSync(process.execPath, [cli, "plan", "Audit", "--model", "gemini-3.8-flash-high", "--known-model", "gemini-3.8-flash-high"], { cwd: root, encoding: "utf8" });
+  assert.equal(cliModel.status, 0, cliModel.stderr);
+  assert.equal(JSON.parse(cliModel.stdout).modelValidation.status, "checked-against-supplied-list");
+  const cliBadModel = spawnSync(process.execPath, [cli, "plan", "Audit", "--model", "typo-model", "--known-model", "gemini-3.8-flash-high"], { cwd: root, encoding: "utf8" });
+  assert.notEqual(cliBadModel.status, 0);
+
+  // 10. PR5-ARCH-02: swarm bundle templates use the board (member) name as identity
+  const swarmIdentity = planSquadCohort({ task: "audit", roles: ["A", "B"], scopeFiles: ["src"] }, root);
+  for (const w of swarmIdentity.workers) {
+    const names = w.specialists.map(s => s.workerName);
+    const tpl = swarmIdentity.bundleRecordTemplates[w.squadId].assignments.map(a => a.conversationId);
+    assert.deepEqual(tpl, names);
+  }
+  assert.match(swarmIdentity.provenanceScaffold.identity, /roster name/);
+  const subIdentity = planSquadCohort({ task: "audit", executionMode: "subagent" }, root);
+  assert.match(subIdentity.bundleRecordTemplates[subIdentity.workers[0].squadId].assignments[0].conversationId, /^<invoke_subagent:/);
+
+  // 11. PR5-ARCH-03 / PR5-SKILL-01: honest notes about layering cost and convention-only Pointer-Over-Wire
+  assert.ok(swarmIdentity.notes.some(n => /not enforced/.test(n)));
+  assert.ok(!swarmIdentity.notes.some(n => /Layered plan/.test(n)), "single-squad swarm plans have no squad lead");
+  const layered = planSquadCohort({
+    manifest: { squads: {
+      a: { lead: { role: "A Lead", objective: "Lead a", scopeFiles: ["a"] }, specialists: [{ role: "SA", objective: "Check a", scopeFiles: ["a/x.mjs"] }] },
+      b: { lead: { role: "B Lead", objective: "Lead b", scopeFiles: ["b"] }, specialists: [{ role: "SB", objective: "Check b", scopeFiles: ["b/y.mjs"] }] }
+    } }
+  }, root);
+  assert.ok(layered.notes.some(n => /Layered plan/.test(n)));
+  assert.equal(planSquadCohort({ task: "audit", executionMode: "subagent" }, root).notes.some(n => /not enforced/.test(n)), false);
+
   console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

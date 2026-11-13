@@ -91,10 +91,13 @@ To run a fresh live comparison on an authenticated WSL2 host with `Agy-Context-S
 
 1. Start from a clean checkout of `benchmarks/teamwork-vs-squad/fixture` and record your `agy --version`, model selection, and start/stop timestamps.
 2. **Arm 1 (Agy-Squad):**
+   > [!NOTE]
+   > The recorded Nov 8, 2026 run launched Arm 1 through the Phase 1 `agy-squad run --launch` PTY launcher, which PR #5 retired (`L17`). The command below is the current equivalent. It is not the path that produced the recorded numbers, so a fresh run is a new measurement, not a replication.
+
    ```bash
-   node bin/agy-squad.mjs run --workspace "$PWD" \
-     --manifest benchmarks/teamwork-vs-squad/manifest.json --squad all_l1 --launch
+   node bin/agy-squad.mjs plan --manifest benchmarks/teamwork-vs-squad/manifest.json \
+     --squad ab_audit --mode subagent
    ```
-   After the lead returns its `READY` receipt and `report.sources.json` bundle digest, run `node mcp/handoffs.mjs verify scratch/agy-squad/run-<uuid>/plan-<hex>/squad-ab_audit/lead/report.sources.json` and collect per-agent metrics via `check_context_health`.
+   Give the compiled `Subagent` specs to Antigravity (`invoke_subagent`, or `dispatch_squad` over MCP). To run the same cohort on native `/swarm`, use `--mode swarm --model <id>` and let the coordinator issue the emitted `swarm add` calls. After the lead returns its `READY` receipt, fill in the emitted `bundleRecordTemplates`, run `node bin/agy-squad.mjs bundle <record.json>`, then `node bin/agy-squad.mjs verify scratch/agy-squad/squad-ab_audit/lead/report.sources.json`, and collect per-agent metrics via `check_context_health`.
 3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `check_context_health`.
 4. Grade both arms' findings against the six-defect rubric (`N1` through `N6`) in `results/telemetry.json`.

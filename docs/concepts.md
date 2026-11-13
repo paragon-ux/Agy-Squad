@@ -1,6 +1,6 @@
 # Concepts and terminology
 
-This guide defines the core terms used across Agy-Squad's CLI launcher, MCP tools, skills, and architecture decision ledger.
+This guide defines the core terms used across Agy-Squad's CLI, MCP tools, skills, and architecture decision ledger.
 
 ## Execution lifecycle
 

@@ -19,7 +19,7 @@ In this recorded six-defect audit, both arms caught all six planted defect categ
 | **Parent wakeups and injected bytes** | **`1` wakeup (`249 B`)** | **`5` wakeups (`4,940 B`)** | **`19.8x` fewer parent bytes (`95.0%` reduction)** |
 | **Artifact integrity verification** | **`20 ms`** (`handoffs.mjs verify` SHA-256 digests) | No separate SHA-256 source/report bundle check | Cryptographic input and report digest check |
 | **Semantic correctness verification** | Parent/lead direct code and test inspection (`32` lead steps) | `2` dedicated LLM review agents (`reviewer_1` + `auditor_1`, `174` steps, `228.6 KB`) | Direct lead verification vs. separate verifier fleet |
-| **Teardown policy and post-run Git status** | Explicit 3-scope teardown contract (`0` untracked Git files; `scratch/` gitignored) | No operator-facing teardown CLI documented (`41` untracked files, `207.9 KB` in `.agents/teamwork/`) | Governed lifecycle contract (`L41`) |
+| **Teardown policy and post-run Git status** | Explicit 3-scope teardown contract at the time of the run (`0` untracked Git files; `scratch/` gitignored; Phase 1, see note below) | No operator-facing teardown CLI documented (`41` untracked files, `207.9 KB` in `.agents/teamwork/`) | Governed lifecycle contract (`L41`) |
 
 ## Possible contributors to the observed difference
 
@@ -74,10 +74,13 @@ The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhoo
 
 ## Documented teardown and evidence retention
 
-The lifecycle distinction between the two workflows is **Agy-Squad's explicit 3-scope teardown and evidence-retention contract** ([`docs/core-workflows.md`](core-workflows.md)):
+> [!NOTE]
+> **Historical comparison.** The Nov 8, 2026 run above used Agy-Squad's Phase 1 launcher (`agy-squad run --launch`, `bin/terminal.py`, `mcp/run-state.mjs`), which PR #5 retired (`L17`). The retained components that the run exercised are the staged compile (`dispatch_squad`), `Pointer-Over-Wire` receipts and the `handoffs.mjs` bundle/verify/prune pipeline. The managed CLI session cleanup described in the original run no longer exists. Native `/swarm` now owns worker lifecycle and `kill` cleanup. The numbers are recorded evidence for the Phase 1 workflow, not a measurement of the current `squad_planner` + `/swarm` path.
 
-1. **Managed CLI session scope:** `bin/agy-squad.mjs` removes unchanged temporary plugin and agent profile registrations on exit while preserving staged run evidence under `scratch/agy-squad/run-...`.
-2. **Handoff bundle scope:** `node mcp/handoffs.mjs` enforces `inspect -> bundle -> verify -> prune`, recording SHA-256 digests of every input file and specialist report in `lead/report.sources.json` before pruning loose `specialist-N/report.md` files.
+The lifecycle distinction that remains after Phase 2 is **Agy-Squad's evidence-retention contract (handoff bundle and self-diagnosis scopes)** ([`docs/core-workflows.md`](core-workflows.md)), alongside native `/swarm` worker lifecycle:
+
+1. **Native `/swarm` worker lifecycle (not Agy-Squad):** worker spawning, worktree isolation and `kill` cleanup belong to Antigravity. `agy-squad` creates no temporary plugin or agent-profile registrations.
+2. **Handoff bundle scope:** `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) enforces `inspect -> bundle -> verify -> prune`, recording SHA-256 digests of every input file and specialist report in `lead/report.sources.json` before pruning loose `specialist-N/report.md` files.
 3. **Self-diagnosis review scope:** `.agents/skills/self-diagnosis/SKILL.md` requires 1-ID-per-row transcription into a durable `docs/reviews/` ledger and bundle digest verification before `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-*` directories and `manage_subagents` terminates child sessions.
 
 The recorded `0` vs. `41` (`207.9 KB`) Git-untracked file counts are secondary telemetry from `git status` after run completion (note that Agy-Squad's `.gitignore` excludes `scratch/`).

@@ -5,7 +5,7 @@ description: Apply Agy-Squad governance, role separation, Pointer-Over-Wire repo
 
 # Agy-Squad Swarm Governance & Verification
 
-Agy-Squad serves as the **governance, integrity auditing, and cryptographic proof layer** on top of Antigravity's native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`).
+Agy-Squad serves as the **governance, integrity auditing, and file-integrity layer** on top of Antigravity's native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`).
 
 Native `/swarm` handles worker spawning, worktree/branch isolation (`workspace: "share"` / `"branch"`), live model switching, and stall monitoring. Use `squad_planner` (MCP tool or `node bin/agy-squad.mjs plan`) + native `/swarm` to pin worker models explicitly (`swarm add`), detect writable `scopeFiles` overlaps, scaffold `L6`-safe `provenanceScaffold` (without copying raw `.system_generated/` transcripts), and bind SHA-256 bundles (`L42`, `L43`). The legacy `agy-squad run` PTY launcher (`L17`) is retired.
 
@@ -45,9 +45,14 @@ Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiti
    - `@lead NO_REPORT — <reason>`
 3. When recording board receipts into `<bundle-record.json>` `handoffs[].message` for `reconcileHandoffs`, strip the leading `@lead ` mention prefix so each message starts with `READY `, `PARTIAL `, or `NO_REPORT`.
 
+> [!NOTE]
+> This pointer format is a convention. The board does not enforce it, and workers can post anything. `agy-squad inspect` detects deviations after the fact; it cannot prevent them. A layered plan also adds a squad lead per working squad above the swarm coordinator; that extra layer is unmeasured, and a flat plan is the default recommendation. `squad_planner` reports both caveats in its `notes` output.
+
 ---
 
-## 4. Post-Swarm Cryptographic Proof Bundling
+## 4. Post-Swarm File-Integrity Bundling
+
+**What a bundle attests, and what it does not.** `bundle`/`verify` bind SHA-256 digests of the verified files, worker reports and the integrity-audit report to a `<bundle-record.json>`, and `verify` fails if any of them changed afterward. The record itself (`assignments`, `handoffs`, `sender`) is assembled by the coordinator from the board. The pipeline checks that each `sender` string matches a recorded assignment; it does **not** prove that the board carried that message or that the named worker wrote the report. Treat a verified bundle as file-integrity evidence for a coordinator-assembled record, not as proof of authorship or of the truth of any worker's claim. Use the swarm member name (the board identity) as the `conversationId` / `sender` string consistently.
 
 Since `agy-squad` is a workspace-private package (`"private": true`), invoke the CLI directly via `node bin/agy-squad.mjs` (or `npm link` + `npx --no-install agy-squad`):
 

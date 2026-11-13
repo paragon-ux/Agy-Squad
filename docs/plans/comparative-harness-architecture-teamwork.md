@@ -1,5 +1,8 @@
 # Comparative Multi-Agent Harness Architecture: Systems Engineering Analysis, Quantitative Rubrics, and Protocol Tracing
 
+> [!NOTE]
+> **Historical (pre-Phase 2).** Scores, teardown and `PGID` kill-control criteria, and launcher references in this document describe Agy-Squad at decisions `L1`–`L41` (Phase 1: PTY launcher, managed-session teardown). PR #5 retired the launcher and managed-session teardown (`L17`; `L42`/`L43`). Do not cite these scores as describing the current architecture.
+
 **Document ID:** `DOSSIER-ARCH-HARNESS-2026-11-09`  
 **Publication Standard:** Agy-Squad PR Review Standard `v1.3.0` & Architectural Decision Ledger (`L1`–`L41`)  
 **Target File:** `docs/plans/comparative-harness-architecture-teamwork.md`  
