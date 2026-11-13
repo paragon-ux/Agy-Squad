@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { managedCohort } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
-import { bundleReports, pruneReports, publish, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, fingerprint, inspectHandoffs, pruneReports, publish, readFile, verifyBundle } from "../mcp/handoffs.mjs";
 import { createRun, ensureDirectory } from "../mcp/run-state.mjs";
 import { parseContentVerdict, parseIntegrityVerdict } from "../mcp/verdicts.mjs";
 
@@ -15,10 +15,12 @@ const server = fileURLToPath(new URL("../mcp/index.js", import.meta.url));
 const terminal = fileURLToPath(new URL("./terminal.py", import.meta.url));
 const usage = [
   "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm):",
-  "  agy-squad bundle <record.json>                                  Create a SHA-256 verified proof bundle",
-  "  agy-squad verify <bundle.json>                                  Verify bundle integrity, synthesis, and audit hashes",
-  "  agy-squad prune <bundle.json> <accepted-sha256> [--keep-reports] Prune loose reports after verification",
-  "  agy-squad verdict [--integrity] <report.md>                     Strictly parse a content or integrity verdict",
+  "  agy-squad fingerprint <file...>                                        Compute SHA-256 fingerprints for verifiedFiles",
+  "  agy-squad inspect <record.json>                                        Reconcile handoff readiness for a cohort",
+  "  agy-squad bundle <record.json> [--allow-unaudited]                     Create a SHA-256 verified proof bundle",
+  "  agy-squad verify <report.sources.json>                                 Verify bundle integrity, synthesis, and audit hashes",
+  "  agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports] Prune loose reports after verification",
+  "  agy-squad verdict [--integrity] <report.md>                            Strictly parse a content or integrity verdict",
   "",
   "Legacy local launcher (deprecated in favor of native /swarm):",
   '  agy-squad run --workspace <directory> --launch "Your task"',
@@ -215,16 +217,36 @@ async function main(args) {
     return 0;
   }
   const [command, ...rest] = args;
+  if (command !== "run" && (rest.includes("--help") || rest.includes("-h"))) {
+    console.log(usage);
+    return 0;
+  }
   const root = fs.realpathSync(process.cwd());
 
+  if (command === "fingerprint") {
+    if (!rest.length) throw new Error("Usage: agy-squad fingerprint <file...>");
+    console.log(JSON.stringify(fingerprint(root, rest), null, 2));
+    return 0;
+  }
+  if (command === "inspect") {
+    if (rest.length !== 1) throw new Error("Usage: agy-squad inspect <record.json>");
+    const record = JSON.parse(readFile(root, rest[0]).toString("utf8"));
+    console.log(JSON.stringify(inspectHandoffs(root, record), null, 2));
+    return 0;
+  }
   if (command === "bundle") {
-    if (rest.length !== 1) throw new Error("Usage: agy-squad bundle <record.json>");
-    const record = JSON.parse(fs.readFileSync(path.resolve(root, rest[0]), "utf8"));
-    console.log(JSON.stringify(bundleReports(root, record), null, 2));
+    const allowUnaudited = rest.includes("--allow-unaudited");
+    const positional = rest.filter(arg => arg !== "--allow-unaudited");
+    if (positional.length !== 1) throw new Error("Usage: agy-squad bundle <record.json> [--allow-unaudited]");
+    const record = JSON.parse(readFile(root, positional[0]).toString("utf8"));
+    const bundleInput = allowUnaudited || record.requireIntegrityAudit === false
+      ? record
+      : { requireIntegrityAudit: true, ...record };
+    console.log(JSON.stringify(bundleReports(root, bundleInput), null, 2));
     return 0;
   }
   if (command === "verify") {
-    if (rest.length !== 1) throw new Error("Usage: agy-squad verify <bundle.json>");
+    if (rest.length !== 1) throw new Error("Usage: agy-squad verify <report.sources.json>");
     console.log(JSON.stringify(verifyBundle(root, rest[0]), null, 2));
     return 0;
   }
@@ -232,7 +254,7 @@ async function main(args) {
     const keepReports = rest.includes("--keep-reports");
     const positional = rest.filter(arg => arg !== "--keep-reports");
     if (positional.length !== 2) {
-      throw new Error("Usage: agy-squad prune <bundle.json> <accepted-sha256> [--keep-reports]");
+      throw new Error("Usage: agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports]");
     }
     console.log(JSON.stringify(pruneReports(root, positional[0], positional[1], { keepReports }), null, 2));
     return 0;
@@ -243,13 +265,13 @@ async function main(args) {
     if (positional.length !== 1) {
       throw new Error("Usage: agy-squad verdict [--integrity] <report.md>");
     }
-    const markdown = fs.readFileSync(path.resolve(root, positional[0]), "utf8");
+    const markdown = readFile(root, positional[0]).toString("utf8");
     const verdict = isIntegrity ? parseIntegrityVerdict(markdown) : parseContentVerdict(markdown);
     console.log(JSON.stringify({ verdict }, null, 2));
     return 0;
   }
   if (command !== "run") {
-    throw new Error(`Unknown command '${command}'. Expected bundle, verify, prune, verdict, or run.`);
+    throw new Error(`Unknown command '${command}'. Expected fingerprint, inspect, bundle, verify, prune, verdict, or run.`);
   }
   const { values, positionals } = parseArgs({
     args: rest, allowPositionals: true,
@@ -263,6 +285,7 @@ async function main(args) {
     console.log(usage);
     return 0;
   }
+  console.error("Warning: 'agy-squad run' is deprecated in favor of Antigravity native /swarm + swarm-governance.");
   const task = positionals.join(" ").trim();
   if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(task)) {
     throw new Error("Task text must not contain terminal control characters.");

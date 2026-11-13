@@ -21,7 +21,7 @@ Never conflate content acceptance with integrity auditing:
 | **Integrity Auditor** | `integrity-auditor` (flat) | `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION` | Independent peer auditing tool traces, primary evidence, and absence of sycophancy or guessing. Must record `Target Squad: <id>`. |
 
 - **Strict single-line enforcement:** Avoid hedged verdicts (e.g., `PASS with Advisories`, `CONDITIONAL PASS`). `agy-squad verdict` and `bundleReports` deterministically reject hedged or contradictory verdict lines.
-- **Flat auditor preference:** Use a single flat `integrity-auditor` peer rather than nested adversarial sub-hierarchies to eliminate invisible sub-subagents and reduce token burn.
+- **Flat auditor preference:** Use a single flat `integrity-auditor` peer (or `integrity_auditor:<target>` slot `scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md`) rather than nested adversarial sub-hierarchies to eliminate invisible sub-subagents and reduce token burn.
 
 ---
 
@@ -34,26 +34,43 @@ Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiti
    - `@lead READY <report-path> — <1-line concrete observation>`
    - `@lead PARTIAL <report-path> — <observation and blocker>`
    - `@lead NO_REPORT — <reason>`
+3. When recording board receipts into `<bundle-record.json>` `handoffs[].message` for `reconcileHandoffs`, strip the leading `@lead ` mention prefix so each message starts with `READY `, `PARTIAL `, or `NO_REPORT`.
 
 ---
 
 ## 3. Post-Swarm Cryptographic Proof Bundling
 
-After the `/swarm` cohort completes, generate and verify a tamper-evident SHA-256 bundle offline without model calls:
+Since `agy-squad` is a workspace-private package (`"private": true`), invoke the CLI directly via `node bin/agy-squad.mjs` (or `npm link` + `npx --no-install agy-squad`):
 
 ```bash
 # 1. Validate strict verdicts
-npx agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
-npx agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md
+node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
+node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md
 
-# 2. Bundle reports + programmatic integrity hash binding
-npx agy-squad bundle <bundle-record.json>
+# 2. Fingerprint verified source files for <bundle-record.json>
+node bin/agy-squad.mjs fingerprint <verified-file-1> <verified-file-2>
 
-# 3. Verify bundle, synthesis, verified files, and integrity audit hash in CI/CD
-npx agy-squad verify scratch/agy-squad/squad-<id>/bundle.json
+# 3. Bundle reports + programmatic integrity hash binding (enforces requireIntegrityAudit: true by default)
+node bin/agy-squad.mjs bundle <bundle-record.json>
 
-# 4. Optionally prune loose reports (or pass --keep-reports to retain)
-npx agy-squad prune scratch/agy-squad/squad-<id>/bundle.json <bundle-sha256> --keep-reports
+# 4. Verify bundle, synthesis, verified files, and integrity audit hash in CI/CD
+node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json
+
+# 5. Optionally prune loose reports (or pass --keep-reports to retain)
+node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <bundle-sha256> --keep-reports
+```
+
+### `<bundle-record.json>` Schema
+```json
+{
+  "squadId": "<id>",
+  "workspace": "<realpath-to-workspace>",
+  "verdict": "PASS",
+  "requireIntegrityAudit": true,
+  "verifiedFiles": { "<file>": { "sha256": "<64-hex>", "bytes": 123 } },
+  "assignments": [{ "conversationId": "<worker-id>", "report": "scratch/agy-squad/squad-<id>/specialist-1/report.md" }],
+  "handoffs": [{ "sender": "<worker-id>", "message": "READY scratch/agy-squad/squad-<id>/specialist-1/report.md — <summary>" }]
+}
 ```
 
 The bundler (`mcp/handoffs.mjs`) programmatically computes and binds the integrity audit report's SHA-256 digest—never ask an LLM to manually copy-paste 64-character hashes in Markdown.

@@ -15,10 +15,10 @@ flowchart LR
 ## Core orchestration terms
 
 ### Parent session
-The top-level Antigravity conversation (started in **Antigravity Desktop (IDE)** or via `node bin/agy-squad.mjs run` in the CLI on POSIX / WSL2) that owns user approvals, invokes `dispatch_squad`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
+The top-level Antigravity conversation (started via native `/swarm` or in **Antigravity Desktop (IDE)**; legacy `node bin/agy-squad.mjs run` is deprecated per `L42`) that owns user approvals, invokes `dispatch_squad` or native `swarm`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
 
 ### Squad lead
-An intermediate subagent compiled when `dispatch_squad` runs with `squadId: "all_l1"` on a manifest defining one or more squads. Each squad lead dispatches its own domain specialists, verifies their cited files, writes `scratch/agy-squad/.../lead/report.md` (`Verdict: PASS`, `FAIL`, or `BLOCKED`), and bundles SHA-256 digests via `node mcp/handoffs.mjs`.
+An intermediate subagent compiled when `dispatch_squad` runs with `squadId: "all_l1"` on a manifest defining one or more squads. Each squad lead dispatches its own domain specialists, verifies their cited files, writes `scratch/agy-squad/.../lead/report.md` (`Content Verdict: PASS`, `FAIL`, or `BLOCKED`; `Verdict:` also accepted), pairs with an independent flat `integrity_auditor` (`Integrity Verdict: CLEAN` | `INTEGRITY VIOLATION`), and bundles SHA-256 digests via `node bin/agy-squad.mjs bundle` (or `node mcp/handoffs.mjs`).
 
 ### Specialist
 A focused worker subagent compiled for a single squad (`squadId: "<id>"`). Every specialist uses `TypeName: "self"` and `Workspace: "inherit"` so it can inspect its assigned `scopeFiles` and write its evidence report to `scratch/agy-squad/.../specialist-<N>/report.md`.
@@ -45,7 +45,7 @@ The single-line message a child sends back to its parent via `send_message` when
 `mcp/handoffs.mjs` enforces the `500` UTF-8 byte ceiling and single-line format.
 
 ### Evidence bundle (`report.sources.json`)
-A JSON manifest written by `node mcp/handoffs.mjs bundle` alongside `lead/report.md`. It records the SHA-256 digest and byte size of `lead/report.md`, every `specialist-<N>/report.md`, and every workspace file recorded in the record's `verifiedFiles` property. Running `node mcp/handoffs.mjs verify` checks that none of those files have changed since bundling. Digest verification proves artifact consistency, while the lead or parent's code and test inspection verifies semantic correctness.
+A JSON manifest written by `node bin/agy-squad.mjs bundle` (or `node mcp/handoffs.mjs bundle`) alongside `lead/report.md`. It records the SHA-256 digest and byte size of `lead/report.md`, every `specialist-<N>/report.md`, any `integrityAudit` report (`path`, `sha256`, `verdict: "CLEAN"`, `targetSquad`), and every workspace file recorded in `verifiedFiles`. Running `node bin/agy-squad.mjs verify` checks that none of those files (including the integrity audit report on disk) have changed or been deleted since bundling. Digest verification proves artifact consistency, while the lead's code/test inspection and the independent `integrity_auditor` certify semantic correctness and execution integrity.
 
 ## Companion and governance terms
 

@@ -2,21 +2,45 @@ const CONTENT_VERDICTS = new Set(["PASS", "FAIL", "BLOCKED"]);
 const INTEGRITY_VERDICTS = new Set(["CLEAN", "INTEGRITY VIOLATION"]);
 
 /**
- * Strip fenced code blocks and inline code spans so quoted examples do not
- * trigger verdict parsing.
+ * Strip fenced code blocks line-by-line (tracking matching opening/closing
+ * fence tokens) before stripping inline code spans so an inline `` ` ``` ` ``
+ * cannot swallow subsequent lines.
  * @param {string} markdown
  * @returns {string}
  */
 function stripCode(markdown) {
-  return markdown
-    .replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "")
+  const lines = markdown.split(/\r?\n/);
+  const kept = [];
+  let fenceChar = "";
+  let fenceLen = 0;
+
+  for (const line of lines) {
+    if (!fenceChar) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+      kept.push(line);
+    } else {
+      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
+      if (closeRe.test(line)) {
+        fenceChar = "";
+        fenceLen = 0;
+      }
+    }
+  }
+
+  return kept
+    .join("\n")
     .replace(/(`+)([^\r\n]*?)\1/g, " ");
 }
 
 /**
  * Parse strict single-line verdict declarations of the form
- * `<Label>: <ALLOWED_TOKEN>` (with optional Markdown emphasis).
- * Rejects hedged or compound values such as `PASS with Advisories`.
+ * `<Label>: <ALLOWED_TOKEN>` (with optional list/heading prefix, Markdown
+ * emphasis, and trailing period). Rejects hedged or compound values.
  * @param {string} markdown
  * @param {string[]} labels
  * @param {Set<string>} allowed
@@ -25,9 +49,10 @@ function stripCode(markdown) {
 function parseStrictLines(markdown, labels, allowed) {
   const clean = stripCode(markdown);
   const labelPattern = labels.join("|");
-  const labelRe = new RegExp(`^\\s*(?:[-*+]\\s+)?(?:[*_]{1,3})?\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const prefix = "(?:[-*+]\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const labelRe = new RegExp(`^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*(?:[-*+]\\s+)?(?:[*_]{1,3})?\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Z][A-Z ]*?)\\s*(?:[*_]{1,3})?\\s*$`,
+    `^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Z][A-Z ]*?)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
     "i"
   );
   const found = new Set();
@@ -49,25 +74,40 @@ function parseStrictLines(markdown, labels, allowed) {
 
 /**
  * Parse a strict content verdict (`PASS`, `FAIL`, or `BLOCKED`) from a
- * synthesis or lead report.
+ * synthesis or lead report. Rejects missing, hedged, or contradicted verdicts.
  * @param {string} markdown
  * @returns {"PASS"|"FAIL"|"BLOCKED"}
  */
 function parseContentVerdict(markdown) {
   const found = parseStrictLines(markdown, ["Content Verdict", "Verdict"], CONTENT_VERDICTS);
-  const clean = stripCode(markdown);
-  for (const line of clean.split(/\r?\n/)) {
-    if (/\b(?:FAIL|BLOCKED)\b/.test(line)) {
-      const m = line.match(/\b(FAIL|BLOCKED)\b/);
-      if (m) found.add(m[1]);
-    }
-    if (/\b(?:not|no|never|isn't|wasn't|didn't|doesn't|cannot|can't|did not|does not)\s+PASS\b/.test(line)) {
-      found.add("FAIL");
-    }
-  }
   if (found.size === 0) {
     throw new Error("Report must record an unambiguous single-line 'Content Verdict: PASS|FAIL|BLOCKED' (or 'Verdict: ...').");
   }
+
+  const clean = stripCode(markdown);
+  for (const line of clean.split(/\r?\n/)) {
+    // Reject explicit negations targeting PASS (uppercase PASS, or lowercase "pass" at clause end)
+    if (/\b(?:not|no|never|isn't|wasn't|didn't|doesn't|cannot|can't|did not|does not)\s+(?:PASS\b|pass(?=\s*(?:[.,;:!?]|$)))/.test(line)) {
+      found.add("FAIL");
+    }
+    // Reject secondary labeled verdict/status/check lines or table cells asserting FAIL/BLOCKED
+    const labeled = line.match(
+      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*(?:[:—–-]|\bis\b)\s*(?:[*_]{1,3})?\s*(PASS|FAIL|BLOCKED)(?![-\w])/i
+    );
+    if (labeled) {
+      const token = labeled[1].toUpperCase();
+      if (token !== "PASS") found.add(token);
+    }
+    const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
+    if (leading) {
+      found.add(leading[1]);
+    }
+    const tableCell = line.match(/\|\s*(?:[*_]{1,3})?(FAIL|BLOCKED)(?:[*_]{1,3})?\s*\|/);
+    if (tableCell) {
+      found.add(tableCell[1]);
+    }
+  }
+
   if (found.size > 1) {
     throw new Error(`Report contains conflicting content verdicts: ${[...found].join(", ")}.`);
   }
@@ -92,18 +132,34 @@ function parseIntegrityVerdict(markdown) {
 }
 
 /**
- * Parse an optional `Target Squad: <id>` declaration from an integrity report.
+ * Parse a `Target Squad: <id>` declaration from an integrity report.
+ * Supports optional list/heading/Markdown emphasis; throws on malformed or
+ * conflicting Target Squad declarations.
  * @param {string} markdown
  * @returns {string|undefined}
  */
 function parseTargetSquad(markdown) {
   const clean = stripCode(markdown);
-  const re = /^\s*(?:[*_]{1,3})?\s*Target Squad\s*(?:[*_]{1,3})?\s*:\s*(?:[*_]{1,3})?\s*([A-Za-z0-9_.-]+)\s*(?:[*_]{1,3})?\s*$/i;
+  const prefix = "(?:[-*+]\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const labelRe = new RegExp(`^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const exactRe = new RegExp(
+    `^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Za-z0-9_.-]+)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    "i"
+  );
+  const found = new Set();
+
   for (const line of clean.split(/\r?\n/)) {
-    const match = line.match(re);
-    if (match) return match[1];
+    if (!labelRe.test(line)) continue;
+    const match = line.match(exactRe);
+    if (!match) {
+      throw new Error(`Malformed Target Squad line: "${line.trim()}"`);
+    }
+    found.add(match[1]);
   }
-  return undefined;
+  if (found.size > 1) {
+    throw new Error(`Integrity report contains conflicting Target Squad declarations: ${[...found].join(", ")}.`);
+  }
+  return found.size === 1 ? [...found][0] : undefined;
 }
 
 export {

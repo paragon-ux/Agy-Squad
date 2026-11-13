@@ -713,11 +713,7 @@ Revision 2 adds six rows and closes none; `ARCH-PR3-02`, `RUN-PR3-01`, `SVC-PR3-
 | `INFO-PR3-03` | Session 14 | `ARCH` | `Informational` | `E12`, `E13`, `E17` | Layered adversarial coverage is intentional for proportional delegation; the defect is visibility and role conflation, not layering itself. | Preserve layering; make each layer root-visible or project it into the operator view; do not flatten solely for GUI visibility. | N/A |
 | `INFO-PR3-04` | Session 14 | `DOC` | `Informational` | `E12`–`E16` | The five copied-over transcripts are evidence from the PR #3 run, not part of the PR diff; they live under `Deepseek-Project-Archival`. | Cite them as evidence; do not commit them to the repository. | N/A |
 
----
-
-## 9. `/self-diagnosis` Cohort & Bundle Ledger
-
-No `/self-diagnosis` cohorts were dispatched in this review. Section 9 is not applicable.
+*Note: No `/self-diagnosis` cohorts were dispatched in this review; Section 9 is omitted.*
 
 ---
 

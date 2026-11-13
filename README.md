@@ -2,7 +2,7 @@
 
 Staged subagent orchestration, self-diagnosis, and review governance for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (with best-effort, untested macOS support)**.
 
-`Agy-Squad` compiles coding or review tasks into scoped Antigravity subagent assignments (`dispatch_squad`). Each specialist writes a file-backed report (`scratch/agy-squad/.../report.md`) and returns a single-line receipt under `500` UTF-8 bytes (`Pointer-Over-Wire`) with a concrete observation and its report path. The parent or squad lead checks the cited code and tests directly, then bundles SHA-256 input and report digests via `node mcp/handoffs.mjs`.
+`Agy-Squad` compiles coding or review tasks into scoped Antigravity subagent assignments (`dispatch_squad`) and serves as the governance, role-separation (`integrity_auditor`), and SHA-256 proof-bundle layer (`bin/agy-squad.mjs` + `.agents/skills/swarm-governance/SKILL.md`) on top of Antigravity native `/swarm`. Each specialist writes a file-backed report (`scratch/agy-squad/.../report.md`) and returns a single-line receipt under `500` UTF-8 bytes (`Pointer-Over-Wire`) with a concrete observation and its report path. The parent or squad lead checks the cited code and tests directly, pairs with a flat `integrity_auditor` (`Integrity Verdict: CLEAN`), and bundles SHA-256 input, report, and audit digests via `node bin/agy-squad.mjs bundle` (or `node mcp/handoffs.mjs`).
 
 Beyond task delegation, the core harness includes:
 
@@ -87,7 +87,7 @@ When the CLI session exits, the launcher removes unchanged temporary registratio
 
 ## Core workflows: orchestrate, diagnose, and review
 
-- **Orchestrate tasks:** Dispatch direct specialists (`--squad <id>`) or domain leads (`--squad all_l1`), collect `<= 500` B `READY` receipts, and bundle SHA-256 digests with `node mcp/handoffs.mjs` ([Core workflows](docs/core-workflows.md#1-orchestrate-proportional-specialist-or-lead-cohorts)).
+- **Govern native `/swarm` or orchestrate tasks:** Pair Antigravity native `/swarm` with [`swarm-governance`](.agents/skills/swarm-governance/SKILL.md) (or dispatch specialists/leads via `dispatch_squad` and flat `integrity_auditor:<target>`), collect `<= 500` B `READY` pointers, enforce strict verdicts, and bundle SHA-256 digests with `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`; legacy `run` is deprecated per [`L42`](docs/plans/LEDGER.md)) ([Core workflows](docs/core-workflows.md#1-orchestrate-proportional-specialist-or-lead-cohorts)).
 - **Self-diagnose the harness:** Run `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown` for a zero-subagent health and token-budget check, or compile targeted audit cohorts with `--print-dispatch` ([`self-diagnosis` skill](.agents/skills/self-diagnosis/SKILL.md)).
 - **Review pull requests:** Apply the ten-category `v1.3.0` repository review standard ([`pr-review` skill](.agents/skills/pr-review/SKILL.md)) and record `1 ID = 1 Row` findings in `docs/reviews/` before running `diagnose.mjs --teardown`.
 

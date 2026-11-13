@@ -27,9 +27,9 @@ To eliminate hesitation, ambiguity, and false starts, the agent MUST immediately
 2. **Teardown & Provenance Policy:**
    - `(Recommended) Retain Full Evidence & Provenance (--keep-reports)`: Preserve all specialist and lead evidence reports in `scratch/agy-squad/` alongside bundle records for auditability and research.
    - `Automatic Atomic Teardown (--teardown)`: Prune loose reports from `scratch/` upon successful cryptographic bundle verification.
-3. **Adversarial Rigor:**
-   - `(Recommended) Mandatory Adversarial Review Squad Enabled`: Stage independent adversarial audit squad after working squads complete, enforcing PASS verdict before acceptance.
-   - `Working Squad Self-Synthesis Only`: Skip secondary adversarial squad.
+3. **Integrity Audit Rigor:**
+   - `(Recommended) Mandatory Integrity Auditor Enabled`: Stage independent flat `integrity_auditor:<target>` after working squads complete, enforcing `Integrity Verdict: CLEAN` before acceptance.
+   - `Working Squad Self-Synthesis Only`: Skip secondary integrity audit.
 4. **Self-Contained Instruction Standard:**
    - Never use unanchored abbreviations, unexpanded section codes (e.g., 'H4', 'D2'), or undefined internal tokens in objectives or instructions. Every deliverable requirement must be fully self-contained and explicit so subagents do not waste tokens searching the codebase for phantom acronyms.
 

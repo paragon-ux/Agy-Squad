@@ -50,11 +50,11 @@ In **Antigravity Desktop (IDE)** (or any workspace on Linux, macOS, or WSL2), re
 }
 ```
 
-In Desktop IDE sessions, the agent calls `dispatch_squad` (or runs `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>`), launches returned specs with `invoke_subagent`, reconciles and bundles reports with `node mcp/handoffs.mjs`, and stops completed subagents with `manage_subagents(Action='kill', ConversationIds=[...])`.
+In Desktop IDE sessions, use Antigravity native `/swarm` paired with the `swarm-governance` skill (or call `dispatch_squad` / `diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>`), enforce strict single-line verdicts and SHA-256 bundles via `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`), and stop completed subagents with `manage_subagents(Action='kill', ConversationIds=[...])`.
 
-## 3. Three CLI execution modes side by side (`bin/agy-squad.mjs run`)
+## 3. CLI Governance & Legacy Runner (`bin/agy-squad.mjs`)
 
-When running the CLI wrapper from an interactive WSL2 terminal with `agy` on `PATH`:
+For native `/swarm` workflows and CI verification, `bin/agy-squad.mjs` exposes offline governance subcommands (`fingerprint`, `inspect`, `bundle`, `verify`, `prune`, `verdict`). The local PTY wrapper (`bin/agy-squad.mjs run`) is **deprecated** in favor of Antigravity native `/swarm` (`L42`), but remains available when running from an interactive WSL2 terminal with `agy` on `PATH`:
 
 | Mode | Command | Starts `agy`? | Spawns subagents? | When to use |
 | --- | --- | :---: | :---: | --- |
@@ -96,13 +96,14 @@ node bin/agy-squad.mjs run --workspace "$PWD" \
    ```text
    READY scratch/agy-squad/run-.../plan-.../squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
-3. The parent (or squad lead) inspects the cited source lines and tests to verify semantic correctness, records an unambiguous PASS verdict in `lead/report.md`, and runs `node mcp/handoffs.mjs` (`inspect`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
+3. The parent (or squad lead) inspects the cited source lines and tests to verify semantic correctness, records a strict `Content Verdict: PASS` (or `Verdict: PASS`) in `lead/report.md`, pairs with a flat `integrity_auditor` (`Integrity Verdict: CLEAN`), and runs `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
 4. Exiting a managed CLI session removes the temporary workspace plugin and agent profile while keeping staged evidence in `scratch/agy-squad/run-<uuid>/`. Use `manage_subagents` (in Desktop IDE) or `/agents` (in CLI) to inspect or stop running subagents, and see [Stopping agents](stopping-agents.md) to verify child process termination.
 
 ## When to use Agy-Squad vs. alternatives
 
 | Approach | Primary strength | Use Agy-Squad when... | Prefer comparator when... |
 | --- | --- | --- | --- |
+| **Antigravity native `/swarm`** | Native shared board, worktrees (`share`/`branch`), live model switching, and `swarm_monitor` | Pair Agy-Squad (`swarm-governance` + `bin/agy-squad.mjs`) on top of `/swarm` for role separation, `Pointer-Over-Wire` disk pointers, and SHA-256 CI proof bundles | You only need ephemeral board coordination without deterministic bundles or strict verdict gates |
 | **Antigravity `/teamwork`** (or `/teamwork-preview`) | Autonomous multi-milestone campaigns with built-in wrapper, explorer, and semantic reviewer agents | You want proportional 2-to-3 agent cohorts in Desktop IDE or CLI, `<= 500` B receipts, SHA-256 evidence bundles, governed teardown, and integrated `self-diagnosis` + `pr-review` (`v1.3.0`) | You want a long autonomous campaign with built-in LLM reviewer/auditor agents |
 | **Antigravity native subagents** (`invoke_subagent`) | Zero setup for ad hoc parallel tasks | You want a repeatable manifest, report-slot paths, receipt length enforcement, and bundle verification | You only need one quick ad hoc delegation |
 | **Claude Code / Codex subagents** | Native role files and parallel delegation inside those tools | Your workflow runs in Antigravity Desktop or CLI on POSIX / WSL2 | Your team works inside Claude Code or OpenAI Codex |
