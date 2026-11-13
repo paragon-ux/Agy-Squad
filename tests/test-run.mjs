@@ -45,6 +45,7 @@ try {
   const leads = unpack(dispatch({ squadId: "all_l1", manifest }));
   assert.deepEqual(leads.map(({ Role }) => Role), ["Lexer Integrator", "Emitter Integrator"]);
   assert.equal(leads[0].TypeName, "self");
+  assert.match(leads[0].Prompt, /Squad Lead Patrol:/);
   const nestedArgs = JSON.parse(leads[0].Prompt.match(/Call dispatch_squad once with (\{.*\}), launch/)[1]);
   assert.ok(nestedArgs.manifestPath.startsWith(managed.relative + "/"));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, nestedArgs.manifestPath), "utf8")), manifest);
@@ -52,6 +53,8 @@ try {
   const report = slotOf(leaf);
   assert.equal(leaf.Role, "Boundary Investigator");
   assert.equal(leaf.Workspace, "inherit");
+  assert.match(leaf.Prompt, /Subagent Alignment Policy: Follow squad lead policy/);
+  assert.match(leaf.Prompt, /Anti-cheating rule/);
   assert.ok(fs.statSync(path.join(root, path.dirname(report))).isDirectory());
   assert.equal(fs.existsSync(path.join(root, report)), false);
   fs.writeFileSync(path.join(root, report), "Input without a newline triggers EOF.\n");
@@ -73,6 +76,18 @@ try {
   const flat = unpack(handleDispatchSquad({ squadId: "lexer", manifest }, root, other.relative));
   assert.notEqual(slotOf(flat[0]), report);
   assert.ok(slotOf(flat[0]).startsWith(other.relative));
+
+  const advLeads = unpack(handleDispatchSquad({ squadId: "adversarial_l1", manifest }, root, other.relative));
+  assert.equal(advLeads.length, 1);
+  assert.equal(advLeads[0].Role, "Adversarial Review Lead");
+  assert.ok(slotOf(advLeads[0]).startsWith(other.relative));
+  assert.ok(slotOf(advLeads[0]).includes("squad-adversarial_review/lead"));
+
+  const advFlat = unpack(handleDispatchSquad({ squadId: "adversarial_flat", manifest }, root, other.relative));
+  assert.equal(advFlat.length, 1);
+  assert.equal(advFlat[0].Role, "Adversarial Review Specialist");
+  assert.ok(slotOf(advFlat[0]).startsWith(other.relative));
+  assert.ok(slotOf(advFlat[0]).includes("squad-adversarial_review/specialist-1"));
 
   const concurrent = createRun(root);
   const dispatchModule = fileURLToPath(new URL("../mcp/dispatch.mjs", import.meta.url));

@@ -1,0 +1,42 @@
+{
+  "squads": {
+    "harness_comparative_audit": {
+      "lead": {
+        "role": "Harness Comparative Architecture Lead",
+        "objective": "Synthesize findings from both research specialists into docs/plans/comparative-harness-architecture-retest.md, score all harnesses objectively against the 5-Axis Rubric, enforce the Squad Lead Patrol Gate against sycophancy, and verify citations.",
+        "scopeFiles": [
+          "docs/concepts.md",
+          "docs/core-workflows.md",
+          "benchmarks/teamwork-vs-squad/README.md",
+          "docs/plans/comparative-harness-architecture-retest.md"
+        ],
+        "instructions": "Wait for READY receipts from specialist-1 and specialist-2. Enforce the Squad Lead Patrol Gate: inspect specialist reports and tool traces via rtk read. Verify that specialists executed search_web and cited primary sources without parametric guessing or flattering bias. Synthesize the unified scoring matrix and comparative dossier in your lead report at your assigned slot and write the complete deliverable to docs/plans/comparative-harness-architecture-retest.md. Send a <=500B READY receipt to parent.",
+        "expectedDeliverable": "Synthesis report with Verdict: PASS, objective 5-Axis Rubric scores, and docs/plans/comparative-harness-architecture-retest.md."
+      },
+      "specialists": [
+        {
+          "role": "General Workflow & Graph Harness Specialist",
+          "objective": "Empirically audit MetaGPT (SOP-driven), CrewAI (role-playing), AutoGen / Swarm (conversational broadcast), and LangGraph (statechart DAGs). Contrast their IPC token footprints, state machines, and scratch handling against Agy-Squad's Pointer-Over-Wire model.",
+          "scopeFiles": [
+            "mcp/briefs.mjs",
+            "mcp/dispatch.mjs",
+            "docs/concepts.md"
+          ],
+          "instructions": "Execute search_web to audit external architecture documentation and papers for MetaGPT, CrewAI, AutoGen, and LangGraph. Profile token transmission overhead per turn compared to Agy-Squad's 500-byte receipt ceiling. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "expectedDeliverable": "Markdown evidence report with comparative matrix, protocol sequence diagrams, and 5-axis ratings for the 4 general workflow harnesses."
+        },
+        {
+          "role": "Autonomous Coding & SWE Harness Specialist",
+          "objective": "Empirically audit Devin/Sol (sandboxed SWE workspace), Claude Code / SWE-agent (interactive command execution), and Google Antigravity Native /teamwork. Compare their evidence retention, sandbox boundaries, and context compaction against Agy-Squad.",
+          "scopeFiles": [
+            "bin/agy-squad.mjs",
+            "bin/terminal.py",
+            "benchmarks/teamwork-vs-squad/README.md"
+          ],
+          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's terminal PTY and L41 teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "expectedDeliverable": "Markdown evidence report with comparative matrix, blast-radius analysis, and 5-axis ratings for the 3 coding agent harnesses."
+        }
+      ]
+    }
+  }
+}

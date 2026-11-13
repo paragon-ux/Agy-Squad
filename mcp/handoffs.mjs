@@ -322,7 +322,7 @@ function bundleReports(root, record) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle record.");
   }
-  const { squadId, verdict, verifiedFiles } = record;
+  const { squadId, verdict, verifiedFiles, requireAdversarialReview, adversarialReport } = record;
   if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
@@ -349,12 +349,52 @@ function bundleReports(root, record) {
     throw new Error("Synthesis report must record an unambiguous PASS verdict.");
   }
   const synthesis = sha256(synthesisCheck.bytes);
+
+  let adversarialReview;
+  if (squadId !== "adversarial_review") {
+    const leadAdvSlot = reportPath("adversarial_review", undefined, rootPrefix);
+    const flatAdvSlot = reportPath("adversarial_review", 1, rootPrefix);
+    const candidate = adversarialReport ?? (
+      fs.existsSync(path.join(root, leadAdvSlot))
+        ? leadAdvSlot
+        : fs.existsSync(path.join(root, flatAdvSlot))
+          ? flatAdvSlot
+          : undefined
+    );
+    if (requireAdversarialReview && !candidate) {
+      throw new Error("Acceptance blocked: Mandatory adversarial review report missing. Run adversarial review before bundling.");
+    }
+    if (candidate) {
+      let advSynthesis;
+      try {
+        advSynthesis = readSynthesis(root, candidate, verifiedDirs);
+      } catch {
+        throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+      }
+      if (advSynthesis.verdict !== "PASS") {
+        throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
+      }
+      adversarialReview = { path: candidate, sha256: sha256(advSynthesis.bytes) };
+    }
+  }
+
   const reports = assignments.map(({ report, bytes }) => {
     const markdown = decodeUtf8(bytes, report);
     return { path: report, sha256: sha256(bytes), markdown };
   });
   const bundlePayload = Buffer.from(
-    JSON.stringify({ squadId, verdict: synthesisCheck.verdict, synthesis, verifiedFiles, reports }, null, 2) + "\n"
+    JSON.stringify(
+      {
+        squadId,
+        verdict: synthesisCheck.verdict,
+        synthesis,
+        verifiedFiles,
+        ...(adversarialReview ? { adversarialReview } : {}),
+        reports
+      },
+      null,
+      2
+    ) + "\n"
   );
   publish(root, relative, bundlePayload, true, verifiedDirs);
   return {
@@ -397,6 +437,16 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     throw new Error("Synthesis changed after bundling.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
+  if (parsed.adversarialReview) {
+    const adv = parsed.adversarialReview;
+    if (!adv || typeof adv !== "object" || typeof adv.path !== "string" || typeof adv.sha256 !== "string") {
+      throw new Error("Invalid adversarialReview entry in bundle.");
+    }
+    const bytes = readIfPresent(root, adv.path, verifiedDirs);
+    if (bytes && sha256(bytes) !== adv.sha256) {
+      throw new Error(`Adversarial review report changed: ${adv.path}`);
+    }
+  }
   const loosePresent = [];
   for (const report of reports) {
     if (typeof report.markdown !== "string" || typeof report.sha256 !== "string") {

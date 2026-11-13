@@ -17,6 +17,20 @@ Conduct pull request and branch reviews in `Agy-Squad` using the workflow below.
 
 ## Workflow
 
+### Step 0: Pre-Flight Intake Interview (Review Scope & Teardown Gate)
+Before launching a review or invoking review cohorts, establish review bounds via structured intake (via `ask_question` or multiple-choice prompt):
+1. **Review Topology & Depth:**
+   - `(Recommended) Layered Review Squad (Leads + Specialists)`: Deep multi-category review with independent category specialists and synthesis lead.
+   - `Flat Review Specialist Dispatch`: Targeted inspection across specific changed files.
+   - `Single-Agent Interactive Audit`: Direct architectural trace performed by primary agent.
+2. **Teardown & Provenance Policy:**
+   - `(Recommended) Retain Full Evidence & Provenance (--keep-reports)`: Preserve all specialist evidence reports and session provenance in `docs/reviews/` and `scratch/`.
+   - `Automatic Atomic Teardown (--teardown)`: Prune loose reports from `scratch/` upon verification and ledger update.
+3. **Adversarial Verification:**
+   - `(Recommended) Mandatory Adversarial Review Gate`: Require independent adversarial verification before recommending `Approve`.
+
+---
+
 ### Step 1: Pin the Review & Session Provenance
 1. Record repository, PR URL (or branch status), date, reviewer, standard version (`1.3.0`), base/head SHAs (plus dirty delta and exact CI commit SHAs), and an append-only **Session Provenance** table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`).
 2. List all changed files (`base..head`) plus unchanged dependencies examined.

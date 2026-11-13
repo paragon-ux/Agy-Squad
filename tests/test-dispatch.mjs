@@ -37,6 +37,7 @@ try {
   assert.doesNotMatch(leads[0].Prompt, /Review src\/a\.js/);
   assert.match(leads[0].Prompt, /operator checks \/agents/);
   assert.match(leads[0].Prompt, /recheck changed inputs/);
+  assert.match(leads[0].Prompt, /Squad Lead Patrol & Alignment Gate/);
   assert.equal(payload({ squadId: "beta", manifestPath: "swarm-manifest.json" })[0].Role, "Other specialist");
 
   const leaves = payload({ squadId: "alpha", manifestPath });
@@ -51,6 +52,8 @@ try {
     assert.ok(leaf.Prompt.includes(`READY ${pointer} — <concrete observation>`));
     assert.match(leaf.Prompt, /500 UTF-8 bytes/);
     assert.match(leaf.Prompt, /Retry when inputs change/);
+    assert.match(leaf.Prompt, /Subagent Alignment Policy: Follow squad lead policy/);
+    assert.match(leaf.Prompt, /Anti-cheating rule/);
     assert.doesNotMatch(leaf.Prompt, /1 KB|20 work tool calls/);
     const file = path.join(workspace, pointer);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -149,6 +152,42 @@ try {
     squads: { alpha: { lead: agent("Lead", "src"), children: "invalid", specialists: [agent("B", "src/b.js")] } }
   }));
   rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /both 'children' and 'specialists'/);
+
+  // Adversarial Review Squad dispatch tests (layered, flat, targeted)
+  const advLead = payload({ squadId: "adversarial_l1", manifestPath });
+  assert.equal(advLead.length, 1);
+  assert.equal(advLead[0].Role, "Adversarial Review Lead");
+  assert.equal(advLead[0].TypeName, "self");
+  assert.match(advLead[0].Prompt, /"squadId":"adversarial_review"/);
+  assert.equal(advLead[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review"));
+
+  const advSpecs = payload({ squadId: "adversarial_review", manifestPath });
+  assert.equal(advSpecs.length, 2);
+  assert.deepEqual(advSpecs.map(s => s.Role), [
+    "Specialist Alignment & Anti-Cheating Auditor",
+    "Lead Synthesis & Grounding Auditor"
+  ]);
+  assert.equal(advSpecs[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 1));
+  assert.equal(advSpecs[1].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 2));
+
+  const flatAdv = payload({ squadId: "adversarial_flat", manifestPath });
+  assert.equal(flatAdv.length, 1);
+  assert.equal(flatAdv[0].Role, "Adversarial Review Specialist");
+  assert.equal(flatAdv[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 1));
+
+  const targetedFlatAdv = payload({ squadId: "adversarial_flat:alpha", manifestPath });
+  assert.equal(targetedFlatAdv.length, 1);
+  assert.match(targetedFlatAdv[0].Prompt, /alpha/);
+
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { adversarial_l1: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for adversarial lead compilation/);
+  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
+    squads: { adversarial_flat: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for flat adversarial review compilation/);
+  rejects({ squadId: "adversarial_flat:missing", manifestPath }, /Unknown targetSquad 'missing'/);
 
   const externalManifest = path.join(testDir, "outside.json");
   fs.writeFileSync(externalManifest, JSON.stringify(manifest));

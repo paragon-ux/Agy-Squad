@@ -107,6 +107,37 @@ try {
   const accepted = bundleReports(root, record);
   assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
+
+  // Adversarial Review Acceptance Gate tests:
+  // 1. Mandatory adversarial review missing
+  assert.throws(
+    () => bundleReports(root, { ...record, requireAdversarialReview: true }),
+    /Acceptance blocked: Mandatory adversarial review report missing/
+  );
+
+  // 2. Adversarial review failed (Verdict: FAIL)
+  const advLeadSlot = reportPath("adversarial_review", undefined);
+  write(advLeadSlot, "Verdict: FAIL\nAdversarial review caught sycophancy or ungrounded claims.");
+  assert.throws(
+    () => bundleReports(root, record),
+    /Acceptance blocked: Mandatory adversarial review verdict is not PASS/
+  );
+
+  // 3. Adversarial review passed (Verdict: PASS)
+  write(advLeadSlot, "Verdict: PASS\nAdversarial review verified empirical tool execution and lead checks.");
+  const advAcceptedBundle = bundleReports(root, record);
+  assert.ok(advAcceptedBundle.sha256);
+  const bundledWithAdv = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
+  assert.equal(bundledWithAdv.adversarialReview.path, advLeadSlot);
+  assert.equal(verifyBundle(root, bundle).path, bundle);
+
+  // 4. Tampering with adversarial report after bundling fails verifyBundle
+  write(advLeadSlot, "Verdict: PASS\nTampered after bundling.");
+  assert.throws(() => verifyBundle(root, bundle), /Adversarial review report changed/);
+
+  // Clean up adversarial slot for remaining legacy bundle tests
+  fs.unlinkSync(path.join(root, advLeadSlot));
+  bundleReports(root, record);
   write(lead, "FAIL: synthesis changed after bundling.");
   assert.throws(() => verifyBundle(root, bundle), /unambiguous PASS verdict/);
   assert.throws(() => pruneReports(root, bundle, accepted.sha256), /unambiguous PASS verdict/);
