@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function copyIsolatedRepo(targetDir) {
-  for (const rel of ["bin", "mcp", ".agents", "docs", "tests", "package.json", "README.md"]) {
+  for (const rel of ["bin", "mcp", ".agents", "docs", "tests", "package.json", "README.md", "zensical.toml"]) {
     fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
   }
   return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
@@ -56,6 +56,10 @@ try {
   assert.notEqual(retiredRun.status, 0);
   assert.match(retiredRun.stderr, /retired in Phase 2/);
 
+  const emptyPlan = spawnSync(process.execPath, [cli, "plan"], { cwd: repoRoot, encoding: "utf8" });
+  assert.notEqual(emptyPlan.status, 0);
+  assert.match(emptyPlan.stderr, /Usage: agy-squad plan/);
+
   const planRes = spawnSync(
     process.execPath,
     [cli, "plan", "--model", "gemini-3.8-flash-high", "--scope", "package.json", "--role", "Verifier", "Verify Phase 2 CLI"],
@@ -66,6 +70,25 @@ try {
   assert.equal(planJson.executionMode, "swarm");
   assert.equal(planJson.modelProvenance.pinningSupported, true);
   assert.equal(planJson.workers[0].specialists[0].swarmAdd.model, "gemini-3.8-flash-high");
+
+  const dispatchRes = spawnSync(
+    process.execPath,
+    [cli, "dispatch", "--squad", "all_l1", "--manifest", ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json"],
+    { cwd: repoRoot, encoding: "utf8" }
+  );
+  assert.equal(dispatchRes.status, 0, dispatchRes.stderr);
+  const dispatchJson = JSON.parse(dispatchRes.stdout);
+  assert.equal(dispatchJson.Subagents.length, 3);
+  const dispatchPos = spawnSync(
+    process.execPath,
+    [cli, "dispatch", "integrity_auditor:skill_and_pr_review_audit", "--manifest", ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json"],
+    { cwd: repoRoot, encoding: "utf8" }
+  );
+  assert.equal(dispatchPos.status, 0, dispatchPos.stderr);
+  assert.equal(JSON.parse(dispatchPos.stdout).Subagents.length, 1);
+  const dispatchBad = spawnSync(process.execPath, [cli, "dispatch"], { cwd: repoRoot, encoding: "utf8" });
+  assert.notEqual(dispatchBad.status, 0);
+  assert.match(dispatchBad.stderr, /Usage: agy-squad dispatch/);
 
   // 2. diagnose.mjs --help, flag validation, HEALTHY execution, --print-dispatch, and drift checks (all isolated in os.tmpdir)
   const isoRepo = path.join(temporary, "iso-repo");
@@ -100,7 +123,7 @@ try {
   assert.match(badAcceptAll.stderr, /single squadId/);
   const badLedgerDispatch = spawnSync(process.execPath, [isoDiag, "--print-dispatch", "all_l1", "--ledger", "docs/reviews/x.md"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badLedgerDispatch.status, 1);
-  assert.match(badLedgerDispatch.stderr, /not valid with '--print-dispatch'/);
+  assert.match(badLedgerDispatch.stderr, /not valid with '--print-plan' or '--print-dispatch'/);
 
   // Mid-cohort --allow-active-cohort check inside os.tmpdir()
   fs.mkdirSync(path.join(isoRepo, "scratch/agy-squad/squad-skill_and_pr_review_audit"), { recursive: true });
@@ -145,27 +168,120 @@ try {
     assert.match(agent.Prompt, /Parent conversation ID \(send_message Recipient\): parent-conv-456/);
   }
 
-  // SKILL-PR5-04: Verify skill drift check catches retired Phase 2 symbols in references/*.md without false positives on retired notices
+  const planDiagRes = spawnSync(
+    process.execPath,
+    [isoDiag, "--print-plan", "--workspace-isolation", "share"],
+    { cwd: isoRepo, encoding: "utf8" }
+  );
+  assert.equal(planDiagRes.status, 0, planDiagRes.stderr);
+  const planDiagJson = JSON.parse(planDiagRes.stdout);
+  assert.equal(planDiagJson.executionMode, "swarm");
+  assert.equal(planDiagJson.workers.length, 3);
+  assert.equal(planDiagJson.integrityAuditPlan.length, 3);
+
+  const flatPlanRes = spawnSync(
+    process.execPath,
+    [isoDiag, "--print-plan", "--topology", "flat"],
+    { cwd: isoRepo, encoding: "utf8" }
+  );
+  assert.equal(flatPlanRes.status, 0, flatPlanRes.stderr);
+  const flatPlanJson = JSON.parse(flatPlanRes.stdout);
+  assert.equal(flatPlanJson.topology.compiledPattern, "flat");
+  assert.equal(flatPlanJson.workers.length, 1);
+  assert.equal(flatPlanJson.workers[0].squadId, "self_diagnosis");
+  assert.equal(flatPlanJson.workers[0].lead, null);
+  assert.equal(flatPlanJson.workers[0].specialists.length, 6);
+  assert.equal(flatPlanJson.integrityAuditPlan.length, 1);
+
+  // SKILL-PR5-04: Verify skill drift check catches retired Phase 1/2 symbols in references/*.md without false positives on retired notices
   const driftRefDir = path.join(isoRepo, ".agents/skills/swarm-governance/references");
   const driftRefFile = path.join(driftRefDir, "drift-probe.md");
   fs.mkdirSync(driftRefDir, { recursive: true });
   try {
-    fs.writeFileSync(driftRefFile, "Run `bin/terminal.py` and wait for `.mcp-ready` before dispatch.\n");
+    fs.writeFileSync(driftRefFile, "Run `bin/terminal.py`, `adversarial_l1`, `node mcp/handoffs.mjs`, and wait for `.mcp-ready`.\n");
     const driftBad = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
     assert.equal(driftBad.status, 1, driftBad.stderr);
     const driftBadJson = JSON.parse(driftBad.stdout);
     assert.equal(driftBadJson.status, "CHANGES_REQUIRED");
     const driftFinding = driftBadJson.findings.find(f => f.id === "SKILL-DRIFT-swarm-governance");
-    assert.ok(driftFinding, "Expected SKILL-DRIFT-swarm-governance for active retired Phase 2 symbol reference");
+    assert.ok(driftFinding, "Expected SKILL-DRIFT-swarm-governance for active retired Phase 1/2 symbol reference");
     assert.match(driftFinding.summary, /terminal\.py/);
+    assert.match(driftFinding.summary, /adversarial_l1/);
+    assert.match(driftFinding.summary, /mcp\/handoffs\.mjs/);
     assert.match(driftFinding.summary, /\.mcp-ready/);
 
-    fs.writeFileSync(driftRefFile, "Historical note: `bin/terminal.py` and `.mcp-ready` are retired in Phase 2.\n");
+    fs.writeFileSync(driftRefFile, "Historical note: `bin/terminal.py`, `adversarial_l1`, `node mcp/handoffs.mjs`, and `.mcp-ready` are retired.\n");
     const driftOk = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
     assert.equal(driftOk.status, 0, driftOk.stderr);
     assert.equal(JSON.parse(driftOk.stdout).status, "HEALTHY");
   } finally {
     fs.rmSync(driftRefDir, { recursive: true, force: true });
+  }
+
+  // Canonical roles-and-workflows & runtime closure checklist enforcement tests
+  const swarmSkillPath = path.join(isoRepo, ".agents/skills/swarm-governance/SKILL.md");
+  const stoppingDocPath = path.join(isoRepo, "docs/stopping-agents.md");
+  const rolesDocPath = path.join(isoRepo, "docs/roles-and-workflows.md");
+  const prSkillPath = path.join(isoRepo, ".agents/skills/pr-review/SKILL.md");
+  const origSwarmSkill = fs.readFileSync(swarmSkillPath, "utf8");
+  const origStoppingDoc = fs.readFileSync(stoppingDocPath, "utf8");
+  const origRolesDoc = fs.readFileSync(rolesDocPath, "utf8");
+  const origPrSkill = fs.readFileSync(prSkillPath, "utf8");
+  try {
+    // 1. Dropping checks 1 & 4 inside closure section triggers SKILL-CLOSURE-CHECKLIST even though swarm_monitor appears earlier;
+    //    bare non-link text "roles-and-workflows.md" triggers SKILL-ROLES-LINK-*
+    fs.writeFileSync(
+      swarmSkillPath,
+      origSwarmSkill
+        .replace(/\[Roles & skill workflows\]\([^)]+\)/g, "roles-and-workflows.md")
+        .replace(/1\. `swarm\{action: "status"\}`[^\n]+\n/, "")
+        .replace(/4\. Child commands:[^\n]+\n?/, "")
+    );
+    fs.writeFileSync(
+      prSkillPath,
+      origPrSkill.replace("roles-and-workflows.md#pr-review", "roles-and-workflows.md#nonexistent-anchor")
+    );
+    fs.writeFileSync(
+      stoppingDocPath,
+      origStoppingDoc.replace(/## Four-check runtime closure checklist[\s\S]*?(?=\n## )/, "")
+    );
+    fs.writeFileSync(
+      rolesDocPath,
+      origRolesDoc.replace(/### Four-check runtime closure gate[\s\S]*?(?=\n#{2,3} |$)/, "")
+    );
+    const badIds = JSON.parse(spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" }).stdout).findings.map(f => f.id);
+    assert.ok(badIds.includes("SKILL-ROLES-LINK-swarm-governance"), "Expected SKILL-ROLES-LINK for bare non-link mention");
+    assert.ok(badIds.includes("SKILL-ROLES-LINK-pr-review"), "Expected SKILL-ROLES-LINK for bad #anchor fragment");
+    assert.ok(badIds.includes("SKILL-CLOSURE-CHECKLIST"), "Expected SKILL-CLOSURE-CHECKLIST when closure section is incomplete");
+    assert.ok(badIds.includes("DOC-CLOSURE-CHECKLIST-stopping-agents"), "Expected DOC-CLOSURE-CHECKLIST-stopping-agents when closure section is removed");
+    assert.ok(badIds.includes("DOC-CLOSURE-CHECKLIST-roles-and-workflows"), "Expected DOC-CLOSURE-CHECKLIST-roles-and-workflows when closure section is removed");
+
+    fs.rmSync(rolesDocPath);
+    const missingDocIds = JSON.parse(spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" }).stdout).findings.map(f => f.id);
+    assert.ok(missingDocIds.includes("DOC-ROLES-MISSING"), "Expected DOC-ROLES-MISSING when docs/roles-and-workflows.md is absent");
+
+    const orphanSvgPath = path.join(isoRepo, "docs/assets/test-orphan-diagram.svg");
+    const reviewMentionPath = path.join(isoRepo, "docs/reviews/test-orphan-mention.md");
+    fs.mkdirSync(path.dirname(orphanSvgPath), { recursive: true });
+    fs.writeFileSync(orphanSvgPath, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
+    fs.writeFileSync(reviewMentionPath, "Mentioning test-orphan-diagram.svg in docs/reviews/ must not clear DOC-SVG-ORPHAN.\n");
+    const zensicalPath = path.join(isoRepo, "zensical.toml");
+    const origZensical = fs.readFileSync(zensicalPath, "utf8");
+    fs.writeFileSync(zensicalPath, origZensical.replace("roles-and-workflows.md", "missing-nav-target.md"));
+    try {
+      const visualIds = JSON.parse(spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" }).stdout).findings.map(f => f.id);
+      assert.ok(visualIds.includes("DOC-SVG-ORPHAN-test-orphan-diagram"), "Expected DOC-SVG-ORPHAN even if mentioned in docs/reviews/");
+      assert.ok(visualIds.some(id => id.startsWith("DOC-ZENSICAL-MISSING")), "Expected DOC-ZENSICAL-MISSING for missing nav target");
+    } finally {
+      fs.writeFileSync(zensicalPath, origZensical);
+      fs.rmSync(orphanSvgPath, { force: true });
+      fs.rmSync(reviewMentionPath, { force: true });
+    }
+  } finally {
+    fs.writeFileSync(swarmSkillPath, origSwarmSkill);
+    fs.writeFileSync(stoppingDocPath, origStoppingDoc);
+    fs.writeFileSync(rolesDocPath, origRolesDoc);
+    fs.writeFileSync(prSkillPath, origPrSkill);
   }
 
   // 3. TEST-PR5-02: Isolated --teardown positive & negative gating tests
@@ -262,6 +378,46 @@ try {
   assert.equal(tdSuccessJson.status, "TORN_DOWN");
   assert.deepEqual(tdSuccessJson.tornDown, [`scratch/agy-squad/squad-${squadId}`]);
   assert.deepEqual(tdSuccessJson.removedParents, ["scratch/agy-squad", "scratch"]);
+  assert.equal(fs.existsSync(path.join(tdRepo, "scratch")), false);
+
+  // 3f2. SD-SCRIPT-01: Audited teardown removes companion squad-integrity_auditor-<id> too and refuses unbundled auditor dir
+  const auditedId = "runtime_and_contract_diagnosis";
+  const aS1 = reportPath(auditedId, 1);
+  const aLead = reportPath(auditedId, undefined);
+  const aInt = reportPath(`integrity_auditor-${auditedId}`, 1);
+  const writeTd = (rel, body) => {
+    const abs = path.join(tdRepo, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+  };
+  writeTd(aS1, "# Spec 1\nVerified target.txt.\n");
+  writeTd(aLead, "Content Verdict: PASS\nNo open defects.\n");
+  writeTd(aInt, `Target Squad: ${auditedId}\nIntegrity Verdict: CLEAN\nVerified.\n`);
+  const unbundledAuditRefusal = spawnSync(process.execPath, [tdDiag, "--teardown", auditedId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(unbundledAuditRefusal.status, 1);
+  const auditedRecord = {
+    workspace: tdRepo,
+    squadId: auditedId,
+    verdict: "PASS",
+    requireIntegrityAudit: true,
+    verifiedFiles,
+    assignments: [{ conversationId: "s1-id", report: aS1 }],
+    handoffs: [{ sender: "s1-id", message: `READY ${aS1} — Audited check.` }]
+  };
+  inspectHandoffs(tdRepo, auditedRecord);
+  const auditedBundled = bundleReports(tdRepo, auditedRecord);
+  const auditedMtimeSec = Math.floor(fs.statSync(path.join(tdRepo, auditedBundled.path)).mtimeMs / 1000);
+  fs.writeFileSync(tdLedgerAbs, buildTestLedger({ bundleSha: auditedBundled.sha256, includeFindingRow: true }));
+  fs.utimesSync(tdLedgerAbs, auditedMtimeSec + 5, auditedMtimeSec + 5);
+  const auditedTeardown = spawnSync(
+    process.execPath,
+    [tdDiag, "--teardown", auditedId, "--accept", auditedBundled.sha256, "--ledger", tdLedgerRel],
+    { cwd: tdRepo, encoding: "utf8" }
+  );
+  assert.equal(auditedTeardown.status, 0, auditedTeardown.stderr);
+  const auditedTdJson = JSON.parse(auditedTeardown.stdout);
+  assert.ok(auditedTdJson.tornDown.includes(`scratch/agy-squad/squad-${auditedId}`));
+  assert.ok(auditedTdJson.tornDown.includes(`scratch/agy-squad/squad-integrity_auditor-${auditedId}`));
   assert.equal(fs.existsSync(path.join(tdRepo, "scratch")), false);
 
   // 3g. --force bypass removes unbundled squad and canary directories + empty parents

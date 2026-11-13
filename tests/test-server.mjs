@@ -51,11 +51,18 @@ console.log("Agy-Squad MCP server tests\n");
   assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad", "squad_planner"]);
   const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
   assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
+  assert.doesNotMatch(dispatch.inputSchema.properties.squadId.description, /adversarial_/);
   assert.equal(dispatch.inputSchema.properties.squadId.minLength, 1);
   assert.equal(dispatch.inputSchema.properties.manifestPath.minLength, 1);
   const planner = res.result.tools.find((t) => t.name === "squad_planner");
+  assert.ok(Array.isArray(planner.inputSchema.oneOf) && planner.inputSchema.oneOf.length === 3);
+  assert.ok(Object.values(planner.inputSchema.properties).every((p) => typeof p.description === "string" && p.description.length > 0));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
+  const invalidParamsRes = await handleRequest({ jsonrpc: "2.0", id: 98, method: "tools/call", params: null });
+  assert.equal(invalidParamsRes.error.code, -32602);
+  const arrayParamsRes = await handleRequest({ jsonrpc: "2.0", id: 99, method: "tools/call", params: [] });
+  assert.equal(arrayParamsRes.error.code, -32602);
   console.log("✓ tools/list exposes dispatch_squad and squad_planner");
 }
 {
@@ -89,6 +96,19 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(planPayload.executionMode, "swarm");
   assert.equal(planPayload.modelProvenance.pinningSupported, true);
   assert.equal(planPayload.modelValidation.status, "checked-against-supplied-list");
+  const manifestPlanRes = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+      executionMode: "swarm",
+      workspaceIsolation: "share"
+    }
+  });
+  assert.equal(Boolean(manifestPlanRes.result.isError), false, manifestPlanRes.result.content[0].text);
+  const manifestPlan = JSON.parse(manifestPlanRes.result.content[0].text);
+  assert.equal(manifestPlan.workers.length, 3);
+  assert.ok(!manifestPlan.workers[0].lead.swarmAdd.brief.includes("dispatch_squad"));
+  assert.ok(manifestPlan.workers[0].specialists[0].swarmAdd.brief.includes("post_message"));
   const badKnownModel = await send("tools/call", {
     name: "squad_planner",
     arguments: {
@@ -163,7 +183,7 @@ console.log("Agy-Squad MCP server tests\n");
   capped.stdin.write(Buffer.alloc(1500, 0x62));
   await waitForMsgCount(1);
   assert.equal(cappedMsgs[0].error.code, -32600);
-  assert.match(cappedMsgs[0].error.message, /exceeds 10MB safety ceiling/);
+  assert.match(cappedMsgs[0].error.message, /exceeds 2048-byte safety ceiling/);
 
   // Terminate the dropped oversized frame and stream a valid request split mid-UTF8 character across chunks.
   capped.stdin.write("\n");

@@ -26,14 +26,15 @@ try {
     model: "gemini-3.8-flash-high"
   }, root);
   assert.equal(overlapTask.executionMode, "swarm");
-  assert.equal(overlapTask.topology.recommendedPattern, "flat");
+  assert.equal(overlapTask.topology.compiledPattern, "flat");
+  assert.match(overlapTask.topology.defaultBias, /ask user/i);
   assert.equal(overlapTask.topology.scopeOverlaps.length, 1);
   assert.match(overlapTask.warnings[0], /scopeFiles overlap/);
   assert.equal(overlapTask.modelProvenance.pinningSupported, true);
   assert.equal(overlapTask.workers[0].specialists[0].swarmAdd.model, "gemini-3.8-flash-high");
   assert.equal(overlapTask.integrityAuditPlan.length, 1);
   assert.equal(overlapTask.integrityAuditPlan[0].swarmAdd.model, "gemini-3.8-flash-high");
-  assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /L6 enforced/);
+  assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /L6 convention/);
   assert.equal(overlapTask.provenanceScaffold.entries.length, 2);
   assert.ok(overlapTask.bundleRecordTemplates.task_squad.requireIntegrityAudit);
 
@@ -107,10 +108,30 @@ try {
   assert.equal(new Set(allSelfDiagNames).size, allSelfDiagNames.length, "self-diagnosis-manifest workerNames must be globally unique");
   assert.ok(allSelfDiagNames.every(n => typeof n === "string" && n.length > 0 && n.length <= 24));
   for (const w of selfDiagPlan.workers) {
-    if (w.lead) assert.equal(w.lead.swarmAdd.name, w.lead.workerName);
+    if (w.lead) {
+      assert.equal(w.lead.swarmAdd.name, w.lead.workerName);
+      assert.ok(!w.lead.swarmAdd.brief.includes("dispatch_squad"), "swarm lead brief must not call dispatch_squad");
+      assert.ok(!w.lead.swarmAdd.brief.includes("send_message"), "swarm lead brief must not tell lead to use send_message");
+      assert.ok(!w.lead.swarmAdd.brief.includes("/agents"), "swarm lead brief must not instruct checking /agents");
+      assert.match(w.lead.swarmAdd.brief, /post_message/);
+      assert.match(w.lead.swarmAdd.brief, /swarm_wait/);
+    }
     for (const s of w.specialists) assert.equal(s.swarmAdd.name, s.workerName);
     const tplAssignments = selfDiagPlan.bundleRecordTemplates[w.squadId].assignments.map(a => a.conversationId);
     assert.equal(new Set(tplAssignments).size, tplAssignments.length);
+  }
+  const sharedSelfDiagPlan = planSquadCohort({
+    manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+    executionMode: "swarm",
+    workspaceIsolation: "share"
+  }, repoRoot);
+  for (const w of sharedSelfDiagPlan.workers) {
+    for (const s of w.specialists) {
+      assert.ok(!s.swarmAdd.brief.includes("Use the shared workspace"), "isolated share brief must not say shared workspace");
+      assert.ok(!s.swarmAdd.brief.includes("send_message"), "swarm specialist brief must not use send_message");
+      assert.match(s.swarmAdd.brief, /'share' working copy/);
+      assert.match(s.swarmAdd.brief, /post_message/);
+    }
   }
   for (const a of selfDiagPlan.integrityAuditPlan) {
     assert.equal(a.swarmAdd.name, a.workerName);
@@ -284,7 +305,7 @@ try {
     workspaceIsolation: "branch",
     includeIntegrityAuditor: false
   }, root);
-  assert.equal(multiSquadPlan.topology.recommendedPattern, "flat");
+  assert.equal(multiSquadPlan.topology.compiledPattern, "flat");
   assert.equal(multiSquadPlan.topology.workingSquads, 1);
   assert.equal(multiSquadPlan.workers[0].squadId, "beta");
   assert.equal(multiSquadPlan.workers[0].specialists[0].swarmAdd.workspace, "branch");
@@ -308,7 +329,9 @@ try {
     [{ manifestPath: "plan-manifest.json", scopeFiles: ["mcp"] }, /only be passed with task/],
     [{ manifest: { squads: { a: { specialists: [{ role: "R", objective: "O", scopeFiles: ["."] }] } } }, roles: ["R"] }, /only be passed with task/],
     [{ manifest: { squads: { a: { specialists: [{ role: "R", objective: "O", scopeFiles: ["."] }] } } }, squadId: "missing" }, /Unknown working squadId/],
-    [{ manifest: { squads: { a: { specialists: [{ role: "R", objective: "O", scopeFiles: ["."] }] } } }, squadId: "adversarial_review" }, /Unknown working squadId/]
+    [{ manifest: { squads: { a: { specialists: [{ role: "R", objective: "O", scopeFiles: ["."] }] } } }, squadId: "adversarial_review" }, /Unknown working squadId/],
+    [{ manifest: { squads: { a: { specialists: [{ role: "R", objective: "O", scopeFiles: ["."], readOnly: "true" }] } } } }, /readOnly must be a boolean/],
+    [{ manifest: { squads: { a: { lead: { role: "L", objective: "O", scopeFiles: ["."], readOnly: 1 }, specialists: [{ role: "R", objective: "O", scopeFiles: ["."] }] } } } }, /readOnly must be a boolean/]
   ]) {
     assert.throws(() => planSquadCohort(badArgs, root), pattern);
   }
@@ -385,6 +408,38 @@ try {
   }, root);
   assert.ok(layered.notes.some(n => /Layered plan/.test(n)));
   assert.equal(planSquadCohort({ task: "audit", executionMode: "subagent" }, root).notes.some(n => /not enforced/.test(n)), false);
+
+  // 12. Stage 1 remediation regressions: inherit model in swarm + knownModels, explicit topology flat/layered, PascalCase ReadOnly
+  const inheritSwarmPlan = planSquadCohort({
+    task: "verify inherit normalization",
+    model: "inherit",
+    executionMode: "swarm",
+    knownModels: ["gemini-4-hydrogen-high"]
+  }, root);
+  assert.equal(inheritSwarmPlan.workers[0].specialists[0].swarmAdd.model, undefined);
+
+  const flatSelfDiag = planSquadCohort({
+    manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+    topology: "flat",
+    executionMode: "swarm"
+  }, repoRoot);
+  assert.equal(flatSelfDiag.topology.compiledPattern, "flat");
+  assert.ok(flatSelfDiag.workers.every(w => w.lead === null));
+
+  const pascalReadOnlyPlan = planSquadCohort({
+    manifest: {
+      squads: {
+        pascal: {
+          specialists: [
+            { Role: "R1", Objective: "O1", ScopeFiles: ["src/a.js"], ReadOnly: true },
+            { Role: "R2", Objective: "O2", ScopeFiles: ["src/a.js"], ReadOnly: true }
+          ]
+        }
+      }
+    }
+  }, root);
+  assert.equal(pascalReadOnlyPlan.topology.scopeOverlaps.length, 0);
+  assert.equal(pascalReadOnlyPlan.workers[0].specialists[0].swarmAdd.brief.includes("ReadOnly"), false);
 
   console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {

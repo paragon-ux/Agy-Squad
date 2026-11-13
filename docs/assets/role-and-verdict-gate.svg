@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="pele pele-flowchart" viewBox="0 0 580 498" width="580" height="498" style="max-width:100%;height:auto;--_bg:var(--pele-bg,#fff);--_fg:var(--pele-fg,#1f1f1f);--_m:var(--pele-muted,#6e6e6e);--_l:var(--pele-line,#1f1f1f);--_s:var(--pele-surface,#f3f3f3);--_a:var(--pele-surface-alt,#e6e6e6);--_b:var(--pele-border,#8a8a8a);--_c:var(--pele-accent,#5b7bd5);color:var(--_fg);--_r:var(--pele-radius,4px);--_fm:var(--pele-font-mono,monospace);font:16px sans-serif;letter-spacing:normal;word-spacing:normal;text-transform:none;direction:ltr;font-family:var(--pele-font,sans-serif)" fill="var(--_fg)" role="graphics-document document" aria-roledescription="flowchart">
+  <style>
+    :root {
+      --pele-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      --pele-bg: #ffffff;
+      --pele-fg: #1f2328;
+      --pele-muted: #656d76;
+      --pele-line: #57606a;
+      --pele-surface: #f6f8fa;
+      --pele-surface-alt: #eaeef2;
+      --pele-border: #d0d7de;
+      --pele-accent: #0969da;
+      --pele-series-1: #0969da;
+      --pele-series-2: #1a7f37;
+      --pele-series-3: #9a6700;
+      --pele-series-4: #8250df;
+      --pele-series-5: #cf222e;
+      --pele-series-6: #bf3989;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --pele-bg: #0d1117;
+        --pele-fg: #e6edf3;
+        --pele-muted: #8b949e;
+        --pele-line: #8b949e;
+        --pele-surface: #161b22;
+        --pele-surface-alt: #21262d;
+        --pele-border: #30363d;
+        --pele-accent: #2f81f7;
+        --pele-series-1: #2f81f7;
+        --pele-series-2: #3fb950;
+        --pele-series-3: #d29922;
+        --pele-series-4: #a371f7;
+        --pele-series-5: #f85149;
+        --pele-series-6: #db61a2;
+      }
+    }
+  </style>
+<g class="pele-clusters"><g class="pele-cluster" data-id="Audit"><rect x="300" y="8" width="276" height="344" fill="var(--_a)" fill-opacity="0.5" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-cluster-label" fill="var(--_m)" x="438" y="33.6" text-anchor="middle">Flat Integrity Auditor (Audit Plane)</text></g><g class="pele-cluster" data-id="Content"><rect x="8" y="50" width="255.63" height="302" fill="var(--_a)" fill-opacity="0.5" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-cluster-label" fill="var(--_m)" x="134.94" y="75.6" text-anchor="middle">Working Squad (Content Plane)</text></g></g><g class="pele-edges" fill="none" stroke="var(--_l)" stroke-linecap="round"><g class="pele-edge" data-id="L_SP_LD_0"><path d="M135.82,177L135.82,218"/><path class="pele-marker" d="M135.82,225L132.46,217L139.18,217Z" fill="var(--_l)" stroke="none"/></g><g class="pele-edge" data-id="L_AU_IV_0"><path d="M437.68,156L437.68,197"/><path class="pele-marker" d="M437.68,204L434.32,196L441.04,196Z" fill="var(--_l)" stroke="none"/></g><g class="pele-edge" data-id="L_LD_GATE_0"><path d="M135.82,312L135.82,352C135.82,369.58 271.94,369.58 271.94,387.16L271.94,393.16"/><path class="pele-marker" d="M271.94,400.16L268.58,392.16L275.3,392.16Z" fill="var(--_l)" stroke="none"/></g><g class="pele-edge" data-id="L_IV_GATE_0"><path d="M437.68,312L437.68,352C437.68,369.58 301.56,369.58 301.56,387.16L301.56,393.16"/><path class="pele-marker" d="M301.56,400.16L298.2,392.16L304.92,392.16Z" fill="var(--_l)" stroke="none"/></g></g><g class="pele-nodes"><g class="pele-node pele-shape-rect" data-id="SP" transform="translate(135.82,133.5)"><rect x="-88.91" y="-43.5" width="177.82" height="87" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-15.4">Specialists</tspan><tspan x="0" y="5.6">report.md + READY</tspan><tspan x="0" y="26.6">&lt;= 500 B</tspan></text></g><g class="pele-node pele-shape-rect" data-id="LD" transform="translate(135.82,268.5)"><rect x="-107.82" y="-43.5" width="215.63" height="87" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-15.4">Lead Content Verdict:</tspan><tspan x="0" y="5.6">PASS / FAIL / BLOCKED</tspan><tspan x="0" y="26.6">+ fingerprint SHA-256</tspan></text></g><g class="pele-node pele-shape-rect" data-id="AU" transform="translate(437.68,102)"><rect x="-128" y="-54" width="256" height="108" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-25.9">audit-&lt;id&gt; | integrity_auditor</tspan><tspan x="0" y="-4.9">query_transcript</tspan><tspan x="0" y="16.1">summaryOnly=true</tspan><tspan x="0" y="37.1">+ Artifact Hash Check</tspan></text></g><g class="pele-node pele-shape-rect" data-id="IV" transform="translate(437.68,258)"><rect x="-105.58" y="-54" width="211.15" height="108" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-25.9">Target Squad +</tspan><tspan x="0" y="-4.9">Integrity Verdict:</tspan><tspan x="0" y="16.1">CLEAN |</tspan><tspan x="0" y="37.1">INTEGRITY VIOLATION</tspan></text></g><g class="pele-node pele-shape-cyl" data-id="GATE" transform="translate(286.75,445)"><path d="M-118,-33A118,12 0 0 1 118,-33V33A118,12 0 0 1 -118,33Z" fill="var(--_s)" stroke="var(--_b)"/><path d="M-118,-33A118,12 0 0 0 118,-33" fill="none" stroke="var(--_b)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="1.1">bundle -&gt; verify -&gt; prune</tspan><tspan x="0" y="22.1">(opt-out: --allow-unaudited)</tspan></text></g></g></svg>

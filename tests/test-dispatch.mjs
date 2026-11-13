@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { reportPath } from "../mcp/handoffs.mjs";
 
@@ -159,47 +160,40 @@ try {
   }));
   rejects({ squadId: "alpha", manifestPath: "invalid.json" }, /both 'children' and 'specialists'/);
 
-  // Adversarial Review Squad dispatch tests (layered, flat, targeted)
-  const advLead = payload({ squadId: "adversarial_l1", manifestPath });
-  assert.equal(advLead.length, 1);
-  assert.equal(advLead[0].Role, "Adversarial Review Lead");
-  assert.equal(advLead[0].TypeName, "self");
-  assert.match(advLead[0].Prompt, /"squadId":"adversarial_review"/);
-  assert.equal(advLead[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review"));
+  // Legacy Phase 1 adversarial_* targets are retired (kept only: integrity_auditor[:<target>])
+  rejects({ squadId: "adversarial_l1", manifestPath }, /Unknown squadId 'adversarial_l1'/);
+  rejects({ squadId: "adversarial_flat", manifestPath }, /Unknown squadId 'adversarial_flat'/);
+  rejects({ squadId: "adversarial_flat:alpha", manifestPath }, /Unknown squadId 'adversarial_flat:alpha'/);
+  rejects({ squadId: "integrity_auditor:missing", manifestPath }, /Unknown targetSquad 'missing'/);
 
-  const advSpecs = payload({ squadId: "adversarial_review", manifestPath });
-  assert.equal(advSpecs.length, 2);
-  assert.deepEqual(advSpecs.map(s => s.Role), [
-    "Specialist Alignment & Anti-Cheating Auditor",
-    "Lead Synthesis & Grounding Auditor"
-  ]);
-  assert.equal(advSpecs[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 1));
-  assert.equal(advSpecs[1].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 2));
+  // Plane-split brief tests (P1L-CODE-01..03): swarm vs subagent wording
+  const swarmLead = buildSubagentSpec(agent("Lead", "src"), "alpha", "swarm-manifest.json", undefined, undefined, {
+    executionMode: "swarm",
+    workspaceIsolation: "inherit"
+  });
+  assert.match(swarmLead.Prompt, /swarm_wait/);
+  assert.match(swarmLead.Prompt, /post_message/);
+  assert.doesNotMatch(swarmLead.Prompt, /dispatch_squad|send_message|\/agents/);
+  const swarmSpec = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
+    executionMode: "swarm",
+    workspaceIsolation: "share"
+  });
+  assert.match(swarmSpec.Prompt, /'share' working copy/);
+  assert.match(swarmSpec.Prompt, /post_message/);
+  assert.doesNotMatch(swarmSpec.Prompt, /Use the shared workspace|send_message/);
 
-  const flatAdv = payload({ squadId: "adversarial_flat", manifestPath });
-  assert.equal(flatAdv.length, 1);
-  assert.equal(flatAdv[0].Role, "Adversarial Review Specialist");
-  assert.equal(flatAdv[0].Prompt.match(/^Report slot: (\S+)$/m)?.[1], reportPath("adversarial_review", 1));
-
-  const targetedFlatAdv = payload({ squadId: "adversarial_flat:alpha", manifestPath });
-  assert.equal(targetedFlatAdv.length, 1);
-  assert.match(targetedFlatAdv[0].Prompt, /alpha/);
-
-  // F-05 & S2-OPT2: custom adversarial_review preserves targetSquad, lead-only integrity_auditor rejects loudly,
-  // and single-squad dispatch skips unrelated invalid sibling squads.
+  // S2-OPT2: single-squad dispatch skips unrelated invalid sibling squads; lead-only integrity_auditor rejects loudly
   fs.writeFileSync(path.join(workspace, "custom-targets.json"), JSON.stringify({
     squads: {
       alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
-      broken_sibling: { specialists: [] },
-      adversarial_review: {
-        specialists: [{ role: "Custom Adv", objective: "Inspect reports", scopeFiles: ["src"] }]
-      }
+      broken_sibling: { specialists: [] }
     }
   }));
   const alphaWithBrokenSibling = payload({ squadId: "alpha", manifestPath: "custom-targets.json" });
   assert.equal(alphaWithBrokenSibling[0].Role, "First");
-  const customFlatAdv = payload({ squadId: "adversarial_flat:alpha", manifestPath: "custom-targets.json" });
-  assert.match(customFlatAdv[0].Prompt, /Target Squad: alpha/);
+  const scopedAuditor = payload({ squadId: "integrity_auditor:alpha", manifestPath: "custom-targets.json" });
+  assert.equal(scopedAuditor.length, 1);
+  assert.match(scopedAuditor[0].Prompt, /Target Squad: alpha/);
 
   fs.writeFileSync(path.join(workspace, "lead-only-auditor.json"), JSON.stringify({
     squads: {
@@ -209,15 +203,13 @@ try {
   }));
   rejects({ squadId: "integrity_auditor:alpha", manifestPath: "lead-only-auditor.json" }, /lead without specialists/);
 
-  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
-    squads: { adversarial_l1: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
+  fs.writeFileSync(path.join(workspace, "null-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: null
+    }
   }));
-  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for adversarial lead compilation/);
-  fs.writeFileSync(path.join(workspace, "invalid.json"), JSON.stringify({
-    squads: { adversarial_flat: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] } }
-  }));
-  rejects({ squadId: "all_l1", manifestPath: "invalid.json" }, /reserved for flat adversarial review compilation/);
-  rejects({ squadId: "adversarial_flat:missing", manifestPath }, /Unknown targetSquad 'missing'/);
+  rejects({ squadId: "integrity_auditor:alpha", manifestPath: "null-auditor.json" }, /must be an object/);
 
   const externalManifest = path.join(testDir, "outside.json");
   fs.writeFileSync(externalManifest, JSON.stringify(manifest));

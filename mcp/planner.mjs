@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
-  defaultAdversarialSquad,
   loadSquads,
   manifestSquads,
   resolveIntegrityAuditor,
@@ -23,7 +22,8 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "roles",
   "includeIntegrityAuditor",
   "reportRoot",
-  "knownModels"
+  "knownModels",
+  "topology"
 ]);
 
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
@@ -119,15 +119,21 @@ function scopesOverlap(a, b) {
 }
 
 function findScopeOverlaps(entries) {
+  const normalizedEntries = entries.map(entry => ({
+    label: entry.label,
+    scopes: entry.scopeFiles.map(raw => ({ raw, norm: normalizeScopePath(raw) }))
+  }));
   const overlaps = [];
-  for (let i = 0; i < entries.length; i++) {
-    for (let j = i + 1; j < entries.length; j++) {
-      const left = entries[i];
-      const right = entries[j];
+  for (let i = 0; i < normalizedEntries.length; i++) {
+    for (let j = i + 1; j < normalizedEntries.length; j++) {
+      const left = normalizedEntries[i];
+      const right = normalizedEntries[j];
       const matchingPair = [];
-      for (const a of left.scopeFiles) {
-        for (const b of right.scopeFiles) {
-          if (scopesOverlap(a, b)) matchingPair.push([a, b]);
+      for (const a of left.scopes) {
+        for (const b of right.scopes) {
+          if (a.norm === "" || b.norm === "" || a.norm === b.norm || a.norm.startsWith(`${b.norm}/`) || b.norm.startsWith(`${a.norm}/`)) {
+            matchingPair.push([a.raw, b.raw]);
+          }
         }
       }
       if (matchingPair.length > 0) {
@@ -144,7 +150,7 @@ function findScopeOverlaps(entries) {
 
 function stripPlannerFields(spec) {
   if (!spec || typeof spec !== "object") return spec;
-  const { readOnly: _readOnly, ...rest } = spec;
+  const { readOnly: _readOnly, ReadOnly: _pascalReadOnly, ...rest } = spec;
   return rest;
 }
 
@@ -168,18 +174,13 @@ function deriveTaskSquads(task, roles, scopeFiles) {
   return { task_squad: { specialists } };
 }
 
-function buildSwarmWorkerBrief(compiledBrief, targetModel, workspaceIsolation, reportSlot) {
+function buildSwarmWorkerBrief(compiledBrief, targetModel, workspaceIsolation) {
   const modelNote = targetModel
     ? `Pinned model expectation: ${targetModel} (verify via swarm status).`
     : "Model: coordinator default.";
-  const isolationNote = workspaceIsolation === "inherit"
-    ? `Shared workspace mode: write your report directly to ${reportSlot} and post READY ${reportSlot} — <finding> on the board.`
-    : `Isolated '${workspaceIsolation}' workspace mode: write your report inside your working copy at ${reportSlot}, post READY ${reportSlot} — <finding> on the board, and let the coordinator merge/collect outputs before bundling.`;
-  return [
-    compiledBrief.Prompt,
-    modelNote,
-    isolationNote
-  ].join("\n");
+  return workspaceIsolation === "inherit"
+    ? `${compiledBrief.Prompt}\n${modelNote}`
+    : `${compiledBrief.Prompt}\n${modelNote}\nIsolated '${workspaceIsolation}' workspace: coordinator collects outputs before bundling.`;
 }
 
 /**
@@ -209,8 +210,13 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     roles,
     includeIntegrityAuditor = true,
     reportRoot,
-    knownModels
+    knownModels,
+    topology
   } = args;
+
+  if (topology !== undefined && topology !== "flat" && topology !== "layered") {
+    throw new Error("topology must be 'flat' or 'layered'.");
+  }
 
   if (knownModels !== undefined) {
     if (!Array.isArray(knownModels) || knownModels.length === 0 || knownModels.some(m => typeof m !== "string" || !m.trim())) {
@@ -270,13 +276,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     selectedManifest = loaded.selectedManifest;
   }
 
-  const allSquads = { ...loadedSquads };
-  if (!allSquads.adversarial_review) {
-    allSquads.adversarial_review = defaultAdversarialSquad(allSquads, squadId);
-  }
-
-  const isAuditKey = id =>
-    id === "adversarial_review" || id === "integrity_auditor" || id.startsWith("integrity_auditor-");
+  const isAuditKey = id => id === "integrity_auditor" || id.startsWith("integrity_auditor-");
   const allWorkingIds = Object.keys(loadedSquads).filter(id => !isAuditKey(id));
   const targetWorkingIds = squadId !== undefined
     ? (() => {
@@ -294,7 +294,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     throw new Error("Manifest must define at least one non-audit working squad.");
   }
 
-  const requestedModel = model?.trim();
+  const requestedModel = normalizeExplicitModel(model);
   const effectiveSubagentModel = requestedModel && SUBAGENT_MODEL_ALIASES.has(requestedModel)
     ? requestedModel
     : "inherit";
@@ -337,7 +337,10 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
 
   for (const id of targetWorkingIds) {
     const squad = loadedSquads[id];
-    const leadSpec = resolveSquadLead(squad, id, targetWorkingIds.length > 1);
+    const leadSpec =
+      topology === "flat"
+        ? undefined
+        : resolveSquadLead(squad, id, topology === "layered" || targetWorkingIds.length > 1);
     const specs = specialistAssignments(loadedSquads, id);
     totalSpecialists += specs.length;
 
@@ -346,6 +349,13 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     let leadModel;
     let leadWorkerName;
     if (leadSpec) {
+      if (leadSpec.readOnly !== undefined && leadSpec.ReadOnly !== undefined) {
+        throw new Error(`Agent '${leadSpec.role ?? leadSpec.Role ?? `${id}-lead`}' cannot define both 'readOnly' and 'ReadOnly'.`);
+      }
+      const leadReadOnly = leadSpec.readOnly ?? leadSpec.ReadOnly;
+      if (leadReadOnly !== undefined && typeof leadReadOnly !== "boolean") {
+        throw new Error(`Agent '${leadSpec.role ?? leadSpec.Role ?? `${id}-lead`}' readOnly must be a boolean.`);
+      }
       const rawLead = stripPlannerFields(leadSpec);
       leadModel = resolveWorkerModels(
         executionMode,
@@ -357,16 +367,30 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
         ...rawLead,
         model: leadModel.compiledModel
       };
-      compiledLead = buildSubagentSpec(cleanedLead, id, manifestPathForBrief, undefined, normalizedReportRoot);
+      compiledLead = buildSubagentSpec(
+        cleanedLead,
+        id,
+        manifestPathForBrief,
+        undefined,
+        normalizedReportRoot,
+        { executionMode, workspaceIsolation: "inherit" }
+      );
       leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`);
     }
 
     const compiledSpecialists = [];
     const assignmentsTemplate = [];
     for (const { spec, number } of specs) {
+      if (spec?.readOnly !== undefined && spec?.ReadOnly !== undefined) {
+        throw new Error(`Agent '${spec.role ?? spec.Role ?? `${id}#${number}`}' cannot define both 'readOnly' and 'ReadOnly'.`);
+      }
+      const specReadOnly = spec?.readOnly ?? spec?.ReadOnly;
+      if (specReadOnly !== undefined && typeof specReadOnly !== "boolean") {
+        throw new Error(`Agent '${spec.role ?? spec.Role ?? `${id}#${number}`}' readOnly must be a boolean.`);
+      }
       const rawSpec = stripPlannerFields(spec);
       const specScope = validateScopeFiles(rawSpec.scopeFiles ?? rawSpec.ScopeFiles, rawSpec.role ?? rawSpec.Role);
-      if (spec?.readOnly !== true) {
+      if (specReadOnly !== true) {
         writableScopeEntries.push({
           label: `${id}#${number} (${rawSpec.role ?? rawSpec.Role ?? `Specialist ${number}`})`,
           scopeFiles: specScope
@@ -382,7 +406,14 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
         ...rawSpec,
         model: specModel.compiledModel
       };
-      const compiled = buildSubagentSpec(subSpec, id, manifestPathForBrief, number, normalizedReportRoot);
+      const compiled = buildSubagentSpec(
+        subSpec,
+        id,
+        manifestPathForBrief,
+        number,
+        normalizedReportRoot,
+        { executionMode, workspaceIsolation }
+      );
       const slot = reportPath(id, number, normalizedReportRoot);
       const workerName = allocateWorkerName(
         usedWorkerNames,
@@ -486,7 +517,9 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
             rawAudit.model ?? rawAudit.Model,
             overriddenSubagentModels
           );
-          const targetScopeNote = `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and spot-check traces ONLY via read_board/swarm status or single-pass query_transcript(summaryOnly=true) on coordinator-recorded conversationIds. NEVER copy .system_generated/ transcripts into scratch/.`;
+          const targetScopeNote = executionMode === "swarm"
+            ? `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and board/status execution via read_board and swarm{action:"status"} (or single-pass query_transcript(summaryOnly=true) if inspecting saved session transcripts). NEVER copy .system_generated/ transcripts into scratch/.`
+            : `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and spot-check traces ONLY via single-pass query_transcript(summaryOnly=true) on coordinator-recorded conversationIds. NEVER copy .system_generated/ transcripts into scratch/.`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -496,7 +529,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
             auditSquadId,
             manifestPathForBrief,
             auditItem.number,
-            normalizedReportRoot
+            normalizedReportRoot,
+            { executionMode, workspaceIsolation: "inherit" }
           );
           const rawAuditName =
             auditSpecs.length > 1
@@ -583,7 +617,11 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   const notes = [];
   if (executionMode === "swarm" && workers.some(w => w.lead)) {
     notes.push(
-      "Layered plan: each working squad has its own lead on top of the swarm coordinator. Single-squad plans have no squad lead (the coordinator acts as lead). The extra layer costs tokens and is unmeasured; prefer a flat plan unless domains need separate synthesis."
+      "Layered plan: working squad(s) define a squad lead on top of the swarm coordinator. Compared with flat plans (specialists reporting directly to the coordinator), layered plans isolate multi-domain syntheses at higher coordination token cost. Neither topology is forced as default; ask the user which topology they want if unspecified."
+    );
+  } else if (executionMode === "swarm") {
+    notes.push(
+      "Flat plan: specialists report directly to the swarm coordinator without per-squad leads. Compared with layered plans, flat plans use fewer coordination hops when a single synthesis suffices. Neither topology is forced as default; ask the user which topology they want if unspecified."
     );
   }
   if (executionMode === "swarm") {
@@ -598,7 +636,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     executionMode,
     workspaceIsolation,
     topology: {
-      recommendedPattern: targetWorkingIds.length > 1 ? "layered" : "flat",
+      compiledPattern: workers.some(w => w.lead) ? "layered" : "flat",
+      defaultBias: "none (ask user if unspecified)",
       workingSquads: targetWorkingIds.length,
       totalSpecialists,
       scopeOverlaps
@@ -612,7 +651,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
       : {}),
     workers,
     provenanceScaffold: {
-      transcriptIsolation: "L6 enforced: raw transcripts stay in .system_generated/; never copy transcripts into scratch/ or lead/leaf directories.",
+      transcriptIsolation: "L6 convention: keep raw transcripts in .system_generated/; never copy transcripts into scratch/ or lead/leaf directories.",
       identity: executionMode === "swarm"
         ? "Swarm identifies members by roster name: bundle assignments[].conversationId and handoffs[].sender use the swarm member name shown above and on the board."
         : "invoke_subagent returns a conversationId per child; record it in assignments[].conversationId and use it as handoffs[].sender.",

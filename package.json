@@ -4,7 +4,10 @@
   "private": true,
   "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Antigravity.",
   "main": "mcp/index.js",
-  "bin": { "agy-squad": "bin/agy-squad.mjs" },
+  "bin": {
+    "agy-squad": "bin/agy-squad.mjs",
+    "agy-squad-mcp": "mcp/index.js"
+  },
   "files": [
     "bin",
     "mcp",
@@ -13,7 +16,9 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-comparative-dossier.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
+    "start": "node mcp/index.js",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-comparative-dossier.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
+    "verify:package": "node tests/verify-package.mjs --self-test && npm pack --dry-run --json | node tests/verify-package.mjs",
     "docs": "zensical serve"
   },
   "repository": {
@@ -28,7 +33,8 @@
     "antigravity",
     "mcp",
     "subagents",
-    "sandbox",
+    "swarm",
+    "governance",
     "wsl"
   ],
   "author": "paragon-ux",

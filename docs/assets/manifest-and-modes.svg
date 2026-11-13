@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="pele pele-flowchart" viewBox="0 0 734 616" width="734" height="616" style="max-width:100%;height:auto;--_bg:var(--pele-bg,#fff);--_fg:var(--pele-fg,#1f1f1f);--_m:var(--pele-muted,#6e6e6e);--_l:var(--pele-line,#1f1f1f);--_s:var(--pele-surface,#f3f3f3);--_a:var(--pele-surface-alt,#e6e6e6);--_b:var(--pele-border,#8a8a8a);--_c:var(--pele-accent,#5b7bd5);color:var(--_fg);--_r:var(--pele-radius,4px);--_fm:var(--pele-font-mono,monospace);font:16px sans-serif;letter-spacing:normal;word-spacing:normal;text-transform:none;direction:ltr;font-family:var(--pele-font,sans-serif)" fill="var(--_fg)" role="graphics-document document" aria-roledescription="flowchart">
+  <style>
+    :root {
+      --pele-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      --pele-bg: #ffffff;
+      --pele-fg: #1f2328;
+      --pele-muted: #656d76;
+      --pele-line: #57606a;
+      --pele-surface: #f6f8fa;
+      --pele-surface-alt: #eaeef2;
+      --pele-border: #d0d7de;
+      --pele-accent: #0969da;
+      --pele-series-1: #0969da;
+      --pele-series-2: #1a7f37;
+      --pele-series-3: #9a6700;
+      --pele-series-4: #8250df;
+      --pele-series-5: #cf222e;
+      --pele-series-6: #bf3989;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --pele-bg: #0d1117;
+        --pele-fg: #e6edf3;
+        --pele-muted: #8b949e;
+        --pele-line: #8b949e;
+        --pele-surface: #161b22;
+        --pele-surface-alt: #21262d;
+        --pele-border: #30363d;
+        --pele-accent: #2f81f7;
+        --pele-series-1: #2f81f7;
+        --pele-series-2: #3fb950;
+        --pele-series-3: #d29922;
+        --pele-series-4: #a371f7;
+        --pele-series-5: #f85149;
+        --pele-series-6: #db61a2;
+      }
+    }
+  </style>
+<g class="pele-clusters"><g class="pele-cluster" data-id="OUT"><rect x="8" y="481.04" width="717.06" height="126" fill="var(--_a)" fill-opacity="0.5" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-cluster-label" fill="var(--_m)" x="86.02" y="506.64" text-anchor="middle">Compiled Outputs</text></g><g class="pele-cluster" data-id="CORE"><rect x="92" y="203" width="548" height="230.04" fill="var(--_a)" fill-opacity="0.5" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-cluster-label" fill="var(--_m)" x="190.72" y="228.6" text-anchor="middle">Compiler &amp; Validation</text></g><g class="pele-cluster" data-id="IN"><rect x="136" y="8" width="465" height="147" fill="var(--_a)" fill-opacity="0.5" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-cluster-label" fill="var(--_m)" x="214.58" y="33.6" text-anchor="middle">Planner &amp; Compiler Inputs</text></g></g><g class="pele-edges" fill="none" stroke="var(--_l)" stroke-linecap="round"><g class="pele-edge" data-id="L_M1_M2_0"><path d="M297,328.02L334.18,328.02"/><path class="pele-marker" d="M341.18,328.02L333.18,331.38L333.18,324.66Z" fill="var(--_l)" stroke="none"/></g><g class="pele-edge" data-id="L_IN_CORE_0"><path d="M366.53,155L366.53,196"/><path class="pele-marker" d="M366.53,203L363.17,195L369.89,195Z" fill="var(--_l)" stroke="none"/></g><g class="pele-edge" data-id="L_CORE_OUT_0"><path d="M366.53,433.04L366.53,474.04"/><path class="pele-marker" d="M366.53,481.04L363.17,473.04L369.89,473.04Z" fill="var(--_l)" stroke="none"/></g></g><g class="pele-nodes"><g class="pele-node pele-shape-rect" data-id="I1" transform="translate(230,91.5)"><rect x="-74" y="-33" width="148" height="66" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-4.9">manifestPath |</tspan><tspan x="0" y="16.1">manifest | task</tspan></text></g><g class="pele-node pele-shape-rect" data-id="I2" transform="translate(459.96,91.5)"><rect x="-120" y="-43.5" width="240" height="87" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-15.4">plan: --mode|--model</tspan><tspan x="0" y="5.6">--workspace-isolation</tspan><tspan x="0" y="26.6">dispatch: --squad &lt;id&gt;</tspan></text></g><g class="pele-node pele-shape-rect" data-id="M1" transform="translate(200,328.02)"><rect x="-97" y="-43.5" width="194" height="87" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-15.4">squad_planner (/swarm)</tspan><tspan x="0" y="5.6">dispatch_squad (subagent)</tspan><tspan x="0" y="26.6">+ mcp/briefs.mjs</tspan></text></g><g class="pele-node pele-shape-diam" data-id="M2" transform="translate(477.22,328.02)"><polygon points="0,-85.02 136.03,0 0,85.02 -136.03,0" fill="var(--_s)" stroke="var(--_b)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-4.9">scopeOverlaps (readOnly)</tspan><tspan x="0" y="16.1">&amp; knownModels</tspan></text></g><g class="pele-node pele-shape-rect" data-id="O1" transform="translate(105.57,554.04)"><rect x="-82" y="-33" width="164" height="66" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-4.9">swarmAdd + slots</tspan><tspan x="0" y="16.1">(squad_planner)</tspan></text></g><g class="pele-node pele-shape-rect" data-id="O2" transform="translate(338.95,554.04)"><rect x="-107.82" y="-33" width="215.63" height="66" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-4.9">Subagents[] + alias note</tspan><tspan x="0" y="16.1">(dispatch_squad)</tspan></text></g><g class="pele-node pele-shape-rect" data-id="O3" transform="translate(599.91,554.04)"><rect x="-105.14" y="-33" width="210.29" height="66" fill="var(--_s)" stroke="var(--_b)" style="rx:var(--_r)"/><text class="pele-label" text-anchor="middle" xml:space="preserve"><tspan x="0" y="-4.9">provenanceScaffold &amp;</tspan><tspan x="0" y="16.1">bundleRecordTemplates</tspan></text></g></g></svg>

@@ -1,6 +1,7 @@
 ---
 name: pr-review
 description: >-
+  [Task Spec — PR/branch diff & CI review; pair with swarm-governance on /swarm]
   Use this skill when the user asks to perform, update, or verify a pull request
   or branch review in Agy-Squad. Enforces the Agy-Squad PR Review Standard
   (v1.3.0) with commit-pinned and session-pinned metadata, architecture-before-runtime
@@ -11,91 +12,48 @@ description: >-
 
 # Agy-Squad PR Review Skill (Standard v1.3.0)
 
-Conduct pull request and branch reviews in `Agy-Squad` using the workflow below. Consult [references/pr-review-standard.md](./references/pr-review-standard.md) on demand for standard governance, versioning, or change-history rules, and see [Core workflows](../../../docs/core-workflows.md) for how this repository workflow standard (enforced by `diagnose.mjs` and `npm test`, not a GitHub branch-protection setting) integrates with `/self-diagnosis`. Passing tests, polished docs, and prior approvals are inputs, not proof that implementation satisfies architecture. Implementation status updates are separate from the review.
+Conduct pull request and branch diff/CI reviews in `Agy-Squad`. For broad non-diff evidence bundles, repo-wide triage, or Direction decisions, use `full-review`. To run multi-agent reviews on `/swarm`, pair this **Task Spec** with the `swarm-governance` **Execution Modifier** (`squad_planner` / `node bin/agy-squad.mjs plan`; `dispatch_squad` / `agy-squad dispatch` is `invoke_subagent` fallback only). Consult [references/pr-review-standard.md](./references/pr-review-standard.md), [Core workflows](../../../docs/core-workflows.md), and [Roles & skill workflows](../../../docs/roles-and-workflows.md#pr-review). Passing tests, polished docs, and prior approvals are inputs, not proof that implementation satisfies architecture.
 
 ---
 
 ## Workflow
 
-### Step 0: Pre-Flight Intake Interview (Review Scope & Teardown Gate)
-Before launching a review or invoking review cohorts, establish review bounds via structured intake (via `ask_question` or multiple-choice prompt):
-1. **Review Topology & Depth:**
-   - `(Recommended) Layered Review Squad (Leads + Specialists)`: Deep multi-category review with independent category specialists and synthesis lead.
-   - `Flat Review Specialist Dispatch`: Targeted inspection across specific changed files.
-   - `Single-Agent Interactive Audit`: Direct architectural trace performed by primary agent.
-2. **Teardown & Provenance Policy:**
-   - `(Recommended) Retain Full Evidence & Provenance (--keep-reports)`: Preserve all specialist evidence reports and session provenance in `docs/reviews/` and `scratch/`.
-   - `Automatic Atomic Teardown (--teardown)`: Prune loose reports from `scratch/` upon verification and ledger update.
-3. **Adversarial Verification:**
-   - `(Recommended) Mandatory Adversarial Review Gate`: Require independent adversarial verification before recommending `Approve`.
+### Step 0: Pre-Flight Intake (Neutral Topology, Evidence & Integrity Gate)
+If the user did not specify topology or retention options, ask via `ask_question` (or multiple-choice prompt) without biasing Flat vs. Layered:
+1. **Execution Topology (Ask if Unspecified):**
+   - `Flat Cohort`: Specialists report directly to coordinator (`squad_planner` without per-squad leads; fewer coordination hops).
+   - `Layered Cohort`: Category specialists + squad leads + coordinator (domain synthesis per squad; higher coordination cost).
+   - `Single-Agent Audit`: Direct trace by one reviewer.
+2. **Evidence Retention (`Scope 2` vs `Scope 3`):**
+   - `Scope 2 — Swarm bundle prune`: Pass `--keep-reports` to `node bin/agy-squad.mjs prune` to retain loose specialist reports in `scratch/agy-squad/squad-<id>/`, or omit to delete loose specialist files after SHA-256 bundling.
+   - `Scope 3 — Self-diagnosis teardown (L41)`: Delete completed `/self-diagnosis` directories (`diagnose.mjs --teardown`) once `docs/reviews/<slug>.md` is updated, or defer cleanup during active multi-wave triage.
+3. **Integrity Gate & Swarm UI Link:** `Mandatory Flat Integrity Auditor Gate` (`audit-<id>` in `/swarm` or `integrity_auditor[:<id>]` in `invoke_subagent`; `adversarial_*` was retired in Phase 2). When launching `/swarm`, verify pinned models via `swarm{action: "status"}` and immediately end the launch turn with `open_board` (`[Open the Swarm UI](sidecar://swarm/swarm_board/)`) on its own line so the Swarm UI pill renders immediately (do not hide it behind `swarm_wait`).
 
----
-
-### Step 1: Pin the Review & Session Provenance
-1. Record repository, PR URL (or branch status), date, reviewer, standard version (`1.3.0`), base/head SHAs (plus dirty delta and exact CI commit SHAs), and an append-only **Session Provenance** table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`).
-2. List all changed files (`base..head`) plus unchanged dependencies examined.
-3. State available evidence (`docs/plans/LEDGER.md`, `docs/plans/wsl-cli-verification.md`, `ee10ebc`, prior reviews, transcripts, local runs, CI logs) and unavailable inputs.
-4. State scope and exclusions; on a new head, re-review the delta and affected categories while retaining carried-forward findings.
+### Step 1: Pin Review & Session Provenance
+Record repository, target PR/branch/tree state, date, reviewer, standard version `1.3.0`, base/head SHAs, dirty delta, CI SHAs, and **Session Provenance** (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`). List changed files and unchanged dependencies, available evidence (`docs/plans/LEDGER.md`, `docs/plans/wsl-cli-verification.md`, prior reviews, transcripts, CI logs), and explicit exclusions.
 
 ### Step 2: Trace Architecture Before Runtime
 For every behavior change, trace:
 `design thesis / invariant -> current architecture decision -> public contract -> implementation -> verification`
 
-- Distinguish `docs/plans/LEDGER.md` IDs:
-  - **Active WSL architecture (`L1–L7, L21, L29–L31, L40–L43`)**
-  - **Retired/superseded decisions:** Retired Phase 1 PTY launcher (`L17`), WSL trial checks passed (`L18–L20, L22–L24, L28, L37, L39`), rebuild branch (`L16`), and superseded Windows/Docker decisions (`L8–L12, L35, L36, L38` in `docs/plans/LEDGER.md`)
-  - **External/shared ledger allocations (`L13–L15, L25–L27, L32–L34` in `Agy-Context-Saver`)**
-- Existing implementation does not override a higher-priority contract. Never resolve a contract mismatch by silently rewriting documentation to match code.
+Distinguish `docs/plans/LEDGER.md` decisions: active WSL architecture (`L1–L7, L21, L29–L31, L40–L43`), retired/superseded records (`L17` PTY `agy-squad run` retired, `L16`, `L8–L12, L35, L36, L38`), and external shared allocations (`L13–L15, L25–L27, L32–L34`). Never rewrite contracts or docs to match defective code.
 
-### Step 3: Map Files & Evaluate All 10 Required Categories
-Map every changed file to **one primary category** and cross-reference affected categories without double-counting defects (`"No findings"` is permitted; finding quotas are prohibited):
+### Steps 3–4: Ten-Category Inventory & Records
+Map every changed artifact to **one primary category** (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`) and cross-reference affected categories without double-counting (`"No findings"` is valid; finding quotas are banned; mark filesystem-only persistence under `RUN`/`SVC` and `DB` as `Not applicable`). Every category records all 7 items: **Scope**, **Coverage** (`Complete`, `Partial`, `Not reviewed`), **P1**, **P2**, **P3** (`None identified within reviewed scope` / `Not assessed`), **Verification**, and **Verdict** (`Changes required`, `No findings within reviewed scope`, `Incomplete`, `Not applicable`).
 
-| ID | Category | Required Review Questions |
-| --- | --- | --- |
-| `ARCH` | Architecture and contracts | Are boundaries, guarantees, ownership, compatibility, and resource limits explicit? Does implementation satisfy the selected decisions? |
-| `DOC` | Documentation and change records | Do active docs agree with normative contracts and actual behavior? Are historical records distinguished? Are completion and benchmark claims supported? |
-| `SKILL` | Skills and agent instructions | Are referenced APIs, enums, fields, commands, and guarantees real and current? Do instructions guide correct implementation and review? |
-| `MCP` | MCP schemas and public API | Do discovery schemas, runtime acceptance, errors, defaults, nullability, bounds, and documented responses agree? |
-| `RUN` | Core runtime, parsing, and validation | Are inputs untrusted, failures deterministic, workspace/descriptor containment enforced, and stage compilation/reporting accurate? |
-| `SVC` | Services, orchestration, and audit semantics | Are retries, lineage, request identity, recovery, and shared entry points consistent with the contracts? |
-| `DB` | Database, migrations, replay, and concurrency | When SQL/database persistence exists, are reads/writes coherent and migrations verified? When only filesystem state exists (`scratch/agy-squad/`), is state persistence covered under `RUN`/`SVC` and `DB` marked `Not applicable`? |
-| `SCRIPT` | Scripts, evaluation, and developer tooling | Do scripts fail on unexpected results? Are exceptions scenario-specific? Are measurement claims limited to what was measured? |
-| `TEST` | Tests and CI | Do tests prove the guarantees, including adversarial cases? What ran, where, against which revision, and what remains unverified? |
-| `DEP` | Dependencies, packaging, and configuration | Are installation paths, lockfiles, supported versions, configuration names, and startup assumptions coherent? |
+### Step 5: Format Findings & Readability (`1 ID = 1 Row`)
+Assign one stable ID per independently remediable problem and one of the 6 canonical statuses (`Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`; `Informational` in Section 8 only). Zero compression or omission: `docs/reviews/<slug>.md` is the surviving durable ledger once `prune` / `--teardown` removes `scratch/`.
+- **`P0` / `P1` / `P2`:** Concise 10-field records (title/priority/status, contract provenance, commit-pinned source evidence, trigger, expected/actual, impact, remediation, acceptance evidence, root cause/related IDs, closure).
+- **`P3`:** Atomic 1-row-per-ID table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`).
+- **Readability rule:** Reserve inline backticks strictly for identifiers, file paths, flags, and commands—never wrap plain numbers, English statuses, or multi-sentence quotes in inline backticks or fenced code blocks inside prose or table cells.
 
-### Step 4: Populate Each Required Category Record
-Every category section **must** contain all 7 items (`"None identified within reviewed scope"` or `"Not assessed"` when a triage bucket is empty):
-1. **Scope:** Changed files and unchanged dependencies examined.
-2. **Coverage:** `Complete`, `Partial`, or `Not reviewed` (state what remains).
-3. **P1 — high priority:** Blocking correctness, data-loss, security, or reliability findings.
-4. **P2 — medium priority:** Actionable correctness or contract findings.
-5. **P3 — low priority:** Advisory or lower-impact improvements (escalate any `P0` explicitly).
-6. **Verification:** Tests inspected/executed, CI evidence, and missing proof (separate from P1–P3).
-7. **Verdict:** `Changes required`, `No findings within reviewed scope`, `Incomplete`, or `Not applicable` (with reason).
+### Step 6: Evidence Rules & Agy-Squad Runtime Boundaries
+Separate source inspection, attempted reproduction, local execution, and CI logs; inspect actual test assertions. Verify relevant boundaries:
+1. **Schema & Stdio Framing:** `request.jsonrpc === "2.0"`, `tools/list` (`mcp/index.js`) vs `dispatch_squad` / `squad_planner`, positive integer `AGY_MAX_STDIO_PAYLOAD_BYTES`, and 10MB stdio cap.
+2. **Workspace & Descriptor Containment:** workspace-internal symlink resolution + `O_NOFOLLOW`/`O_NONBLOCK` + `/proc/self/fd/${fd}` in `mcp/dispatch.mjs`; strict symlink rejection in `mcp/handoffs.mjs`.
+3. **Worker Capability, Model Provenance & Input Guards:** disallowed built-in `TypeName`s (`research`, `browser`, `image-generator`), manifest agent `workspace === "inherit"` for `invoke_subagent` and `squad_planner` (`/swarm` copy isolation uses top-level `workspaceIsolation`), `modelProvenance` caveats vs `/swarm` pinning, `scopeFiles` path safety + writable overlap diagnostics, boolean `readOnly`, and camelCase/PascalCase conflict rejection.
+4. **Pointer-Over-Wire & Bundling:** `<= 500` UTF-8 byte single-line `READY`/`PARTIAL`/`NO_REPORT` grammar, custom `reportRoot` containment, atomic `publish()`, strict single-line verdicts (`mcp/verdicts.mjs`), default `requireIntegrityAudit: true` binding, and `bundle`/`verify`/`prune` SHA-256 verification.
+5. **External MCP & CLI:** real stdio subprocesses and `node bin/agy-squad.mjs` (`plan|dispatch|fingerprint|inspect|bundle|verify|prune|verdict`) vs in-process calls.
 
-### Step 5: Format Each Finding Record (`1 ID = 1 Row`, Zero Compression & Tiered Density)
-Enforce `1 ID = 1 Row / Record` per independently remediable problem: every distinct `P0`–`P3` defect, optimization, or advisory from a review or squad bundle (`lead/report.md`) **must** map `1-to-1` to its own ledger entry—never compressed into umbrella/range IDs (`HARDEN-P3-1`, `OPT-P3-1`, `TEST-2..4`) or silently omitted (since `prune`/`--teardown` delete `scratch/` reports, making solved vs. hidden items otherwise indistinguishable; merge only duplicate reports of the exact same defect). Every item must carry one of six statuses: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` (`Informational` allowed for non-defects in Section 8).
-- **`P0` / `P1` / `P2` defects** require all 10 concise 1-line fields (no repeated prose across sections): **Title, priority, status**; **Contract provenance** (`LEDGER.md` ID, public contract, or external norm); **Source evidence** (commit-pinned file links, lines, symbol); **Trigger**; **Expected / actual** (observed vs. source-derived); **Impact**; **Required remediation**; **Acceptance evidence**; **Root cause / related IDs**; and **Closure** (fix commit, recheck, residual limits).
-- **`P3` advisories / optimizations** use a compact 1-row-per-ID table: `ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`.
-
-### Step 6: Apply Evidence Rules & Agy-Squad Verification Boundaries
-- Separate **source inspection**, **attempted reproduction**, **local execution**, and **inspected CI logs**; inspect actual test assertions.
-- Exercise Agy-Squad's five runtime boundaries where relevant:
-  1. **Schema & Stdio Framing:** `request.jsonrpc === "2.0"`, `tools/list` (`mcp/index.js`) vs. `dispatch_squad` (`mcp/dispatch.mjs`) and `squad_planner` (`mcp/planner.mjs`), positive integer `AGY_MAX_STDIO_PAYLOAD_BYTES`, and 10MB stdio framing.
-  2. **Workspace & Descriptor Containment:** internal manifest symlink resolution (`fs.realpathSync` + `O_NOFOLLOW`/`O_NONBLOCK` + `/proc/self/fd/${fd}`) in `mcp/dispatch.mjs`; strict symlink rejection (`O_NOFOLLOW`/`O_NONBLOCK`, parent `realpathSync`, `/proc/self/fd/${fd}`) for reports and bundles in `mcp/handoffs.mjs`.
-  3. **Subagent Capability, Model Provenance & Input Guards:** built-in read-only/sandboxed `TypeName` rejection (`research`, `browser`, `image-generator`; default `"self"`), `Workspace === "inherit"` for subagents, `modelProvenance` caveats vs. `/swarm` pinning, `scopeFiles` path safety + writable overlap diagnostics, and camelCase/PascalCase conflict rejection (`mcp/briefs.mjs`, `mcp/planner.mjs`).
-  4. **Pointer-Over-Wire Handoffs & Bundling:** `<= 500` UTF-8 byte single-line `READY`/`PARTIAL`/`NO_REPORT` grammar, custom `reportRoot` alignment in `inspectReports`/`bundleReports`, atomic `publish()`, strict verdict parsing (`mcp/verdicts.mjs`), `integrityAudit` binding, and `bundle`/`verify`/`prune` SHA-256 checks (`mcp/handoffs.mjs`).
-  5. **External MCP & Governance CLI:** real stdio subprocesses and `node bin/agy-squad.mjs` (`plan|fingerprint|inspect|bundle|verify|prune|verdict`) vs. in-process calls.
-
-### Step 7: Verdict, Closure & Report Structure under `docs/reviews/`
-- **Verdict rules:** Request changes when blocking (`P1`/`P2`) findings remain; mark `Incomplete` when a material category is unreviewed; recommend `Approve` only when all material categories are covered, blocking findings are resolved and rechecked, and required verification has evidence.
-- Save the report to `docs/reviews/<review-slug>.md` with the 8 mandatory sections (plus Section 9 when `/self-diagnosis` cohorts are run):
-  1. **Review metadata, Session Provenance, and evidence limits**
-  2. **File-to-category inventory and coverage matrix**
-  3. **Architecture-to-implementation trace**
-  4. **Ten category sections** (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`)
-  5. **Cross-category root causes and rationale for remediation order**
-  6. **Verification record and remaining gaps**
-  7. **Overall disposition and finding closure table**
-  8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory sink for all `Residual (Open)` -> `Closed (Post-Remediation)`, `Deferred / Won't Fix`, and `Closed (By Design)` / `Informational` items as atomic 1-ID rows—never hidden or buried inside `Closed` prose; or `None (0 open residuals, 0 deferred items)`)
-  9. **`/self-diagnosis` Cohort & Bundle Ledger** *(required when `/self-diagnosis` cohorts run: one Cohort Provenance table + one atomic 1-ID-per-row Wave Finding Ledger)*
+### Step 7: Verdict, Closure & Report Structure (`docs/reviews/`)
+Request changes if blocking (`P1`/`P2`) findings remain; mark `Incomplete` if a material category is unreviewed; recommend `Approve` only when all material categories are covered, blocking findings are rechecked at the fixed revision, and verification has evidence. Write `docs/reviews/<review-slug>.md` using [references/pr-review-standard.md](./references/pr-review-standard.md) Sections 1–8 (plus Section 9 only when `/self-diagnosis` cohorts run; write `None (0 open residuals, 0 deferred items)` when Section 8 is empty).

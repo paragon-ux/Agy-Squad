@@ -17,7 +17,7 @@ import {
   reportPath,
   verifyBundle
 } from "../../../../mcp/handoffs.mjs";
-import { planSquadCohort } from "../../../../mcp/planner.mjs";
+import { planSquadCohort, scopesOverlap } from "../../../../mcp/planner.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = fs.realpathSync(path.resolve(scriptDir, "../../../.."));
@@ -425,7 +425,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
 
 function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = false, ledgerPath } = {}) {
   const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-  const knownSquads = Object.keys(manifest.squads);
+  const knownSquads = [...Object.keys(manifest.squads), "self_diagnosis"];
   if (squadId !== "all" && !knownSquads.includes(squadId)) {
     throw new Error(`Unknown self-diagnosis squadId '${squadId}'. Expected 'all' or one of: ${knownSquads.join(", ")}`);
   }
@@ -442,29 +442,35 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
   for (const id of targetSquads) {
     const relDir = `${scratchSquadRel}/squad-${encodeURIComponent(id)}`;
     const absDir = path.join(repoRoot, relDir);
-    if (!fs.existsSync(absDir)) {
+    const auditId = `integrity_auditor-${id}`;
+    const auditRelDir = `${scratchSquadRel}/squad-${encodeURIComponent(auditId)}`;
+    const auditAbsDir = path.join(repoRoot, auditRelDir);
+    const hasWorking = fs.existsSync(absDir);
+    const hasAudit = fs.existsSync(auditAbsDir);
+    if (!hasWorking && !hasAudit) {
       if (acceptedHash && !force) {
         throw new Error(`Cannot verify accepted hash for '${id}': directory ${relDir} does not exist.`);
       }
       continue;
     }
-    assertSafeDeleteTarget(relDir); // REVIEW: --force skips evidence gates, never path safety.
+    if (hasWorking) assertSafeDeleteTarget(relDir); // REVIEW: --force skips evidence gates, never path safety.
+    if (hasAudit) assertSafeDeleteTarget(auditRelDir);
     const bundleRel = reportPath(id, undefined, scratchSquadRel).replace(/\.md$/, ".sources.json");
     const bundleAbs = path.join(repoRoot, bundleRel);
 
     if (!force) {
       if (!targetLedger) {
         throw new Error(
-          `Refusing to tear down ${relDir}: no durable target PR review ledger found under docs/reviews/. Export or update docs/reviews/<slug>.md before --teardown.`
+          `Refusing to tear down ${hasWorking ? relDir : auditRelDir}: no durable target PR review ledger found under docs/reviews/. Export or update docs/reviews/<slug>.md before --teardown.`
         );
       }
       const ledgerCheck = validateTargetReviewLedger(targetLedger, { requireCohortSection: true });
       if (ledgerCheck.errors.length > 0) {
         throw new Error(
-          `Refusing to tear down ${relDir}: ${targetLedger.relative} violates PR Review Standard v1.3.0 schema: ${ledgerCheck.errors.join(" ")}`
+          `Refusing to tear down ${hasWorking ? relDir : auditRelDir}: ${targetLedger.relative} violates PR Review Standard v1.3.0 schema: ${ledgerCheck.errors.join(" ")}`
         );
       }
-      if (fs.existsSync(bundleAbs)) {
+      if (hasWorking && fs.existsSync(bundleAbs)) {
         const verified = verifyBundle(repoRoot, bundleRel, acceptedHash);
         const bundleStat = fs.statSync(bundleAbs);
         if (targetLedger.stat.mtimeMs + 1000 < bundleStat.mtimeMs) {
@@ -521,15 +527,32 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
             `Refusing to tear down ${relDir}: unbundled artifacts remain: ${unexpectedArtifacts.join(", ")}`
           );
         }
+        if (hasAudit) {
+          const bundledAuditPath = bundleJson.integrityAudit?.path;
+          const unexpectedAuditArtifacts = listArtifacts(auditAbsDir).filter(file => file !== bundledAuditPath);
+          if (unexpectedAuditArtifacts.length) {
+            throw new Error(
+              `Refusing to tear down ${auditRelDir}: unbundled artifacts remain: ${unexpectedAuditArtifacts.join(", ")}`
+            );
+          }
+        }
       } else if (acceptedHash) {
         throw new Error(`Cannot verify accepted hash for '${id}': missing bundle at ${bundleRel}`);
-      } else if (listArtifacts(absDir).length > 0) {
-        throw new Error(
-          `Refusing to tear down unbundled evidence in ${relDir} without bundle verification or --force.`
-        );
+      } else {
+        if (hasWorking && listArtifacts(absDir).length > 0) {
+          throw new Error(
+            `Refusing to tear down unbundled evidence in ${relDir} without bundle verification or --force.`
+          );
+        }
+        if (hasAudit && listArtifacts(auditAbsDir).length > 0) {
+          throw new Error(
+            `Refusing to tear down unbundled evidence in ${auditRelDir} without bundle verification or --force.`
+          );
+        }
       }
     }
-    validatedDirs.push({ absDir, relDir });
+    if (hasWorking) validatedDirs.push({ absDir, relDir });
+    if (hasAudit) validatedDirs.push({ absDir: auditAbsDir, relDir: auditRelDir });
   }
 
   for (const { relDir } of validatedDirs) {
@@ -540,6 +563,19 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
 
   if (squadId === "all" && fs.existsSync(scratchSquadRoot)) {
     assertSafeDeleteTarget(scratchSquadRel); // REVIEW: don't enumerate external symlink trees.
+    const flatAuditRel = `${scratchSquadRel}/squad-integrity_auditor`;
+    const flatAuditAbs = path.join(repoRoot, flatAuditRel);
+    if (fs.existsSync(flatAuditAbs)) {
+      assertSafeDeleteTarget(flatAuditRel);
+      const flatAuditArtifacts = listArtifacts(flatAuditAbs);
+      if (!force && flatAuditArtifacts.length > 0) {
+        throw new Error(
+          `Refusing to tear down unbundled evidence in ${flatAuditRel} without bundle verification or --force.`
+        );
+      }
+      fs.rmSync(assertSafeDeleteTarget(flatAuditRel), { recursive: true, force: true });
+      tornDown.push(flatAuditRel);
+    }
     for (const entry of fs.readdirSync(scratchSquadRoot, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name.startsWith("self-diag-canary-")) {
         const relCanary = `${scratchSquadRel}/${entry.name}`;
@@ -572,19 +608,95 @@ function parseFrontmatter(markdown) {
   return { name, hasDescription };
 }
 
-function checkRelativeLinks(skillFile, markdown) {
-  const dir = path.dirname(skillFile);
-  const broken = [];
+function extractMarkdownLinks(sourceFile, markdown) {
+  const dir = path.dirname(sourceFile);
   const stripped = markdown
+    .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "")
     .replace(/(`+)([^\r\n]*?)\1/g, "CODE");
-  const linkRegex = /\[[^\]]+\]\(([^)#\s]+)(?:#[^)]*)?\)/g;
+  const links = [];
+  const linkRegex = /\[[^\]]+\]\(([^)#\s]*)(?:#([^)\s]*))?\)/g;
   for (const match of stripped.matchAll(linkRegex)) {
     const rawTarget = match[1];
-    if (/^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(rawTarget)) continue;
-    const target = path.resolve(dir, rawTarget);
-    if (!fs.existsSync(target)) {
-      broken.push({ link: rawTarget, resolved: path.relative(repoRoot, target) });
+    const fragment = match[2] ?? "";
+    if (!rawTarget && !fragment) continue;
+    if (rawTarget && /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(rawTarget)) continue;
+    links.push({
+      link: rawTarget || `#${fragment}`,
+      fragment,
+      resolved: rawTarget ? path.resolve(dir, rawTarget) : sourceFile
+    });
+  }
+  return links;
+}
+
+function slugifyHeading(heading) {
+  return heading
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .toLowerCase()
+    .replace(/`/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s/g, "-");
+}
+
+function extractHeadingSlugs(markdown) {
+  const slugs = new Set();
+  const counts = new Map();
+  const body = markdown.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
+  for (const line of body.split(/\r?\n/)) {
+    const match = /^#{1,6}\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const base = slugifyHeading(match[1]);
+    if (!base) continue;
+    const seen = counts.get(base) ?? 0;
+    counts.set(base, seen + 1);
+    slugs.add(seen === 0 ? base : `${base}-${seen}`);
+  }
+  return slugs;
+}
+
+const headingSlugCache = new Map();
+
+function getCachedHeadingSlugs(filePath) {
+  if (!headingSlugCache.has(filePath)) {
+    headingSlugCache.set(filePath, extractHeadingSlugs(fs.readFileSync(filePath, "utf8")));
+  }
+  return headingSlugCache.get(filePath);
+}
+
+function extractHeadingSection(markdown, headingRegex) {
+  const lines = markdown.split(/\r?\n/);
+  let startIndex = -1;
+  let startLevel = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(lines[i]);
+    if (!headingMatch) continue;
+    if (startIndex === -1) {
+      if (headingRegex.test(lines[i])) {
+        startIndex = i;
+        startLevel = headingMatch[1].length;
+      }
+    } else if (headingMatch[1].length <= startLevel) {
+      return lines.slice(startIndex, i).join("\n");
+    }
+  }
+  return startIndex === -1 ? "" : lines.slice(startIndex).join("\n");
+}
+
+function checkRelativeLinks(skillFile, markdown) {
+  const broken = [];
+  for (const item of extractMarkdownLinks(skillFile, markdown)) {
+    if (!fs.existsSync(item.resolved)) {
+      broken.push({ link: item.link, resolved: path.relative(repoRoot, item.resolved) });
+    } else if (item.fragment && item.resolved.endsWith(".md")) {
+      const slugs = getCachedHeadingSlugs(item.resolved);
+      if (!slugs.has(item.fragment.toLowerCase())) {
+        broken.push({
+          link: `${item.link}#${item.fragment}`,
+          resolved: `${path.relative(repoRoot, item.resolved)}#${item.fragment}`
+        });
+      }
     }
   }
   return broken;
@@ -601,7 +713,7 @@ function walkFiles(dir) {
 }
 
 const RETIRED_SKILL_SYMBOL_RE =
-  /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?)\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
+  /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?|adversarial_l1|adversarial_flat|adversarial_review|integrity-auditor)\b|\bnode\s+mcp\/handoffs\.mjs\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
 const HISTORICAL_NOTICE_RE =
   /\b(?:retired|historical|deprecated|removed|superseded|obsolete|replaced\s+by|do\s+not\s+use|never\s+use)\b/i;
 
@@ -661,6 +773,21 @@ function auditSkills(ledgerArg) {
         summary: `${targetLedger.relative} Section 8 tracks ${ledgerCheck.openResiduals.length} Residual (Open) item(s) awaiting post-remediation closure: ${ledgerCheck.openResiduals.join(", ")}.`
       });
     }
+  }
+
+  const rolesDocPath = path.join(repoRoot, "docs/roles-and-workflows.md");
+  const rolesDocExists = fs.existsSync(rolesDocPath);
+  const rolesSlugs = rolesDocExists
+    ? extractHeadingSlugs(fs.readFileSync(rolesDocPath, "utf8"))
+    : new Set();
+
+  if (!rolesDocExists) {
+    findings.push({
+      id: "DOC-ROLES-MISSING",
+      category: "DOC",
+      priority: "P2",
+      summary: "Canonical role and skill workflow reference docs/roles-and-workflows.md is missing."
+    });
   }
 
   for (const entry of skillDirs) {
@@ -758,6 +885,21 @@ function auditSkills(ledgerArg) {
       }
     }
 
+    const rolesLinks = extractMarkdownLinks(skillMd, content).filter(
+      item => item.resolved === rolesDocPath && fs.existsSync(item.resolved)
+    );
+    const hasValidRolesLink = rolesLinks.some(
+      item => !item.fragment || rolesSlugs.has(item.fragment.toLowerCase())
+    );
+    if (!hasValidRolesLink) {
+      findings.push({
+        id: `SKILL-ROLES-LINK-${entry.name}`,
+        category: "SKILL",
+        priority: "P2",
+        summary: `.agents/skills/${entry.name}/SKILL.md must contain a valid relative Markdown link to docs/roles-and-workflows.md (with valid #anchor if specified).`
+      });
+    }
+
     skills.push({
       name: entry.name,
       path: path.relative(repoRoot, skillMd),
@@ -772,6 +914,103 @@ function auditSkills(ledgerArg) {
     });
   }
 
+  const closureChecks = [
+    { label: "swarm status & monitor kill", test: s => /swarm\{action:\s*["']status["']\}|`?swarm\s+status`?/i.test(s) && /monitor(?:-\*)?/i.test(s) && /kill/i.test(s) },
+    { label: "manage_subagents", test: s => /manage_subagents/i.test(s) },
+    { label: "manage_task", test: s => /manage_task/i.test(s) },
+    { label: "child command cleanup", test: s => /child\s+commands?|builds,\s*servers,\s*or\s*watchers/i.test(s) }
+  ];
+  for (const [checkId, relPath, category, sectionRe] of [
+    ["SKILL-CLOSURE-CHECKLIST", ".agents/skills/swarm-governance/SKILL.md", "SKILL", /^##\s+5\.\s+Runtime Closure Checklist\b/i],
+    ["DOC-CLOSURE-CHECKLIST-stopping-agents", "docs/stopping-agents.md", "DOC", /^##\s+Four-check runtime closure checklist\b/i],
+    ["DOC-CLOSURE-CHECKLIST-roles-and-workflows", "docs/roles-and-workflows.md", "DOC", /^###\s+Four-check runtime closure gate\b/i]
+  ]) {
+    const absCheck = path.join(repoRoot, relPath);
+    const checkRaw = fs.existsSync(absCheck) ? fs.readFileSync(absCheck, "utf8") : "";
+    const section = extractHeadingSection(checkRaw, sectionRe);
+    if (!section) {
+      findings.push({
+        id: checkId,
+        category,
+        priority: "P2",
+        summary: `${relPath} is missing its dedicated runtime closure checklist section.`
+      });
+      continue;
+    }
+    const missingControls = closureChecks.filter(c => !c.test(section)).map(c => c.label);
+    if (missingControls.length) {
+      findings.push({
+        id: checkId,
+        category,
+        priority: "P2",
+        summary: `${relPath} runtime closure checklist is missing: ${missingControls.join(", ")}.`
+      });
+    }
+  }
+
+  // Zensical nav & docs/assets/*.svg structural checks (SCRIPT-PR5-04)
+  const zensicalPath = path.join(repoRoot, "zensical.toml");
+  const docsRoot = path.join(repoRoot, "docs");
+  if (fs.existsSync(zensicalPath) && fs.existsSync(docsRoot)) {
+    const zensicalRaw = fs.readFileSync(zensicalPath, "utf8");
+    const navMatch = zensicalRaw.match(/^nav\s*=\s*\[([\s\S]*?)^\]/m);
+    const navFiles = new Set();
+    if (navMatch) {
+      for (const m of navMatch[1].matchAll(/=\s*"([^"]+\.md)"/g)) {
+        navFiles.add(m[1]);
+        if (!fs.existsSync(path.join(docsRoot, m[1]))) {
+          findings.push({
+            id: `DOC-ZENSICAL-MISSING-${m[1].replace(/[^a-zA-Z0-9]+/g, "-")}`,
+            category: "DOC",
+            priority: "P2",
+            summary: `zensical.toml nav references missing file docs/${m[1]}.`
+          });
+        }
+      }
+      for (const entry of fs.readdirSync(docsRoot, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith(".md") && !navFiles.has(entry.name)) {
+          findings.push({
+            id: `DOC-ZENSICAL-UNLISTED-${entry.name.replace(/\.md$/, "")}`,
+            category: "DOC",
+            priority: "P3",
+            summary: `Top-level doc docs/${entry.name} is omitted from zensical.toml nav.`
+          });
+        }
+      }
+    }
+    const assetsDir = path.join(docsRoot, "assets");
+    if (fs.existsSync(assetsDir)) {
+      const reviewsPrefix = path.join(docsRoot, "reviews") + path.sep;
+      const allDocsMarkdown = walkFiles(docsRoot)
+        .filter(f => f.endsWith(".md") && !f.startsWith(reviewsPrefix))
+        .map(f => fs.readFileSync(f, "utf8"))
+        .join("\n");
+      for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
+        const svgPath = path.join(assetsDir, entry.name);
+        const svgRaw = fs.readFileSync(svgPath, "utf8");
+        const hasRootSvg = /<svg\b[^>]*>[\s\S]*<\/svg>\s*$/i.test(svgRaw);
+        const hasBareAmp = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw);
+        if (!hasRootSvg || hasBareAmp) {
+          findings.push({
+            id: `DOC-SVG-XML-${entry.name.replace(/\.svg$/, "")}`,
+            category: "DOC",
+            priority: "P2",
+            summary: `docs/assets/${entry.name} failed SVG XML sanity check (root <svg> envelope or unescaped '&').`
+          });
+        }
+        if (!allDocsMarkdown.includes(entry.name)) {
+          findings.push({
+            id: `DOC-SVG-ORPHAN-${entry.name.replace(/\.svg$/, "")}`,
+            category: "DOC",
+            priority: "P3",
+            summary: `docs/assets/${entry.name} is not referenced by any file under docs/.`
+          });
+        }
+      }
+    }
+  }
+
   return { skills, findings, targetReviewLedger: targetLedger?.relative ?? null };
 }
 
@@ -784,8 +1023,17 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
   // 0. Check for lingering untorn-down self-diagnosis directories (L41)
   const scratchSquadRoot = path.join(repoRoot, scratchSquadRel);
   if (fs.existsSync(scratchSquadRoot)) {
-    for (const id of squadIds) {
-      const relDir = `${scratchSquadRel}/squad-${encodeURIComponent(id)}`;
+    const checkDirs = [
+      ...squadIds.map(id => ({ id, relDir: `${scratchSquadRel}/squad-${encodeURIComponent(id)}` })),
+      ...squadIds.map(id => ({
+        id: `integrity_auditor-${id}`,
+        relDir: `${scratchSquadRel}/squad-${encodeURIComponent(`integrity_auditor-${id}`)}`
+      })),
+      { id: "integrity_auditor", relDir: `${scratchSquadRel}/squad-integrity_auditor` },
+      { id: "self_diagnosis", relDir: `${scratchSquadRel}/squad-self_diagnosis` },
+      { id: "integrity_auditor-self_diagnosis", relDir: `${scratchSquadRel}/squad-integrity_auditor-self_diagnosis` }
+    ];
+    for (const { id, relDir } of checkDirs) {
       if (fs.existsSync(path.join(repoRoot, relDir))) {
         findings.push({
           id: allowActiveCohort ? `SVC-ACTIVE-COHORT-${id}` : `SVC-TEARDOWN-${id}`,
@@ -865,10 +1113,10 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const seen = new Set();
     const overlaps = new Set();
     let totalFiles = 0;
+    const writableScopes = [];
     for (const sp of specialists) {
       for (const file of sp.scopeFiles) {
         totalFiles += 1;
-        if (seen.has(file)) overlaps.add(file);
         seen.add(file);
         if (!fs.existsSync(path.join(repoRoot, file))) {
           findings.push({
@@ -879,6 +1127,18 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
           });
         }
       }
+      if (sp.readOnly !== true) {
+        writableScopes.push(sp.scopeFiles);
+      }
+    }
+    for (let i = 0; i < writableScopes.length; i += 1) {
+      for (let j = i + 1; j < writableScopes.length; j += 1) {
+        for (const a of writableScopes[i]) {
+          for (const b of writableScopes[j]) {
+            if (scopesOverlap(a, b)) overlaps.add(`${a} <-> ${b}`);
+          }
+        }
+      }
     }
     const overlapRatio = totalFiles > 0 ? Number((overlaps.size / totalFiles).toFixed(2)) : 0;
     if (overlapRatio > 0.25) {
@@ -886,7 +1146,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
         id: `ARCH-OVERLAP-${id}`,
         category: "ARCH",
         priority: "P3",
-        summary: `Squad '${id}' has ${overlapRatio * 100}% scopeFiles overlap across specialists (${[...overlaps].join(", ")}).`
+        summary: `Squad '${id}' has ${overlapRatio * 100}% writable scopeFiles overlap across specialists (${[...overlaps].join(", ")}).`
       });
     }
     topology.push({
@@ -950,10 +1210,12 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
       const leadSlot = reportPath(id);
+      const auditSlot = reportPath(`integrity_auditor-${id}`, 1);
       for (const [slot, text] of [
         [s1, `# ${id} Specialist 1\nVerified target.txt.\n`],
         [s2, `# ${id} Specialist 2\nVerified target.txt.\n`],
-        [leadSlot, `# ${id} Lead Synthesis\nVerdict: PASS\nVerified both specialist reports against target.txt.\n`]
+        [leadSlot, `# ${id} Lead Synthesis\nContent Verdict: PASS\nVerified both specialist reports against target.txt.\n`],
+        [auditSlot, `# ${id} Integrity Audit\nTarget Squad: ${id}\nIntegrity Verdict: CLEAN\n`]
       ]) {
         const full = path.join(canaryDir, slot);
         fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -1004,10 +1266,12 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const cs1 = reportPath(customId, 1, customRoot);
     const cs2 = reportPath(customId, 2, customRoot);
     const cLead = reportPath(customId, undefined, customRoot);
+    const cAudit = reportPath(`integrity_auditor-${customId}`, 1, customRoot);
     for (const [slot, text] of [
       [cs1, `# ${customId} Custom 1\nVerified target.txt.\n`],
       [cs2, `# ${customId} Custom 2\nVerified target.txt.\n`],
-      [cLead, `# ${customId} Custom Lead\nVerdict: PASS\nVerified custom reportRoot.\n`]
+      [cLead, `# ${customId} Custom Lead\nContent Verdict: PASS\nVerified custom reportRoot.\n`],
+      [cAudit, `# ${customId} Custom Integrity Audit\nTarget Squad: ${customId}\nIntegrity Verdict: CLEAN\n`]
     ]) {
       const full = path.join(canaryDir, slot);
       fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -1153,8 +1417,13 @@ function buildPrReviewCategoryMatrix(allFindings) {
 function parseCliArgs(argv) {
   let markdown = false;
   let printDispatch = false;
+  let printPlan = false;
   let teardown = false;
   let squadId = "all_l1";
+  let planSquadId;
+  let topology;
+  let executionMode = "swarm";
+  let workspaceIsolation = "inherit";
   let teardownTarget = "all";
   let parentId;
   let acceptedHash;
@@ -1171,6 +1440,36 @@ function parseCliArgs(argv) {
       markdown = true;
     } else if (arg === "--allow-active-cohort") {
       allowActiveCohort = true;
+    } else if (arg === "--print-plan") {
+      printPlan = true;
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        planSquadId = next;
+        i += 1;
+      }
+    } else if (arg === "--topology") {
+      const next = argv[i + 1];
+      if (next !== "flat" && next !== "layered") {
+        throw new Error("Flag '--topology' requires 'flat' or 'layered'.");
+      }
+      topology = next;
+      i += 1;
+    } else if (arg === "--flat") {
+      topology = "flat";
+    } else if (arg === "--mode") {
+      const next = argv[i + 1];
+      if (next !== "swarm" && next !== "subagent") {
+        throw new Error("Flag '--mode' requires 'swarm' or 'subagent'.");
+      }
+      executionMode = next;
+      i += 1;
+    } else if (arg === "--workspace-isolation") {
+      const next = argv[i + 1];
+      if (next !== "inherit" && next !== "share" && next !== "branch") {
+        throw new Error("Flag '--workspace-isolation' requires 'inherit', 'share', or 'branch'.");
+      }
+      workspaceIsolation = next;
+      i += 1;
     } else if (arg === "--print-dispatch") {
       printDispatch = true;
       const next = argv[i + 1];
@@ -1210,20 +1509,26 @@ function parseCliArgs(argv) {
       force = true;
     } else {
       throw new Error(
-        `Unknown argument '${arg}'. Usage: diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]]`
+        `Unknown argument '${arg}'. Usage: diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]]`
       );
     }
   }
-  if ([markdown, printDispatch, teardown].filter(Boolean).length > 1) {
-    throw new Error("Flags '--markdown', '--print-dispatch', and '--teardown' are mutually exclusive.");
+  if ([markdown, printPlan, printDispatch, teardown].filter(Boolean).length > 1) {
+    throw new Error("Flags '--markdown', '--print-plan', '--print-dispatch', and '--teardown' are mutually exclusive.");
   }
   if (parentId && !printDispatch) {
     throw new Error("Flag '--parent-id' is only valid with '--print-dispatch'.");
   }
-  if (ledgerPath && printDispatch) {
-    throw new Error("Flag '--ledger' is not valid with '--print-dispatch'.");
+  if (topology && !printPlan) {
+    throw new Error("Flags '--topology' and '--flat' are only valid with '--print-plan'.");
   }
-  if (allowActiveCohort && (printDispatch || teardown)) {
+  if ((executionMode !== "swarm" || workspaceIsolation !== "inherit") && !printPlan) {
+    throw new Error("Flags '--mode' and '--workspace-isolation' are only valid with '--print-plan'.");
+  }
+  if (ledgerPath && (printPlan || printDispatch)) {
+    throw new Error("Flag '--ledger' is not valid with '--print-plan' or '--print-dispatch'.");
+  }
+  if (allowActiveCohort && (printPlan || printDispatch || teardown)) {
     throw new Error("Flag '--allow-active-cohort' is only valid in audit mode.");
   }
   if ((acceptedHash || force) && !teardown) {
@@ -1234,9 +1539,14 @@ function parseCliArgs(argv) {
   }
   return {
     markdown,
+    printPlan,
     printDispatch,
     teardown,
     squadId,
+    planSquadId,
+    topology,
+    executionMode,
+    workspaceIsolation,
     teardownTarget,
     parentId,
     acceptedHash,
@@ -1248,7 +1558,7 @@ function parseCliArgs(argv) {
 }
 
 const USAGE =
-  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
+  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
 
 let cli;
 try {
@@ -1272,6 +1582,40 @@ if (cli.teardown) {
       ledgerPath: cli.ledgerPath
     });
     console.log(JSON.stringify(res, null, 2));
+    process.exit(0);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+}
+
+if (cli.printPlan) {
+  try {
+    let planInput;
+    if (cli.topology === "flat" && !cli.planSquadId) {
+      const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
+      const flatSpecialists = Object.values(manifest.squads).flatMap(
+        squad => squad.specialists ?? squad.children ?? []
+      );
+      planInput = {
+        manifest: { squads: { self_diagnosis: { specialists: flatSpecialists } } },
+        topology: "flat",
+        executionMode: cli.executionMode,
+        workspaceIsolation: cli.workspaceIsolation,
+        includeIntegrityAuditor: true
+      };
+    } else {
+      planInput = {
+        manifestPath: manifestRelative,
+        ...(cli.planSquadId ? { squadId: cli.planSquadId } : {}),
+        ...(cli.topology ? { topology: cli.topology } : {}),
+        executionMode: cli.executionMode,
+        workspaceIsolation: cli.workspaceIsolation,
+        includeIntegrityAuditor: true
+      };
+    }
+    const plan = planSquadCohort(planInput, repoRoot);
+    console.log(JSON.stringify(plan, null, 2));
     process.exit(0);
   } catch (error) {
     console.error(error.message);

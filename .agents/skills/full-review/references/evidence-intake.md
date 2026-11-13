@@ -74,7 +74,7 @@ Use one batch pass to produce:
 - tool call counts by name and error counts;
 - a step/time index around quoted evidence.
 
-A compact Node recipe (run from the repository root, adjust the path):
+A compact Node recipe for user-supplied or exported JSONL files (for internal Antigravity `.system_generated/` transcripts, shell reads are hook-blocked under `L6`; call `query_transcript` / `read_transcript` in one batch pass from the coordinator session if `/swarm` workers lack those MCP tools):
 
 ```bash
 node -e '

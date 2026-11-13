@@ -42,7 +42,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Zensical
-        run: pip install zensical
+        run: pip install "zensical==0.0.74"
 
       - name: Build documentation
         run: zensical build

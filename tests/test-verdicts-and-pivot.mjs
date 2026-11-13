@@ -144,23 +144,13 @@ try {
   assert.throws(() => verifyBundle(root, bundled.path), /does not match bundle squad 'alpha'/);
   fs.writeFileSync(path.join(root, bundled.path), savedBundle);
 
-  // F-01 & SVC-PR4-03/04: explicit adversarialReport does not overwrite existing integrityAudit, and fenced code is ignored
+  // Stale squad-adversarial_review directory on disk is never auto-discovered by bundleReports
   const advSlot = reportPath("adversarial_review", 1);
   write(advSlot, "Verdict: FAIL\n```\nIntegrity Verdict: CLEAN\n```\n");
-  assert.throws(
-    () => bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot }),
-    /Mandatory adversarial review verdict is not PASS/
-  );
-  write(advSlot, "Content Verdict: PASS\nIndependent adversarial verification passed.\n");
-  const bothBundle = bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot });
-  const bothJson = JSON.parse(fs.readFileSync(path.join(root, bothBundle.path), "utf8"));
-  assert.equal(bothJson.integrityAudit.path, scopedIntAlpha);
-  assert.equal(bothJson.adversarialReview.path, advSlot);
-  write(advSlot, "Integrity Verdict: CLEAN\nAttempted role conflation.\n");
-  assert.throws(
-    () => bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot }),
-    /Mandatory adversarial review verdict is not PASS/
-  );
+  const withoutAdvAuto = bundleReports(root, record);
+  const withoutAdvJson = JSON.parse(fs.readFileSync(path.join(root, withoutAdvAuto.path), "utf8"));
+  assert.equal(withoutAdvJson.integrityAudit.path, scopedIntAlpha);
+  assert.equal(withoutAdvJson.adversarialReview, undefined);
   fs.unlinkSync(path.join(root, advSlot));
   bundleReports(root, record);
 
@@ -197,12 +187,13 @@ try {
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
   assert.match(payload.Subagents[0].Prompt, /summaryOnly=true/);
 
-  // Untargeted on multi-squad manifest throws; empty target and adversarial_review target return isError
+  // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "squads.json" }, root).isError, true);
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor:", manifestPath: "squads.json" }, root).isError, true);
-  assert.equal(handleDispatchSquad({ squadId: "adversarial_flat:", manifestPath: "squads.json" }, root).isError, true);
+  assert.equal(handleDispatchSquad({ squadId: "adversarial_l1", manifestPath: "squads.json" }, root).isError, true);
+  assert.equal(handleDispatchSquad({ squadId: "adversarial_flat", manifestPath: "squads.json" }, root).isError, true);
   assert.equal(
-    handleDispatchSquad({ squadId: "integrity_auditor:adversarial_review", manifestPath: "squads.json" }, root).isError,
+    handleDispatchSquad({ squadId: "integrity_auditor:nonexistent", manifestPath: "squads.json" }, root).isError,
     true
   );
 
@@ -221,8 +212,11 @@ try {
   }));
   const untargetedSingle = handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "single-squad.json" }, root);
   assert.equal(untargetedSingle.isError, undefined);
-  const customLeadRes = handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "single-squad.json" }, root);
-  assert.equal(customLeadRes.isError, undefined);
+  const singlePayload = JSON.parse(untargetedSingle.content[0].text);
+  assert.equal(singlePayload.Subagents.length, 1);
+  assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor Policy/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
 
   // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
   const intLeadCompiled = buildSubagentSpec(
@@ -263,19 +257,36 @@ try {
   assert.equal(fs.existsSync(path.join(root, first)), false);
 
   // SCRIPT-PR4-01 & SCRIPT-PR4-02: path traversal, absolute paths, symlinks, malformed verdicts, --help
+  const malformedVerdict = "scratch/agy-squad/malformed-content.md";
+  const malformedIntegrity = "scratch/agy-squad/malformed-integrity.md";
+  write(malformedVerdict, "Looks fine without verdict token.\n");
+  write(malformedIntegrity, "Integrity Verdict: CLEAN\nIntegrity Verdict: INTEGRITY VIOLATION\n");
   const symlinkReport = "scratch/agy-squad/symlink-report.md";
   fs.symlinkSync(outsideFile, path.join(root, symlinkReport));
-  for (const badArgs of [
-    ["verdict", `../${path.basename(outsideFile)}`],
-    ["verdict", outsideFile],
-    ["verdict", symlinkReport],
-    ["bundle", outsideFile],
-    ["verdict", lead, "--integrity"]
+  for (const [badArgs, expectedStderr] of [
+    [["verdict", `../${path.basename(outsideFile)}`], /workspace-relative/],
+    [["verdict", outsideFile], /workspace-relative/],
+    [["verdict", symlinkReport], /Unsupported|symlink|ELOOP/i],
+    [["bundle", outsideFile], /workspace-relative/],
+    [["verdict", lead, "--integrity"], /Integrity Verdict:/],
+    [["verdict", malformedVerdict], /Content Verdict:/],
+    [["verdict", "--integrity", malformedIntegrity], /conflicting verdicts/],
+    [["bogus", "--help"], /Unknown command/],
+    [["bundle", "bundle-record.json", "--unknown"], /Unknown option/],
+    [["verify", cliBundled.path, "--unknown"], /Unknown option/]
   ]) {
-    assert.notEqual(runCliFail(badArgs).status, 0, `Expected failure for: ${badArgs.join(" ")}`);
+    const res = runCliFail(badArgs);
+    assert.notEqual(res.status, 0, `Expected failure for: ${badArgs.join(" ")}`);
+    assert.match(res.stderr, expectedStderr, `Expected ${expectedStderr} in stderr for ${badArgs.join(" ")}`);
   }
 
-  for (const sub of ["plan", "fingerprint", "inspect", "bundle", "verify", "prune", "verdict"]) {
+  // SD-GOV-SCRIPT-01: Non-boolean requireIntegrityAudit must not coerce to true
+  write("bad-audit-type.json", JSON.stringify({ ...record, requireIntegrityAudit: "false" }));
+  const badAuditCli = runCliFail(["bundle", "bad-audit-type.json"]);
+  assert.notEqual(badAuditCli.status, 0);
+  assert.match(badAuditCli.stderr, /requireIntegrityAudit must be a boolean/);
+
+  for (const sub of ["plan", "dispatch", "fingerprint", "inspect", "bundle", "verify", "prune", "verdict"]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
     assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);

@@ -4,7 +4,7 @@ On November 8, 2026, we ran a recorded sequential comparison between **Agy-Squad
 
 ## Canonical recorded comparison (November 8, 2026)
 
-In this recorded six-defect audit, both arms caught all six planted defect categories (`6 / 6`). Agy-Squad + Agy-Context-Saver finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, used **`64` vs. `645` transcript steps** (`10.1x` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`249 B` vs. `4,940 B` into the parent conversation** (`95.0%` fewer parent wakeup bytes).
+Both arms caught all six planted defect categories (`6 / 6`). Agy-Squad + Agy-Context-Saver finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, used **`64` vs. `645` transcript steps** (`10.1x` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`249 B` vs. `4,940 B` into the parent conversation** (`95.0%` fewer parent wakeup bytes).
 
 | Metric | Agy-Squad + Agy-Context-Saver (`ab_audit`) | Antigravity `/teamwork` (`[skip-interview]`) | Recorded difference |
 | --- | ---: | ---: | --- |
@@ -21,24 +21,24 @@ In this recorded six-defect audit, both arms caught all six planted defect categ
 | **Semantic correctness verification** | Parent/lead direct code and test inspection (`32` lead steps) | `2` dedicated LLM review agents (`reviewer_1` + `auditor_1`, `174` steps, `228.6 KB`) | Direct lead verification vs. separate verifier fleet |
 | **Teardown policy and post-run Git status** | Explicit 3-scope teardown contract at the time of the run (`0` untracked Git files; `scratch/` gitignored; Phase 1, see note below) | No operator-facing teardown CLI documented (`41` untracked files, `207.9 KB` in `.agents/teamwork/`) | Governed lifecycle contract (`L41`) |
 
-## Possible contributors to the observed difference
+## Observed contributors to the difference
 
-1. **Task-proportional topology (`3` agents vs. `8`):** For a two-domain audit (`gateway/` and `worker/`), `Agy-Squad` dispatches one squad lead and two domain specialists from `manifest.json`. `/teamwork` spawns a wrapper agent, an internal orchestrator, three exploratory agents, a dedicated report writer (`worker_report_1`), a reviewer (`reviewer_1`), and a forensic auditor (`auditor_1`).
-2. **Scoped lead verification + `20 ms` SHA-256 bundling vs. separate LLM review fleet:** In `Agy-Squad`, the squad lead inspects the cited source lines directly, writes its synthesis report, and runs `node mcp/handoffs.mjs bundle`, `verify` (`20 ms`, SHA-256 `418d7ccbade0a14a5b2e165b706adf45275e7b20604df1dfe03c41a012abc945`), and `prune`. The `20 ms` SHA-256 check confirms cryptographic artifact integrity (that cited files and reports match their recorded digests), while the lead's code inspection verifies semantic correctness. `/teamwork` delegates semantic verification to two additional LLM subagents (`reviewer_1` and `auditor_1`) that run `174` combined steps (`228.6 KB` of transcript).
-3. **Single-line `Pointer-Over-Wire` receipt (`249 B`) vs. five parent wakeups (`4,940 B`):** `Agy-Squad` keeps intermediate coordination inside the squad and wakes the parent conversation once with a `249`-byte `READY` receipt. `/teamwork` wakes the parent conversation four times with intermediate Sentinel progress updates before sending a `3,218`-byte completion summary.
-4. **RTK command rewriting and governed teardown (`L41`):** With `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) active, `Agy-Squad` specialists read scoped files through `rtk read` and prune loose specialist reports after bundling.
+1. **Task-proportional topology (`3` agents vs. `8`):** For a two-domain audit (`gateway/` and `worker/`), `dispatch_squad` launches one squad lead and two domain specialists from `manifest.json`. `/teamwork` spawns a wrapper agent, an internal orchestrator, three exploratory agents, a report writer (`worker_report_1`), a reviewer (`reviewer_1`), and a forensic auditor (`auditor_1`).
+2. **Scoped lead verification and `20 ms` SHA-256 bundling vs. separate LLM review fleet:** In `Agy-Squad`, the squad lead inspects cited source lines directly, writes its synthesis report, and runs `node mcp/handoffs.mjs` (`bundle`, `verify` in `20 ms` producing SHA-256 `418d7ccbade0a14a5b2e165b706adf45275e7b20604df1dfe03c41a012abc945`, and `prune`). Digest verification confirms that cited inputs and reports match their recorded hashes while the lead's code inspection checks semantic correctness. `/teamwork` delegates verification to `reviewer_1` and `auditor_1` (`174` combined steps, `228.6 KB` of transcript).
+3. **Single-line `Pointer-Over-Wire` receipt (`249 B`) vs. five parent wakeups (`4,940 B`):** `Agy-Squad` keeps intermediate coordination inside the squad and wakes the parent once with a `249`-byte `READY` receipt. `/teamwork` wakes the parent four times with intermediate Sentinel progress updates before sending a `3,218`-byte completion summary.
+4. **RTK command rewriting and governed teardown ([`L41`](plans/LEDGER.md)):** With `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) active, `Agy-Squad` specialists read scoped files through `rtk read` and prune loose specialist reports after bundling.
 
 ## Recorded session metrics and unit definitions
 
 All session counts in `benchmarks/teamwork-vs-squad/results/telemetry.json` come from `agy-context-saver`'s `check_context_health` tool:
 
 - **Transcript steps, turns, and tool calls:** Operational counts from `.system_generated/logs/transcript.jsonl` across every spawned subagent in each arm.
-- **Raw transcript size (`148.2 KB` vs. `817.4 KB`) and parent wakeup bytes (`249 B` vs. `4,940 B`):** Measured in decimal kilobytes (`1,000 B`) and UTF-8 message bytes. These measure transcript and parent-inbox volume rather than billed API token charges.
-- **Finding adjudication (`6 / 6` categories vs. `18` and `25` total items):** Both arms caught all six planted defect categories (`N1` through `N6`). Total reported counts (`18` in Agy-Squad vs. `25` in Teamwork) include sub-defects split out from `N6` (corrupt JSON reset, non-atomic write, off-by-one retry) plus secondary input-validation observations.
+- **Raw transcript size (`148.2 KB` vs. `817.4 KB`) and parent wakeup bytes (`249 B` vs. `4,940 B`):** Measured in decimal kilobytes (`1,000 B`) and UTF-8 message bytes. These measure transcript and parent-inbox volume, not billed API token charges.
+- **Finding adjudication (`6 / 6` categories vs. `18` and `25` total items):** Both arms caught all six planted defect categories (`N1` through `N6`). Total item counts (`18` in Agy-Squad vs. `25` in Teamwork) include sub-defects split out from `N6` (corrupt JSON reset, non-atomic write, off-by-one retry) plus secondary input-validation observations.
 
 ## Benchmark fixture and six planted bugs
 
-The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhook relay (`gateway/gateway.mjs` and `worker/worker.mjs` + `worker/ledger.mjs`). Its unit tests (`test-gateway.mjs` and `test-worker.mjs`) pass in isolation while leaving six defects across module boundaries:
+The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhook relay (`gateway/gateway.mjs` and `worker/worker.mjs` + `worker/ledger.mjs`). Its unit tests (`test-gateway.mjs` and `test-worker.mjs`) pass in isolation while leaving six cross-module defects:
 
 | ID | Priority | Location | Defect summary | Caught by Agy-Squad | Caught by `/teamwork` |
 | --- | --- | --- | --- | :---: | :---: |
@@ -75,15 +75,15 @@ The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhoo
 ## Documented teardown and evidence retention
 
 > [!NOTE]
-> **Historical comparison.** The Nov 8, 2026 run above used Agy-Squad's Phase 1 launcher (`agy-squad run --launch`, `bin/terminal.py`, `mcp/run-state.mjs`), which PR #5 retired (`L17`). The retained components that the run exercised are the staged compile (`dispatch_squad`), `Pointer-Over-Wire` receipts and the `handoffs.mjs` bundle/verify/prune pipeline. The managed CLI session cleanup described in the original run no longer exists. Native `/swarm` now owns worker lifecycle and `kill` cleanup. The numbers are recorded evidence for the Phase 1 workflow, not a measurement of the current `squad_planner` + `/swarm` path.
+> **Historical comparison.** The November 8, 2026 run above used Agy-Squad's Phase 1 launcher (`agy-squad run --launch`, `bin/terminal.py`, `mcp/run-state.mjs`), which PR #5 retired ([`L17`](plans/LEDGER.md)). The run exercised the retained `dispatch_squad` staged compiler, `Pointer-Over-Wire` receipts, and `mcp/handoffs.mjs` (`bundle`/`verify`/`prune`). Managed CLI session cleanup from Phase 1 no longer exists because native `/swarm` owns worker lifecycles and `kill` cleanup. These numbers record the Phase 1 workflow and do not measure the current `squad_planner` + `/swarm` path.
 
-The lifecycle distinction that remains after Phase 2 is **Agy-Squad's evidence-retention contract (handoff bundle and self-diagnosis scopes)** ([`docs/core-workflows.md`](core-workflows.md)), alongside native `/swarm` worker lifecycle:
+After Phase 2, **Agy-Squad's evidence-retention contract (handoff bundle and self-diagnosis scopes)** ([`docs/core-workflows.md`](core-workflows.md)) sits alongside native `/swarm` worker cleanup:
 
-1. **Native `/swarm` worker lifecycle (not Agy-Squad):** worker spawning, worktree isolation and `kill` cleanup belong to Antigravity. `agy-squad` creates no temporary plugin or agent-profile registrations.
-2. **Handoff bundle scope:** `node bin/agy-squad.mjs` (or `node mcp/handoffs.mjs`) enforces `inspect -> bundle -> verify -> prune`, recording SHA-256 digests of every input file and specialist report in `lead/report.sources.json` before pruning loose `specialist-N/report.md` files.
+1. **Native `/swarm` worker lifecycle (Antigravity):** Worker spawning, worktree isolation, and `kill` cleanup belong to Antigravity `/swarm`. `agy-squad` writes no temporary plugin or agent-profile registrations.
+2. **Handoff bundle scope:** `node bin/agy-squad.mjs` enforces `inspect -> bundle -> verify -> prune` (backed by `mcp/handoffs.mjs`; the standalone `node mcp/handoffs.mjs` CLI from Phase 1 has since been retired), recording SHA-256 digests of every input file and specialist report in `lead/report.sources.json` before pruning loose `specialist-N/report.md` files.
 3. **Self-diagnosis review scope:** `.agents/skills/self-diagnosis/SKILL.md` requires 1-ID-per-row transcription into a durable `docs/reviews/` ledger and bundle digest verification before `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-*` directories and `manage_subagents` terminates child sessions.
 
-The recorded `0` vs. `41` (`207.9 KB`) Git-untracked file counts are secondary telemetry from `git status` after run completion (note that Agy-Squad's `.gitignore` excludes `scratch/`).
+The recorded `0` vs. `41` (`207.9 KB`) Git-untracked file counts come from `git status` after run completion (Agy-Squad's `.gitignore` excludes `scratch/`).
 
 ## Offline check vs. live experiment reproduction
 
@@ -95,8 +95,8 @@ Run the offline verifier from the repository root (also executed by `npm test`):
 node benchmarks/teamwork-vs-squad/verify-benchmark.mjs
 ```
 
-This script runs both fixture unit suites, reproduces all six seeded bugs in-process, compiles `all_l1` and `ab_audit` from `benchmarks/teamwork-vs-squad/manifest.json`, and checks the per-agent sums, rubric mappings, and provenance fields in `benchmarks/teamwork-vs-squad/results/telemetry.json`. It does not launch `agy` or replay live conversations.
+`verify-benchmark.mjs` runs both fixture unit suites, reproduces all six seeded bugs in-process, compiles `all_l1` and `ab_audit` from `benchmarks/teamwork-vs-squad/manifest.json`, and checks the per-agent sums, rubric mappings, and provenance fields in `benchmarks/teamwork-vs-squad/results/telemetry.json`. It does not launch `agy` or replay live conversations.
 
 ### 2. Live reproduction protocol and provenance policy
 
-See [`benchmarks/teamwork-vs-squad/README.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/benchmarks/teamwork-vs-squad/README.md#experimental-protocol-prompts-and-provenance-policy) for the verbatim audit prompt, arm configuration details (`manifest.json` domain-specialist briefs vs. `/teamwork [skip-interview]`), timing boundaries, and step-by-step live run commands. Session `conversationId` UUIDs in `results/telemetry.json` are local Antigravity conversation identifiers kept for `check_context_health` verification, with host paths, usernames, and raw session transcripts excluded prior to publication.
+See [`benchmarks/teamwork-vs-squad/README.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/benchmarks/teamwork-vs-squad/README.md#experimental-protocol-prompts-and-provenance-policy) for the verbatim audit prompt, arm configuration details (`manifest.json` domain-specialist briefs vs. `/teamwork [skip-interview]`), timing boundaries, and step-by-step live run commands. Session `conversationId` UUIDs in `results/telemetry.json` are local Antigravity conversation identifiers kept for `check_context_health` verification; host paths, usernames, and raw session transcripts were stripped before publication.

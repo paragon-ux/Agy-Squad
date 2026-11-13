@@ -13,10 +13,13 @@ const REQUIRED = [
   "mcp/planner.mjs",
   "mcp/handoffs.mjs",
   "mcp/verdicts.mjs",
+  ".agents/skills/full-review/SKILL.md",
   ".agents/skills/pr-review/SKILL.md",
+  ".agents/skills/pr-review/references/pr-review-standard.md",
   ".agents/skills/self-diagnosis/SKILL.md",
   ".agents/skills/swarm-governance/SKILL.md",
-  ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
+  ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+  "docs/roles-and-workflows.md"
 ];
 
 function validate(packages) {
