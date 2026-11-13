@@ -10,12 +10,13 @@
           ".agents/skills/pr-review/SKILL.md",
           "docs/tools.md"
         ],
-        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
-        "expectedDeliverable": "Synthesis report starting with Verdict: PASS, with SKILL/DOC/ARCH/SCRIPT category triage and verified file SHA-256 hashes."
+        "instructions": "For subagent fallback, compile via 'diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <id>'. On /swarm, wait via swarm_wait for READY receipts, inspect specialist reports with rtk read, write verified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity (never compress or omit distinct P0-P3/optimization/residual items before prune), verify planner-assigned flat audit-* reports 'Integrity Verdict: CLEAN', run 'node bin/agy-squad.mjs' (fingerprint, inspect, bundle, verify, prune), and post <=500B READY.",
+        "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
         {
           "role": "Self-Diagnosis Skill & Progressive Disclosure Auditor",
+          "readOnly": true,
           "objective": "Audit .agents/skills/self-diagnosis/SKILL.md, scripts/diagnose.mjs, resources/self-diagnosis-manifest.json, and references/optimization-and-review-rubric.md using pr-review SKILL/DOC/SCRIPT criteria: verify frontmatter, relative links, CLI flags, progressive disclosure ratio (SKILL.md vs references/), and propose concrete token or runtime optimizations.",
           "scopeFiles": [
             ".agents/skills/self-diagnosis/SKILL.md",
@@ -28,6 +29,7 @@
         },
         {
           "role": "PR-Review Skill & Contract Alignment Auditor",
+          "readOnly": true,
           "objective": "Cross-check .agents/skills/pr-review/SKILL.md and references/pr-review-standard.md against current Agy-Squad runtime contracts (mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, docs/plans/LEDGER.md, docs/tools.md) and identify any stale guidance or token/prompt optimization opportunities.",
           "scopeFiles": [
             ".agents/skills/pr-review/SKILL.md",
@@ -49,34 +51,37 @@
           "mcp/dispatch.mjs",
           "mcp/briefs.mjs",
           "mcp/handoffs.mjs",
-          "mcp/run-state.mjs",
-          "bin/agy-squad.mjs",
-          "bin/terminal.py"
+          "mcp/planner.mjs",
+          "bin/agy-squad.mjs"
         ],
-        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
-        "expectedDeliverable": "Synthesis report starting with Verdict: PASS and summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
+        "instructions": "For subagent fallback, compile via 'diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <id>'. On /swarm, wait via swarm_wait for READY receipts, inspect specialist reports with rtk read, write verified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity (never compress or omit distinct P0-P3/optimization/residual items before prune), verify planner-assigned flat audit-* reports 'Integrity Verdict: CLEAN', run 'node bin/agy-squad.mjs' (fingerprint, inspect, bundle, verify, prune), and post <=500B READY.",
+        "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
       },
       "specialists": [
         {
-          "role": "MCP, Dispatch & Handoff Boundary Inspector",
-          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, and mcp/run-state.mjs under pr-review MCP, RUN, and SVC criteria: verify input validation, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, and readSynthesis verdict enforcement.",
+          "role": "MCP, Dispatch, Planner & Handoff Boundary Inspector",
+          "readOnly": true,
+          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, mcp/verdicts.mjs, and mcp/planner.mjs under pr-review MCP, RUN, and SVC criteria: verify input validation, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, model provenance caveats, and readSynthesis verdict enforcement.",
           "scopeFiles": [
             "mcp/index.js",
             "mcp/dispatch.mjs",
             "mcp/briefs.mjs",
             "mcp/handoffs.mjs",
-            "mcp/run-state.mjs"
+            "mcp/verdicts.mjs",
+            "mcp/planner.mjs"
           ],
           "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
-          "role": "Launcher, PTY Bridge & Test Coverage Inspector",
-          "objective": "Audit bin/agy-squad.mjs, bin/terminal.py, and tests/ under pr-review SCRIPT, TEST, and DEP criteria: verify sandbox permissions, profile tool allowlists, PTY readiness and signal handling, failed-run cleanup, and adversarial test assertions.",
+          "role": "Governance CLI, Bundler & Test Coverage Inspector",
+          "readOnly": true,
+          "objective": "Audit bin/agy-squad.mjs and tests/ under pr-review SCRIPT, TEST, and DEP criteria: verify CLI argument validation, --allow-unaudited override behavior, bundle integrity verification, and adversarial test assertions.",
           "scopeFiles": [
             "bin/agy-squad.mjs",
-            "bin/terminal.py",
+            "tests/test-verdicts-and-pivot.mjs",
             "tests/test-dispatch.mjs",
+            "tests/test-planner.mjs",
             "tests/test-handoffs.mjs",
             "tests/test-run.mjs",
             "tests/test-server.mjs"
@@ -89,22 +94,25 @@
     "token_and_execution_optimization": {
       "lead": {
         "role": "Token & Execution Optimization Lead",
-        "objective": "Profile and optimize Agy-Squad's context footprint, compiled brief byte budgets, squad manifest topology, and filesystem/IPC hot paths without weakening L1-L41 guarantees.",
+        "objective": "Profile and optimize Agy-Squad's context footprint, compiled brief byte budgets, squad manifest topology, and filesystem/IPC hot paths without weakening L1-L43 guarantees.",
         "scopeFiles": [
           "mcp/briefs.mjs",
           "mcp/dispatch.mjs",
           "mcp/handoffs.mjs",
+          "mcp/planner.mjs",
           "mcp/index.js",
+          "bin/agy-squad.mjs",
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/pr-review/SKILL.md"
         ],
-        "instructions": "Compile via 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <your-conversation-id>', launch both Subagents verbatim, and yield. After READY receipts arrive, inspect reports via 'rtk read', write your verified synthesis ('Verdict: PASS' or FAIL/BLOCKED) at your slot preserving 1-ID-per-finding granularity from both specialists (merge only identical duplicate reports of the same defect; never compress or omit distinct P0-P3 findings, optimizations, or deferred/residual items before prune), run 'node mcp/handoffs.mjs' (fingerprint, inspect, and when PASS: bundle, verify, prune), keep specialists idle (do not kill early), and send your <=500B READY receipt.",
-        "expectedDeliverable": "Synthesis report starting with Verdict: PASS with ranked optimization opportunities and measured byte/latency deltas."
+        "instructions": "For subagent fallback, compile via 'diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <id>'. On /swarm, wait via swarm_wait for READY receipts, inspect specialist reports with rtk read, write verified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity (never compress or omit distinct P0-P3/optimization/residual items before prune), verify planner-assigned flat audit-* reports 'Integrity Verdict: CLEAN', run 'node bin/agy-squad.mjs' (fingerprint, inspect, bundle, verify, prune), and post <=500B READY.",
+        "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [
         {
           "role": "Prompt, Schema & Skill Token Optimizer",
-          "objective": "Measure UTF-8 byte and token budgets across mcp/briefs.mjs (superviseCohort, managedCohort, compiled lead/specialist prompts), mcp/index.js (tools/list schema), and .agents/skills/*/SKILL.md; identify concrete wording or progressive-disclosure optimizations that reduce context overhead while preserving all contract invariants.",
+          "readOnly": true,
+          "objective": "Measure UTF-8 byte and token budgets across mcp/briefs.mjs (superviseCohort, superviseIntegrityCohort, compiled lead/specialist prompts), mcp/index.js (tools/list schema), and .agents/skills/*/SKILL.md; identify concrete wording or progressive-disclosure optimizations that reduce context overhead while preserving all contract invariants.",
           "scopeFiles": [
             "mcp/briefs.mjs",
             "mcp/index.js",
@@ -116,11 +124,12 @@
         },
         {
           "role": "I/O, Concurrency & Cohort Topology Optimizer",
-          "objective": "Inspect mcp/dispatch.mjs, mcp/handoffs.mjs, mcp/run-state.mjs, and bin/agy-squad.mjs for redundant filesystem syscalls (realpathSync, openSync, statSync), cohort fan-out bottlenecks, and scopeFiles overlap; propose measurable runtime optimizations.",
+          "readOnly": true,
+          "objective": "Inspect mcp/dispatch.mjs, mcp/planner.mjs, mcp/handoffs.mjs, and bin/agy-squad.mjs for redundant filesystem syscalls (realpathSync, openSync, statSync), cohort fan-out bottlenecks, and scopeFiles overlap; propose measurable runtime optimizations.",
           "scopeFiles": [
             "mcp/dispatch.mjs",
+            "mcp/planner.mjs",
             "mcp/handoffs.mjs",
-            "mcp/run-state.mjs",
             "bin/agy-squad.mjs"
           ],
           "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",

@@ -1,6 +1,8 @@
 # Full review report template
 
-Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>` placeholder. Delete no mandatory section; use `Not applicable` with a reason where a section does not apply, and `None identified within reviewed scope` or `Not assessed` inside each triage bucket as the standard requires.
+Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>` placeholder. Delete no mandatory section; use Not applicable with a reason where a section does not apply, and None identified within reviewed scope or Not assessed inside each triage bucket as the standard requires.
+
+**Formatting & Readability:** Keep reports scannable in plain prose and Markdown tables. Reserve backticks strictly for exact code identifiers, file paths, CLI flags, and commands—never wrap plain numbers, statuses (Closed, Open, PASS), or quoted sentences inside inline backticks or fenced code blocks inside table cells.
 
 ---
 
@@ -121,7 +123,7 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `<ID>` | `<wave/session>` | `<cat>` | `<status>` | `<link>` | `<defect>` | `<fix>` | `<evidence>` |
+| `<ID>` | &lt;wave/session&gt; | &lt;cat&gt; | &lt;status&gt; | `<path#line>` | &lt;defect summary&gt; | &lt;fix summary&gt; | `<evidence or sha>` |
 
 ## 6. Cross-category root causes and remediation order
 
@@ -196,7 +198,7 @@ Include only when cohorts were dispatched.
 
 | EID / locator | Quote | Class | What it establishes |
 | --- | --- | --- | --- |
-| `<step/line>` | `<verbatim>` | `<user/model/tool/source>` | `<bounded claim>` |
+| `<step/line>` | &lt;short verbatim quote&gt; | &lt;user/model/tool/source&gt; | &lt;bounded claim&gt; |
 
 ## Quality gates
 
@@ -210,4 +212,5 @@ Include only when cohorts were dispatched.
 - [ ] A requested direction decision has constraints, options, a recommendation, and falsifiers.
 - [ ] When an integrity audit is used: the content and integrity verdicts are separate, the auditor did not approve content, the lead re-reviewed after `CLEAN`, and `INTEGRITY VIOLATION` hard-blocks acceptance.
 - [ ] The disposition matches coverage and open findings; no approval from a pass rate or an unreviewed category.
+- [ ] Formatting & Readability: prose and table cells avoid unnecessary inline backticks on numbers, statuses, and quoted sentences, and avoid fenced code blocks inside narrative/tables.
 - [ ] The report is saved at a stable path and linked from the response.

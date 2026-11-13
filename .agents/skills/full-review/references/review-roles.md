@@ -57,7 +57,7 @@ Do not use this text unless the independent auditor, the `INTEGRITY VIOLATION` b
 
 ## 6. Proportional coverage and transcript audits
 
-- **Layered cohort:** use a layered integrity audit proportional to the working squads and specialists. Each layer audits the layer below it; the top auditor audits the leads.
+- **Layered cohort:** Phase 2 Agy-Squad cohorts (`mcp/planner.mjs`, `docs/roles-and-workflows.md`) default to one flat peer `audit-<id>` Integrity Auditor (`integrity_auditor:<id>`); use hierarchical multi-layer auditors only when manually configured without flat `audit-<id>`.
 - **Flat cohort:** use a flat integrity audit; every specialist is covered directly.
 - Coverage must be explicit: which transcripts, which step ranges, which tool traces, which artifacts, and which evidence classes. State what was not covered.
 - Define a query budget and merge/deduplicate transcript ranges. A single-pass batch query is the default; repeated overlapping queries are a finding unless a new evidence class requires them.

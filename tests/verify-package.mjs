@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { text } from "node:stream/consumers";
 
 const REQUIRED = [
   "package.json",
   "README.md",
   "bin/agy-squad.mjs",
-  "bin/terminal.py",
   "mcp/index.js",
   "mcp/dispatch.mjs",
+  "mcp/briefs.mjs",
+  "mcp/planner.mjs",
   "mcp/handoffs.mjs",
   "mcp/verdicts.mjs",
+  ".agents/skills/full-review/SKILL.md",
   ".agents/skills/pr-review/SKILL.md",
+  ".agents/skills/pr-review/references/pr-review-standard.md",
   ".agents/skills/self-diagnosis/SKILL.md",
   ".agents/skills/swarm-governance/SKILL.md",
-  ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
+  ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+  "docs/roles-and-workflows.md"
 ];
 
 function validate(packages) {
@@ -75,8 +80,15 @@ function selfTest() {
 if (process.argv[2] === "--self-test") {
   selfTest();
 } else {
-  assert.equal(process.argv.length, 3,
-    "Usage: node tests/verify-package.mjs <npm-pack-json> | --self-test");
-  const packages = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+  const usage = "Usage: node tests/verify-package.mjs [<npm-pack-json> | - | --self-test]";
+  assert.ok(process.argv.length === 2 || process.argv.length === 3, usage);
+  const useStdin = process.argv.length === 2 || process.argv[2] === "-";
+  if (process.argv.length === 2 && process.stdin.isTTY) {
+    assert.fail(usage);
+  }
+  const raw = useStdin
+    ? await text(process.stdin)
+    : fs.readFileSync(process.argv[2], "utf8");
+  const packages = JSON.parse(raw);
   console.log(`Package boundary verified (${validate(packages)} files)`);
 }

@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad, stripCode } from "./verdicts.mjs";
+import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "./verdicts.mjs";
 
 const messageLimit = 500;
 
@@ -24,6 +23,14 @@ function defaultScratchBase() {
   return raw;
 }
 
+function normalizeReportRoot(reportRoot) {
+  const trimmed = typeof reportRoot === "string" ? reportRoot.trim().replace(/\/+$/, "") : "";
+  if (!isValidRelativePrefix(trimmed)) {
+    throw new Error(`Expected a workspace-relative reportRoot: ${reportRoot}`);
+  }
+  return trimmed;
+}
+
 function defaultReportRoot() {
   return `${defaultScratchBase()}/agy-squad`;
 }
@@ -33,28 +40,32 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
   if (specialistNumber !== undefined && (!Number.isInteger(specialistNumber) || specialistNumber < 1)) {
     throw new Error("Specialist number must be a positive integer.");
   }
+  const normalizedRoot = normalizeReportRoot(reportRoot);
   const directory = `squad-${encodeURIComponent(squadId)}`;
   if (Buffer.byteLength(directory) > 255) {
     throw new Error("Squad ID must fit in one workspace directory name.");
   }
   const slot = specialistNumber === undefined ? "lead" : `specialist-${specialistNumber}`;
-  return `${reportRoot}/${directory}/${slot}/report.md`;
+  const relative = `${normalizedRoot}/${directory}/${slot}/report.md`;
+  if (Buffer.byteLength(`READY ${relative} — `) >= messageLimit) {
+    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget: ${relative}`);
+  }
+  return relative;
 }
 
-function resolveReportRoot(recordOrPath) {
+function resolveReportRoot(recordOrPath, allowCustomPrefix = false) {
   if (typeof recordOrPath === "string") {
-    const match = /^(.+\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?)\/squad-[^/\s]+\//.exec(recordOrPath);
+    const pattern = allowCustomPrefix
+      ? /^(.+)\/squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/
+      : /^(.+\/agy-squad(?:\/[^/\s]+)*)\/squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/;
+    const match = pattern.exec(recordOrPath);
     if (match && isValidRelativePrefix(match[1])) {
       return match[1];
     }
     return defaultReportRoot();
   }
-  if (typeof recordOrPath?.reportRoot === "string" && recordOrPath.reportRoot.trim()) {
-    const trimmed = recordOrPath.reportRoot.trim().replace(/\/+$/, "");
-    if (!isValidRelativePrefix(trimmed)) {
-      throw new Error(`Expected a workspace-relative reportRoot: ${recordOrPath.reportRoot}`);
-    }
-    return trimmed;
+  if (recordOrPath?.reportRoot !== undefined) {
+    return normalizeReportRoot(recordOrPath.reportRoot);
   }
   const firstSlot = recordOrPath?.assignments?.[0]?.report;
   return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : defaultReportRoot();
@@ -64,12 +75,11 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
   if (!Array.isArray(assignments) || !assignments.length || !Array.isArray(handoffs)) {
     throw new Error("Provide the ordered launch assignments and their handoffs.");
   }
-  const allowedBases = new Set(["scratch", defaultScratchBase()]);
-  if (typeof customReportRoot === "string" && customReportRoot.trim()) {
-    const trimmed = customReportRoot.trim().replace(/\/+$/, "");
-    const baseMatch = /^(.+)\/agy-squad(?:\/run-[0-9a-f-]{36}\/plan-[0-9a-f]{24})?$/.exec(trimmed);
-    if (baseMatch && isValidRelativePrefix(baseMatch[1])) {
-      allowedBases.add(baseMatch[1]);
+  let allowedRoots = new Set(["scratch/agy-squad", defaultReportRoot()]);
+  if (customReportRoot !== undefined) {
+    const trimmed = normalizeReportRoot(customReportRoot);
+    if (trimmed !== "scratch/agy-squad") {
+      allowedRoots = new Set([trimmed]);
     }
   }
   const expected = new Map();
@@ -78,16 +88,14 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     const { conversationId, report } = item ?? {};
     const slotMatch =
       typeof report === "string"
-        ? /^(.+)\/agy-squad\/(run-[0-9a-f-]{36}\/plan-[0-9a-f]{24}\/)?squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.exec(
-            report
-          )
+        ? /^(.+)\/squad-[^/\s]+\/(lead|specialist-[1-9]\d*)\/report\.md$/.exec(report)
         : null;
     if (
       typeof conversationId !== "string" ||
       !conversationId.trim() ||
       expected.has(conversationId) ||
       !slotMatch ||
-      !allowedBases.has(slotMatch[1]) ||
+      !allowedRoots.has(slotMatch[1]) ||
       slots.has(report)
     ) {
       throw new Error("Launch assignments must have distinct native IDs and their exact compiled report slots.");
@@ -104,17 +112,19 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n\u2028\u2029]/.test(message)) {
       throw new Error("Handoff must be one line within 500 UTF-8 bytes.");
     }
+    // Allow optional leading /swarm @mention prefix before Pointer-Over-Wire verbs.
+    const parsedMessage = message.replace(/^@[A-Za-z0-9._:-]+\s+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
     const readyPrefix = `READY ${report} — `;
     const partialPrefix = `PARTIAL ${report} — `;
-    const status = message.startsWith(readyPrefix)
+    const status = parsedMessage.startsWith(readyPrefix)
       ? "READY"
-      : message.startsWith(partialPrefix)
+      : parsedMessage.startsWith(partialPrefix)
         ? "PARTIAL"
         : undefined;
     const observation = status
-      ? message.slice((status === "READY" ? readyPrefix : partialPrefix).length)
+      ? parsedMessage.slice((status === "READY" ? readyPrefix : partialPrefix).length)
       : "";
-    const noReport = /^NO_REPORT — \S/.test(message);
+    const noReport = /^NO_REPORT — \S/.test(parsedMessage);
     // REVIEW: Compare to the exact assigned path. It may contain spaces or " — ".
     if (!noReport && (!status || !observation.trim())) {
       throw new Error("Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason.");
@@ -165,7 +175,7 @@ function workspacePath(root, relative, verifiedDirs) {
 function readOpenedFile(file, relative) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
-    if (!fs.fstatSync(fd).isFile() || (process.platform === "linux" && fs.realpathSync(`/proc/self/fd/${fd}`) !== file)) {
+    if (!fs.fstatSync(fd).isFile() || (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file)) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
     return fs.readFileSync(fd);
@@ -287,13 +297,37 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs) {
   return { bytes, verdict: "CLEAN", targetSquad };
 }
 
+function ensureDirectory(root, relative, created = [], verifiedDirs) {
+  if (typeof relative !== "string" || relative.includes("\\")) {
+    throw new Error(`Invalid workspace directory: ${relative}`);
+  }
+  let directory = root;
+  for (const part of relative.split("/")) {
+    if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
+    directory = path.join(directory, part);
+    if (verifiedDirs?.has(directory)) continue;
+    try {
+      fs.mkdirSync(directory, { mode: 0o700 });
+      created.push(directory);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (!fs.lstatSync(directory).isDirectory()) {
+        throw new Error(`Expected a real workspace directory: ${directory}`);
+      }
+    }
+    verifiedDirs?.add(directory);
+  }
+  return directory;
+}
+
 function inspectReports(root, record, verifiedDirs = new Set()) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
-  const { workspace, assignments, handoffs, reportRoot } = record;
+  const { workspace, assignments, handoffs } = record;
   if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
-  const received = reconcileHandoffs(assignments, handoffs, reportRoot);
+  const resolvedRoot = resolveReportRoot(record);
+  const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;
@@ -317,14 +351,15 @@ function bundleReports(root, record) {
     squadId,
     verdict,
     verifiedFiles,
-    requireAdversarialReview,
-    adversarialReport,
-    requireIntegrityAudit,
+    requireIntegrityAudit = true,
     integrityReport,
     retainReports
   } = record;
   if (retainReports !== undefined && typeof retainReports !== "boolean") {
     throw new Error("retainReports must be a boolean.");
+  }
+  if (typeof requireIntegrityAudit !== "boolean") {
+    throw new Error("requireIntegrityAudit must be a boolean.");
   }
   if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
   const verifiedDirs = new Set();
@@ -354,9 +389,7 @@ function bundleReports(root, record) {
   const synthesis = sha256(synthesisCheck.bytes);
 
   let integrityAudit;
-  let adversarialReview;
   const isAuditCohort =
-    squadId === "adversarial_review" ||
     squadId === "integrity_auditor" ||
     squadId.startsWith("integrity_auditor-");
   if (!isAuditCohort) {
@@ -368,7 +401,7 @@ function bundleReports(root, record) {
       slot => fs.existsSync(path.join(root, slot))
     );
     if (requireIntegrityAudit && !integrityCandidate) {
-      throw new Error("Acceptance blocked: Mandatory integrity audit report missing. Run integrity_auditor before bundling.");
+      throw new Error("Acceptance blocked: Mandatory integrity audit report missing. Run integrity_auditor (or audit-<squad> in /swarm) before bundling.");
     }
     if (integrityCandidate) {
       const audit = readIntegrityAudit(root, integrityCandidate, squadId, verifiedDirs);
@@ -378,41 +411,6 @@ function bundleReports(root, record) {
         verdict: audit.verdict,
         ...(audit.targetSquad ? { targetSquad: audit.targetSquad } : {})
       };
-    }
-
-    const leadAdvSlot = reportPath("adversarial_review", undefined, rootPrefix);
-    const flatAdvSlot = reportPath("adversarial_review", 1, rootPrefix);
-    const advCandidate = adversarialReport ?? (
-      !integrityCandidate
-        ? [leadAdvSlot, flatAdvSlot].find(slot => fs.existsSync(path.join(root, slot)))
-        : undefined
-    );
-    if (requireAdversarialReview && !advCandidate) {
-      throw new Error("Acceptance blocked: Mandatory adversarial review report missing. Run adversarial review before bundling.");
-    }
-    if (advCandidate) {
-      const advBytes = readEvidence(root, advCandidate, verifiedDirs);
-      const advMarkdown = stripCode(decodeUtf8(advBytes, advCandidate));
-      if (/^\s*(?:[-*+]\s+|#+\s+)?(?:[*_]{1,3})?\s*Integrity Verdict\s*(?:[*_]{1,3})?\s*:/im.test(advMarkdown)) {
-        const audit = readIntegrityAudit(root, advCandidate, squadId, verifiedDirs);
-        integrityAudit = {
-          path: advCandidate,
-          sha256: sha256(audit.bytes),
-          verdict: audit.verdict,
-          ...(audit.targetSquad ? { targetSquad: audit.targetSquad } : {})
-        };
-      } else {
-        let advSynthesis;
-        try {
-          advSynthesis = readSynthesis(root, advCandidate, verifiedDirs);
-        } catch {
-          throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
-        }
-        if (advSynthesis.verdict !== "PASS") {
-          throw new Error("Acceptance blocked: Mandatory adversarial review verdict is not PASS.");
-        }
-        adversarialReview = { path: advCandidate, sha256: sha256(advSynthesis.bytes) };
-      }
     }
   }
 
@@ -429,7 +427,6 @@ function bundleReports(root, record) {
         verifiedFiles,
         ...(retainReports ? { retainReports: true } : {}),
         ...(integrityAudit ? { integrityAudit } : {}),
-        ...(adversarialReview ? { adversarialReview } : {}),
         reports
       },
       null,
@@ -460,7 +457,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (verdict !== "PASS") {
     throw new Error("Bundle must record an independently verified PASS verdict.");
   }
-  const rootPrefix = resolveReportRoot(relative);
+  const rootPrefix = resolveReportRoot(relative, true);
   if (
     relative !== bundlePath(squadId, rootPrefix) ||
     !Array.isArray(reports) ||
@@ -493,6 +490,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
       throw new Error(`Integrity audit report changed: ${audit.path}`);
     }
   }
+  // Legacy read-only verification compatibility for pre-Phase-2 bundle manifests.
   if (parsed.adversarialReview) {
     const adv = parsed.adversarialReview;
     if (!adv || typeof adv !== "object" || typeof adv.path !== "string" || typeof adv.sha256 !== "string") {
@@ -547,33 +545,4 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
   return { removed };
 }
 
-const realOrSelf = p => {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return path.resolve(p);
-  }
-};
-
-if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url))) {
-  const root = fs.realpathSync(process.cwd());
-  const [action, ...args] = process.argv.slice(2);
-  try {
-    let result;
-    if (action === "fingerprint") result = fingerprint(root, args);
-    else if (action === "inspect" && args.length === 1) result = inspectHandoffs(root, JSON.parse(readFile(root, args[0])));
-    else if (action === "bundle" && args.length === 1) result = bundleReports(root, JSON.parse(readFile(root, args[0])));
-    else if (action === "verify" && args.length === 1) result = verifyBundle(root, args[0]);
-    else if (action === "prune" && (args.length === 2 || (args.length === 3 && args[2] === "--keep-reports"))) {
-      result = pruneReports(root, args[0], args[1], { keepReports: args[2] === "--keep-reports" });
-    } else {
-      throw new Error("Usage: fingerprint <file...> | inspect <record.json> | bundle <record.json> | verify <bundle.json> | prune <bundle.json> <accepted-sha256> [--keep-reports]");
-    }
-    console.log(JSON.stringify(result, null, 2));
-  } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
-  }
-}
-
-export { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, publish, readFile, reportPath, verifyBundle };
+export { bundleReports, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, reportPath, verifyBundle };
