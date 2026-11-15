@@ -1,0 +1,20 @@
+{
+  "name": "agy-squad",
+  "version": "0.1.0",
+  "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
+  "author": {
+    "name": "paragon-ux"
+  },
+  "repository": "https://github.com/paragon-ux/Agy-Squad",
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "swarm",
+    "subagents",
+    "governance",
+    "pr-review",
+    "mcp"
+  ],
+  "skills": "./skills",
+  "mcpServers": "./mcp_config.json"
+}

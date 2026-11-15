@@ -4,8 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
-import { bundleReports, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -116,7 +117,9 @@ try {
   assert.throws(() => bundleReports(root, { ...record, retainReports: "false" }), /retainReports must be a boolean/);
 
   // Valid scoped alpha & beta audits co-exist without collision (ARCH-PR4-01)
-  write(scopedIntAlpha, "Target Squad: alpha\nIntegrity Verdict: CLEAN\nAll traces grounded.\n");
+  const { evidenceDigest: alphaDigest } = computeEvidenceDigest(root, record);
+  const cleanAlphaAudit = `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nAll traces grounded.\n`;
+  write(scopedIntAlpha, cleanAlphaAudit);
   write(scopedIntBeta, "Target Squad: beta\nIntegrity Verdict: CLEAN\nBeta grounded.\n");
 
   const bundled = bundleReports(root, record);
@@ -128,14 +131,16 @@ try {
   assert.equal(verifyBundle(root, bundled.path).sha256, bundled.sha256);
 
   // SVC-PR4-02: tampered bundle JSON pointing integrityAudit to beta is rejected
+  const tamperedEntry = {
+    path: scopedIntBeta,
+    sha256: JSON.parse(JSON.stringify(bundleJson)).integrityAudit.sha256,
+    verdict: "CLEAN",
+    targetSquad: "beta"
+  };
   const tamperedBundle = {
     ...bundleJson,
-    integrityAudit: {
-      path: scopedIntBeta,
-      sha256: JSON.parse(JSON.stringify(bundleJson)).integrityAudit.sha256,
-      verdict: "CLEAN",
-      targetSquad: "beta"
-    }
+    integrityAudit: tamperedEntry,
+    integrityAudits: [tamperedEntry]
   };
   write("scratch/agy-squad/squad-alpha/lead/tampered.json", JSON.stringify(tamperedBundle));
   const savedBundle = fs.readFileSync(path.join(root, bundled.path), "utf8");
@@ -143,21 +148,22 @@ try {
   assert.throws(() => verifyBundle(root, bundled.path), /does not match bundle squad 'alpha'/);
   fs.writeFileSync(path.join(root, bundled.path), savedBundle);
 
-  // SVC-PR4-03 & SVC-PR4-04: explicit adversarialReport not shadowed by stale integrity report; fenced code ignored
+  // Stale squad-adversarial_review directory on disk is never auto-discovered by bundleReports
   const advSlot = reportPath("adversarial_review", 1);
   write(advSlot, "Verdict: FAIL\n```\nIntegrity Verdict: CLEAN\n```\n");
-  assert.throws(
-    () => bundleReports(root, { ...record, requireAdversarialReview: true, adversarialReport: advSlot }),
-    /Mandatory adversarial review verdict is not PASS/
-  );
+  const withoutAdvAuto = bundleReports(root, record);
+  const withoutAdvJson = JSON.parse(fs.readFileSync(path.join(root, withoutAdvAuto.path), "utf8"));
+  assert.equal(withoutAdvJson.integrityAudit.path, scopedIntAlpha);
+  assert.equal(withoutAdvJson.adversarialReview, undefined);
   fs.unlinkSync(path.join(root, advSlot));
+  bundleReports(root, record);
 
   // Deleting integrity report from disk must fail verifyBundle (no silent deletion pass)
   fs.unlinkSync(path.join(root, scopedIntAlpha));
   assert.throws(() => verifyBundle(root, bundled.path), /ENOENT/);
 
   // Restore and test retainReports / --keep-reports
-  write(scopedIntAlpha, "Target Squad: alpha\nIntegrity Verdict: CLEAN\nAll traces grounded.\n");
+  write(scopedIntAlpha, cleanAlphaAudit);
   const kept = pruneReports(root, bundled.path, bundled.sha256, { keepReports: true });
   assert.deepEqual(kept.removed, []);
   assert.deepEqual(kept.retained, [first]);
@@ -185,12 +191,13 @@ try {
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
   assert.match(payload.Subagents[0].Prompt, /summaryOnly=true/);
 
-  // Untargeted on multi-squad manifest throws; empty target and adversarial_review target return isError
+  // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "squads.json" }, root).isError, true);
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor:", manifestPath: "squads.json" }, root).isError, true);
-  assert.equal(handleDispatchSquad({ squadId: "adversarial_flat:", manifestPath: "squads.json" }, root).isError, true);
+  assert.equal(handleDispatchSquad({ squadId: "adversarial_l1", manifestPath: "squads.json" }, root).isError, true);
+  assert.equal(handleDispatchSquad({ squadId: "adversarial_flat", manifestPath: "squads.json" }, root).isError, true);
   assert.equal(
-    handleDispatchSquad({ squadId: "integrity_auditor:adversarial_review", manifestPath: "squads.json" }, root).isError,
+    handleDispatchSquad({ squadId: "integrity_auditor:nonexistent", manifestPath: "squads.json" }, root).isError,
     true
   );
 
@@ -209,10 +216,35 @@ try {
   }));
   const untargetedSingle = handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "single-squad.json" }, root);
   assert.equal(untargetedSingle.isError, undefined);
-  const customLeadRes = handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "single-squad.json" }, root);
-  assert.equal(customLeadRes.isError, undefined);
+  const singlePayload = JSON.parse(untargetedSingle.content[0].text);
+  assert.equal(singlePayload.Subagents.length, 1);
+  assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor Policy/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
 
-  // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, ARCH-PR4-03, TEST-PR4-01)
+  // GOV-07: Swarm integrity auditor briefs must not treat workspace re-execution alone as sufficient for CLEAN
+  const swarmAuditSpec = buildSubagentSpec(
+    { role: "Integrity Auditor", objective: "Audit swarm alpha", scopeFiles: ["."] },
+    "integrity_auditor-alpha",
+    "multi-squad.json",
+    1,
+    undefined,
+    { executionMode: "swarm" }
+  );
+  assert.doesNotMatch(swarmAuditSpec.Prompt, /or direct workspace artifact\/command re-execution/);
+  assert.match(swarmAuditSpec.Prompt, /coordinator-extracted sanitized transcript index in scratch\//);
+  assert.match(swarmAuditSpec.Prompt, /report 'Integrity Verdict: INTEGRITY VIOLATION' \(never CLEAN\)/);
+
+  // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
+  const intLeadCompiled = buildSubagentSpec(
+    { role: "Integrity Auditor Lead", objective: "Audit alpha", scopeFiles: ["."] },
+    "integrity_auditor-alpha",
+    "single-squad.json"
+  );
+  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof/);
+  assert.match(intLeadCompiled.Prompt, /never emit a content PASS/i);
+
+  // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, SCRIPT-P3-04, ARCH-PR4-03, TEST-PR4-01)
   assert.equal(JSON.parse(runCli(["verdict", lead])).verdict, "PASS");
   assert.equal(JSON.parse(runCli(["verdict", "--integrity", scopedIntAlpha])).verdict, "CLEAN");
   assert.deepEqual(Object.keys(JSON.parse(runCli(["fingerprint", "src/app.js"]))), ["src/app.js"]);
@@ -220,17 +252,19 @@ try {
   const unauditedRecord = { ...record };
   delete unauditedRecord.requireIntegrityAudit;
   write("unaudited-record.json", JSON.stringify(unauditedRecord));
+  write("strict-record.json", JSON.stringify(record));
   fs.unlinkSync(path.join(root, scopedIntAlpha));
   // ARCH-PR4-03: CLI bundle enforces requireIntegrityAudit: true by default
   assert.notEqual(runCliFail(["bundle", "unaudited-record.json"]).status, 0);
-  // --allow-unaudited allows explicit opt-out
-  assert.equal(runCliFail(["bundle", "unaudited-record.json", "--allow-unaudited"]).status, 0);
+  // --allow-unaudited allows explicit opt-out even when record sets requireIntegrityAudit: true (SCRIPT-P3-04)
+  assert.equal(runCliFail(["bundle", "unaudited-record.json", "--allow-unaudited", "--replace"]).status, 0);
+  assert.equal(runCliFail(["bundle", "strict-record.json", "--allow-unaudited", "--replace"]).status, 0);
 
   // Restore audit and run full CLI cycle including inspect & destructive prune
-  write(scopedIntAlpha, "Target Squad: alpha\nIntegrity Verdict: CLEAN\nAll traces grounded.\n");
+  write(scopedIntAlpha, cleanAlphaAudit);
   write("bundle-record.json", JSON.stringify(record));
   assert.equal(JSON.parse(runCli(["inspect", "bundle-record.json"]))[0].status, "READY");
-  const cliBundled = JSON.parse(runCli(["bundle", "bundle-record.json"]));
+  const cliBundled = JSON.parse(runCli(["bundle", "bundle-record.json", "--replace"]));
   const cliVerified = JSON.parse(runCli(["verify", cliBundled.path]));
   assert.equal(cliVerified.sha256, cliBundled.sha256);
   const cliKept = JSON.parse(runCli(["prune", cliBundled.path, cliBundled.sha256, "--keep-reports"]));
@@ -240,23 +274,50 @@ try {
   assert.equal(fs.existsSync(path.join(root, first)), false);
 
   // SCRIPT-PR4-01 & SCRIPT-PR4-02: path traversal, absolute paths, symlinks, malformed verdicts, --help
+  const malformedVerdict = "scratch/agy-squad/malformed-content.md";
+  const malformedIntegrity = "scratch/agy-squad/malformed-integrity.md";
+  write(malformedVerdict, "Looks fine without verdict token.\n");
+  write(malformedIntegrity, "Integrity Verdict: CLEAN\nIntegrity Verdict: INTEGRITY VIOLATION\n");
   const symlinkReport = "scratch/agy-squad/symlink-report.md";
   fs.symlinkSync(outsideFile, path.join(root, symlinkReport));
-  for (const badArgs of [
-    ["verdict", `../${path.basename(outsideFile)}`],
-    ["verdict", outsideFile],
-    ["verdict", symlinkReport],
-    ["bundle", outsideFile],
-    ["verdict", lead, "--integrity"]
+  for (const [badArgs, expectedStderr] of [
+    [["verdict", `../${path.basename(outsideFile)}`], /workspace-relative/],
+    [["verdict", outsideFile], /workspace-relative/],
+    [["verdict", symlinkReport], /Unsupported|symlink|ELOOP/i],
+    [["bundle", outsideFile], /workspace-relative/],
+    [["verdict", lead, "--integrity"], /Integrity Verdict:/],
+    [["verdict", malformedVerdict], /Content Verdict:/],
+    [["verdict", "--integrity", malformedIntegrity], /conflicting verdicts/],
+    [["bogus", "--help"], /Unknown command/],
+    [["bundle", "bundle-record.json", "--unknown"], /Unknown option/],
+    [["verify", cliBundled.path, "--unknown"], /Unknown option/]
   ]) {
-    assert.notEqual(runCliFail(badArgs).status, 0, `Expected failure for: ${badArgs.join(" ")}`);
+    const res = runCliFail(badArgs);
+    assert.notEqual(res.status, 0, `Expected failure for: ${badArgs.join(" ")}`);
+    assert.match(res.stderr, expectedStderr, `Expected ${expectedStderr} in stderr for ${badArgs.join(" ")}`);
   }
 
-  for (const sub of ["fingerprint", "inspect", "bundle", "verify", "prune", "verdict"]) {
+  // SD-GOV-SCRIPT-01: Non-boolean requireIntegrityAudit must not coerce to true
+  write("bad-audit-type.json", JSON.stringify({ ...record, requireIntegrityAudit: "false" }));
+  const badAuditCli = runCliFail(["bundle", "bad-audit-type.json"]);
+  assert.notEqual(badAuditCli.status, 0);
+  assert.match(badAuditCli.stderr, /requireIntegrityAudit must be a boolean/);
+
+  for (const sub of ["plan", "dispatch", "fingerprint", "inspect", "digest", "bundle", "verify", "prune", "verdict"]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
     assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);
   }
+
+  // RUN-011 & RUN-012: ordered list verdict prefix supported and invalid UTF-8 rejected by verdict CLI
+  assert.equal(parseContentVerdict("1. Content Verdict: PASS\n"), "PASS");
+  assert.equal(parseIntegrityVerdict("2) Integrity Verdict: CLEAN\n"), "CLEAN");
+  const badUtf8Report = "scratch/agy-squad/invalid-utf8.md";
+  fs.mkdirSync(path.dirname(path.join(root, badUtf8Report)), { recursive: true });
+  fs.writeFileSync(path.join(root, badUtf8Report), Buffer.from([0x61, 0xff, 0x62]));
+  const badUtf8Res = runCliFail(["verdict", badUtf8Report]);
+  assert.notEqual(badUtf8Res.status, 0);
+  assert.match(badUtf8Res.stderr, /UTF-8/);
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

@@ -1,76 +1,59 @@
 ---
 name: swarm-governance
-description: Apply Agy-Squad governance, role separation, Pointer-Over-Wire reporting, and SHA-256 proof bundling on top of Antigravity native /swarm execution.
+description: >-
+  [Execution Modifier — pairs with /pr-review, /full-review, or /self-diagnosis on /swarm]
+  Apply Agy-Squad governance, role separation, Pointer-Over-Wire reporting, and
+  SHA-256 proof bundling on top of Antigravity native /swarm execution.
 ---
 
-# Agy-Squad Swarm Governance & Verification
+# Agy-Squad Swarm Governance (Native `/swarm` Execution Modifier)
 
-Agy-Squad serves as the **governance, integrity auditing, and cryptographic proof layer** on top of Antigravity's native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`).
-
-Native `/swarm` handles worker spawning, worktree/branch isolation (`workspace: "share"` / `"branch"`), live model switching, and stall monitoring. Do **not** use the deprecated local launcher (`agy-squad run`); use native `/swarm` for execution and apply these Agy-Squad controls for rigor and auditability.
-
----
-
-## 1. Strict Role Separation
-
-Never conflate content acceptance with integrity auditing:
-
-| Role | Native `/swarm` Member | Verdict Format | Responsibility |
-| :--- | :--- | :--- | :--- |
-| **Working Lead** | `lead` / domain lead | `Content Verdict: PASS` \| `FAIL` \| `BLOCKED` | Reviews specialist deliverables, runs tests, and owns final technical acceptance. |
-| **Integrity Auditor** | `integrity-auditor` (flat) | `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION` | Independent peer auditing tool traces, primary evidence, and absence of sycophancy or guessing. Must record `Target Squad: <id>`. |
-
-- **Strict single-line enforcement:** Avoid hedged verdicts (e.g., `PASS with Advisories`, `CONDITIONAL PASS`). `agy-squad verdict` and `bundleReports` deterministically reject hedged or contradictory verdict lines.
-- **Flat auditor preference:** Use a single flat `integrity-auditor` peer (or `integrity_auditor:<target>` slot `scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md`) rather than nested adversarial sub-hierarchies to eliminate invisible sub-subagents and reduce token burn.
+Governs Antigravity native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`) alongside any **Task Spec** ([`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), or [`self-diagnosis`](../self-diagnosis/SKILL.md)). For the canonical cross-skill role graph, scaling rules, and `Spike S5` hook boundary, consult [Core workflows](../../../docs/core-workflows.md) and [Roles & skill workflows](../../../docs/roles-and-workflows.md#swarm-governance).
 
 ---
 
-## 2. Pointer-Over-Wire on the Swarm Board
+## Invariants
 
-Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiting worker to ingest them on subsequent turns, causing quadratic token bloat.
-
-1. Instruct each `/swarm` worker to write its full Markdown report to a workspace-relative scratch slot (e.g., `scratch/agy-squad/squad-<id>/specialist-N/report.md`).
-2. Have the worker post a single-line pointer (under 500 UTF-8 bytes) to the board:
-   - `@lead READY <report-path> — <1-line concrete observation>`
-   - `@lead PARTIAL <report-path> — <observation and blocker>`
-   - `@lead NO_REPORT — <reason>`
-3. When recording board receipts into `<bundle-record.json>` `handoffs[].message` for `reconcileHandoffs`, strip the leading `@lead ` mention prefix so each message starts with `READY `, `PARTIAL `, or `NO_REPORT`.
+1. **Tool & Surface Boundaries:** Plan `/swarm` cohorts via `squad_planner` (MCP) or `node bin/agy-squad.mjs plan` (omit `squadId` to compile all squads; never pass `all_l1`). Use `dispatch_squad` / `agy-squad dispatch` only for `invoke_subagent` fallback (`executionMode: "subagent"`). Never run `mcp/handoffs.mjs` as a CLI (it is an internal JS library), and never invoke retired `agy-squad run` (`L17`). See [planner & dispatch commands](./references/intake-and-planning.md#planner-and-dispatch-commands) and [model caveats](./references/intake-and-planning.md#model-pinning-and-subagent-caveats) (including `invoke_subagent` `inherit|flash_lite|flash|pro` limits and [tools contract](../../../docs/tools.md#manifest-structure-rules) `24`-char names, `500` B pointers, `10 MiB` stdio cap, and no hardcoded worker count ceiling).
+2. **Strict Role Separation & Canonical Audit Slots:** Never merge content acceptance with integrity auditing:
+   - **Working Lead / Coordinator** (`<squad>-lead` layered, or coordinator flat): verifies deliverables and tests, owns strict single-line `Content Verdict: PASS | FAIL | BLOCKED`.
+   - **Integrity Auditor** (`audit-<id>` -> `scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md` single-squad; `audit-<id>` -> `scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md` multi-squad): independent flat peer verifying tool traces and `Evidence Digest`, owns `Target Squad: <id>` and strict `Integrity Verdict: CLEAN | INTEGRITY VIOLATION`. Reject hedged verdicts (`CONDITIONAL PASS`, `PASS with Advisories`). See [role separation & slots](./references/bundling-and-wire-format.md#canonical-auditor-slots-and-verdicts).
+3. **Pointer-Over-Wire & `L6` Transcript Isolation:** Workers write full Markdown reports to assigned `scratch/` slots (collecting from `share`/`branch` copies before normal bundling or `kill`) and post **zero mid-flight chatter** — only one single-line `< 500` UTF-8 byte pointer (`@lead READY <path> — <observation>`, `@lead PARTIAL <path> — <observation and blocker>`, or `@lead NO_REPORT — <reason>`) to prevent quadratic board token bloat. Record raw board posts verbatim (including `@lead`) in `handoffs[].message` for `agy-squad inspect`. Note this convention is detected post-hoc, not board-enforced. Never copy `.system_generated/` transcripts into `scratch/` (`L6`). See [Pointer-Over-Wire convention](./references/bundling-and-wire-format.md#pointer-over-wire-convention) and [large-swarm reference](./references/large-swarms.md#shared-board-on2-broadcast-and-zero-mid-flight-chatter).
+4. **`open_board`, `swarm_wait`, Immediate Kill & Quota Recovery:** Emit `open_board` (`[Open the Swarm UI](sidecar://swarm/swarm_board/)` or `?tab=graph` for the `@mention` graph) **only on active `/swarm` launch turns and in-flight user updates** — **never emit `open_board` after all swarm workers are killed**. Do not call `swarm_wait` silently on the launch turn so the Swarm UI pill renders immediately; **warn explicitly** that ending the launch turn without `swarm_wait` displays `"waiting for my reply"` / `"waiting for user reply"` in Antigravity until a worker message (`@coordinator`) or scheduled watchdog wakes the coordinator. Use `swarm_wait` on subsequent intermediate quiet turns. **User-directed kill override:** Whenever the user explicitly asks to kill or stop workers, execute `swarm{action: "kill"}` immediately without delaying for worktree collection or bundling; for quota exhaustion on active `waiting` workers, switch models in place via `swarm{action: "model"}` rather than `kill` + `add`. See [UI turn lifecycle](./references/intake-and-planning.md#swarm-ui-and-turn-lifecycle) and [large-swarm reference](./references/large-swarms.md#immediate-user-directed-kill-vs-normal-shutdown).
+5. **Cryptographic File-Integrity Boundary:** `bundle` and `verify` enforce `requireIntegrityAudit: true` by default and attest SHA-256 digests of coordinator-assembled inputs (`verifiedFiles`, reports, `Evidence Digest`), not host authorship or unverified claim truth. Never ask LLMs to copy-paste 64-hex hashes; see [bundle schema & CLI](./references/bundling-and-wire-format.md#bundle-record-schema-and-cli).
 
 ---
 
-## 3. Post-Swarm Cryptographic Proof Bundling
+## Workflow
 
-Since `agy-squad` is a workspace-private package (`"private": true`), invoke the CLI directly via `node bin/agy-squad.mjs` (or `npm link` + `npx --no-install agy-squad`):
+### Step 0: Pre-Flight Intake (Ask When Unspecified)
+Ask once via `ask_question` before compiling plans whenever any of these four settings are unspecified (see [Step 0 templates](./references/intake-and-planning.md#step-0-intake-question-templates)):
+1. **Topology (neutral, no default bias):** `Flat` (specialists -> coordinator) vs `Layered` (specialists -> domain squad leads -> coordinator).
+2. **Workspace Isolation (`workspaceIsolation`):** `inherit` (shared workspace for read-only or disjoint `scopeFiles`) vs `share` (shared-storage copy) vs `branch` (isolated clone).
+3. **Evidence Retention (`Scope 2` / `Scope 3`):** Keep loose specialist reports (`--keep-reports` on `prune` / defer `--teardown`) vs prune/tear down after verified bundling.
+4. **Model:** Defaults to the **coordinator's active model** (`model` / `--model` omitted) unless the user specifies another model ID (`swarm{action: "models"}` + `knownModels` allowlist).
 
-```bash
-# 1. Validate strict verdicts
-node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
-node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md
+### Stage 1: Plan, Launch & Park
+1. Run `squad_planner` (or `node bin/agy-squad.mjs plan` per [planner commands](./references/intake-and-planning.md#planner-and-dispatch-commands)); check `swarm{action: "models"}` first if pinning non-default model IDs.
+2. Spawn workers via `swarm{action: "add"}`, record roster names and IDs in `provenanceScaffold`, and verify running models via `swarm{action: "status"}`.
+3. End the launch turn with `open_board` on its own line (`no swarm_wait` on launch; `"waiting for my reply"` clears on worker wakeup). On subsequent quiet turns while active, park via `swarm_wait`.
 
-# 2. Fingerprint verified source files for <bundle-record.json>
-node bin/agy-squad.mjs fingerprint <verified-file-1> <verified-file-2>
+### Stage 2: Content Gate & Flat Integrity Audit
+1. Collect any `share`/`branch` report slots into the coordinator workspace, verify worker claims against primary files and test output, and write `lead/report.md` (`Content Verdict: ...`).
+2. Run `node bin/agy-squad.mjs fingerprint` and `digest` (`Evidence Digest: <64-hex>`). With `Agy-Context-Saver >= 2.0.1`, `squad_planner` stamps `[agy-transcript-access: allow]` on `audit-<id>` and `<squad>-lead` briefs (and `[agy-transcript-access: deny]` on leaf specialists) so `audit-<id>` can directly run single-pass batch `agy-context transcript query --id <id> --summary` / `read --id <id> --last-turns 10` (or verify a coordinator-extracted `scratch/agy-squad/transcript-index-<id>.md` fallback; never raw logs) before emitting `Target Squad: <id>` and strict `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` (re-execution alone cannot satisfy `CLEAN`). See [transcript index protocol](./references/bundling-and-wire-format.md#coordinator-extracted-transcript-index-native-swarm-fallback).
 
-# 3. Bundle reports + programmatic integrity hash binding (enforces requireIntegrityAudit: true by default)
-node bin/agy-squad.mjs bundle <bundle-record.json>
+### Stage 3: Bundle, Multi-Cycle Continuation, or Final Close
+1. Run the 7-step CLI gate (`verdict`, `fingerprint`, `digest`, `verdict --integrity`, `bundle`, `verify`, `prune [--keep-reports]`) per working squad against `<bundle-record.json>` (multi-squad runs audit each `audit-<squadId>` and bundle each squad independently) per [bundle schema & CLI](./references/bundling-and-wire-format.md#bundle-record-schema-and-cli).
+2. **Remediation / multi-cycle swarms:** For follow-up fixes or re-verification on the same codebase, keep waiting `/swarm` workers idle and wake them with `post_message` (pass `occupiedWorkerNames` to `squad_planner` if spawning extra workers onto the active board; start a fresh conversation between major waves for a clean UI board).
+3. **Final shutdown:** Unless the user requested an immediate kill (which executes `swarm{action: "kill"}` at once), finish normal `share`/`branch` teardown per the [pre-kill checklist](./references/large-swarms.md#pre-kill-checklist-for-share-and-branch-worktrees), post `[done] <summary>`, kill workers with `swarm{action: "kill"}`, complete Section 5 below, and do **not** emit `open_board`.
 
-# 4. Verify bundle, synthesis, verified files, and integrity audit hash in CI/CD
-node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json
+---
 
-# 5. Optionally prune loose reports (or pass --keep-reports to retain)
-node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <bundle-sha256> --keep-reports
-```
+## 5. Runtime Closure Checklist (Pre-Handoff Gate)
 
-### `<bundle-record.json>` Schema
-```json
-{
-  "squadId": "<id>",
-  "workspace": "<realpath-to-workspace>",
-  "verdict": "PASS",
-  "requireIntegrityAudit": true,
-  "verifiedFiles": { "<file>": "<64-hex>" },
-  "assignments": [{ "conversationId": "<worker-id>", "report": "scratch/agy-squad/squad-<id>/specialist-1/report.md" }],
-  "handoffs": [{ "sender": "<worker-id>", "message": "READY scratch/agy-squad/squad-<id>/specialist-1/report.md — <summary>" }]
-}
-```
+`bundle`/`verify` check disk SHA-256 digests only; before ending any session, verify all four live runtime checks:
 
-The bundler (`mcp/handoffs.mjs`) programmatically computes and binds the integrity audit report's SHA-256 digest—never ask an LLM to manually copy-paste 64-character hashes in Markdown.
+1. `swarm{action: "status"}`: every worker **including `monitor`** (exact monitor roster name in status, killed via `swarm{action: "kill", name: "monitor"}` after `[done]`) reports `state: "killed"`.
+2. `manage_subagents(Action='list')`: `0 active subagent(s): []`.
+3. `manage_task(Action='list')`: `No background tasks are currently running.` (catches lingering `swarm_monitor` daemon crons).
+4. Child commands: any worker-launched builds, servers, or watchers exited cleanly.

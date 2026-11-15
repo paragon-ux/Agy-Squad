@@ -1,89 +1,63 @@
 ---
 name: self-diagnosis
 description: >-
-  Use this skill when the user asks to self-diagnose, troubleshoot, audit, or
-  optimize Agy-Squad or its workspace skills (.agents/skills/self-diagnosis and
-  .agents/skills/pr-review). Uses Agy-Squad's own staged dispatch_squad
-  compiler, Pointer-Over-Wire handoff/bundle pipeline, and the Agy-Squad PR
-  Review Standard (v1.3.0) to inspect skill integrity, contract alignment, and
-  token/runtime efficiency.
+  [Task Spec — Agy-Squad self-audit & optimization; pair with swarm-governance on
+  /swarm] Use when the user asks to self-diagnose, troubleshoot, audit, or
+  optimize Agy-Squad or its workspace skills (.agents/skills/). Uses
+  diagnose.mjs, squad_planner (or dispatch_squad for invoke_subagent), the
+  bin/agy-squad.mjs Pointer-Over-Wire pipeline, and the Agy-Squad PR Review
+  Standard v1.4.0.
 ---
 
 # Agy-Squad Self-Diagnosis & Optimization Skill
 
-Self-diagnose, review, and optimize `Agy-Squad` and its workspace skills (`self-diagnosis` and [`pr-review`](../pr-review/SKILL.md)) by dogfooding `Agy-Squad`'s staged payload compiler (`mcp/dispatch.mjs`), Pointer-Over-Wire verifier (`mcp/handoffs.mjs`), and the 10-category [Agy-Squad PR Review Standard v1.3.0](../pr-review/references/pr-review-standard.md). Consult the [Optimization & Review Rubric](./references/optimization-and-review-rubric.md) for quantitative budgets, latency targets, and category triage rules, and see [Core workflows](../../../docs/core-workflows.md) for how this operator-supervised workflow (never autonomous self-modifying code) pairs with the 3-scope evidence-retention and teardown contract (measured by durable `docs/reviews/` ledgers, verified SHA-256 bundles, `--teardown`, and child termination rather than `git status` untracked counts alone).
+Self-diagnose, audit, and optimize `Agy-Squad` and its workspace skills (including [`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), and [`swarm-governance`](../swarm-governance/SKILL.md)). This skill is a **Task Spec** for repository and harness self-audits; when run on `/swarm` or multi-agent teams, compose it with [`swarm-governance`](../swarm-governance/SKILL.md) (which owns `/swarm` launch, `open_board`, `swarm_wait`, pointer receipts, and closure).
+
+It dogfoods `Agy-Squad`'s `/swarm` planner (`mcp/planner.mjs` via `squad_planner` / `node bin/agy-squad.mjs plan`), `invoke_subagent` compiler (`mcp/dispatch.mjs` via `dispatch_squad` / `node bin/agy-squad.mjs dispatch`), Pointer-Over-Wire CLI (`node bin/agy-squad.mjs`), and [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md). Consult [Optimization & Review Rubric](./references/optimization-and-review-rubric.md) for budgets, [Execution & Teardown Reference](./references/execution-and-teardown.md) for uncondensed multi-squad and `--teardown` edge cases, and [Core workflows](../../../docs/core-workflows.md) for the 3-scope retention contract.
+
+---
+
+## Invariants
+
+1. **Zero-Subagent Local Profiler (`L7`):** [`diagnose.mjs`](./scripts/diagnose.mjs) launches zero agents; pass `--allow-active-cohort` while `scratch/agy-squad/squad-*` cohorts are active.
+2. **Self-Contained Instruction Standard:** Never use unanchored abbreviations or unexpanded section codes in briefs; state exact paths, constraints, and deliverable formats explicitly.
+3. **Non-Negotiable Pre-Remediation & Pre-Teardown Gate (`docs/reviews/`):** Before editing code or running `--teardown`, record every distinct defect/proposal `1-to-1` (`1 ID = 1 Row`, zero umbrella compression or silent drops) in `docs/reviews/<target-review-slug>.md` per [pr-review-standard.md](../pr-review/references/pr-review-standard.md) (Section 1 Session Provenance, Section 9 Cohort Provenance & Wave Finding Ledger, Section 8 residuals/deferred/closed items, plain-text readability rules without decorative backticks on numbers or English statuses).
+4. **Three-Scope Teardown Isolation (`Scope 2` vs `Scope 3`, `L41`):** `Scope 2` (`bin/agy-squad.mjs prune [--keep-reports]`) manages loose specialist reports under verified SHA-256 bundles; `Scope 3` (`diagnose.mjs --teardown ... --ledger <slug>.md`) refuses deletion until `lead/report.sources.json` verifies and the target ledger has `mtime >= bundle mtime` (unless `--force` is passed). See [Scope 3 refusal & partial cleanup rules](./references/execution-and-teardown.md#pre-teardown-refusal-conditions-and-partial-cleanup).
+5. **Same-Cohort Re-Verification & Runtime Closure:** Keep existing `/swarm` workers (`swarm_wait` / `post_message`) or `invoke_subagent` children (`send_message`) alive to re-verify remediation fixes in place; spawn fresh cohorts only for independent new audits. Kill workers only after `0` open blockers remain, ledger rows close, and teardown finishes, then complete the 4-check closure gate (`manage_subagents`, `manage_task`, `swarm status` including `monitor`, child OS processes; see [Roles & skill workflows](../../../docs/roles-and-workflows.md#self-diagnosis)).
+6. **Empirical Measurement & Architecture Trace:** Verify `design thesis / invariant (L1-L7, L21, L29-L31, L40-L43) -> public contract -> implementation -> verification` before altering runtime or skill code, record exact UTF-8 byte deltas, token estimates, and timings from `diagnose.mjs`, and confirm `npm test` passes after final edits.
 
 ---
 
 ## Workflow
 
-### Step 0: Pre-Flight Intake Interview (Operator Alignment Gate)
-To eliminate hesitation, ambiguity, and false starts, the agent MUST immediately conduct a structured intake round before compiling manifests or launching subagents (trigger via `ask_question` or multiple-choice prompt):
-1. **Topology & Delegation Mode:**
-   - `(Recommended) Layered Squad Dispatch (all_l1)`: 1 Lead per squad (`3` leads total). Leads manage specialists, conduct transcript patrol, and synthesize findings.
-   - `Flat Specialist Dispatch (all_specialists)`: Direct specialist dispatch (`6` specialists in one flat wave). The primary agent acts as lead across all squads.
-   - `Targeted Single Squad Dispatch`: Run only one focused squad (`skill_and_pr_review_audit`, `runtime_and_contract_diagnosis`, or `token_and_execution_optimization`).
-   - `Local Profiler Dry-Run Only`: Run `diagnose.mjs` locally without spawning subagents.
-2. **Teardown & Provenance Policy:**
-   - `(Recommended) Retain Full Evidence & Provenance (--keep-reports)`: Preserve all specialist and lead evidence reports in `scratch/agy-squad/` alongside bundle records for auditability and research.
-   - `Automatic Atomic Teardown (--teardown)`: Prune loose reports from `scratch/` upon successful cryptographic bundle verification.
-3. **Integrity Audit Rigor:**
-   - `(Recommended) Mandatory Integrity Auditor Enabled`: Stage independent flat `integrity_auditor:<target>` after working squads complete, enforcing `Integrity Verdict: CLEAN` before acceptance.
-   - `Working Squad Self-Synthesis Only`: Skip secondary integrity audit.
-4. **Self-Contained Instruction Standard:**
-   - Never use unanchored abbreviations, unexpanded section codes (e.g., 'H4', 'D2'), or undefined internal tokens in objectives or instructions. Every deliverable requirement must be fully self-contained and explicit so subagents do not waste tokens searching the codebase for phantom acronyms.
+### Step 0: Pre-Flight Intake Interview (Neutral Alignment Gate)
+Ask once before compiling manifests or launching workers whenever any choice below is unspecified (skip questions already answered; defer `/swarm` launch, `open_board`, and `swarm_wait` rules to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified)):
+1. **Execution Mode, Topology & Isolation (neutral, no default bias):**
+   - `/swarm` via `squad_planner` (`diagnose.mjs --print-plan [--topology flat|layered | --flat]`): **Flat Specialist Swarm** (6 read-only specialists -> coordinator) or **Layered Squad Swarm** (3 leads -> 6 specialists), plus `workspaceIsolation` (`inherit` for read-only audits vs `share`/`branch` for writers) and model (coordinator default unless user specifies otherwise).
+   - `invoke_subagent` fallback via `diagnose.mjs --print-dispatch <target>` (`all_l1`, `all_specialists`, or one squad; MCP `dispatch_squad` accepts `all_l1`, `<squadId>`, or `integrity_auditor[:<target>]`, whereas `all_specialists` is `diagnose.mjs` only).
+   - **Local Profiler Only:** run `diagnose.mjs` locally with zero agents launched.
+2. **Retention & Teardown (`Scope 2` vs `Scope 3`):** Keep loose reports via `prune --keep-reports` or prune after SHA-256 bundling (`Scope 2`); run `--teardown` after updating `docs/reviews/<target-review-slug>.md` or defer cleanup across active waves (`Scope 3`).
+3. **Integrity Audit Gate:** Independent Integrity Auditor enabled (`audit-<id>` on `/swarm` or `integrity_auditor[:<target>]` slot) enforcing `Integrity Verdict: CLEAN` before acceptance, vs working-squad synthesis only (`--allow-unaudited`).
 
 ---
 
-### Step 1: Run the Automated Self-Diagnosis & Optimization Profiler (`L7`-Safe)
-Run [`diagnose.mjs`](./scripts/diagnose.mjs) from the repository root (launches zero real subagents per `L7`; pass `--allow-active-cohort` if running mid-cohort while `scratch/agy-squad/squad-*` slots are in flight):
-
-```bash
-node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown
-# Machine-readable JSON telemetry:
-node .agents/skills/self-diagnosis/scripts/diagnose.mjs
-```
-
-The profiler audits four surfaces in one pass:
-1. **Skill & Progressive Disclosure (`SKILL`, `DOC`):** Validates YAML frontmatter, relative Markdown links across `SKILL.md` and `references/`, target `docs/reviews/` ledger presence + `v1.3.0` schema (Section 1 Session Provenance, Section 8 Residuals/Deferred, Section 9 Cohort Ledger, and `1 ID = 1 Row`), and `SKILL.md` entry share (total and prose).
-2. **Self-Dispatch & Pointer-Over-Wire Canary (`RUN`, `SVC`, `MCP`):** Compiles [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) (`all_l1` + all 3 squads, unmanaged and managed), checks `L41` scratch cleanliness and `scopeFiles` overlap, and smoke-tests `fingerprint -> inspect -> bundle -> verify -> prune` in `scratch/agy-squad/self-diag-canary-<uuid>` (`L4`) with `try/finally` cleanup.
-3. **Token & Latency Telemetry (`RUN`, `SKILL`, `SVC`):** Measures UTF-8 byte/token budgets across `mcp/briefs.mjs` templates, `mcp/index.js` `tools/list`, and stage/handoff latencies.
-4. **PR-Review v1.3.0 Matrix:** Maps findings across all 10 mandatory categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`).
+### Step 1: Run the Automated Profiler (`L7`-Safe)
+Run `node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--ledger docs/reviews/<slug>.md] --markdown`:
+1. **Skill & Doc Health (`SKILL`, `DOC`):** Validates frontmatter, entry budgets (`<= 10,240 B` / `<= 250` lines for `SKILL.md`; warns above `12,288 B` / `300` lines; `<= 70%` entry share when `> 8 KB`), relative links, `zensical.toml` `nav` & `docs/assets/*.svg`, closure checklists, and `v1.4.0` ledgers (`1 ID = 1 Row`, no retired symbol drift).
+2. **Planner, Dispatch & Pointer-Over-Wire Canary (`RUN`, `SVC`, `MCP`):** Compiles [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) for both tools, checks disjoint write scopes (skipping `readOnly: true`), and tests `fingerprint -> inspect -> bundle -> verify -> integrity -> prune` in temp storage.
+3. **Byte & Token Telemetry (`SKILL`, `RUN`):** Reports brief sizes, UTF-8/token overhead, and specialist timing regressions across `dispatch_squad`, `squad_planner`, handoff bundling, and MCP stdio checks.
+4. **Workspace Hygiene (`SVC`):** Detects orphaned `scratch/agy-squad/squad-*` cohorts against `--allow-active-cohort` and `--ledger`.
 
 ---
 
-### Step 2: Compile or Delegate an Agy-Squad Self-Diagnosis Stage
-Use [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json) with `dispatch_squad` (or `diagnose.mjs --print-dispatch [squadId|all_l1|all_specialists] [--parent-id <conversationId>]`) to compile targeted or full-squad diagnostic cohorts:
+### Step 2: Execute Cohort, Verify Bundles & Tear Down
+Plan cohorts per [Planning & Dispatch Commands](./references/execution-and-teardown.md#planning-and-dispatch-commands) (working squads in [`self-diagnosis-manifest.json`](./resources/self-diagnosis-manifest.json): `skill_and_pr_review_audit`, `runtime_and_contract_diagnosis`, and `token_and_execution_optimization`; omit `squadId` on `/swarm` to compile all three, and follow [`swarm-governance`](../swarm-governance/SKILL.md#stage-1-plan-launch--park) for launch and UI lifecycle):
 
-| Stage / Squad ID | Agents Compiled | Purpose | Primary `pr-review` Categories |
-| --- | --- | --- | --- |
-| `all_l1` (Layered Full Squad) | `3` Leads (`-> 6` Specialists) | Compile all 3 squad leads; each lead dispatches and bundles its own 2 specialists | All 10 categories (`ARCH`..`DEP`) |
-| `all_specialists` (Flat Full Squad) | `6` Specialists (across all `3` squads) | Compile all 6 specialists in one flat wave with the parent acting as lead across all 3 squads | All 10 categories (`ARCH`..`DEP`) |
-| `skill_and_pr_review_audit` | `2` Specialists | Audit `.agents/skills/self-diagnosis` and `.agents/skills/pr-review` for contract drift, broken links, and progressive disclosure | `SKILL`, `DOC`, `ARCH`, `SCRIPT` |
-| `runtime_and_contract_diagnosis` | `2` Specialists | Audit `mcp/index.js`, `mcp/dispatch.mjs`, `mcp/briefs.mjs`, `mcp/handoffs.mjs`, `mcp/run-state.mjs`, `bin/agy-squad.mjs`, and `bin/terminal.py` | `MCP`, `RUN`, `SVC`, `SCRIPT`, `TEST`, `DEP` |
-| `token_and_execution_optimization` | `2` Specialists | Profile and optimize brief byte budgets, `SKILL.md` progressive disclosure, `scopeFiles` disjointness, and filesystem/IPC hot paths | `RUN`, `SKILL`, `SVC`, `ARCH` |
-
-- **Payload review mode (default per `L7`):** Compile the selected squad (`node .agents/skills/self-diagnosis/scripts/diagnose.mjs --print-dispatch skill_and_pr_review_audit`) and execute the checks directly or present the compiled `Subagents` payload.
-- **Live subagent delegation, pre-remediation durable ledger gate, teardown (`L41`), and subagent termination:**
-  1. **Fresh Passes vs. Same-Squad Remediation Checks:** Spawn fresh subagents (`invoke_subagent`) for each new independent pass. When remediating findings from an active cohort, keep that cohort alive (`idle`) and message the **same** subagents (`send_message`) so they re-verify their exact prior findings in place.
-  2. **Reconcile & Bundle (`mcp/handoffs.mjs`):** Compile with `--print-dispatch <squadId> --parent-id <conversationId>`, yield for **Reactive Wakeup**, and run `node mcp/handoffs.mjs` (`fingerprint`, `inspect`, and when `PASS`: `bundle`, `verify`, `prune`).
-  3. **NON-NEGOTIABLE PRE-REMEDIATION & PRE-TEARDOWN GATE — Formalized Operator Ledger & Zero Lead/Bundle Compression (`docs/reviews/`):** Immediately after bundling and **strictly BEFORE applying code edits or running `--teardown`**, create or update `docs/reviews/<target-review-slug>.md` in place using the `v1.3.0` structure (one file per PR review cycle). **Zero Lead/Bundle Compression or Silent Omission:** because `handoffs.mjs prune` deletes `specialist-N/report.md` and `diagnose.mjs --teardown` deletes `scratch/agy-squad/squad-<id>/lead/report.md` (`L41`), `docs/reviews/<target-review-slug>.md` is the **only surviving durable record**—every distinct `P0`–`P3` defect, optimization proposal, or advisory in any `lead/report.md` / specialist bundle **must** map `1-to-1` to its own row in the ledger before `--teardown` (never compressed into umbrella/range IDs or silently dropped, which would make solved vs. hidden items indistinguishable to the user):
-     - **Section 1 (`Session Provenance`):** Append/update the session row (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`).
-     - **Section 9 (`/self-diagnosis` Cohort & Bundle Ledger):** Update the single **Cohort Provenance** table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) and single atomic **Wave Finding Ledger** (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA` for `P3`s; concise 10-field blocks for `P0`–`P2`s). Enforce `1 ID = 1 Row`: log newly surfaced findings as `Open (Pre-Remediation)`, then flip them to `Closed` after same-squad re-verification (`send_message`).
-     - **Section 8 (`Post-Remediation Residuals & Deferred Dispositions` — Mandatory Sink for Non-Closed / Post-Remediation Items):** Every post-remediation finding surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), every `Deferred / Won't Fix` proposal, and every `Closed (By Design)` / `Informational` item **must** receive its own atomic row here—never silently omitted and never tucked into a `Closed` row's prose cell.
-  4. **Deterministic Atomic Teardown (`L41`):** Immediately after updating the target `docs/reviews/` ledger (`mtime >= bundle mtime`) — and before mutating `verifiedFiles` during code remediation — tear down completed self-diagnosis directories and empty `scratch/agy-squad` / `scratch` parents:
-     ```bash
-     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown all [--ledger docs/reviews/<target-review-slug>.md]
-     # Or for a single squad with explicit digest check:
-     node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown <squadId> --accept <bundle-sha256> [--ledger docs/reviews/<target-review-slug>.md]
-     ```
-  5. **Kill Subagents After Final Closure (`manage_subagents`):** Only after `0` open blocking findings remain, the target `docs/reviews/` ledger is updated (`Open -> Closed`), and `--teardown` completes, terminate all spawned subagents via `manage_subagents(Action='kill', ConversationIds=[...])` (killing the `3` leads in `all_l1` mode automatically terminates their `6` specialist descendants).
+1. **Bundle per Squad (`Scope 2`):** Assemble `<bundle-record.json>` from `--print-plan` `bundleRecordTemplates` plus `fingerprint` digests, run `digest` before `audit-*` signs `CLEAN`, and run `verdict`, `verdict --integrity`, `inspect`, `bundle`, `verify`, and `prune [--keep-reports]` for every working squad per [Multi-Squad Bundling & Prune](./references/execution-and-teardown.md#multi-squad-bundling-and-scope-2-prune).
+2. **Transcribe Ledger (`docs/reviews/`):** Record every distinct defect and proposal `1-to-1` (`1 ID = 1 Row`) into `docs/reviews/<target-review-slug>.md` before editing code or running teardown.
+3. **Atomic Teardown (`L41`, `Scope 3`), Remediation & Closure:** After the target ledger has `mtime >= bundle mtime`, run `diagnose.mjs --teardown` per [Scope 3 Atomic Teardown](./references/execution-and-teardown.md#scope-3-atomic-teardown-and-failure-modes), re-verify remediation fixes with the **same** specialists/workers, kill agents (`swarm{action: "kill"}` / `manage_subagents`), and complete the 4-check closure gate.
 
 ---
 
-### Step 3: Evaluate Findings & Optimizations with the `pr-review` Skill
-Activate [`pr-review`](../pr-review/SKILL.md) and apply its architecture-before-runtime trace:
-
-1. **Trace before changing:** Verify `design thesis / invariant (active WSL IDs L1-L7, L17, L21, L29-L31, L40, L41) -> public contract -> implementation -> verification` before proposing any skill, prompt, or runtime change.
-2. **Triage by category and priority (`P1` blocking / `P2` actionable / `P3` optimization):** Apply the thresholds and failure-to-category mappings in Sections 2 and 3 of the [Optimization & Review Rubric](./references/optimization-and-review-rubric.md).
-3. **Require measured before/after evidence:** Every optimization proposal must report exact before/after UTF-8 bytes, token estimates, or execution milliseconds from [`diagnose.mjs`](./scripts/diagnose.mjs) and pass `npm test`.
+### Step 3: Triage & Verify Optimizations with `pr-review`
+Activate [`pr-review`](../pr-review/SKILL.md) with rubric thresholds from Sections 2–3 of [Optimization & Review Rubric](./references/optimization-and-review-rubric.md), trace invariants first, and prove exact before/after metrics and `npm test` pass after final edits.

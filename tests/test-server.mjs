@@ -8,7 +8,6 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { handleRequest } from "../mcp/index.js";
-import { createRun } from "../mcp/run-state.mjs";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mcp/index.js");
 const proc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
@@ -49,129 +48,128 @@ console.log("Agy-Squad MCP server tests\n");
 }
 {
   const res = await send("tools/list");
-  assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad"]);
+  assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad", "squad_planner"]);
   const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
   assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
+  assert.doesNotMatch(dispatch.inputSchema.properties.squadId.description, /adversarial_/);
   assert.equal(dispatch.inputSchema.properties.squadId.minLength, 1);
   assert.equal(dispatch.inputSchema.properties.manifestPath.minLength, 1);
-  console.log("✓ tools/list exposes only dispatch_squad, with no spawn options");
+  const planner = res.result.tools.find((t) => t.name === "squad_planner");
+  assert.ok(Array.isArray(planner.inputSchema.oneOf) && planner.inputSchema.oneOf.length === 3);
+  assert.ok(Object.values(planner.inputSchema.properties).every((p) => typeof p.description === "string" && p.description.length > 0));
+  assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
+  assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
+  const invalidParamsRes = await handleRequest({ jsonrpc: "2.0", id: 98, method: "tools/call", params: null });
+  assert.equal(invalidParamsRes.error.code, -32602);
+  const arrayParamsRes = await handleRequest({ jsonrpc: "2.0", id: 99, method: "tools/call", params: [] });
+  assert.equal(arrayParamsRes.error.code, -32602);
+  console.log("✓ tools/list exposes dispatch_squad and squad_planner");
 }
 {
   const res = await send("tools/call", { name: "dispatch_squad", arguments: { squadId: "all_l1", mode: "direct" } });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
+  const dispatchOk = await send("tools/call", {
+    name: "dispatch_squad",
+    arguments: {
+      squadId: "all_l1",
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json"
+    }
+  });
+  assert.equal(Boolean(dispatchOk.result.isError), false, dispatchOk.result.content[0].text);
+  const dispatchPayload = JSON.parse(dispatchOk.result.content[0].text);
+  assert.ok(Array.isArray(dispatchPayload.Subagents) && dispatchPayload.Subagents.length >= 1);
+  assert.equal(typeof dispatchPayload.Subagents[0].Role, "string");
+  assert.equal(typeof dispatchPayload.Subagents[0].Prompt, "string");
+  const planRes = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      task: "Audit server boundaries",
+      scopeFiles: ["mcp/index.js"],
+      roles: ["Inspector"],
+      model: "gemini-4-hydrogen-high",
+      knownModels: ["gemini-4-hydrogen-high"]
+    }
+  });
+  assert.equal(Boolean(planRes.result.isError), false, planRes.result.content[0].text);
+  const planPayload = JSON.parse(planRes.result.content[0].text);
+  assert.equal(planPayload.executionMode, "swarm");
+  assert.equal(planPayload.modelProvenance.pinningSupported, true);
+  assert.equal(planPayload.modelValidation.status, "checked-against-supplied-list");
+  const manifestPlanRes = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+      executionMode: "swarm",
+      workspaceIsolation: "share"
+    }
+  });
+  assert.equal(Boolean(manifestPlanRes.result.isError), false, manifestPlanRes.result.content[0].text);
+  const manifestPlan = JSON.parse(manifestPlanRes.result.content[0].text);
+  assert.equal(manifestPlan.workers.length, 3);
+  assert.ok(!manifestPlan.workers[0].lead.swarmAdd.brief.includes("dispatch_squad"));
+  assert.ok(manifestPlan.workers[0].specialists[0].swarmAdd.brief.includes("post_message"));
+  const badKnownModel = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      task: "Audit server boundaries",
+      scopeFiles: ["mcp/index.js"],
+      model: "typo-model",
+      knownModels: ["gemini-4-hydrogen-high"]
+    }
+  });
+  assert.equal(badKnownModel.result.isError, true);
+  assert.match(badKnownModel.result.content[0].text, /not in knownModels: typo-model/);
+  const badPlan = await send("tools/call", {
+    name: "squad_planner",
+    arguments: { task: "conflict", manifestPath: "x.json" }
+  });
+  assert.equal(badPlan.result.isError, true);
+  assert.match(badPlan.result.content[0].text, /exactly one/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
-  assert.equal(unknown.error.code, -32601);
-  for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }, { id: 99, method: "ping" }]) {
+  assert.equal(unknown.error.code, -32602);
+  for (const invalid of [
+    null,
+    123,
+    [],
+    { jsonrpc: "2.0", id: 99 },
+    { id: 99, method: "ping" },
+    { jsonrpc: "2.0", id: null, method: "ping" },
+    { jsonrpc: "2.0", id: true, method: "ping" },
+    { jsonrpc: "2.0", id: {}, method: "ping" }
+  ]) {
     const err = await handleRequest(invalid);
     assert.equal(err.error.code, -32600);
   }
+  // MCP-007: subagent mode coerces non-alias models to 'inherit'
+  const subagentCoerced = await handleRequest({
+    jsonrpc: "2.0",
+    id: 199,
+    method: "tools/call",
+    params: { name: "squad_planner", arguments: { task: "Verify coercion", executionMode: "subagent", model: "gemini-3.8-flash-high" } }
+  });
+  const coercedPayload = JSON.parse(subagentCoerced.result.content[0].text);
+  assert.equal(coercedPayload.workers[0].specialists[0].Subagent.Model, "inherit");
   const unknownMethod = await send("resources/list");
   assert.equal(unknownMethod.error.code, -32601);
   proc.stdin.write("{malformed json\n");
   const afterMalformed = await send("ping");
   assert.deepEqual(afterMalformed.result, {});
   assert.equal(unsolicited.pop()?.error?.code, -32700);
-  console.log("✓ tools/call rejects direct mode, retired subagent_brief, and malformed JSON-RPC requests");
+  console.log("✓ tools/call executes squad_planner, rejects direct mode, retired subagent_brief, and malformed JSON-RPC");
 }
 {
-  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-server-managed-")));
-  try {
-    const run = createRun(tmp);
-    const active = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: run.relative },
-      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
+  // F-07(6): Non-positive or invalid AGY_MAX_STDIO_PAYLOAD_BYTES falls back safely to 10MB default.
+  for (const badEnv of ["-1", "abc", "0"]) {
+    const invalidLimit = spawnSync(process.execPath, [server], {
+      env: { ...process.env, AGY_MAX_STDIO_PAYLOAD_BYTES: badEnv },
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n",
       encoding: "utf8"
     });
-    assert.equal(active.status, 0, active.stderr);
-    const listed = JSON.parse(active.stdout.trim()).result.tools[0];
-    assert.deepEqual(Object.keys(listed.inputSchema.properties).sort(), ["manifest", "manifestPath", "squadId"]);
-    assert.equal(listed.inputSchema.properties.manifest.properties.squads.minProperties, 1);
-    const leadSchema = listed.inputSchema.properties.manifest.properties.squads.additionalProperties.properties.lead;
-    assert.deepEqual(leadSchema.properties.workspace.enum, ["inherit"]);
-    assert.deepEqual(leadSchema.properties.Workspace.enum, ["inherit"]);
-    assert.equal(leadSchema.required, undefined, "PascalCase-only inline manifests must not fail camelCase required check");
-    assert.equal(leadSchema.allOf.length, 2);
-    assert.equal(fs.readFileSync(path.join(tmp, run.relative, ".mcp-ready"), "utf8"), "ready\n");
-
-    const pascalCall = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: run.relative },
-      input: [
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 10,
-          method: "tools/call",
-          params: {
-            name: "dispatch_squad",
-            arguments: {
-              squadId: "all_l1",
-              manifest: {
-                squads: {
-                  alpha: {
-                    Role: "Alpha Lead",
-                    Objective: "Verify PascalCase inline lead",
-                    ScopeFiles: ["README.md"],
-                    specialists: [
-                      {
-                        Role: "Alpha Specialist",
-                        Objective: "Verify PascalCase inline specialist",
-                        ScopeFiles: ["README.md"]
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }),
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 11,
-          method: "tools/call",
-          params: {
-            name: "dispatch_squad",
-            arguments: {
-              squadId: "all_l1",
-              manifest: {
-                squads: {
-                  alpha: {
-                    objective: "camel",
-                    Objective: "Pascal conflict",
-                    scopeFiles: ["README.md"],
-                    specialists: [{ objective: "spec", scopeFiles: ["README.md"] }]
-                  }
-                }
-              }
-            }
-          }
-        })
-      ].join("\n") + "\n",
-      encoding: "utf8"
-    });
-    assert.equal(pascalCall.status, 0, pascalCall.stderr);
-    const [pascalOk, pascalConflict] = pascalCall.stdout.trim().split("\n").map(JSON.parse);
-    assert.equal(Boolean(pascalOk.result.isError), false);
-    assert.equal(pascalConflict.result.isError, true);
-    assert.match(pascalConflict.result.content[0].text, /conflicting objective and Objective fields/);
-
-    const neighbor = spawnSync(process.execPath, [server], {
-      cwd: tmp,
-      env: { PATH: process.env.PATH, AGY_SQUAD_RUN_DIR: run.relative, AGY_SQUAD_SESSION: "other-session" },
-      input: [
-        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dispatch_squad", arguments: { squadId: "all_l1" } } })
-      ].join("\n") + "\n",
-      encoding: "utf8"
-    });
-    const [neighborList, neighborCall] = neighbor.stdout.trim().split("\n").map(JSON.parse);
-    assert.deepEqual(neighborList.result.tools, []);
-    assert.equal(neighborCall.error.code, -32601);
-    console.log("✓ managed-run session gating, PascalCase inline manifest schema, and .mcp-ready publication");
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    assert.equal(invalidLimit.status, 0, invalidLimit.stderr);
+    assert.deepEqual(JSON.parse(invalidLimit.stdout.trim()).result, {});
   }
+  console.log("✓ invalid or non-positive AGY_MAX_STDIO_PAYLOAD_BYTES safely falls back to 10MB default");
 }
 {
   const capped = spawn(process.execPath, [server], {
@@ -203,7 +201,7 @@ console.log("Agy-Squad MCP server tests\n");
   capped.stdin.write(Buffer.alloc(1500, 0x62));
   await waitForMsgCount(1);
   assert.equal(cappedMsgs[0].error.code, -32600);
-  assert.match(cappedMsgs[0].error.message, /exceeds 10MB safety ceiling/);
+  assert.match(cappedMsgs[0].error.message, /exceeds 2048-byte safety ceiling/);
 
   // Terminate the dropped oversized frame and stream a valid request split mid-UTF8 character across chunks.
   capped.stdin.write("\n");
@@ -216,7 +214,60 @@ console.log("Agy-Squad MCP server tests\n");
   assert.deepEqual(cappedMsgs[1].result, {});
   capped.stdin.end();
   await new Promise((resolve) => capped.on("exit", resolve));
-  console.log("✓ incremental chunk-level 10MB stdio framing cap before newline and split UTF-8 recovery");
+  console.log("✓ incremental chunk-level 2048-byte override stdio framing cap and split UTF-8 recovery");
+}
+{
+  // TEST-001, MCP-003, MCP-004, MCP-005: default 10 MiB boundary, split \r\n framing, >500 KB early-EOF stdout drain, and invalid UTF-8 -32700
+  const maxDefaultProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const maxChunks = [];
+  maxDefaultProc.stdout.on("data", (d) => maxChunks.push(d));
+  const maxExited = new Promise((resolve) => maxDefaultProc.on("exit", resolve));
+  maxDefaultProc.stdin.write(Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+  maxDefaultProc.stdin.write("\n");
+  maxDefaultProc.stdin.end();
+  assert.equal(await maxExited, 0);
+  const maxMsg = JSON.parse(Buffer.concat(maxChunks).toString("utf8").trim());
+  assert.equal(maxMsg.error.code, -32600);
+  assert.match(maxMsg.error.message, /10485760-byte safety ceiling/);
+
+  // MCP-003 & MCP-005: split CRLF across chunks and invalid UTF-8 fatal parse error
+  const crlfProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const crlfChunks = [];
+  crlfProc.stdout.on("data", (d) => crlfChunks.push(d));
+  const crlfExited = new Promise((resolve) => crlfProc.on("exit", resolve));
+  crlfProc.stdin.write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 11, method: "ping" }) + "\r", "utf8"));
+  crlfProc.stdin.write(Buffer.from("\n", "utf8"));
+  crlfProc.stdin.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":12,"method":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}\n')]));
+  crlfProc.stdin.end();
+  assert.equal(await crlfExited, 0);
+  const crlfMsgs = Buffer.concat(crlfChunks).toString("utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(crlfMsgs.length, 2);
+  assert.equal(crlfMsgs[0].id, 11);
+  assert.equal(crlfMsgs[1].error.code, -32700);
+
+  // MCP-004: >500 KB response written while stdin closes immediately after sending the request (early EOF)
+  const manyRoles = Array.from({ length: 120 }, (_, i) => `Role ${i + 1} Large Objective Padding`);
+  const largeProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const largeChunks = [];
+  largeProc.stdout.on("data", (d) => largeChunks.push(d));
+  const largeExited = new Promise((resolve) => largeProc.on("exit", resolve));
+  largeProc.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 404,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { task: "Large stdio frame drain test", roles: manyRoles, executionMode: "swarm" } }
+    }) + "\n"
+  );
+  largeProc.stdin.end();
+  const largeExitCode = await largeExited;
+  assert.equal(largeExitCode, 0);
+  const largeRaw = Buffer.concat(largeChunks).toString("utf8");
+  assert.ok(Buffer.byteLength(largeRaw, "utf8") > 500_000, `Expected >500 KB payload, got ${Buffer.byteLength(largeRaw, "utf8")}`);
+  const largeParsed = JSON.parse(largeRaw.trim());
+  assert.equal(largeParsed.id, 404);
+  assert.equal(largeParsed.result.isError, undefined);
+  console.log("✓ default 10 MiB framing ceiling, split CRLF, invalid UTF-8 -32700, and >500 KB early-EOF stdout drain");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

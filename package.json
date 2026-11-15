@@ -1,19 +1,34 @@
 {
   "name": "agy-squad",
   "version": "0.1.0",
-  "private": true,
-  "description": "Staged subagent payloads and Pointer-Over-Wire briefs for the Antigravity CLI on WSL.",
+  "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "main": "mcp/index.js",
-  "bin": { "agy-squad": "bin/agy-squad.mjs" },
+  "bin": {
+    "agy-squad": "bin/agy-squad.mjs",
+    "agy-squad-mcp": "mcp/index.js"
+  },
   "files": [
     "bin",
     "mcp",
+    "scripts",
     ".agents/skills",
-    "docs"
+    "docs",
+    "plugin.json",
+    "install.sh",
+    "install.ps1",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "type": "module",
   "scripts": {
-    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs",
+    "start": "node mcp/index.js",
+    "setup": "node scripts/install-register.mjs",
+    "uninstall": "node scripts/install-register.mjs --uninstall",
+    "status": "node scripts/install-register.mjs --status",
+    "preflight": "node scripts/release-preflight.mjs",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-comparative-dossier.mjs && node tests/test-lifecycle-installer.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
+    "verify:package": "node tests/verify-package.mjs --self-test && npm pack --dry-run --json | node tests/verify-package.mjs",
     "docs": "zensical serve"
   },
   "repository": {
@@ -21,15 +36,23 @@
     "url": "https://github.com/paragon-ux/Agy-Squad.git"
   },
   "homepage": "https://paragon-ux.github.io/agy-squad/",
+  "bugs": {
+    "url": "https://github.com/paragon-ux/Agy-Squad/issues"
+  },
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "antigravity",
     "mcp",
     "subagents",
-    "sandbox",
-    "wsl"
+    "swarm",
+    "governance",
+    "pr-review",
+    "cli"
   ],
   "author": "paragon-ux",
   "license": "MIT"

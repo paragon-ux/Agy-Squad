@@ -1,6 +1,6 @@
 # Evidence intake for full reviews
 
-This reference supports Step 1 and Step 2 of [../SKILL.md](../SKILL.md). It is a procedure, not a substitute for the [PR Review Standard v1.3.0](../../pr-review/references/pr-review-standard.md).
+This reference supports Step 1 and Step 2 of [../SKILL.md](../SKILL.md). It is a procedure, not a substitute for the [PR Review Standard v1.4.0](../../pr-review/references/pr-review-standard.md).
 
 ## 0. Target types and minimum evidence
 
@@ -74,7 +74,7 @@ Use one batch pass to produce:
 - tool call counts by name and error counts;
 - a step/time index around quoted evidence.
 
-A compact Node recipe (run from the repository root, adjust the path):
+A compact Node recipe for user-supplied or exported JSONL files (for internal Antigravity `.system_generated/` transcripts, shell reads are hook-blocked under `L6`; call `query_transcript` / `read_transcript` in one batch pass from the coordinator session if `/swarm` workers lack those MCP tools):
 
 ```bash
 node -e '

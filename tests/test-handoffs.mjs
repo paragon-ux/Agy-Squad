@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
+const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-handoffs-")));
 const squadId = "trial-a";
@@ -21,6 +22,7 @@ const firstHandoff = { sender: "native-alpha", message: `READY ${first} — Saw 
 const secondHandoff = { sender: "native-beta", message: `READY ${second} — Command returned ALPHA-é.` };
 const record = {
   workspace: root, squadId,
+  requireIntegrityAudit: false,
   assignments: [
     { conversationId: firstHandoff.sender, report: first },
     { conversationId: secondHandoff.sender, report: second }
@@ -104,40 +106,47 @@ try {
 
   const initialBundle = bundleReports(root, record);
   write(lead, "Verdict: PASS\nPASS after independent inspection and recheck of fixture.txt.");
-  const accepted = bundleReports(root, record);
+  const accepted = bundleReports(root, { ...record, replaceExisting: true });
   assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
 
-  // Adversarial Review Acceptance Gate tests:
-  // 1. Mandatory adversarial review missing
+  // Phase 2 Integrity Audit Acceptance Gate tests (P1L-CODE-06, P1L-CODE-07, P1L-CODE-14):
+  const { requireIntegrityAudit: _omittedAudit, ...defaultRecord } = record;
+  // 1. Default bundleReports requires integrity audit when requireIntegrityAudit is omitted
   assert.throws(
-    () => bundleReports(root, { ...record, requireAdversarialReview: true }),
-    /Acceptance blocked: Mandatory adversarial review report missing/
+    () => bundleReports(root, defaultRecord),
+    /Acceptance blocked: Mandatory integrity audit report missing/
   );
 
-  // 2. Adversarial review failed (Verdict: FAIL)
+  // 2. Stale squad-adversarial_review on disk is NOT auto-discovered
   const advLeadSlot = reportPath("adversarial_review", undefined);
-  write(advLeadSlot, "Verdict: FAIL\nAdversarial review caught sycophancy or ungrounded claims.");
+  write(advLeadSlot, "Verdict: FAIL\nStale legacy adversarial report should be ignored.");
   assert.throws(
-    () => bundleReports(root, record),
-    /Acceptance blocked: Mandatory adversarial review verdict is not PASS/
+    () => bundleReports(root, defaultRecord),
+    /Acceptance blocked: Mandatory integrity audit report missing/
   );
+  const unauditedBundle = bundleReports(root, record);
+  const unauditedParsed = JSON.parse(fs.readFileSync(path.join(root, unauditedBundle.path), "utf8"));
+  assert.equal(unauditedParsed.adversarialReview, undefined);
+  fs.unlinkSync(path.join(root, advLeadSlot));
 
-  // 3. Adversarial review passed (Verdict: PASS)
-  write(advLeadSlot, "Verdict: PASS\nAdversarial review verified empirical tool execution and lead checks.");
-  const advAcceptedBundle = bundleReports(root, record);
-  assert.ok(advAcceptedBundle.sha256);
-  const bundledWithAdv = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
-  assert.equal(bundledWithAdv.adversarialReview.path, advLeadSlot);
+  // 3. Valid integrity audit unblocks default bundleReports, and tampering fails verifyBundle
+  const intAuditSlot = reportPath(`integrity_auditor-${squadId}`, 1);
+  const intDigest = computeEvidenceDigest(root, defaultRecord).evidenceDigest;
+  write(intAuditSlot, `Target Squad: ${squadId}\nEvidence Digest: ${intDigest}\nIntegrity Verdict: CLEAN\nVerified empirical execution.\n`);
+  const intAcceptedBundle = bundleReports(root, { ...defaultRecord, replaceExisting: true });
+  assert.ok(intAcceptedBundle.sha256);
+  const bundledWithInt = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
+  assert.equal(bundledWithInt.integrityAudit.path, intAuditSlot);
+  assert.equal(bundledWithInt.auditPolicy, "required");
   assert.equal(verifyBundle(root, bundle).path, bundle);
 
-  // 4. Tampering with adversarial report after bundling fails verifyBundle
-  write(advLeadSlot, "Verdict: PASS\nTampered after bundling.");
-  assert.throws(() => verifyBundle(root, bundle), /Adversarial review report changed/);
+  write(intAuditSlot, `Target Squad: ${squadId}\nEvidence Digest: ${intDigest}\nIntegrity Verdict: CLEAN\nTampered after bundling.`);
+  assert.throws(() => verifyBundle(root, bundle), /Integrity audit report changed/);
 
-  // Clean up adversarial slot for remaining legacy bundle tests
-  fs.unlinkSync(path.join(root, advLeadSlot));
-  bundleReports(root, record);
+  // Clean up integrity slot for remaining baseline tests
+  fs.unlinkSync(path.join(root, intAuditSlot));
+  bundleReports(root, { ...record, replaceExisting: true });
   write(lead, "FAIL: synthesis changed after bundling.");
   assert.throws(() => verifyBundle(root, bundle), /unambiguous PASS verdict/);
   assert.throws(() => pruneReports(root, bundle, accepted.sha256), /unambiguous PASS verdict/);
@@ -178,18 +187,23 @@ try {
   assert.throws(() => verifyBundle(root, bundle), /independently verified PASS verdict/);
   write(bundle, JSON.stringify(archived, null, 2) + "\n");
   assert.ok(exists(lead) && exists("fixture.txt"));
-  const cliVerify = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
+  // mcp/handoffs.mjs standalone CLI was removed (bin/agy-squad.mjs is the single canonical CLI)
+  const libDirect = spawnSync(process.execPath, [handoffsCli, "verify", bundle], { cwd: root, encoding: "utf8" });
+  assert.equal(libDirect.status, 0, libDirect.stderr);
+  assert.equal(libDirect.stdout, "");
+
+  const cliVerify = spawnSync(process.execPath, [agySquadCli, "verify", bundle], { cwd: root, encoding: "utf8" });
   assert.equal(cliVerify.status, 0, cliVerify.stderr);
   assert.deepEqual(JSON.parse(cliVerify.stdout), accepted);
-  const symlinkCli = path.join(root, "handoffs-link.mjs");
-  fs.symlinkSync(handoffsCli, symlinkCli);
+  const symlinkCli = path.join(root, "agy-squad-link.mjs");
+  fs.symlinkSync(agySquadCli, symlinkCli);
   const cliViaSymlink = spawnSync(process.execPath, [symlinkCli, "verify", bundle], { cwd: root, encoding: "utf8" });
   assert.equal(cliViaSymlink.status, 0, cliViaSymlink.stderr);
   assert.deepEqual(JSON.parse(cliViaSymlink.stdout), accepted);
   fs.unlinkSync(symlinkCli);
   assert.throws(() => verifyBundle(root, "scratch\\agy-squad\\bundle.json"), /workspace-relative/);
 
-  // Verify managed-run slot bundling, CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
+  // Verify custom reportRoot slot bundling (F-02), CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
   assert.throws(() => inspectHandoffs(root, {
     workspace: root,
     assignments: [{ conversationId: "child-1", report: first }],
@@ -201,27 +215,31 @@ try {
     handoffs: [{ sender: "child-1", message: `NO_REPORT — line one\u2028line two` }]
   }), /one line within 500 UTF-8 bytes/);
   assert.throws(() => reportPath("alpha", -1), /positive integer/);
-  const managedRoot = "scratch/agy-squad/run-00000000-0000-4000-8000-000000000000/plan-000000000000000000000000";
-  const mFirst = reportPath("alpha", 1, managedRoot);
-  const mLead = reportPath("alpha", undefined, managedRoot);
-  write(mFirst, "Managed specialist evidence.\n");
-  write(mLead, "Verdict: PASS\nManaged lead synthesis.\n");
-  const mRecordPath = path.join(root, "managed-record.json");
+  const cohortRoot = "custom-reports/cohort-alpha";
+  const mFirst = reportPath("alpha", 1, cohortRoot);
+  const mLead = reportPath("alpha", undefined, cohortRoot);
+  write(mFirst, "Cohort specialist evidence.\n");
+  write(mLead, "Verdict: PASS\nCohort lead synthesis.\n");
+  const mRecordPath = path.join(root, "cohort-record.json");
   fs.writeFileSync(mRecordPath, JSON.stringify({
     workspace: root,
+    reportRoot: cohortRoot,
     squadId: "alpha",
     verdict: "PASS",
     verifiedFiles: fingerprint(root, ["fixture.txt"]),
     assignments: [{ conversationId: "m-1", report: mFirst }],
-    handoffs: [{ sender: "m-1", message: `READY ${mFirst} — Managed specialist verified.` }]
+    handoffs: [{ sender: "m-1", message: `READY ${mFirst} — Cohort specialist verified.` }]
   }));
-  const cliInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  const cliInspect = spawnSync(process.execPath, [agySquadCli, "inspect", "cohort-record.json"], { cwd: root, encoding: "utf8" });
   assert.equal(cliInspect.status, 0, cliInspect.stderr);
-  const cliBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "managed-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(JSON.parse(cliInspect.stdout)[0].status, "READY");
+  const cliBundleBlocked = spawnSync(process.execPath, [agySquadCli, "bundle", "cohort-record.json"], { cwd: root, encoding: "utf8" });
+  assert.notEqual(cliBundleBlocked.status, 0);
+  const cliBundle = spawnSync(process.execPath, [agySquadCli, "bundle", "cohort-record.json", "--allow-unaudited"], { cwd: root, encoding: "utf8" });
   assert.equal(cliBundle.status, 0, cliBundle.stderr);
   const mBundled = JSON.parse(cliBundle.stdout);
-  assert.ok(mBundled.path.startsWith(managedRoot + "/"));
-  const cliPrune = spawnSync(process.execPath, [handoffsCli, "prune", mBundled.path, mBundled.sha256], { cwd: root, encoding: "utf8" });
+  assert.ok(mBundled.path.startsWith(cohortRoot + "/"));
+  const cliPrune = spawnSync(process.execPath, [agySquadCli, "prune", mBundled.path, mBundled.sha256], { cwd: root, encoding: "utf8" });
   assert.equal(cliPrune.status, 0, cliPrune.stderr);
   assert.deepEqual(JSON.parse(cliPrune.stdout), { removed: [mFirst] });
 
@@ -241,15 +259,15 @@ try {
     assignments: [{ conversationId: "c-1", report: cFirst }],
     handoffs: [{ sender: "c-1", message: `READY ${cFirst} — Custom scratch specialist verified.` }]
   }));
-  const cInspect = spawnSync(process.execPath, [handoffsCli, "inspect", "custom-record.json"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  const cInspect = spawnSync(process.execPath, [agySquadCli, "inspect", "custom-record.json"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
   assert.equal(cInspect.status, 0, cInspect.stderr);
-  const cBundle = spawnSync(process.execPath, [handoffsCli, "bundle", "custom-record.json"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  const cBundle = spawnSync(process.execPath, [agySquadCli, "bundle", "custom-record.json", "--allow-unaudited"], { cwd: root, env: customScratchEnv, encoding: "utf8" });
   assert.equal(cBundle.status, 0, cBundle.stderr);
   const cBundled = JSON.parse(cBundle.stdout);
   assert.ok(cBundled.path.startsWith(customRootPrefix + "/"));
-  const cVerify = spawnSync(process.execPath, [handoffsCli, "verify", cBundled.path], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  const cVerify = spawnSync(process.execPath, [agySquadCli, "verify", cBundled.path], { cwd: root, env: customScratchEnv, encoding: "utf8" });
   assert.equal(cVerify.status, 0, cVerify.stderr);
-  const cPrune = spawnSync(process.execPath, [handoffsCli, "prune", cBundled.path, cBundled.sha256], { cwd: root, env: customScratchEnv, encoding: "utf8" });
+  const cPrune = spawnSync(process.execPath, [agySquadCli, "prune", cBundled.path, cBundled.sha256], { cwd: root, env: customScratchEnv, encoding: "utf8" });
   assert.equal(cPrune.status, 0, cPrune.stderr);
   assert.deepEqual(JSON.parse(cPrune.stdout), { removed: [cFirst] });
 
@@ -299,6 +317,177 @@ try {
     })[0].status,
     "PARTIAL"
   );
+
+  // Verify RUN-PR5-01: reportPath rejects traversal/invalid roots and normalizes trailing slashes
+  for (const badRoot of ["", "   ", "../../etc", "/tmp/evil", "foo\\bar", "a/../b", "/", null]) {
+    assert.throws(() => reportPath("alpha", 1, badRoot), /workspace-relative reportRoot/);
+  }
+  assert.equal(reportPath("alpha", 1, "custom/out/"), "custom/out/squad-alpha/specialist-1/report.md");
+
+  // Verify RUN-PR5-02: inspectHandoffs restricts allowedRoots when custom reportRoot differs from default
+  const defaultSlot = reportPath("alpha", 1);
+  write(defaultSlot, "Default slot evidence.\n");
+  assert.throws(
+    () => inspectHandoffs(root, {
+      workspace: root,
+      reportRoot: "custom/out",
+      assignments: [{ conversationId: "mismatch-1", report: defaultSlot }],
+      handoffs: [{ sender: "mismatch-1", message: `READY ${defaultSlot} — Mismatched root.` }]
+    }),
+    /exact compiled report slots/
+  );
+
+  // Verify SCRIPT-PR5-01: bin/agy-squad.mjs bundle rejects null/non-object JSON cleanly without TypeError
+  write("null-record.json", "null\n");
+  const nullBundle = spawnSync(process.execPath, [agySquadCli, "bundle", "null-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(nullBundle.status, 1);
+  assert.match(nullBundle.stderr, /Provide a valid bundle record\./);
+  assert.ok(!/TypeError/.test(nullBundle.stderr));
+
+  // Verify SVC-HANDOFF-PREFIX-AND-LENGTH: reportPath enforces < 500 B READY prefix (with 26 B @mention reserve = 474 B ceiling)
+  assert.equal(reportPath("a", undefined, "x".repeat(439)).endsWith("/squad-a/lead/report.md"), true);
+  assert.throws(() => reportPath("a", undefined, "x".repeat(440)), /500-byte Pointer-Over-Wire/);
+  assert.throws(() => reportPath("alpha", 1, "a/".repeat(230) + "out"), /500-byte Pointer-Over-Wire/);
+  write(first, firstEvidence);
+  assert.deepEqual(
+    inspectHandoffs(root, {
+      workspace: root,
+      assignments: [{ conversationId: "w-mention", report: first }],
+      handoffs: [{ sender: "w-mention", message: `@coordinator READY ${first} — Verified via swarm board.` }]
+    }).map(({ status }) => status),
+    ["READY"]
+  );
+
+  // Regression suite for SVC-001, SVC-003, SVC-004, SVC-005, SVC-008, RUN-001..005 & CLI digest/--replace/--predecessor
+  const regSquad = "reg-svc";
+  const regSpec1 = reportPath(regSquad, 1);
+  const regSpec2 = reportPath(regSquad, 2);
+  const regLead = reportPath(regSquad);
+  const regBundle = regLead.replace(/\.md$/, ".sources.json");
+  const regAudit1 = reportPath(`integrity_auditor-${regSquad}`, 1);
+  const regAudit2 = reportPath(`integrity_auditor-${regSquad}`, 2);
+  write("reg-input.txt", "reg-alpha\n");
+  // RUN-003: UTF-8 BOM stripped cleanly on specialist & lead reports
+  write(regSpec1, "\uFEFF# Spec 1\nVerified reg-input.txt line 1: reg-alpha\n");
+  write(regSpec2, "# Spec 2\nVerified reg-input.txt second check: reg-alpha\n");
+  write(regLead, "\uFEFFVerdict: PASS\nVerified reg-alpha after checking both reports.\n");
+  const regBaseRecord = {
+    workspace: root,
+    squadId: regSquad,
+    verdict: "PASS",
+    integrityAuditSlots: [regAudit1, regAudit2],
+    verifiedFiles: fingerprint(root, ["reg-input.txt"]),
+    assignments: [
+      { conversationId: "reg-s1", report: regSpec1 },
+      { conversationId: "reg-s2", report: regSpec2 }
+    ],
+    handoffs: [
+      { sender: "reg-s1", message: `READY ${regSpec1} — reg-alpha 1` },
+      { sender: "reg-s2", message: `READY ${regSpec2} — reg-alpha 2` }
+    ]
+  };
+
+  // RUN-001 & RUN-002: unsafe squadId & control characters in paths rejected
+  assert.throws(() => bundleReports(root, { ...regBaseRecord, squadId: "../escape" }), /Invalid squad ID|workspace-relative/i);
+  assert.throws(() => fingerprint(root, ["bad\x07path.txt"]), /workspace-relative/i);
+  assert.throws(() => inspectHandoffs(root, {
+    workspace: root,
+    assignments: [{ conversationId: "reg-s1", report: regSpec1 }],
+    handoffs: [{ sender: "reg-s1", message: `READY ${regSpec1} — line1\nline2` }]
+  }), /one line/i);
+
+  // SVC-005: missing/stale Evidence Digest blocks acceptance; computeEvidenceDigest matches CLI digest
+  write(regAudit1, `Target Squad: ${regSquad}\nIntegrity Verdict: CLEAN\nNo digest provided.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nIntegrity Verdict: CLEAN\nNo digest provided.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /Evidence Digest/i);
+  const { evidenceDigest: regDigest } = computeEvidenceDigest(root, regBaseRecord);
+  write("reg-record.json", JSON.stringify(regBaseRecord));
+  const cliDigest = spawnSync(process.execPath, [agySquadCli, "digest", "reg-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(cliDigest.status, 0, cliDigest.stderr);
+  assert.equal(JSON.parse(cliDigest.stdout).evidenceDigest, regDigest);
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${"f".repeat(64)}\nIntegrity Verdict: CLEAN\nStale digest.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor CLEAN.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /Evidence Digest .* does not match/i);
+
+  // SVC-001: second auditor reporting INTEGRITY VIOLATION blocks bundling even when first is CLEAN
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nFirst auditor CLEAN.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: INTEGRITY VIOLATION\nSecond auditor flagged trace gap.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /INTEGRITY VIOLATION/);
+
+  // Both CLEAN with matching digest succeed and record integrityAudits array + auditPolicy='required'
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor verified.\n`);
+  const regBundled1 = bundleReports(root, regBaseRecord);
+  const regBundleObj = JSON.parse(fs.readFileSync(path.join(root, regBundled1.path), "utf8"));
+  assert.equal(regBundleObj.schemaVersion, 2);
+  assert.equal(regBundleObj.auditPolicy, "required");
+  assert.equal(regBundleObj.integrityAudits.length, 2);
+  assert.equal(verifyBundle(root, regBundle).auditPolicy, "required");
+
+  // SVC-003: verifyBundle enforces auditPolicy, rejects missing required audits / invalid policy, and surfaces explicit unaudited policy or digest mismatch
+  const savedRegJson = fs.readFileSync(path.join(root, regBundle), "utf8");
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, auditPolicy: "bogus" }));
+  assert.throws(() => verifyBundle(root, regBundle), /Invalid auditPolicy/);
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, integrityAudits: undefined, integrityAudit: undefined }));
+  assert.throws(() => verifyBundle(root, regBundle), /missing integrityAudit/i);
+  const downgraded = { ...regBundleObj, auditPolicy: "unaudited-explicit", integrityAudits: undefined, integrityAudit: undefined };
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify(downgraded));
+  assert.equal(verifyBundle(root, regBundle).auditPolicy, "unaudited-explicit");
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, integrityAudits: [] }));
+  assert.throws(() => verifyBundle(root, regBundle), /Invalid integrityAudits array/);
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({
+    ...regBundleObj,
+    integrityAudit: { ...regBundleObj.integrityAudit, evidenceDigest: "0".repeat(64) }
+  }));
+  assert.throws(() => verifyBundle(root, regBundle), /disagrees with integrityAudits\[0\]/);
+  assert.throws(() => verifyBundle(root, regBundle, regBundled1.sha256), /Bundle differs from the primary's accepted digest/);
+  fs.writeFileSync(path.join(root, regBundle), savedRegJson);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nTampered second auditor.\n`);
+  assert.throws(() => verifyBundle(root, regBundle), /Integrity audit report changed/);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor verified.\n`);
+  const missSpec = reportPath("missing-prev", 1);
+  const missLead = reportPath("missing-prev");
+  write(missSpec, "# Missing Prev Spec\nVerified reg-target.txt.\n");
+  write(missLead, "Content Verdict: PASS\nMissing prev lead.\n");
+  assert.throws(() => bundleReports(root, {
+    workspace: root,
+    squadId: "missing-prev",
+    verdict: "PASS",
+    requireIntegrityAudit: false,
+    verifiedFiles: regBaseRecord.verifiedFiles,
+    assignments: [{ conversationId: "mp-1", report: missSpec }],
+    handoffs: [{ sender: "mp-1", message: `READY ${missSpec} — Verified.` }],
+    expectedPredecessorSha256: regBundled1.sha256
+  }), /does not exist\./);
+
+  // SVC-008: silent overwrite blocked without replaceExisting or matching expectedPredecessorSha256
+  write(regLead, "Verdict: PASS\nPASS updated synthesis text.\n");
+  const { evidenceDigest: regDigest2 } = computeEvidenceDigest(root, regBaseRecord);
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest2}\nIntegrity Verdict: CLEAN\nFirst auditor re-verified.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest2}\nIntegrity Verdict: CLEAN\nSecond auditor re-verified.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /replaceExisting|expectedPredecessorSha256/i);
+  assert.throws(() => bundleReports(root, { ...regBaseRecord, expectedPredecessorSha256: "0".repeat(64) }), /predecessor/i);
+  const cliReplace = spawnSync(process.execPath, [agySquadCli, "bundle", "reg-record.json", "--predecessor", regBundled1.sha256], { cwd: root, encoding: "utf8" });
+  assert.equal(cliReplace.status, 0, cliReplace.stderr);
+  const regBundled2 = JSON.parse(cliReplace.stdout);
+  assert.notEqual(regBundled2.sha256, regBundled1.sha256);
+
+  // SVC-004: partial prune failure reports removed/remaining cleanly and retry finishes removal
+  const spec2Dir = path.dirname(path.join(root, regSpec2));
+  fs.chmodSync(spec2Dir, 0o555);
+  let partialErr;
+  try {
+    pruneReports(root, regBundle, regBundled2.sha256);
+  } catch (err) {
+    partialErr = err;
+  } finally {
+    fs.chmodSync(spec2Dir, 0o755);
+  }
+  assert.ok(partialErr, "Expected partial prune permission error when specialist 2 directory is read-only");
+  assert.deepEqual(partialErr.removed, [regSpec1]);
+  assert.deepEqual(partialErr.remaining, [regSpec2]);
+  const retryPruned = pruneReports(root, regBundle, regBundled2.sha256);
+  assert.deepEqual(retryPruned.removed, [regSpec2]);
+
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

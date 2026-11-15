@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleDispatchSquad } from "./dispatch.mjs";
-import { publish } from "./handoffs.mjs";
+import { handleSquadPlanner } from "./planner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
@@ -12,81 +12,59 @@ const isEntryPoint = Boolean(process.argv[1] && realOrSelf(process.argv[1]) === 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
 const SERVER_NAME = "agy-squad";
-const managedRun = process.env.AGY_SQUAD_RUN_DIR;
-// A neighboring CLI can discover the workspace plugin while this run is active.
-const activeRun = !managedRun || process.env.AGY_SQUAD_SESSION === managedRun;
-const scopeFilesSchema = { type: "array", minItems: 1, items: { type: "string", minLength: 1 } };
-const agentProperties = managedRun
-  ? {
-      role: { type: "string", minLength: 1 },
-      Role: { type: "string", minLength: 1 },
-      objective: { type: "string", minLength: 1 },
-      Objective: { type: "string", minLength: 1 },
-      scopeFiles: scopeFilesSchema,
-      ScopeFiles: scopeFilesSchema,
-      instructions: { type: "string" },
-      Instructions: { type: "string" },
-      expectedDeliverable: { type: "string", minLength: 1 },
-      ExpectedDeliverable: { type: "string", minLength: 1 },
-      typeName: { type: "string", minLength: 1, not: { enum: ["research"] } },
-      TypeName: { type: "string", minLength: 1, not: { enum: ["research"] } },
-      model: { type: "string", minLength: 1 },
-      Model: { type: "string", minLength: 1 },
-      workspace: { type: "string", enum: ["inherit"] },
-      Workspace: { type: "string", enum: ["inherit"] }
-    }
-  : null;
-const agentSchema = managedRun
-  ? {
+const TOOLS = [
+  {
+    name: "dispatch_squad",
+    description: "Compile leads (all_l1), integrity_auditor[:<target>], or one squad's specialists into an invoke_subagent payload (subagent mode only; use squad_planner for /swarm).",
+    inputSchema: {
       type: "object",
-      properties: agentProperties,
-      allOf: [
-        { anyOf: [{ required: ["objective"] }, { required: ["Objective"] }] },
-        { anyOf: [{ required: ["scopeFiles"] }, { required: ["ScopeFiles"] }] }
+      properties: {
+        squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<target>]', or squad ID." },
+        manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." }
+      },
+      required: ["squadId"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "squad_planner",
+    description: "Plan /swarm (primary) or invoke_subagent cohorts with model pinning, scope overlap checks, L6 provenance scaffold, and integrity audit slots. Neutral on flat vs layered topology.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        manifestPath: { type: "string", minLength: 1, description: "Manifest path (exclusive with manifest/task)." },
+        manifest: {
+          type: "object",
+          description: "Inline squads manifest (exclusive with manifestPath/task).",
+          properties: { squads: { type: "object", minProperties: 1 } },
+          required: ["squads"]
+        },
+        task: { type: "string", minLength: 1, description: "Freeform task (exclusive with manifestPath/manifest)." },
+        squadId: { type: "string", minLength: 1, description: "Optional working squad filter (never 'all_l1')." },
+        topology: { type: "string", enum: ["flat", "layered"], description: "Force flat (no leads) or layered (require leads) topology." },
+        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Execution plane (default: swarm)." },
+        model: { type: "string", minLength: 1, description: "Target model ID (pinnable in swarm mode)." },
+        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation (default: inherit)." },
+        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Relative file/directory scopes for task planning." },
+        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Worker role titles for task planning." },
+        includeIntegrityAuditor: { type: "boolean", description: "Include flat audit-<id> / integrity_auditor (default: true)." },
+        reportRoot: { type: "string", minLength: 1, description: "Custom workspace-relative report root." },
+        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowlist of model IDs (e.g. from swarm models); rejects unlisted pins." },
+        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Existing /swarm roster names to reserve when sharing one board across calls." }
+      },
+      oneOf: [
+        { required: ["manifestPath"] },
+        { required: ["manifest"] },
+        { required: ["task"] }
       ],
       additionalProperties: false
     }
-  : null;
-const TOOLS = [{
-  name: "dispatch_squad",
-  description: managedRun
-    ? "Prepare one stage from an inline plan or workspace manifest into a native Subagents payload."
-    : "Compile leads (all_l1) or one squad's specialists from a workspace manifest into a native Subagents payload.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      squadId: { type: "string", minLength: 1, description: "'all_l1' for leads, 'integrity_auditor[:<target>]' for audit, or a squad ID." },
-      manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." },
-      ...(managedRun ? {
-        manifest: {
-          type: "object",
-          description: "Inline squads plan (mutually exclusive with manifestPath; supports canonical camelCase and non-conflicting PascalCase aliases).",
-          properties: {
-            squads: {
-              type: "object",
-              minProperties: 1,
-              additionalProperties: {
-                type: "object",
-                properties: {
-                  ...agentProperties,
-                  lead: agentSchema,
-                  specialists: { type: "array", minItems: 1, items: agentSchema },
-                  children: { type: "array", minItems: 1, items: agentSchema }
-                },
-                anyOf: [{ required: ["specialists"] }, { required: ["children"] }],
-                additionalProperties: false
-              }
-            }
-          },
-          required: ["squads"],
-          additionalProperties: false
-        }
-      } : {})
-    },
-    required: ["squadId"],
-    additionalProperties: false
   }
-}];
+];
+
+function isValidRequestId(id) {
+  return typeof id === "string" || (typeof id === "number" && Number.isInteger(id));
+}
 
 async function handleRequest(request) {
   if (
@@ -97,13 +75,17 @@ async function handleRequest(request) {
     typeof request.method !== "string" ||
     !request.method.trim()
   ) {
-    const id = request && typeof request === "object" && !Array.isArray(request) && "id" in request ? request.id : null;
+    const rawId = request && typeof request === "object" && !Array.isArray(request) && "id" in request ? request.id : null;
+    const id = isValidRequestId(rawId) ? rawId : null;
     return { jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } };
   }
   const { id, method, params } = request;
 
   // Notifications carry no request ID and must not produce a response.
   if (id === undefined) return null;
+  if (!isValidRequestId(id)) {
+    return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request: id must be a string or integer." } };
+  }
 
   if (method === "initialize") {
     return {
@@ -122,46 +104,93 @@ async function handleRequest(request) {
   }
 
   if (method === "tools/list") {
-    return { jsonrpc: "2.0", id, result: { tools: activeRun ? TOOLS : [] } };
+    return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
   }
 
   if (method === "tools/call") {
-    const { name, arguments: args = {} } = params || {};
-    if (!activeRun || name !== "dispatch_squad") {
-      return { jsonrpc: "2.0", id, error: { code: -32601, message: `Tool not found: ${name}` } };
+    if (!params || typeof params !== "object" || Array.isArray(params) || typeof params.name !== "string") {
+      return { jsonrpc: "2.0", id, error: { code: -32602, message: "Invalid params" } };
     }
-    return { jsonrpc: "2.0", id, result: handleDispatchSquad(args, undefined, managedRun) };
+    const { name, arguments: args = {} } = params;
+    if (name === "dispatch_squad") {
+      return { jsonrpc: "2.0", id, result: handleDispatchSquad(args) };
+    }
+    if (name === "squad_planner") {
+      return { jsonrpc: "2.0", id, result: handleSquadPlanner(args) };
+    }
+    return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
   }
 
   return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
 }
 
 if (isEntryPoint) {
-  const MAX_STDIO_PAYLOAD_BYTES = Number(process.env.AGY_MAX_STDIO_PAYLOAD_BYTES) || (10 * 1024 * 1024);
+  const rawMaxBytes = process.env.AGY_MAX_STDIO_PAYLOAD_BYTES;
+  const parsedMaxBytes = rawMaxBytes === undefined ? NaN : Number(rawMaxBytes);
+  const MAX_STDIO_PAYLOAD_BYTES = Number.isInteger(parsedMaxBytes) && parsedMaxBytes > 0
+    ? parsedMaxBytes
+    : 10 * 1024 * 1024;
+  const wireUtf8Decoder = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true });
   let chunks = [];
   let bufferedBytes = 0;
   let droppingOversized = false;
   let processingChain = Promise.resolve();
+  let stdoutClosed = false;
+  let shutdownStarted = false;
 
-  const writeOversizedError = () => {
-    process.stdout.write(JSON.stringify({
-      jsonrpc: "2.0",
-      id: null,
-      error: { code: -32600, message: "Invalid Request: Payload exceeds 10MB safety ceiling" }
-    }) + "\n");
-  };
+  const writeStdout = (text) => new Promise((resolve) => {
+    if (stdoutClosed || process.stdout.destroyed || process.stdout.writableEnded) {
+      resolve();
+      return;
+    }
+    const onDone = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      process.stdout.off("drain", onDone);
+      process.stdout.off("error", onDone);
+      process.stdout.off("close", onDone);
+    };
+    process.stdout.once("error", onDone);
+    process.stdout.once("close", onDone);
+    const ok = process.stdout.write(text);
+    if (ok) {
+      cleanup();
+      resolve();
+    } else {
+      process.stdout.once("drain", onDone);
+    }
+  });
+
+  const writeOversizedError = () => writeStdout(JSON.stringify({
+    jsonrpc: "2.0",
+    id: null,
+    error: { code: -32600, message: `Invalid Request: Payload exceeds ${MAX_STDIO_PAYLOAD_BYTES}-byte safety ceiling` }
+  }) + "\n");
 
   const enqueueOversizedError = () => {
     processingChain = processingChain.then(writeOversizedError);
   };
 
-  const processLine = async (line) => {
+  const processLine = async (frameBuf) => {
+    let line;
+    try {
+      line = wireUtf8Decoder.decode(frameBuf);
+    } catch {
+      await writeStdout(JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: "Parse error: Invalid UTF-8 in request frame" }
+      }) + "\n");
+      return;
+    }
     if (!line || !line.trim()) return;
     let parsed;
     try {
       parsed = JSON.parse(line);
     } catch (err) {
-      process.stdout.write(JSON.stringify({
+      await writeStdout(JSON.stringify({
         jsonrpc: "2.0",
         id: null,
         error: { code: -32700, message: `Parse error: ${err.message}` }
@@ -170,27 +199,27 @@ if (isEntryPoint) {
     }
     try {
       const resp = await handleRequest(parsed);
-      if (resp) process.stdout.write(JSON.stringify(resp) + "\n");
-      if (managedRun && resp?.result?.tools === TOOLS) {
-        try {
-          const root = fs.realpathSync(process.env.AGY_SQUAD_WORKSPACE || process.cwd());
-          publish(root, `${managedRun}/.mcp-ready`, Buffer.from("ready\n"));
-        } catch (error) {
-          process.stderr.write(`Agy-Squad readiness signal failed: ${error.message}\n`);
-        }
-      }
+      if (resp) await writeStdout(JSON.stringify(resp) + "\n");
     } catch (err) {
-      process.stdout.write(JSON.stringify({
+      const rawId = parsed && typeof parsed === "object" && "id" in parsed ? parsed.id : null;
+      await writeStdout(JSON.stringify({
         jsonrpc: "2.0",
-        id: parsed && typeof parsed === "object" && "id" in parsed ? parsed.id : null,
+        id: isValidRequestId(rawId) ? rawId : null,
         error: { code: -32603, message: `Internal error: ${err.message}` }
       }) + "\n");
     }
   };
 
-  const enqueueLine = (line) => {
-    processingChain = processingChain.then(() => processLine(line));
+  const enqueueLine = (frameBuf) => {
+    const copy = Buffer.from(frameBuf);
+    processingChain = processingChain.then(() => processLine(copy));
   };
+
+  const stripSingleTrailingCr = (buf) => (
+    buf.length > 0 && buf[buf.length - 1] === 0x0d
+      ? buf.subarray(0, buf.length - 1)
+      : buf
+  );
 
   process.stdin.on("data", (chunk) => {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
@@ -200,7 +229,13 @@ if (isEntryPoint) {
       if (nlIndex === -1) {
         const rest = buf.subarray(offset);
         if (!droppingOversized) {
-          if (bufferedBytes + rest.length > MAX_STDIO_PAYLOAD_BYTES) {
+          const totalWithRest = bufferedBytes + rest.length;
+          // Allow one extra byte solely if it is a trailing '\r' that may precede '\n' on the next chunk.
+          const endsWithTrailingCr = rest.length > 0
+            ? rest[rest.length - 1] === 0x0d
+            : (chunks.length > 0 && chunks[chunks.length - 1][chunks[chunks.length - 1].length - 1] === 0x0d);
+          const effectiveBuffered = totalWithRest - (endsWithTrailingCr ? 1 : 0);
+          if (effectiveBuffered > MAX_STDIO_PAYLOAD_BYTES) {
             chunks = [];
             bufferedBytes = 0;
             droppingOversized = true;
@@ -218,48 +253,56 @@ if (isEntryPoint) {
         droppingOversized = false;
         continue;
       }
-      const endsWithCr = segment.length > 0
-        ? segment[segment.length - 1] === 0x0d
-        : (chunks.length > 0 && chunks[chunks.length - 1][chunks[chunks.length - 1].length - 1] === 0x0d);
-      const effectiveAdded = segment.length - (endsWithCr ? 1 : 0);
-      if (bufferedBytes + effectiveAdded > MAX_STDIO_PAYLOAD_BYTES) {
-        chunks = [];
-        bufferedBytes = 0;
+      if (segment.length > 0) {
+        chunks.push(segment);
+        bufferedBytes += segment.length;
+      }
+      const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
+      chunks = [];
+      bufferedBytes = 0;
+      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
+      if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
         enqueueOversizedError();
         continue;
       }
-      if (segment.length > 0) chunks.push(segment);
-      const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes + segment.length);
-      chunks = [];
-      bufferedBytes = 0;
-      const cleanBuf = fullLineBuf.length > 0 && fullLineBuf[fullLineBuf.length - 1] === 0x0d
-        ? fullLineBuf.subarray(0, fullLineBuf.length - 1)
-        : fullLineBuf;
-      enqueueLine(cleanBuf.toString("utf8"));
+      enqueueLine(cleanBuf);
     }
   });
 
-  // Anti-orphan: exit when the parent closes stdio or goes away
-  process.stdin.on("end", () => {
+  const flushBufferedRemainder = () => {
     if (!droppingOversized && bufferedBytes > 0) {
       const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
       chunks = [];
       bufferedBytes = 0;
-      const cleanBuf = fullLineBuf.length > 0 && fullLineBuf[fullLineBuf.length - 1] === 0x0d
-        ? fullLineBuf.subarray(0, fullLineBuf.length - 1)
-        : fullLineBuf;
+      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
       if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
         enqueueOversizedError();
       } else {
-        enqueueLine(cleanBuf.toString("utf8"));
+        enqueueLine(cleanBuf);
       }
     }
-    processingChain.finally(() => process.exit(0));
-  });
-  process.stdin.on("close", () => {
-    processingChain.finally(() => process.exit(0));
-  });
+  };
+
+  const shutdown = () => {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    flushBufferedRemainder();
+    processingChain.finally(() => {
+      if (stdoutClosed || process.stdout.destroyed || process.stdout.writableEnded) {
+        process.exit(0);
+        return;
+      }
+      const onFinish = () => process.exit(0);
+      process.stdout.once("error", onFinish);
+      process.stdout.end(onFinish);
+    });
+  };
+
+  // Anti-orphan: exit when the parent closes stdio or goes away (after flushing queued stdout frames).
+  process.stdin.on("end", shutdown);
+  process.stdin.on("close", shutdown);
   process.stdout.on("error", (err) => {
+    stdoutClosed = true;
     if (err && err.code === "EPIPE") process.exit(0);
   });
 

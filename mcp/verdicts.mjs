@@ -1,5 +1,20 @@
 const CONTENT_VERDICTS = new Set(["PASS", "FAIL", "BLOCKED"]);
 const INTEGRITY_VERDICTS = new Set(["CLEAN", "INTEGRITY VIOLATION"]);
+const SQUAD_ID_RE = /^[A-Za-z0-9_.-]+$/;
+const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function validateSquadId(squadId) {
+  if (typeof squadId !== "string" || !squadId) {
+    throw new Error("Squad ID must be a nonempty string.");
+  }
+  if (RESERVED_OBJECT_KEYS.has(squadId) || squadId === "." || squadId === "..") {
+    throw new Error(`Invalid reserved squad ID '${squadId}'.`);
+  }
+  if (!SQUAD_ID_RE.test(squadId)) {
+    throw new Error(`Invalid squad ID '${squadId}': use only [A-Za-z0-9_.-]+.`);
+  }
+  return squadId;
+}
 
 /**
  * Strip fenced code blocks line-by-line (tracking matching opening/closing
@@ -9,7 +24,8 @@ const INTEGRITY_VERDICTS = new Set(["CLEAN", "INTEGRITY VIOLATION"]);
  * @returns {string}
  */
 function stripCode(markdown) {
-  const lines = markdown.split(/\r?\n/);
+  const normalized = markdown.startsWith("\uFEFF") ? markdown.slice(1) : markdown;
+  const lines = normalized.split(/\r?\n/);
   const kept = [];
   let fenceChar = "";
   let fenceLen = 0;
@@ -49,7 +65,7 @@ function stripCode(markdown) {
 function parseStrictLines(markdown, labels, allowed) {
   const clean = stripCode(markdown);
   const labelPattern = labels.join("|");
-  const prefix = "(?:[-*+]\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
   const labelRe = new RegExp(`^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:`, "i");
   const exactRe = new RegExp(
     `^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Z][A-Z ]*?)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
@@ -136,14 +152,14 @@ function parseIntegrityVerdict(markdown) {
 
 /**
  * Parse a `Target Squad: <id>` declaration from an integrity report.
- * Supports optional list/heading/Markdown emphasis; throws on malformed or
- * conflicting Target Squad declarations.
+ * Supports optional unordered/ordered list, heading, and Markdown emphasis;
+ * throws on malformed, reserved, or conflicting Target Squad declarations.
  * @param {string} markdown
  * @returns {string|undefined}
  */
 function parseTargetSquad(markdown) {
   const clean = stripCode(markdown);
-  const prefix = "(?:[-*+]\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
   const labelRe = new RegExp(`^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:`, "i");
   const exactRe = new RegExp(
     `^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Za-z0-9_.-]+)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
@@ -157,7 +173,7 @@ function parseTargetSquad(markdown) {
     if (!match) {
       throw new Error(`Malformed Target Squad line: "${line.trim()}"`);
     }
-    found.add(match[1]);
+    found.add(validateSquadId(match[1]));
   }
   if (found.size > 1) {
     throw new Error(`Integrity report contains conflicting Target Squad declarations: ${[...found].join(", ")}.`);
@@ -165,11 +181,44 @@ function parseTargetSquad(markdown) {
   return found.size === 1 ? [...found][0] : undefined;
 }
 
+/**
+ * Parse a strict `Evidence Digest: <64-hex>` declaration from an integrity report.
+ * @param {string} markdown
+ * @returns {string|undefined}
+ */
+function parseEvidenceDigest(markdown) {
+  const clean = stripCode(markdown);
+  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const labelRe = new RegExp(`^\\s*${prefix}\\s*Evidence Digest\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const exactRe = new RegExp(
+    `^\\s*${prefix}\\s*Evidence Digest\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([0-9a-f]{64})\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    "i"
+  );
+  const found = new Set();
+
+  for (const line of clean.split(/\r?\n/)) {
+    if (!labelRe.test(line)) continue;
+    const match = line.match(exactRe);
+    if (!match) {
+      throw new Error(`Malformed Evidence Digest line: "${line.trim()}"`);
+    }
+    found.add(match[1].toLowerCase());
+  }
+  if (found.size > 1) {
+    throw new Error(`Integrity report contains conflicting Evidence Digest declarations: ${[...found].join(", ")}.`);
+  }
+  return found.size === 1 ? [...found][0] : undefined;
+}
+
 export {
   CONTENT_VERDICTS,
   INTEGRITY_VERDICTS,
+  RESERVED_OBJECT_KEYS,
+  SQUAD_ID_RE,
   parseContentVerdict,
+  parseEvidenceDigest,
   parseIntegrityVerdict,
   parseTargetSquad,
-  stripCode
+  stripCode,
+  validateSquadId
 };

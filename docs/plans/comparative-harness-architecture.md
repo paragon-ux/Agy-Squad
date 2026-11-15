@@ -1,5 +1,8 @@
 # Comparative Harness Architecture: General Multi-Agent & Autonomous SWE Frameworks vs. Agy-Squad
 
+> [!NOTE]
+> **Historical (pre-Phase 2).** Scores, teardown and `PGID` kill-control criteria, and launcher references in this document describe Agy-Squad at decisions `L1`–`L41` (Phase 1: PTY launcher, managed-session teardown). PR #5 retired the launcher and managed-session teardown (`L17`; `L42`/`L43`). Do not cite these scores as describing the current architecture.
+
 **Document Type:** Architectural Blueprint & Comparative Benchmark Synthesis  
 **Author:** Harness Comparative Architecture Lead  
 **Evaluation Standard:** Agy-Squad PR Review Standard `v1.3.0` & Architectural Decision Ledger (`L1`–`L41`)  

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - "feat/**"
       - "rebuild/**"
   pull_request:
   workflow_dispatch:
@@ -17,21 +18,17 @@ concurrency:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }} / ubuntu-latest
-    runs-on: ubuntu-latest
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         node: [22, 24]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -39,7 +36,10 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Show toolchain
-        run: node --version && npm --version && python3 --version
+        run: node --version && npm --version
+
+      - name: Run non-destructive release preflight
+        run: node scripts/release-preflight.mjs
 
       - name: Run automated test suites
         run: npm test
