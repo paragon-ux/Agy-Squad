@@ -1,141 +1,89 @@
 # Agy-Squad
 
-Agy-Squad adds scoped cohort planning, role-separated auditing, and SHA-256 evidence bundling to **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (macOS support is best-effort and untested)**.
+[![npm version](https://img.shields.io/npm/v/agy-squad.svg)](https://www.npmjs.com/package/agy-squad)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-Zensical-purple.svg)](https://paragon-ux.github.io/Agy-Squad/)
+[![Tests](https://img.shields.io/badge/tests-100%25%20passing-brightgreen.svg)](https://github.com/paragon-ux/Agy-Squad/actions)
 
-`squad_planner` (and `dispatch_squad` for `invoke_subagent`) assigns each worker a workspace scope and a file-backed report slot (`scratch/agy-squad/.../report.md`). Specialists write full evidence to disk and post a single-line `Pointer-Over-Wire` receipt under 500 UTF-8 bytes. A parent or squad lead checks the cited code and tests directly, pairs with a flat integrity auditor (`audit-<id>` on `/swarm` or `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN`), and runs `node bin/agy-squad.mjs bundle` to record SHA-256 digests for verified inputs, specialist reports, and the audit report.
+`Agy-Squad` is a multi-agent `/swarm` planner, code-review harness, and SHA-256 proof bundler (`agy-squad`) for **Google Antigravity** (`agy`) on Linux, macOS, and WSL2 (`Node.js >= 22`, zero external npm dependencies). It pairs with [Agy-Context-Saver](https://github.com/paragon-ux/Agy-Context-Saver) (`>= 2.0.1`) to assign non-overlapping file scopes, keep board handoffs under `500` bytes, audit worker tool traces, and verify every report with SHA-256 digests.
 
 ![Agy-Squad, Antigravity, and Agy-Context-Saver architecture](docs/assets/architecture-overview.svg)
 
-The repository ships four core components:
+The repository ships four components:
 
-- **[`swarm-governance`](.agents/skills/swarm-governance/SKILL.md) (Execution Modifier) and `bin/agy-squad.mjs`:** Role separation, `Pointer-Over-Wire` receipts, and offline CLI (`dispatch`, `plan`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`) layered over Antigravity native `/swarm`.
-- **[`self-diagnosis`](.agents/skills/self-diagnosis/SKILL.md) (Task Spec):** Zero-subagent diagnostic profiler (`diagnose.mjs`) and three specialist audit cohorts for operator-supervised skill, runtime, and token checks.
-- **[`pr-review`](.agents/skills/pr-review/SKILL.md) & [`full-review`](.agents/skills/full-review/SKILL.md) (Task Specs — [Standard v1.4.0](.agents/skills/pr-review/references/pr-review-standard.md)):** Ten-category branch/PR diff review (`pr-review`) and non-diff evidence/direction triage (`full-review`), producing commit-pinned `1 ID = 1 Row` ledgers under `docs/reviews/`.
-- **[Evidence retention and teardown](docs/core-workflows.md#4-three-scope-evidence-retention-and-teardown-contract):** SHA-256 bundle verification, report pruning, and ledger-gated `diagnose.mjs --teardown`. Native `/swarm` owns worker lifecycle and `kill` cleanup; Phase 1 temporary CLI session registrations retired with the launcher (`L17`).
-
-## Skill composition & tool surface map
-
-| Surface | Type & Purpose | When to Use |
-| --- | --- | --- |
-| `pr-review` / `full-review` / `self-diagnosis` | **Task Specs** (what to check & report) | Use `pr-review` for PR/branch diffs, `full-review` for non-diff triage/direction decisions, `self-diagnosis` for repo/harness health audits. |
-| `swarm-governance` | **Execution Modifier** (how teams execute) | Pair with any Task Spec when running on `/swarm` or teams (adds slot receipts, flat `audit-<id>`, `bin/agy-squad.mjs` bundles, and 4-check closure). Ask user once if `Flat` vs `Layered` topology is unspecified. |
-| `squad_planner` / `node bin/agy-squad.mjs plan` | **`/swarm` & unified planner** | Default planner for `/swarm` (`swarmAdd` + `provenanceScaffold` + `bundleRecordTemplates`); omit `squadId` to plan all manifest squads (`readOnly: true` exempts read-only slots from overlap warnings). |
-| `dispatch_squad` / `node bin/agy-squad.mjs dispatch` | **`invoke_subagent` compiler** | Explicit `invoke_subagent` stage compiler (`all_l1` leads, `<squadId>` specialists, or `integrity_auditor[:<target>]` audit slot; legacy `adversarial_*` modes removed). |
-| `mcp/handoffs.mjs` | **Internal verification library** | Imported by `bin/agy-squad.mjs` for `fingerprint`, `inspect`, `bundle`, `verify`, `prune`; standalone CLI removed in favor of `node bin/agy-squad.mjs`. |
-
-## Documentation
-
-- [Getting started (Desktop IDE & CLI on POSIX / WSL2)](docs/getting-started.md)
-- [Core workflows: orchestrate, self-diagnose, review, and tear down](docs/core-workflows.md)
-- [Roles, skill workflows, and runtime closure checklist](docs/roles-and-workflows.md)
-- [Concepts and terminology](docs/concepts.md)
-- [Manifest and tool contract](docs/tools.md)
-- [Stopping agents and child processes](docs/stopping-agents.md)
-- [Benchmarks vs. Antigravity Teamwork](docs/benchmarks.md) ([benchmark folder](benchmarks/teamwork-vs-squad/README.md))
-- [WSL CLI verification and live trial](docs/plans/wsl-cli-verification.md)
-- [Architecture decision ledger](docs/plans/LEDGER.md)
-- [Native enforcement ledger](docs/plans/native-enforcement-ledger.md)
+- **Cohort planner & MCP server ([`mcp/planner.mjs`](mcp/planner.mjs), [`mcp/dispatch.mjs`](mcp/dispatch.mjs), [`mcp/index.js`](mcp/index.js)):** Compiles flat (`1–3` workers) and layered (`4+` workers with Squad Leads) `/swarm` cohorts via `squad_planner` (or `dispatch_squad` for `invoke_subagent`), enforcing disjoint writable file scopes, 24-character roster names, explicit model pinning, and first-line `[agy-transcript-access: allow|deny]` directives.
+- **Verification & proof CLI ([`bin/agy-squad.mjs`](bin/agy-squad.mjs), [`mcp/handoffs.mjs`](mcp/handoffs.mjs), [`mcp/verdicts.mjs`](mcp/verdicts.mjs)):** Fingerprints verified source files, reconciles `<= 500` byte `Pointer-Over-Wire` board receipts, computes canonical `Evidence Digest` hashes for independent integrity auditors (`audit-<id>`), and writes tamper-evident `.sources.json` bundles (`plan`, `dispatch`, `fingerprint`, `inspect`, `digest`, `verdict`, `bundle`, `verify`, `prune`).
+- **Review & governance skills ([`.agents/skills/`](.agents/skills/)):** Installs [`pr-review`](.agents/skills/pr-review/SKILL.md) (branch/PR diffs), [`full-review`](.agents/skills/full-review/SKILL.md) (non-diff triage and direction decisions), and [`swarm-governance`](.agents/skills/swarm-governance/SKILL.md) (role separation, proof bundling, and 4-check runtime closure) using the 10-category [PR Review Standard v1.4.0](.agents/skills/pr-review/references/pr-review-standard.md).
+- **Zero-subagent harness profiler ([`self-diagnosis`](.agents/skills/self-diagnosis/SKILL.md), [`diagnose.mjs`](.agents/skills/self-diagnosis/scripts/diagnose.mjs)):** Audits skill token budgets, prompt template byte ceilings (`<= 1800 B` specialist, `<= 3300 B` lead), review ledger invariants, and package boundaries in `< 200 ms` with zero model cost.
 
 ## Quickstart
-
-Live runs follow a six-step cycle across Antigravity `/swarm` execution and `bin/agy-squad.mjs` verification:
 
 ![Six-step swarm lifecycle and dual-verdict gate](docs/assets/swarm-lifecycle.svg)
 
 ### Prerequisites
 
-- **Operating system:** Linux or WSL2 on Windows (`Node.js >= 22`); macOS is best-effort and untested.
-- **Antigravity environment:** Antigravity Desktop (IDE) with `/swarm` and/or `invoke_subagent`.
-- **Companion governor:** `Agy-Context-Saver` (`>= 2.0.1`) reporting active status via `agy-context status` with `RTK` (`>= 1.1.0`). Run `agy-context setup` once on a new host if `rtk` or the plugin hook is missing; see [Getting started](docs/getting-started.md#host-and-companion-compatibility-matrix).
+- **Node.js:** `>= 22.0.0` (Linux, macOS, or WSL2 on Windows)
+- **Google Antigravity:** Antigravity 2.0+ (Desktop IDE or `agy` CLI with `/swarm` / `invoke_subagent`)
+- **Agy-Context-Saver:** `>= 2.0.1` with **RTK (`>= 1.1.0`)** (`npx --package=agy-context-saver agy-context setup`)
 
-### 1. Install and register via NPX (Recommended — zero clone required)
-
-Run the single-command installer to register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server (`squad_planner`, `dispatch_squad`), and install the `agy-squad` CLI shim (`~/.gemini/antigravity/bin/agy-squad`):
+### Install and verify
 
 ```bash
-# Install and activate Agy-Squad (pairs with Agy-Context-Saver >= 2.0.1)
+# Install via npx (registers plugin, skills, MCP server, and agy-squad CLI shim)
 npx --package=agy-squad agy-squad setup
 
-# Check installation health
+# Or from a local checkout
+npm run setup
+
+# Check plugin, skills, MCP registration, and CLI shim status
 agy-squad status
 ```
 
-### 2. Optional: Local repository checkout or manual MCP registration
-
-If you are developing `Agy-Squad` locally, clone the repository and run `npm run setup && npm test`:
+To remove the plugin link, MCP server entry, and CLI shims:
 
 ```bash
-git clone https://github.com/paragon-ux/Agy-Squad.git
-cd Agy-Squad
-npm run setup
-npm test
+agy-squad uninstall
+# Or restore pre-install .bak configuration files:
+agy-squad uninstall --restore-backups
 ```
 
-To configure a workspace-scoped `.agents/mcp_config.json` manually instead of using `agy-squad setup`:
-
-```json
-{
-  "mcpServers": {
-    "agy-squad": {
-      "command": "/absolute/path/to/node",
-      "args": ["/absolute/path/to/Agy-Squad/mcp/index.js"],
-      "env": {
-        "AGY_SQUAD_WORKSPACE": "/absolute/path/to/workspace"
-      },
-      "tools": {
-        "dispatch_squad": { "eager": true },
-        "squad_planner": { "eager": true }
-      }
-    }
-  }
-}
-```
-
-Once connected, call `squad_planner` (for `/swarm` cohorts with explicit `model` pinning, `readOnly`-aware scope-overlap checks, and `L6`-safe `provenanceScaffold`) or `dispatch_squad` (`invoke_subagent`), or run `/swarm-governance`, `/pr-review`, `/full-review`, or `/self-diagnosis` in chat.
-
-### 3. Plan and verify via the Governance CLI (`bin/agy-squad.mjs`)
-
-Run `node bin/agy-squad.mjs` from the workspace root. Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in PR #5 (`L17`, `L42`, `L43`).
+### Plan, audit, and bundle a cohort
 
 ```bash
-# Plan a swarm cohort with explicit model pinning and L6 provenance scaffold:
-node bin/agy-squad.mjs plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
-  --model gemini-4-hydrogen-high
+# Plan a layered /swarm cohort from a manifest or freeform task
+agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
+  --topology layered --mode swarm
 
-# Or compile an invoke_subagent stage via dispatch:
-node bin/agy-squad.mjs dispatch --squad skill_and_pr_review_audit \
-  --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json
+# Parse strict content and integrity verdicts
+agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
+agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md
 
-# Verify strict verdicts, fingerprint verified files, and bundle/verify/prune SHA-256 evidence:
-node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
-node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md  # or squad-integrity_auditor-<id>/... for multi-squad
-node bin/agy-squad.mjs digest <bundle-record.json>
-node bin/agy-squad.mjs bundle <bundle-record.json>
-node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json
+# Compute canonical Evidence Digest, write .sources.json proof bundle, and verify SHA-256 hashes
+agy-squad fingerprint src/app.js docs/tools.md
+agy-squad inspect scratch/agy-squad/<id>-record.json
+agy-squad digest scratch/agy-squad/<id>-record.json
+agy-squad bundle scratch/agy-squad/<id>-record.json --replace
+agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json
 ```
 
-Use `manage_subagents` or `/swarm` status (`swarm{action: "status"}`) to inspect active workers or stop children ([Stopping agents](docs/stopping-agents.md)).
+## CLI, MCP, and skills summary
 
-## Core workflows: orchestrate, diagnose, and review
+| Surface | Purpose | Common usage |
+| :--- | :--- | :--- |
+| `agy-squad setup` / `status` / `uninstall` | Install, audit, or remove plugin link, skills, MCP entry, and CLI shim | `agy-squad setup` / `agy-squad status` / `agy-squad setup --check` |
+| `agy-squad plan` / `squad_planner` (MCP) | Compile flat or layered `/swarm` cohorts with scope checks and `provenanceScaffold` | `agy-squad plan --manifest <path> [--topology flat\|layered]` |
+| `agy-squad dispatch` / `dispatch_squad` (MCP) | Compile `invoke_subagent` payloads (`all_l1`, `<squadId>`, `integrity_auditor[:<id>]`) | `agy-squad dispatch --squad <id> --manifest <path>` |
+| `agy-squad fingerprint` / `inspect` / `digest` | Hash verified files, check `< 500 B` `READY` receipts, and compute `Evidence Digest` | `agy-squad digest scratch/agy-squad/<id>-record.json` |
+| `agy-squad verdict` / `bundle` / `verify` / `prune` | Parse `PASS` / `CLEAN` verdicts, write `.sources.json` proofs, and prune loose reports | `agy-squad bundle <record.json> --replace` / `agy-squad verify <sources.json>` |
+| `/pr-review` & `/full-review` (`v1.4.0`) | 10-category commit-pinned diff review (`pr-review`) or non-diff triage (`full-review`) | Pair with `/swarm-governance` on `/swarm` |
+| `/self-diagnosis` (`diagnose.mjs`) | Zero-subagent profiler checking skill token budgets, prompt sizes, and review ledgers | `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown` |
 
-- **Govern native `/swarm` or dispatch tasks:** Pair Antigravity native `/swarm` and `squad_planner` with [`swarm-governance`](.agents/skills/swarm-governance/SKILL.md) (or dispatch `invoke_subagent` stages via `dispatch_squad` and flat `integrity_auditor:<target>`), collect `<= 500` B `READY` pointers, enforce strict verdicts, and bundle SHA-256 digests with `node bin/agy-squad.mjs` (`dispatch`, `plan`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`) ([Core workflows](docs/core-workflows.md#1-orchestrate-proportional-specialist-or-lead-cohorts)).
-- **Self-diagnose the harness:** Run `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown` for a zero-subagent health and token-budget check, or compile targeted audit cohorts with `--print-plan` (`--print-dispatch` for subagents) ([`self-diagnosis` skill](.agents/skills/self-diagnosis/SKILL.md)).
-- **Review pull requests or evidence bundles:** Apply the ten-category `v1.4.0` repository review standard ([`pr-review`](.agents/skills/pr-review/SKILL.md) for diffs, [`full-review`](.agents/skills/full-review/SKILL.md) for non-diff triage/direction) and record `1 ID = 1 Row` ledgers in `docs/reviews/` before running `diagnose.mjs --teardown`.
+## Benchmark summary vs. Antigravity `/teamwork`
 
-## Positioning and benchmark summary
+In a recorded head-to-head audit against the six-defect event-relay fixture ([`benchmarks/teamwork-vs-squad/`](benchmarks/teamwork-vs-squad/README.md)), both arms caught all six planted defect categories (`6 / 6`):
 
-| Approach | Work allocation | Best fit | Handoff, verification, and teardown |
-| --- | --- | --- | --- |
-| **Agy-Squad + Agy-Context-Saver (`v2.0.1+`)** | Task-proportional stage compile (`squad_planner` / `dispatch_squad`) for direct specialists or domain leads in Desktop IDE or CLI | Scoped coding or review tasks on POSIX / WSL2 needing compact receipts, SHA-256 bundles, `self-diagnosis`, `pr-review` (`v1.4.0`), and governed teardown | `<= 500` B `Pointer-Over-Wire` receipt, parent verification + SHA-256 digest check (`20 ms` in Nov 8 Phase 1 trial; current CLI `node bin/agy-squad.mjs verify`), and 3-scope teardown contract |
-| **Antigravity `/teamwork`** (or `/teamwork-preview`) | Autonomous wrapper, internal orchestrator, exploratory workers, and semantic review fleet | Long multi-milestone campaigns suited to autonomous planning and LLM reviewer/auditor subagents | Top-level milestone delegation with internal Sentinel updates and dedicated LLM review agents |
-| **Antigravity native subagents** (`invoke_subagent`) | Direct manual delegation | One-off parallel tasks without a manifest or report-bundle pipeline | Native subagent return messages |
-
-### Recorded head-to-head audit vs. Antigravity `/teamwork`
-
-On November 8, 2026, a recorded sequential audit ran both arms against the six-defect event-relay fixture ([`benchmarks/teamwork-vs-squad/`](benchmarks/teamwork-vs-squad/README.md)). Both caught all six planted defect categories (`6 / 6`).
-
-| Metric | Agy-Squad + Agy-Context-Saver 1.8.1 (`rtk 0.51.0`) | Antigravity `/teamwork` | Difference |
-| --- | --- | --- | --- |
+| Metric | Agy-Squad + Agy-Context-Saver | Antigravity `/teamwork` | Difference |
+| :--- | :--- | :--- | :--- |
 | Planted defect categories caught | `6 / 6` | `6 / 6` | Parity |
 | Subagents spawned | `3` | `8` | `5` fewer |
 | Wall-clock runtime | `6m 15s` (`375s`) | `26m 19s` (`1,579s`) | `4.2x` faster |
@@ -144,14 +92,26 @@ On November 8, 2026, a recorded sequential audit ran both arms against the six-d
 | Parent context wakeup bytes | `249 B` | `4,940 B` | `95.0%` fewer bytes |
 | Git-untracked files left (`git status`) | `0` | `41` | `41` fewer |
 
-In the Agy-Squad arm, the squad lead inspected cited source files directly and verified SHA-256 input/report digests in `20 ms` (`handoffs.mjs verify`) before pruning loose specialist reports under the 3-scope teardown policy.
+## Documentation
 
-See [docs/benchmarks.md](docs/benchmarks.md) for the canonical comparison table, unit definitions, prompts, and live reproduction protocol. Run `node benchmarks/teamwork-vs-squad/verify-benchmark.mjs` to execute the offline fixture, manifest compilation, and telemetry ledger check.
+Full documentation is hosted at [paragon-ux.github.io/Agy-Squad](https://paragon-ux.github.io/Agy-Squad/) (built with Zensical) and in [`docs/`](docs/):
+
+- [Overview](docs/index.md)
+- [Getting started](docs/getting-started.md)
+- [Core workflows: orchestrate, self-diagnose, review, and tear down](docs/core-workflows.md)
+- [Roles, skill workflows, and runtime closure checklist](docs/roles-and-workflows.md)
+- [Concepts and terminology](docs/concepts.md)
+- [Manifest and tool contract](docs/tools.md)
+- [Stopping agents and child processes](docs/stopping-agents.md)
+- [Benchmarks vs. Antigravity Teamwork](docs/benchmarks.md)
+- [WSL CLI verification and live trial](docs/plans/wsl-cli-verification.md)
+- [Architecture decision ledger](docs/plans/LEDGER.md)
+- [Native enforcement ledger](docs/plans/native-enforcement-ledger.md)
 
 ## Development
 
-Run `npm test` with Node.js `>= 22`. The suite tests the MCP server, `dispatch_squad` compiler, `squad_planner` planner, handoff bundler, `/self-diagnosis` profiler, and offline benchmark verifier without launching live subagents.
+Run `node scripts/release-preflight.mjs`, `npm test`, and `npm run verify:package` with Node.js `>= 22`. Runs all 10 test suites (`tests/test-verdicts-and-pivot.mjs`, `tests/test-dispatch.mjs`, `tests/test-planner.mjs`, `tests/test-handoffs.mjs`, `tests/test-run.mjs`, `tests/test-server.mjs`, `tests/test-comparative-dossier.mjs`, `tests/test-lifecycle-installer.mjs`, `benchmarks/teamwork-vs-squad/verify-benchmark.mjs`, and `tests/verify-package.mjs`) in isolated temporary directories without mutating your live `~/.gemini` configuration.
 
 ## License
 
-MIT
+MIT License. Copyright (c) 2026 paragon-ux.

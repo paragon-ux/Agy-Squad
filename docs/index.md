@@ -1,6 +1,6 @@
 # Agy-Squad
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2 (macOS support is best-effort and untested)**.
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux, macOS, and WSL2**.
 
 `squad_planner` and `dispatch_squad` assign scoped tasks to specialist or lead cohorts, cap `Pointer-Over-Wire` receipts at `500` UTF-8 bytes, and pair with `node bin/agy-squad.mjs` (`mcp/handoffs.mjs`) to verify SHA-256 input and report digests. During live Desktop IDE runs, `Agy-Context-Saver` (`2.0.1+`) rewrites shell commands through `rtk >= 1.1.0` (`rtk hook antigravity`), enforces 5-tier transcript access governance, and applies Reactive Wakeup backoff.
 
