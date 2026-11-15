@@ -12,6 +12,38 @@ const isEntryPoint = Boolean(process.argv[1] && realOrSelf(process.argv[1]) === 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
 const SERVER_NAME = "agy-squad";
+let sessionWorkspace;
+
+function workspaceFromInitializeParams(params) {
+  if (!params || typeof params !== "object") return undefined;
+  const candidates = [
+    ...(Array.isArray(params.workspaceFolders) ? params.workspaceFolders.map((folder) => folder?.uri) : []),
+    params.rootUri
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!/^file:\/\//i.test(trimmed)) continue;
+    try {
+      const parsedUrl = new URL(trimmed);
+      if (!parsedUrl.pathname || parsedUrl.pathname === "/") continue;
+      return fileURLToPath(parsedUrl);
+    } catch {
+      continue;
+    }
+  }
+  if (typeof params.rootPath === "string" && params.rootPath.trim()) {
+    return params.rootPath.trim();
+  }
+  return undefined;
+}
+
+const WORKSPACE_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  description: "Active repository directory path (overrides initialize roots, AGY_SQUAD_WORKSPACE, and cwd)."
+};
+
 const TOOLS = [
   {
     name: "dispatch_squad",
@@ -20,7 +52,8 @@ const TOOLS = [
       type: "object",
       properties: {
         squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<target>]', or squad ID." },
-        manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." }
+        manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." },
+        workspace: WORKSPACE_SCHEMA
       },
       required: ["squadId"],
       additionalProperties: false
@@ -40,6 +73,7 @@ const TOOLS = [
           required: ["squads"]
         },
         task: { type: "string", minLength: 1, description: "Freeform task (exclusive with manifestPath/manifest)." },
+        workspace: WORKSPACE_SCHEMA,
         squadId: { type: "string", minLength: 1, description: "Optional working squad filter (never 'all_l1')." },
         topology: { type: "string", enum: ["flat", "layered"], description: "Force flat (no leads) or layered (require leads) topology." },
         executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Execution plane (default: swarm)." },
@@ -88,6 +122,7 @@ async function handleRequest(request) {
   }
 
   if (method === "initialize") {
+    sessionWorkspace = workspaceFromInitializeParams(params);
     return {
       jsonrpc: "2.0",
       id,
@@ -112,11 +147,13 @@ async function handleRequest(request) {
       return { jsonrpc: "2.0", id, error: { code: -32602, message: "Invalid params" } };
     }
     const { name, arguments: args = {} } = params;
+    const envWorkspace = process.env.AGY_SQUAD_WORKSPACE?.trim();
+    const defaultWorkspace = sessionWorkspace || envWorkspace || process.cwd();
     if (name === "dispatch_squad") {
-      return { jsonrpc: "2.0", id, result: handleDispatchSquad(args) };
+      return { jsonrpc: "2.0", id, result: handleDispatchSquad(args, defaultWorkspace) };
     }
     if (name === "squad_planner") {
-      return { jsonrpc: "2.0", id, result: handleSquadPlanner(args) };
+      return { jsonrpc: "2.0", id, result: handleSquadPlanner(args, defaultWorkspace) };
     }
     return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
   }

@@ -12,9 +12,9 @@ import { printStatus, runCheckOnly, runInstall, runRestoreBackups, runUninstall 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkgVersion = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.0";
+    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.1";
   } catch {
-    return "0.1.0";
+    return "0.1.1";
   }
 })();
 

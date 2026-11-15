@@ -8,6 +8,7 @@ const REQUIRED = [
   "plugin.json",
   "README.md",
   "CHANGELOG.md",
+  "LICENSE",
   "install.sh",
   "install.ps1",
   "bin/agy-squad.mjs",
@@ -50,7 +51,7 @@ const RETIRED_DENYLIST = [
 ];
 
 function validate(packages) {
-  assert.ok(Array.isArray(packages) && packages.length === 1,
+  assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",
     "Expected one npm pack JSON package record");
   const entries = packages[0].files;
   assert.ok(Array.isArray(entries) && entries.length > 0,
@@ -66,14 +67,17 @@ function validate(packages) {
   );
   assert.deepEqual(unsafe, [], `Unsafe package paths: ${unsafe.join(", ")}`);
 
+  const hasBadSubpath = (name) =>
+    name.endsWith(".tgz") || name.endsWith(".log") || /(?:^|\/)scratch(?:\/|$)/.test(name);
   const allowed = names.filter(name =>
-    name === "package.json" || name === "plugin.json" ||
-    name === "README.md" || name === "CHANGELOG.md" ||
-    name === "install.sh" || name === "install.ps1" ||
-    name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
-    name.startsWith("bin/") || name.startsWith("mcp/") ||
-    name.startsWith("scripts/") ||
-    name.startsWith(".agents/skills/") || name.startsWith("docs/")
+    !hasBadSubpath(name) &&
+    (name === "package.json" || name === "plugin.json" ||
+      name === "README.md" || name === "CHANGELOG.md" ||
+      name === "install.sh" || name === "install.ps1" ||
+      name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
+      name.startsWith("bin/") || name.startsWith("mcp/") ||
+      name.startsWith("scripts/") ||
+      name.startsWith(".agents/skills/") || name.startsWith("docs/"))
   );
   const forbidden = names.filter(name => !allowed.includes(name) || RETIRED_DENYLIST.includes(name));
   assert.deepEqual(forbidden, [],
@@ -93,6 +97,9 @@ function selfTest() {
     "tests/leaked.mjs",
     "benchmarks/private.json",
     "scratch/trace.log",
+    "docs/scratch/leak.md",
+    "docs/package.tgz",
+    "mcp/debug.log",
     ".agents/teamwork/session.json",
     "other/private.txt",
     "../outside.txt",
@@ -107,7 +114,7 @@ function selfTest() {
   assert.throws(() => validate([{ files: REQUIRED
     .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log("Package verifier self-test passed (positive + 10 negatives)");
+  console.log("Package verifier self-test passed (positive + 13 negatives)");
 }
 
 if (process.argv[2] === "--self-test") {

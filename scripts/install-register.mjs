@@ -22,9 +22,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.0";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.1";
   } catch {
-    return "0.1.0";
+    return "0.1.1";
   }
 })();
 

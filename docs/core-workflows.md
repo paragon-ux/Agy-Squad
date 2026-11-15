@@ -1,6 +1,6 @@
 # Core workflows: orchestrate, self-diagnose, review, and tear down
 
-Agy-Squad runs four connected workflows across **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux, macOS, and WSL2**:
+Agy-Squad runs four connected workflows across **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2**:
 
 1. **Task-proportional orchestration** (`squad_planner` / `agy-squad plan`, `dispatch_squad` / `agy-squad dispatch`, and `node bin/agy-squad.mjs` backed by `mcp/handoffs.mjs`)
 2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))

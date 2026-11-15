@@ -2,10 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
+  formatNotFoundError,
   loadSquads,
+  logicalWorkspaceRoot,
   manifestSquads,
   resolveIntegrityAuditor,
   resolveSquadLead,
+  resolveWorkspaceRoot,
   specialistAssignments
 } from "./dispatch.mjs";
 import { normalizeReportRoot, reportPath } from "./handoffs.mjs";
@@ -14,6 +17,7 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "manifestPath",
   "manifest",
   "task",
+  "workspace",
   "squadId",
   "executionMode",
   "model",
@@ -235,7 +239,7 @@ function buildSwarmWorkerBrief(compiledBrief, targetModel, workspaceIsolation) {
  * or invoke_subagent dispatch, explicit model provenance, scope-overlap checks, and L6-safe
  * integrity audit scaffolding.
  */
-function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd()) {
+function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Provide a planner options object.");
   }
@@ -249,6 +253,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     manifestPath,
     manifest,
     task,
+    workspace: argWorkspace,
     squadId,
     executionMode = "swarm",
     model,
@@ -303,7 +308,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   }
   const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
-  const root = fs.realpathSync(workspace);
+  const root = resolveWorkspaceRoot(argWorkspace, workspace);
+  const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
   let loadedSquads;
   let selectedManifest;
   if (task !== undefined) {
@@ -328,7 +334,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
     if (scopeFiles !== undefined || roles !== undefined) {
       throw new Error("scopeFiles and roles can only be passed with task.");
     }
-    const loaded = loadSquads(root, manifestPath);
+    const loaded = loadSquads(root, manifestPath, logicalRoot);
     loadedSquads = loaded.squads;
     selectedManifest = loaded.selectedManifest;
   }
@@ -573,8 +579,8 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
             overriddenSubagentModels
           );
           const targetScopeNote = executionMode === "swarm"
-            ? `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>'). read_board/swarm status confirm handoffs/roster/model only; verify worker execution traces via 'agy-context transcript query --id <id> --summary' (when granted access) or via a coordinator-extracted sanitized transcript index in scratch/ before CLEAN (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable). NEVER copy raw .system_generated/ transcripts into scratch/.`
-            : `Audit provenanceScaffold entries for squad '${id}'. Verify reports, verifiedFiles hashes, Evidence Digest ('agy-squad digest <record.json>'), and spot-check traces ONLY via single-pass 'agy-context transcript query --id <id> --summary' (or query_transcript(summaryOnly=true)) on coordinator-recorded conversationIds. NEVER copy .system_generated/ transcripts into scratch/.`;
+            ? `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>'). Use a coordinator-extracted sanitized transcript index in scratch/ when transcript tools are restricted (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable).`
+            : `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>') against coordinator-recorded conversationIds.`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -740,14 +746,14 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE 
   };
 }
 
-function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd()) {
+function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
   try {
     const plan = planSquadCohort(args, workspace);
     return {
       content: [{ type: "text", text: JSON.stringify(plan, null, 2) }]
     };
   } catch (error) {
-    const message = error.code === "ENOENT" ? "Manifest or workspace not found." : error.message;
+    const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;
     return { isError: true, content: [{ type: "text", text: `squad_planner: ${message}` }] };
   }
 }

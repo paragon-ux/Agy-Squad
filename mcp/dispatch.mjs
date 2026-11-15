@@ -12,16 +12,26 @@ const defaultManifests = [
   "suite-manifest.json"
 ];
 
-function assertWithinWorkspace(root, file) {
+function isWithinWorkspace(root, file) {
   const relative = path.relative(root, file);
-  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+  return !(relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative));
+}
+
+function assertWithinWorkspace(root, file) {
+  if (!isWithinWorkspace(root, file)) {
     throw new Error("Manifest path must stay inside the workspace.");
   }
 }
 
-function readManifest(root, filename) {
+function readManifest(root, filename, logicalRoot = root) {
   const candidate = path.resolve(root, filename);
-  assertWithinWorkspace(root, candidate);
+  if (path.isAbsolute(filename)) {
+    if (!isWithinWorkspace(root, candidate) && !isWithinWorkspace(logicalRoot, candidate)) {
+      throw new Error("Manifest path must stay inside the workspace.");
+    }
+  } else {
+    assertWithinWorkspace(root, candidate);
+  }
   const file = fs.realpathSync(candidate);
   assertWithinWorkspace(root, file);
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -129,20 +139,22 @@ function resolveIntegrityAuditor(squads, targetSquad) {
   ];
 }
 
-function loadSquads(root, manifestPath) {
+function loadSquads(root, manifestPath, logicalRoot = root) {
   if (manifestPath !== undefined) {
-    return readManifest(root, manifestPath);
+    return readManifest(root, manifestPath.trim(), logicalRoot);
   }
 
   let firstError;
   for (const candidate of defaultManifests) {
     try {
-      return readManifest(root, candidate);
+      return readManifest(root, candidate, logicalRoot);
     } catch (error) {
       if (error.code !== "ENOENT") firstError ??= error;
     }
   }
-  throw firstError ?? new Error("No squad manifest found. Pass a workspace-relative manifestPath.");
+  const notFound = new Error("No squad manifest found. Pass a workspace-relative manifestPath.");
+  notFound.code = "ENOENT";
+  throw firstError ?? notFound;
 }
 
 const inlineLeadKeys = [
@@ -203,21 +215,65 @@ function specialistAssignments(squads, squadId) {
   return specialists.map((spec, index) => ({ spec, id: squadId, number: index + 1 }));
 }
 
-function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE || process.cwd()) {
+const ALLOWED_DISPATCH_KEYS = new Set(["squadId", "manifestPath", "workspace"]);
+
+function resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace) {
+  if (argsWorkspace !== undefined && (typeof argsWorkspace !== "string" || !argsWorkspace.trim())) {
+    throw new Error("workspace must be a non-empty string.");
+  }
+  const candidate = argsWorkspace !== undefined
+    ? argsWorkspace.trim()
+    : typeof fallbackWorkspace === "string" && fallbackWorkspace.trim()
+      ? fallbackWorkspace.trim()
+      : "";
+  if (!candidate) {
+    throw new Error("workspace must be a non-empty string.");
+  }
+  return candidate;
+}
+
+function logicalWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
+  return path.resolve(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
+}
+
+function resolveWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
+  const candidate = resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace);
+  const root = fs.realpathSync(candidate);
+  if (!fs.statSync(root).isDirectory()) {
+    throw new Error(`Workspace path must be a directory: '${candidate}'.`);
+  }
+  return root;
+}
+
+function formatNotFoundError(args, fallbackWorkspace) {
+  const fallback = typeof fallbackWorkspace === "string" && fallbackWorkspace.trim()
+    ? fallbackWorkspace.trim()
+    : process.cwd();
+  const attemptedWorkspace =
+    typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : fallback;
+  const manifestDetail =
+    typeof args?.manifestPath === "string" && args.manifestPath.trim()
+      ? `, manifestPath: '${args.manifestPath.trim()}'`
+      : "";
+  return `Manifest or workspace not found (workspace: '${attemptedWorkspace}'${manifestDetail}). Pass 'workspace' set to your active repository root, set AGY_SQUAD_WORKSPACE, or run 'node bin/agy-squad.mjs' from the repository root.`;
+}
+
+function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
   try {
     if (!args || typeof args !== "object" || Array.isArray(args) ||
-        Object.keys(args).some(key => key !== "squadId" && key !== "manifestPath")) {
-      throw new Error("Only squadId and manifestPath are supported.");
+        Object.keys(args).some(key => !ALLOWED_DISPATCH_KEYS.has(key))) {
+      throw new Error("Only squadId, manifestPath, and workspace are supported.");
     }
-    const { squadId, manifestPath } = args;
+    const { squadId, manifestPath, workspace: argWorkspace } = args;
     if (typeof squadId !== "string" || !squadId.trim()) {
       throw new Error("Provide a squadId or use all_l1 for the leads.");
     }
     if (manifestPath !== undefined && (typeof manifestPath !== "string" || !manifestPath.trim())) {
       throw new Error("manifestPath must be a nonempty string.");
     }
-    const root = fs.realpathSync(workspace);
-    const { squads: loadedSquads, selectedManifest } = loadSquads(root, manifestPath);
+    const root = resolveWorkspaceRoot(argWorkspace, workspace);
+    const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
+    const { squads: loadedSquads, selectedManifest } = loadSquads(root, manifestPath, logicalRoot);
     const squads = { ...loadedSquads };
     const isIntegrityAuditor = squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor:");
     const hasTargetColon = isIntegrityAuditor && squadId.includes(":");
@@ -234,8 +290,12 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       throw new Error(`Unknown targetSquad '${flatTarget}'.`);
     }
 
+    const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
     const build = ({ spec, id, number }) =>
-      buildSubagentSpec(spec, id, selectedManifest, number, undefined, { isIntegrityAuditor });
+      buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
+        isIntegrityAuditor,
+        workspace: delegateWorkspace
+      });
     let assignments;
     if (squadId === "all_l1") {
       const workingSquads = Object.entries(squads).filter(
@@ -263,18 +323,21 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }]
     };
   } catch (error) {
-    const message = error.code === "ENOENT" ? "Manifest or workspace not found." : error.message;
+    const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;
     return { isError: true, content: [{ type: "text", text: `dispatch_squad: ${message}` }] };
   }
 }
 
 export {
   assertWithinWorkspace,
+  formatNotFoundError,
   handleDispatchSquad,
   loadSquads,
+  logicalWorkspaceRoot,
   manifestSquads,
   readManifest,
   resolveIntegrityAuditor,
   resolveSquadLead,
+  resolveWorkspaceRoot,
   specialistAssignments
 };

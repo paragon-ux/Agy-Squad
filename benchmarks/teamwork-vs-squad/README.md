@@ -1,25 +1,57 @@
 # Agy-Squad vs. Antigravity Teamwork benchmark
 
-This directory holds the fixture, dispatch manifest, offline consistency check, and recorded session telemetry for the November 8, 2026 head-to-head audit comparing **Agy-Squad + Agy-Context-Saver 1.8.1 (`rtk 0.51.0`)** against **Antigravity `/teamwork` (`[skip-interview]` control)**.
+This directory holds the fixture, dispatch manifest, offline consistency check, and recorded session telemetry for two sequential head-to-head audits on the six-defect event-relay fixture:
 
-See [docs/benchmarks.md](../../docs/benchmarks.md) for the canonical comparison table and architectural breakdown.
+1. **November 15, 2026 Matched-`High` Retest (current Phase 2 path):** Native `/swarm` + **Agy-Context-Saver 2.0.1 (`rtk 1.1.0`)** vs. **Antigravity `/teamwork` (`[skip-interview]` control)**, pinned to `Gemini 4 Hydrogen (High)` on all parents and child workers.
+2. **November 8, 2026 Historical Baseline (retired Phase 1 path):** `agy-squad run --launch` + **Agy-Context-Saver 1.8.1 (`rtk 0.51.0`)** vs. **Antigravity `/teamwork` (`[skip-interview]` control)**.
+
+See [docs/benchmarks.md](../../docs/benchmarks.md) for the canonical comparison tables and architectural breakdown.
 
 ## What this benchmark measures
 
 Both systems coordinate multi-agent work inside Antigravity using different orchestration models:
 
-- **Agy-Squad + Agy-Context-Saver** compiles a scoped cohort in `8.5 ms` (`dispatch_squad`), runs child shell commands through `RTK` (`v0.51.0`), caps every child handoff at `500` UTF-8 bytes (`Pointer-Over-Wire`), checks SHA-256 source and report digests in `20 ms` (`node mcp/handoffs.mjs verify`) alongside parent code inspection, and prunes loose specialist reports under an explicit teardown contract.
-- **Antigravity `/teamwork` (`TypeName: "teamwork"`)** delegates an open-ended task through a wrapper agent, an internal orchestrator, exploratory workers, a dedicated report writer, and two semantic verification agents (`reviewer_1` and `auditor_1`).
+- **Agy-Squad + Agy-Context-Saver (`2.0.1+`)** compiles a scoped cohort via `squad_planner` (`agy-squad plan`), runs child shell commands through `RTK` (`rtk >= 1.1.0`), caps every child board/message handoff at `500` UTF-8 bytes (`Pointer-Over-Wire`), pairs an independent flat Integrity Auditor (`audit-<id>`) with `agy-squad digest` / `bundle` / `verify` SHA-256 digests (`4c28db49...` / `ad876bd4...`), and prunes loose specialist reports under an explicit teardown contract.
+- **Antigravity `/teamwork` (`TypeName: "teamwork"`)** delegates an open-ended task through a wrapper/Sentinel agent, an internal orchestrator, exploratory workers, quality reviewer/forensic auditor, and victory auditor.
 
 We built a two-domain event-relay fixture (`fixture/gateway/`, `fixture/worker/`, and `fixture/config.json`) whose unit tests pass on mocked happy-path inputs while containing six `P1` and `P2` security, state-drift, data-loss, and cross-domain contract bugs.
 
-## Recorded run summary (November 8, 2026)
+## Matched-`High` retest summary (November 15, 2026)
 
-In this recorded sequential audit on the six-defect fixture, both arms caught all six planted defect categories (`6 / 6`). **Agy-Squad + Agy-Context-Saver** finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, spawned **`3` vs. `8` subagents**, executed **`64` vs. `645` transcript steps** (`90.1%` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`1` wakeup (`249 B`) vs. `5` wakeups (`4,940 B`)** into the parent conversation (`95.0%` fewer parent bytes).
+With both arms pinned to `Gemini 4 Hydrogen (High)` on parents and all child workers, both caught all six planted defect categories (`6 / 6`), with **Agy-Squad reporting `21` unique defects (`10 P1`, `11 P2`) vs. `16` (`8 P1`, `8 P2`)** (where `/teamwork` Sentinel `0d03a8bb` fabricated code snippets/symbol names that passed `/teamwork`'s own `Victory Auditor` and had to be caught and fixed by the parent session in Steps 11–17). Counting **all sessions end-to-end (`parent + child workers`)**, **Agy-Squad `/swarm`** finished in **`6m 30s` (`390s`) vs. `22m 41s` (`1,361s`, `3.49x` faster)**, used **`4` vs. `9` total sessions** (`3` vs. `8` child workers), executed **`178` vs. `655` steps** (`72.8%` reduction; `90` vs. `636` child-only), generated **`336.8 KB` (`183.6 KB` child-only) vs. `801.8 KB` (`773.7 KB` child-only)** of raw transcripts (`58.0%` smaller overall, `76.3%` smaller child-only), and sent **`1,629 B` (`5` notices; `647 B` handoffs) vs. `18,322 B` (`4` wakeups)** into the parent inbox (`91.1%` fewer wakeup bytes).
+
+All per-agent metrics are stored in [`results/telemetry.json`](results/telemetry.json) (Nov 15 under `matchedHighRetest`; Nov 8 under top-level `arms`).
+
+### Arm 1 (`Nov 15`): Agy-Squad native `/swarm` (`4` sessions total, `336,829 B` / `336.8 KB`)
+
+| Role | Conversation ID | Steps | Assistant turns | Tool calls | Errors | Raw transcript |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Parent Coordinator & Verification Lead | `5e4a24e1-0dd6-4028-b690-7a731772f2bf` | `88` | `25` | `57` | `1` | `153.2 KB` |
+| `ab-audit-gateway-securit` | `583dd7ae-d639-4bbd-91f4-f810f4426542` | `21` | `8` | `11` | `0` | `38.1 KB` |
+| `ab-audit-worker-retry-le` | `031e3bc7-7721-4427-a5e8-f531be0176ce` | `23` | `9` | `12` | `0` | `41.7 KB` |
+| `audit-ab-audit` (Integrity Auditor) | `15f815c6-7dec-480c-b7e8-3f6a71256f9c` | `46` | `7` | `37` | `4` | `103.8 KB` |
+
+### Arm 2 (`Nov 15`): Antigravity `/teamwork` control (`9` sessions total, `801,839 B` / `801.8 KB`)
+
+| Role | Conversation ID | Steps | Assistant turns | Tool calls | Errors | Raw transcript |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Parent Session | `c657d27b-892e-487a-b461-1ebc5484e860` | `19` | `8` | `6` | `0` | `28.2 KB` |
+| Sentinel | `0d03a8bb-a10b-48b1-8996-283e6ed47611` | `97` | `46` | `44` | `0` | `94.3 KB` |
+| Orchestrator | `1912c806-59e3-4df8-bc10-ee70b955bca9` | `102` | `51` | `45` | `6` | `136.0 KB` |
+| Security Explorer | `08eb6ae7-b109-43cb-95ac-b6dd0e6a8942` | `65` | `29` | `35` | `4` | `85.6 KB` |
+| Reliability Explorer | `9aa12cb7-aac5-43b1-9b83-7529002f8b5a` | `74` | `37` | `36` | `1` | `88.8 KB` |
+| Contract Explorer | `3d6d877a-ebfb-4e7c-b152-39874f9ee5ca` | `81` | `40` | `40` | `2` | `104.5 KB` |
+| Quality Reviewer | `b6a2378b-cce9-412b-a8b7-8fb117ba3f07` | `62` | `31` | `30` | `2` | `87.1 KB` |
+| Forensic Auditor | `65936336-840e-46e5-8556-1fb6f5bd3214` | `76` | `38` | `37` | `1` | `77.2 KB` |
+| Victory Auditor | `0c070377-6818-41cc-ad82-b53fa4ae15bf` | `79` | `39` | `38` | `0` | `100.1 KB` |
+
+## Historical baseline summary (November 8, 2026)
+
+In the initial Phase 1 (`agy-squad run --launch`) sequential audit on the same fixture (`Agy-Context-Saver 1.8.1`, `rtk 0.51.0`), both arms caught `6 / 6` planted defect categories (`18` vs. `25` items). **Agy-Squad** finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, spawned **`3` vs. `8` subagents**, executed **`64` vs. `645` transcript steps** (`90.1%` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`1` wakeup (`249 B`) vs. `5` wakeups (`4,940 B`)** into the parent conversation (`95.0%` fewer parent bytes).
 
 Full metric rows and unit definitions live in [docs/benchmarks.md](../../docs/benchmarks.md).
 
-## Per-agent transcript breakdown
+## Per-agent breakdown (November 8, 2026 Phase 1 baseline)
 
 All per-agent metrics come from `agy-context-saver`'s `check_context_health` tool and are stored in [`results/telemetry.json`](results/telemetry.json).
 
@@ -59,16 +91,18 @@ Both arms reported `6 / 6` planted defect categories (`18` total items reported 
 
 ## Experimental protocol, prompts, and provenance policy
 
-- **Environment:** WSL2 on Linux (`Node >= 22`, `Python >= 3.9`, authenticated `agy` CLI, `Agy-Context-Saver 1.8.1`, `RTK 0.51.0`).
-- **Execution order:** Sequential runs on the same WSL2 host (Arm 1 Agy-Squad followed by Arm 2 `/teamwork` control) in separate conversation contexts with no shared state.
+- **Environment:** Linux / WSL2 (`Node >= 22`, `Python >= 3.9`, authenticated `agy` CLI). November 15, 2026 matched-`High` retest: `Gemini 4 Hydrogen (High)` on all parents and child workers, `Agy-Context-Saver 2.0.1`, `RTK 1.1.0`. November 8, 2026 historical baseline: `Agy-Context-Saver 1.8.1`, `RTK 0.51.0`.
+- **Execution order:** Sequential runs on the same host (Arm 1 Agy-Squad followed by Arm 2 `/teamwork` control) in separate conversation contexts with no shared state.
 - **Task prompt and arm configuration:** Both arms received the same read-only audit objective:
   ```text
   Perform a read-only security, reliability, and cross-domain contract audit of benchmarks/teamwork-vs-squad/fixture (gateway/, worker/, and config.json). Identify all concrete defects with file/line evidence, severity (P1/P2), root cause, and remediation.
   ```
   Arm 1 dispatched from [`manifest.json`](manifest.json), which scopes one specialist to `gateway/` + `config.json` and a second specialist to `worker/` + `gateway.mjs` + `config.json`. Arm 2 ran native `/teamwork [skip-interview]` with the same objective and decomposed the task using its internal orchestrator.
-- **Timing boundaries:** `activeWallClockSeconds` measures elapsed seconds from initial invocation to final completion receipt in the parent conversation. `timeToFirstDelegationSeconds` measures elapsed seconds from invocation to the first child specialist spawn.
-- **Verification and teardown contract:** In Arm 1, the squad lead inspected the cited fixture lines, wrote its synthesis report, and ran `node mcp/handoffs.mjs bundle`, `verify` (`20 ms`, SHA-256 `418d7ccbade0a14a5b2e165b706adf45275e7b20604df1dfe03c41a012abc945`), and `prune` (`0` untracked Git files remaining; `.gitignore` excludes retained `scratch/` evidence until explicit teardown). In Arm 2, Teamwork ran two semantic review agents (`reviewer_1` and `auditor_1`) and left `41` untracked files (`207.9 KB`) in `.agents/teamwork/`.
-- **Telemetry provenance and publication policy:** The `conversationId` UUIDs in [`results/telemetry.json`](results/telemetry.json) are local Antigravity conversation identifiers retained for audit traceability via `check_context_health`. Host-specific filesystem paths, OS usernames, environment credentials, and raw `.system_generated/` transcripts are excluded from repository artifacts.
+- **Timing boundaries:** `activeWallClockSeconds` measures elapsed seconds from initial invocation to final completion receipt in the parent conversation. `timeToFirstDelegationSeconds` measures elapsed seconds from invocation to the first child worker/subagent spawn.
+- **Verification and teardown contracts:**
+  - *November 15, 2026 Matched-`High` Retest (Phase 2 `/swarm` + flat `audit-ab-audit`):* Arm 1 compiled `ab_audit` (`flat` mode via `squad_planner`), ran `node bin/agy-squad.mjs digest`, spawned flat integrity auditor `audit-ab-audit` (`Integrity Verdict: CLEAN`, Evidence Digest `ad876bd489dede1cf60ba92348c7510fb059e3f5beeedab69de74815ca25d9af`), ran `bundle` & `verify` (Bundle SHA-256 `4c28db49fd34325b9ba13c054955f9ee40462cfa066e55df34d47f566efd9f04`), and pruned loose specialist reports, leaving `4` gitignored proof/lead files (`72,320 B`). Arm 2 invoked `8` `/teamwork` subagents (including `Quality Reviewer`, `Forensic Auditor`, and `Victory Auditor`) and retained `33` files (`183,670 B`) in `.agents/teamwork/`.
+  - *November 8, 2026 Baseline (retired Phase 1 `agy-squad run --launch`):* Arm 1 inspected fixture lines, wrote its synthesis report, and ran `node mcp/handoffs.mjs bundle`, `verify` (`20 ms`, SHA-256 `418d7ccbade0a14a5b2e165b706adf45275e7b20604df1dfe03c41a012abc945`), and `prune` (`0` untracked Git files remaining). Arm 2 ran `8` subagents (including `reviewer_1` and `auditor_1`) and left `41` untracked files (`207.9 KB`) in `.agents/teamwork/`.
+- **Telemetry provenance and publication policy:** The `conversationId` UUIDs in [`results/telemetry.json`](results/telemetry.json) are local Antigravity conversation identifiers audited via `agy-context transcript health --json` (November 15) and `check_context_health` (November 8). Host-specific filesystem paths, OS usernames, environment credentials, and raw `.system_generated/` transcripts are excluded from repository artifacts.
 
 ## Offline fixture and ledger consistency check
 
@@ -87,17 +121,17 @@ This script performs four offline checks:
 
 ## Run a new live experiment
 
-To run a fresh live comparison on an authenticated WSL2 host with `Agy-Context-Saver 1.8.1+` (`HEALTHY & ACTIVE`):
+To run a fresh live comparison on an authenticated WSL2 / Linux host with `Agy-Context-Saver 2.0.1+` and `RTK >= 1.1.0` (`HEALTHY & ACTIVE`):
 
-1. Start from a clean checkout of `benchmarks/teamwork-vs-squad/fixture` and record your `agy --version`, model selection, and start/stop timestamps.
+1. Start from a clean checkout of `benchmarks/teamwork-vs-squad/fixture` and record your `agy --version`, exact model/effort tier (e.g., `Gemini 4 Hydrogen (High)` on parent and all children), and start/stop timestamps.
 2. **Arm 1 (Agy-Squad):**
    > [!NOTE]
-   > The recorded Nov 8, 2026 run launched Arm 1 through the Phase 1 `agy-squad run --launch` PTY launcher, which PR #5 retired (`L17`). The command below is the current equivalent. It is not the path that produced the recorded numbers, so a fresh run is a new measurement, not a replication.
+   > The November 8, 2026 baseline used the retired Phase 1 `agy-squad run --launch` PTY launcher (`L17`), whereas the November 15, 2026 matched-`High` retest used native `/swarm` (`squad_planner --mode swarm --model <id>`). Pass `workspace: "<repo-root>"` when invoking MCP `squad_planner` from a global plugin install, or run the CLI equivalent below from the repo root.
 
    ```bash
    node bin/agy-squad.mjs plan --manifest benchmarks/teamwork-vs-squad/manifest.json \
-     --squad ab_audit --mode subagent
+     --squad ab_audit --topology flat --mode swarm --model <model-id>
    ```
-   Give the compiled `Subagent` specs to Antigravity (`invoke_subagent`, or `dispatch_squad` over MCP). To run the same cohort on native `/swarm`, use `--mode swarm --model <id>` and let the coordinator issue the emitted `swarm add` calls. After the lead returns its `READY` receipt, also run the emitted `integrityAuditPlan` (`Integrity Verdict: CLEAN`) — or pass `--no-integrity` / `--allow-unaudited` if measuring an unaudited control — then fill in `bundleRecordTemplates`, run `node bin/agy-squad.mjs bundle <record.json>`, verify via `node bin/agy-squad.mjs verify scratch/agy-squad/squad-ab_audit/lead/report.sources.json`, and collect per-agent metrics via `check_context_health`.
+   Execute the emitted `swarm add` calls (or `invoke_subagent` under `--mode subagent`), wait via `swarm_wait`, verify `audit-ab-audit` (`Integrity Verdict: CLEAN`), compute `digest`, `bundle`, and `verify` (`node bin/agy-squad.mjs verify scratch/agy-squad/squad-ab_audit/lead/report.sources.json`), and collect per-agent metrics via `agy-context transcript health --json`.
 3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `check_context_health`.
 4. Grade both arms' findings against the six-defect rubric (`N1` through `N6`) in `results/telemetry.json`.

@@ -1,6 +1,6 @@
 {
   "name": "agy-squad",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "main": "mcp/index.js",
   "bin": {
@@ -35,7 +35,7 @@
     "type": "git",
     "url": "https://github.com/paragon-ux/Agy-Squad.git"
   },
-  "homepage": "https://paragon-ux.github.io/agy-squad/",
+  "homepage": "https://paragon-ux.github.io/Agy-Squad/",
   "bugs": {
     "url": "https://github.com/paragon-ux/Agy-Squad/issues"
   },

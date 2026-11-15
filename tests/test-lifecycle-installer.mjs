@@ -18,6 +18,28 @@ try {
   assert.equal(preflight.status, 0, preflight.stderr || preflight.stdout);
   assert.match(preflight.stdout, /Release preflight passed/);
 
+  // Negative release-preflight check (SCRIPT-001/002: detects negated mcp/dispatch.mjs in package.json files)
+  const negRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-preflight-neg-")));
+  try {
+    fs.cpSync(repoRoot, negRoot, {
+      recursive: true,
+      filter: (src) => !src.includes(`${path.sep}scratch`) && !src.includes(`${path.sep}.git`)
+    });
+    const negPkgPath = path.join(negRoot, "package.json");
+    const negPkg = JSON.parse(fs.readFileSync(negPkgPath, "utf8"));
+    negPkg.files = (negPkg.files || []).filter((f) => f !== "mcp").concat(["mcp/**", "!**/dispatch.mjs"]);
+    fs.writeFileSync(negPkgPath, JSON.stringify(negPkg, null, 2) + "\n");
+    const negPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.notEqual(negPreflight.status, 0);
+    assert.match(negPreflight.stderr, /mcp\/dispatch\.mjs/);
+    assert.doesNotMatch(negPreflight.stderr, /mcp\/planner\.mjs/);
+  } finally {
+    fs.rmSync(negRoot, { recursive: true, force: true });
+  }
+
   const ver = spawnSync(process.execPath, [cli, "--version"], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(ver.status, 0, ver.stderr);
   assert.match(ver.stdout.trim(), /^\d+\.\d+\.\d+/);

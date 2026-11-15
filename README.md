@@ -5,7 +5,7 @@
 [![Docs](https://img.shields.io/badge/docs-Zensical-purple.svg)](https://paragon-ux.github.io/Agy-Squad/)
 [![Tests](https://img.shields.io/badge/tests-100%25%20passing-brightgreen.svg)](https://github.com/paragon-ux/Agy-Squad/actions)
 
-`Agy-Squad` is a multi-agent `/swarm` planner, code-review harness, and SHA-256 proof bundler (`agy-squad`) for **Google Antigravity** (`agy`) on Linux, macOS, and WSL2 (`Node.js >= 22`, zero external npm dependencies). It pairs with [Agy-Context-Saver](https://github.com/paragon-ux/Agy-Context-Saver) (`>= 2.0.1`) to assign non-overlapping file scopes, keep board handoffs under `500` bytes, audit worker tool traces, and verify every report with SHA-256 digests.
+`Agy-Squad` is a multi-agent `/swarm` planner, code-review harness, and SHA-256 proof bundler (`agy-squad`) for **Google Antigravity** (`agy`) on Linux and WSL2 (`Node.js >= 22`, zero external npm dependencies). It pairs with [Agy-Context-Saver](https://github.com/paragon-ux/Agy-Context-Saver) (`>= 2.0.1`) to assign non-overlapping file scopes, keep board handoffs under `500` bytes, audit worker tool traces, and verify every report with SHA-256 digests.
 
 ![Agy-Squad, Antigravity, and Agy-Context-Saver architecture](docs/assets/architecture-overview.svg)
 
@@ -22,7 +22,7 @@ The repository ships four components:
 
 ### Prerequisites
 
-- **Node.js:** `>= 22.0.0` (Linux, macOS, or WSL2 on Windows)
+- **Node.js:** `>= 22.0.0` (Linux or WSL2 on Windows)
 - **Google Antigravity:** Antigravity 2.0+ (Desktop IDE or `agy` CLI with `/swarm` / `invoke_subagent`)
 - **Agy-Context-Saver:** `>= 2.0.1` with **RTK (`>= 1.1.0`)** (`npx --package=agy-context-saver agy-context setup`)
 
@@ -80,17 +80,22 @@ agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json
 
 ## Benchmark summary vs. Antigravity `/teamwork`
 
-In a recorded head-to-head audit against the six-defect event-relay fixture ([`benchmarks/teamwork-vs-squad/`](benchmarks/teamwork-vs-squad/README.md)), both arms caught all six planted defect categories (`6 / 6`):
+In a matched-effort sequential audit (`Gemini 4 Hydrogen (High)` on all parents and workers, November 15, 2026) against the six-defect event-relay fixture ([`benchmarks/teamwork-vs-squad/`](benchmarks/teamwork-vs-squad/README.md)) using native `/swarm` + `Agy-Context-Saver 2.0.1` (`rtk 1.1.0`), both arms caught all six planted defect categories (`6 / 6`):
 
-| Metric | Agy-Squad + Agy-Context-Saver | Antigravity `/teamwork` | Difference |
+| Metric (Parent + All Workers End-to-End) | Agy-Squad + Agy-Context-Saver (`flat /swarm`) | Antigravity `/teamwork` (`[skip-interview]`) | Difference |
 | :--- | :--- | :--- | :--- |
-| Planted defect categories caught | `6 / 6` | `6 / 6` | Parity |
-| Subagents spawned | `3` | `8` | `5` fewer |
-| Wall-clock runtime | `6m 15s` (`375s`) | `26m 19s` (`1,579s`) | `4.2x` faster |
-| Transcript steps | `64` | `645` | `90.1%` fewer steps |
-| Raw transcript size | `148.2 KB` | `817.4 KB` | `81.9%` smaller |
-| Parent context wakeup bytes | `249 B` | `4,940 B` | `95.0%` fewer bytes |
-| Git-untracked files left (`git status`) | `0` | `41` | `41` fewer |
+| Planted defect categories caught | `6 / 6` (`21` defects: `10 P1`, `11 P2`) | `6 / 6` (`16` defects: `8 P1`, `8 P2`) | Equal recall; Arm 1 found 5 more defects |
+| Total sessions (parent + child workers) | `4` (`1` coordinator + `3` workers) | `9` (`1` parent + `8` subagents) | `2.25x` fewer sessions (`3` vs `8` children) |
+| Wall-clock runtime | `6m 30s` (`390s`) | `22m 41s` (`1,361s`) | `3.49x` faster (`71.3%` less time) |
+| Combined transcript steps | `178` (`88` parent + `90` workers) | `655` (`19` parent + `636` subagents) | `3.68x` fewer steps (`72.8%` reduction) |
+| Combined assistant turns | `49` (`25` parent + `24` workers) | `319` (`8` parent + `311` subagents) | `6.51x` fewer turns (`84.6%` reduction) |
+| Combined tool calls | `117` (`57` parent + `60` workers) | `311` (`6` parent + `305` subagents) | `2.66x` fewer tool calls (`62.4%` reduction) |
+| Combined raw transcript size | `336.8 KB` (`183.6 KB` workers) | `801.8 KB` (`773.7 KB` subagents) | `58.0%` smaller overall (`76.3%` child-only) |
+| Parent inbox wakeup bytes | `1,629 B` (`5` notices; `647 B` handoffs) | `18,322 B` (`4` wakeups) | `91.1%` fewer parent wakeup bytes (`11.2x`) |
+| Independent proof & quality outcome | SHA-256 bundle (`ad876bd4...` Digest) + `audit-ab-audit` `CLEAN` | `Victory Auditor` approved Sentinel-fabricated snippets; caught by parent (`Steps 11–17`) | Cryptographic proof vs. unverified QA |
+| Scratch files left after run | `4` proof/report files (`72.3 KB`, gitignored) | `33` files (`183.7 KB` in `.agents/teamwork/`) | `29` fewer scratch files |
+
+See [Benchmarks](docs/benchmarks.md) for the per-agent breakdown of the November 15 matched-`High` retest and the historical November 8 Phase 1 baseline (`6m 15s` vs. `26m 19s`, `148.2 KB` vs. `817.4 KB` subagent-only).
 
 ## Documentation
 

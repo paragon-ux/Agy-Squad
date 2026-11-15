@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
+import { buildSubagentSpec } from "../mcp/briefs.mjs";
+import { handleSquadPlanner, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -588,6 +589,61 @@ try {
     includeIntegrityAuditor: false
   }, root);
   assert.ok(longNamePlan.warnings.some((w) => /24 characters/.test(w) && /occupiedWorkerNames/.test(w)));
+
+  // 11. Workspace argument, symlinked workspaces, handleSquadPlanner errors, and bounded-read/budget checks
+  const altDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-alt-")));
+  const linkRoot = path.join(path.dirname(root), `${path.basename(root)}-link`);
+  fs.symlinkSync(root, linkRoot, "dir");
+  try {
+    const overridePlan = planSquadCohort({
+      manifestPath: "plan-manifest.json",
+      workspace: root,
+      executionMode: "swarm"
+    }, altDir);
+    assert.equal(overridePlan.bundleRecordTemplates.alpha.workspace, root);
+    assert.equal(overridePlan.workers[0].squadId, "alpha");
+    assert.match(
+      inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
+      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\)/
+    );
+    assert.match(
+      overridePlan.workers[0].specialists[0].swarmAdd.brief,
+      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/
+    );
+    assert.match(
+      overridePlan.integrityAuditPlan[0].swarmAdd.brief,
+      /bounded <=150-line read_file slices \(StartLine\/EndLine\) or 'rtk read'\/'rtk grep', never unbounded read_file/
+    );
+
+    const symlinkAbsPlan = handleSquadPlanner({
+      manifestPath: path.join(linkRoot, "plan-manifest.json"),
+      workspace: linkRoot,
+      executionMode: "swarm"
+    }, altDir);
+    assert.equal(symlinkAbsPlan.isError, undefined, symlinkAbsPlan.content[0].text);
+    assert.equal(JSON.parse(symlinkAbsPlan.content[0].text).bundleRecordTemplates.alpha.workspace, root);
+
+    const taskOverridePlan = handleSquadPlanner({ task: "Audit task override", workspace: root }, altDir);
+    assert.equal(taskOverridePlan.isError, undefined, taskOverridePlan.content[0].text);
+    assert.equal(JSON.parse(taskOverridePlan.content[0].text).bundleRecordTemplates.task_squad.workspace, root);
+
+    const noDefaultPlannerErr = handleSquadPlanner({ manifestPath: "missing.json" }, altDir);
+    assert.equal(noDefaultPlannerErr.isError, true);
+    assert.match(noDefaultPlannerErr.content[0].text, /Pass 'workspace'/);
+
+    for (const badWs of ["", 42, path.join(root, "plan-manifest.json"), path.join(root, "missing-dir")]) {
+      assert.equal(handleSquadPlanner({ task: "bad ws", workspace: badWs }, altDir).isError, true);
+    }
+
+    const minAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
+    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", 1).Prompt, "utf8") <= 1800);
+    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", undefined).Prompt, "utf8") <= 3300);
+    const minSwarmAudit = planSquadCohort({ task: "Do work", scopeFiles: ["a"] }, root).integrityAuditPlan[0].swarmAdd.brief;
+    assert.ok(Buffer.byteLength(minSwarmAudit, "utf8") <= 3000, `Expected swarm auditor brief <= 3000 B, got ${Buffer.byteLength(minSwarmAudit, "utf8")}`);
+  } finally {
+    fs.rmSync(linkRoot, { recursive: true, force: true });
+    fs.rmSync(altDir, { recursive: true, force: true });
+  }
 
   console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {

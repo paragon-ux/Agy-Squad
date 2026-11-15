@@ -1,12 +1,12 @@
 # Getting started (Desktop IDE & CLI on POSIX / WSL2)
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and WSL2**. It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux and WSL2**. It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
 
 ## Host and companion compatibility matrix
 
 | Layer | Requirement | Check command |
 | --- | --- | --- |
-| Operating system | Linux, macOS, or WSL2 on Windows | `uname -a` |
+| Operating system | Linux or WSL2 on Windows | `uname -a` |
 | Node.js | `>= 22.0.0` | `node --version` |
 | Antigravity surface | Antigravity Desktop (IDE) with `/swarm` and/or `invoke_subagent` | Open Desktop IDE |
 | Agy-Context-Saver | `>= 2.0.1` (`PreToolUse` hook + `agy-context` CLI active) for live governed cohorts | `agy-context status` (or `agy-context setup`) |

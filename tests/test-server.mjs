@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleRequest } from "../mcp/index.js";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mcp/index.js");
@@ -50,11 +50,13 @@ console.log("Agy-Squad MCP server tests\n");
   const res = await send("tools/list");
   assert.deepEqual(res.result.tools.map((t) => t.name), ["dispatch_squad", "squad_planner"]);
   const dispatch = res.result.tools.find((t) => t.name === "dispatch_squad");
-  assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId"], "no transport mode or spawn pacing in the schema");
+  assert.deepEqual(Object.keys(dispatch.inputSchema.properties).sort(), ["manifestPath", "squadId", "workspace"], "no transport mode or spawn pacing in the schema");
   assert.doesNotMatch(dispatch.inputSchema.properties.squadId.description, /adversarial_/);
   assert.equal(dispatch.inputSchema.properties.squadId.minLength, 1);
   assert.equal(dispatch.inputSchema.properties.manifestPath.minLength, 1);
+  assert.equal(dispatch.inputSchema.properties.workspace.minLength, 1);
   const planner = res.result.tools.find((t) => t.name === "squad_planner");
+  assert.equal(planner.inputSchema.properties.workspace.minLength, 1);
   assert.ok(Array.isArray(planner.inputSchema.oneOf) && planner.inputSchema.oneOf.length === 3);
   assert.ok(Object.values(planner.inputSchema.properties).every((p) => typeof p.description === "string" && p.description.length > 0));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
@@ -68,7 +70,7 @@ console.log("Agy-Squad MCP server tests\n");
 {
   const res = await send("tools/call", { name: "dispatch_squad", arguments: { squadId: "all_l1", mode: "direct" } });
   assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /Only squadId and manifestPath/);
+  assert.match(res.result.content[0].text, /Only squadId, manifestPath, and workspace/);
   const dispatchOk = await send("tools/call", {
     name: "dispatch_squad",
     arguments: {
@@ -268,6 +270,165 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(largeParsed.id, 404);
   assert.equal(largeParsed.result.isError, undefined);
   console.log("✓ default 10 MiB framing ceiling, split CRLF, invalid UTF-8 -32700, and >500 KB early-EOF stdout drain");
+}
+{
+  const repoRoot = fs.realpathSync(path.resolve(path.dirname(server), ".."));
+  const runTmpSession = (requests, extraEnv = {}) => {
+    const env = { ...process.env };
+    delete env.AGY_SQUAD_WORKSPACE;
+    Object.assign(env, extraEnv);
+    const tmpProc = spawnSync(process.execPath, [server], {
+      cwd: os.tmpdir(),
+      env,
+      input: requests.map((req) => JSON.stringify(req)).join("\n") + "\n",
+      encoding: "utf8"
+    });
+    assert.equal(tmpProc.status, 0, tmpProc.stderr);
+    return tmpProc.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  };
+
+  // Without initialize rootUri or args.workspace, server cwd (tmpdir) surfaces actionable ENOENT diagnostic, while args.workspace succeeds
+  const explicitWsResponses = runTmpSession([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "squad_planner",
+        arguments: {
+          manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+          workspace: repoRoot,
+          executionMode: "swarm"
+        }
+      }
+    },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "dispatch_squad",
+        arguments: {
+          squadId: "all_l1",
+          manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+          workspace: repoRoot
+        }
+      }
+    }
+  ]);
+  assert.equal(explicitWsResponses[1].result.isError, true);
+  assert.match(explicitWsResponses[1].result.content[0].text, /Pass 'workspace'/);
+  assert.equal(Boolean(explicitWsResponses[2].result.isError), false, explicitWsResponses[2].result.content[0].text);
+  assert.equal(
+    JSON.parse(explicitWsResponses[2].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+    repoRoot
+  );
+  assert.equal(Boolean(explicitWsResponses[3].result.isError), false, explicitWsResponses[3].result.content[0].text);
+  assert.ok(JSON.parse(explicitWsResponses[3].result.content[0].text).Subagents.length >= 1);
+
+  // Client initialize rootUri sets default workspace across subsequent calls and takes precedence over AGY_SQUAD_WORKSPACE
+  const tmpAlt = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-env-override-")));
+  try {
+    const rootUriResponses = runTmpSession([
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", rootUri: pathToFileURL(repoRoot).href } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "dispatch_squad", arguments: { squadId: "all_l1", manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: "missing.json", workspace: tmpAlt } }
+      }
+    ], { AGY_SQUAD_WORKSPACE: tmpAlt });
+    assert.equal(Boolean(rootUriResponses[1].result.isError), false, rootUriResponses[1].result.content[0].text);
+    assert.equal(
+      JSON.parse(rootUriResponses[1].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+      repoRoot
+    );
+    assert.equal(Boolean(rootUriResponses[2].result.isError), false, rootUriResponses[2].result.content[0].text);
+    assert.ok(JSON.parse(rootUriResponses[2].result.content[0].text).Subagents.length >= 1);
+    assert.equal(rootUriResponses[3].result.isError, true);
+    assert.match(rootUriResponses[3].result.content[0].text, new RegExp(tmpAlt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  } finally {
+    fs.rmSync(tmpAlt, { recursive: true, force: true });
+  }
+
+  // RT-002 URI edge cases: skip empty/non-file/invalid/bare 'file://', accept uppercase 'FILE://', and fall back to rootPath
+  const folderFallback = runTmpSession([
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        workspaceFolders: [
+          { uri: "", name: "empty" },
+          { uri: "vscode-vfs://github/test", name: "vfs" },
+          { uri: "file://otherhost/tmp/wrong", name: "otherhost" },
+          { uri: "file://%ZZ/bad", name: "badpct" },
+          { uri: "file://", name: "bare" }
+        ],
+        rootUri: pathToFileURL(repoRoot).href.replace(/^file:/, "FILE:")
+      }
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+    }
+  ]);
+  assert.equal(Boolean(folderFallback[1].result.isError), false, folderFallback[1].result.content[0].text);
+
+  const rootPathFallback = runTmpSession([
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        workspaceFolders: [{ uri: "file://otherhost/tmp/wrong", name: "otherhost" }],
+        rootPath: repoRoot
+      }
+    },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+    }
+  ]);
+  assert.equal(Boolean(rootPathFallback[1].result.isError), false, rootPathFallback[1].result.content[0].text);
+
+  const blankEnvResponses = runTmpSession([
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+    }
+  ], { AGY_SQUAD_WORKSPACE: "   " });
+  assert.equal(blankEnvResponses[1].result.isError, true);
+  assert.doesNotMatch(blankEnvResponses[1].result.content[0].text, /workspace: '   '/);
+  console.log("✓ explicit workspace arg, initialize URIs, fallback precedence, and env isolation work cleanly");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

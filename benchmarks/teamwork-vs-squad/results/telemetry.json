@@ -223,5 +223,250 @@
         }
       ]
     }
+  },
+  "matchedHighRetest": {
+    "benchmarkId": "teamwork-vs-agy-squad-2026-11-15-high",
+    "date": "2026-11-15",
+    "studyType": "Matched-effort sequential head-to-head audit (Gemini 4 Hydrogen High on all parents and child workers) on the six-defect event-relay fixture",
+    "environment": {
+      "os": "Linux (Ubuntu on WSL2)",
+      "model": "Gemini 4 Hydrogen (High)",
+      "agyContextSaver": "2.0.1",
+      "rtk": "1.1.0",
+      "executionOrder": "Sequential on the same host (Arm 1 Agy-Squad flat native /swarm cohort + integrity auditor followed by Arm 2 Antigravity /teamwork [skip-interview] control in separate fresh conversation contexts)"
+    },
+    "arms": {
+      "agySquad": {
+        "label": "Agy-Squad native /swarm + Agy-Context-Saver 2.0.1 (rtk 1.1.0)",
+        "topology": "flat",
+        "squadId": "ab_audit",
+        "model": "Gemini 4 Hydrogen (High)",
+        "bundleSha256": "4c28db49fd34325b9ba13c054955f9ee40462cfa066e55df34d47f566efd9f04",
+        "evidenceDigest": "ad876bd489dede1cf60ba92348c7510fb059e3f5beeedab69de74815ca25d9af",
+        "integrityVerdict": "CLEAN",
+        "activeWallClockSeconds": 390,
+        "internalDateClockSeconds": 385,
+        "timeToFirstDelegationSeconds": 47,
+        "timeToFirstDelegationFromDateSeconds": 42,
+        "subagentsSpawned": 3,
+        "totalSessionsIncludingParent": 4,
+        "workersSummary": {
+          "steps": 90,
+          "turns": 24,
+          "toolCalls": 60,
+          "toolErrors": 4,
+          "transcriptBytes": 183613,
+          "transcriptKb": 183.6
+        },
+        "allSessionsSummary": {
+          "steps": 178,
+          "turns": 49,
+          "toolCalls": 117,
+          "toolErrors": 5,
+          "transcriptBytes": 336829,
+          "transcriptKb": 336.8
+        },
+        "parentWakeups": 5,
+        "parentInjectedBytes": 1629,
+        "boardHandoffs": 2,
+        "boardHandoffBytes": 647,
+        "totalBusyPollingEvents": 0,
+        "needlesCaught": 6,
+        "totalFindingsReported": 21,
+        "severityBreakdown": { "p1": 10, "p2": 11 },
+        "plantedNeedleMappings": {
+          "N1": "AUD-04",
+          "N2": "AUD-05",
+          "N3": "AUD-01",
+          "N4": "AUD-02",
+          "N5": "AUD-03",
+          "N6": "AUD-13 / AUD-15 / AUD-16"
+        },
+        "scratchFilesRetained": 4,
+        "scratchBytes": 72320,
+        "frictionObserved": [
+          "Parent Step 7: mcp_agy-squad_squad_planner returned ENOENT because MCP server cwd differed from repo root (fixed in v0.1.1 via workspace arg & initialize rootUri).",
+          "Worker audit-ab-audit Steps 5-8: 4 pre-tool denials on unbounded read_file before falling back to rtk read (fixed in v0.1.1 via bounded-read guidance in compiled briefs)."
+        ],
+        "parent": {
+          "conversationId": "5e4a24e1-0dd6-4028-b690-7a731772f2bf",
+          "role": "Parent Coordinator & Verification Lead",
+          "steps": 88,
+          "turns": 25,
+          "toolCalls": 57,
+          "toolErrors": 1,
+          "transcriptBytes": 153216,
+          "transcriptKb": 153.2
+        },
+        "agents": [
+          {
+            "conversationId": "583dd7ae-d639-4bbd-91f4-f810f4426542",
+            "role": "ab-audit-gateway-securit",
+            "steps": 21,
+            "turns": 8,
+            "toolCalls": 11,
+            "toolErrors": 0,
+            "transcriptBytes": 38121,
+            "transcriptKb": 38.1
+          },
+          {
+            "conversationId": "031e3bc7-7721-4427-a5e8-f531be0176ce",
+            "role": "ab-audit-worker-retry-le",
+            "steps": 23,
+            "turns": 9,
+            "toolCalls": 12,
+            "toolErrors": 0,
+            "transcriptBytes": 41722,
+            "transcriptKb": 41.7
+          },
+          {
+            "conversationId": "15f815c6-7dec-480c-b7e8-3f6a71256f9c",
+            "role": "audit-ab-audit",
+            "steps": 46,
+            "turns": 7,
+            "toolCalls": 37,
+            "toolErrors": 4,
+            "transcriptBytes": 103770,
+            "transcriptKb": 103.8
+          }
+        ]
+      },
+      "teamworkControl": {
+        "label": "Antigravity /teamwork ([skip-interview] control)",
+        "model": "Gemini 4 Hydrogen (High)",
+        "activeWallClockSeconds": 1361,
+        "timeToSentinelSeconds": 9,
+        "timeToOrchestratorSeconds": 127,
+        "timeToFirstDelegationSeconds": 244,
+        "subagentsSpawned": 8,
+        "totalSessionsIncludingParent": 9,
+        "childrenSummary": {
+          "steps": 636,
+          "turns": 311,
+          "toolCalls": 305,
+          "toolErrors": 16,
+          "transcriptBytes": 773662,
+          "transcriptKb": 773.7
+        },
+        "allSessionsSummary": {
+          "steps": 655,
+          "turns": 319,
+          "toolCalls": 311,
+          "toolErrors": 16,
+          "transcriptBytes": 801839,
+          "transcriptKb": 801.8
+        },
+        "parentWakeups": 4,
+        "parentInjectedBytes": 18322,
+        "parentWakeupSizesBytes": [489, 945, 1049, 15839],
+        "totalBusyPollingEvents": 0,
+        "needlesCaught": 6,
+        "totalFindingsReported": 16,
+        "severityBreakdown": { "p1": 8, "p2": 8 },
+        "plantedNeedleMappings": {
+          "N1": "Parent Step 18 #1",
+          "N2": "Parent Step 18 #9",
+          "N3": "Parent Step 18 #2",
+          "N4": "Parent Step 18 #3",
+          "N5": "Parent Step 18 #4",
+          "N6": "Parent Step 18 #5 / #6 / #14"
+        },
+        "scratchFilesRetained": 33,
+        "scratchBytes": 183670,
+        "qualityNote": "Sentinel (0d03a8bb) fabricated code snippets and symbol names that passed /teamwork Victory Auditor (0c070377) and were caught and corrected by the parent session in Steps 11-17.",
+        "parent": {
+          "conversationId": "c657d27b-892e-487a-b461-1ebc5484e860",
+          "role": "Parent Session",
+          "steps": 19,
+          "turns": 8,
+          "toolCalls": 6,
+          "toolErrors": 0,
+          "transcriptBytes": 28177,
+          "transcriptKb": 28.2
+        },
+        "agents": [
+          {
+            "conversationId": "0d03a8bb-a10b-48b1-8996-283e6ed47611",
+            "role": "Sentinel",
+            "steps": 97,
+            "turns": 46,
+            "toolCalls": 44,
+            "toolErrors": 0,
+            "transcriptBytes": 94290,
+            "transcriptKb": 94.3
+          },
+          {
+            "conversationId": "1912c806-59e3-4df8-bc10-ee70b955bca9",
+            "role": "Orchestrator",
+            "steps": 102,
+            "turns": 51,
+            "toolCalls": 45,
+            "toolErrors": 6,
+            "transcriptBytes": 136047,
+            "transcriptKb": 136.0
+          },
+          {
+            "conversationId": "08eb6ae7-b109-43cb-95ac-b6dd0e6a8942",
+            "role": "Security Explorer",
+            "steps": 65,
+            "turns": 29,
+            "toolCalls": 35,
+            "toolErrors": 4,
+            "transcriptBytes": 85609,
+            "transcriptKb": 85.6
+          },
+          {
+            "conversationId": "9aa12cb7-aac5-43b1-9b83-7529002f8b5a",
+            "role": "Reliability Explorer",
+            "steps": 74,
+            "turns": 37,
+            "toolCalls": 36,
+            "toolErrors": 1,
+            "transcriptBytes": 88837,
+            "transcriptKb": 88.8
+          },
+          {
+            "conversationId": "3d6d877a-ebfb-4e7c-b152-39874f9ee5ca",
+            "role": "Contract Explorer",
+            "steps": 81,
+            "turns": 40,
+            "toolCalls": 40,
+            "toolErrors": 2,
+            "transcriptBytes": 104516,
+            "transcriptKb": 104.5
+          },
+          {
+            "conversationId": "b6a2378b-cce9-412b-a8b7-8fb117ba3f07",
+            "role": "Quality Reviewer",
+            "steps": 62,
+            "turns": 31,
+            "toolCalls": 30,
+            "toolErrors": 2,
+            "transcriptBytes": 87072,
+            "transcriptKb": 87.1
+          },
+          {
+            "conversationId": "65936336-840e-46e5-8556-1fb6f5bd3214",
+            "role": "Forensic Auditor",
+            "steps": 76,
+            "turns": 38,
+            "toolCalls": 37,
+            "toolErrors": 1,
+            "transcriptBytes": 77155,
+            "transcriptKb": 77.2
+          },
+          {
+            "conversationId": "0c070377-6818-41cc-ad82-b53fa4ae15bf",
+            "role": "Victory Auditor",
+            "steps": 79,
+            "turns": 39,
+            "toolCalls": 38,
+            "toolErrors": 0,
+            "transcriptBytes": 100136,
+            "transcriptKb": 100.1
+          }
+        ]
+      }
+    }
   }
 }

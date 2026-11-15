@@ -70,7 +70,18 @@ try {
   }
   console.log("✓ Leads, both specialist aliases, and two Pointer-Over-Wire reports");
 
-  rejects({ squadId: "all_l1", mode: "direct" }, /Only squadId and manifestPath/);
+  rejects({ squadId: "all_l1", mode: "direct" }, /Only squadId, manifestPath, and workspace/);
+  rejects({ squadId: "all_l1", workspace: "   " }, /workspace must be a non-empty string/);
+  const overrideDispatch = handleDispatchSquad(
+    { squadId: "alpha", manifestPath: "swarm-manifest.json", workspace },
+    os.tmpdir()
+  );
+  assert.equal(overrideDispatch.isError, undefined, overrideDispatch.content[0].text);
+  assert.equal(JSON.parse(overrideDispatch.content[0].text).Subagents[0].Role, "First");
+  const missingManifestErr = handleDispatchSquad({ squadId: "all_l1", manifestPath: "missing.json" }, testDir);
+  assert.equal(missingManifestErr.isError, true);
+  assert.match(missingManifestErr.content[0].text, /workspace:/);
+  assert.match(missingManifestErr.content[0].text, /Pass 'workspace'/);
   rejects({ squadId: "toString" }, /Unknown squadId/);
   rejects({ squadId: "all_l1", manifestPath: "missing.json" }, /not found/);
   rejects({ squadId: "all_l1", manifestPath: "." }, /regular file/);
@@ -217,6 +228,60 @@ try {
   rejects({ squadId: "all_l1", manifestPath: externalManifest }, /inside the workspace/);
   rejects({ squadId: "all_l1", manifestPath: "../outside.json" }, /inside the workspace/);
   rejects({ squadId: "all_l1", manifestPath: "escape.json" }, /inside the workspace/);
+  assert.match(payload({ squadId: "all_l1", manifestPath: " swarm-manifest.json " })[0].Prompt, /dispatch_squad/);
+  const l1WithExplicitWs = handleDispatchSquad(
+    { squadId: "all_l1", manifestPath: "swarm-manifest.json", workspace },
+    testDir
+  );
+  assert.equal(l1WithExplicitWs.isError, undefined, l1WithExplicitWs.content[0].text);
+  const l1Prompt = JSON.parse(l1WithExplicitWs.content[0].text).Subagents[0].Prompt;
+  const dispatchMatch = l1Prompt.match(/Call dispatch_squad with (\{[^\n]+\})\./i);
+  assert.ok(dispatchMatch, "Expected compiled L1 lead prompt to embed dispatch_squad arguments");
+  const parsedLeadArgs = JSON.parse(dispatchMatch[1]);
+  assert.equal(parsedLeadArgs.workspace, workspace);
+  const delegatedSpecialists = handleDispatchSquad(parsedLeadArgs, testDir);
+  assert.equal(delegatedSpecialists.isError, undefined, delegatedSpecialists.content[0].text);
+  assert.equal(JSON.parse(delegatedSpecialists.content[0].text).Subagents[0].Role, "First");
+
+  assert.match(leaves[0].Prompt, /bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/);
+
+  const emptyWs = path.join(testDir, "empty-ws");
+  fs.mkdirSync(emptyWs);
+  const noDefaultErr = handleDispatchSquad({ squadId: "all_l1" }, emptyWs);
+  assert.equal(noDefaultErr.isError, true);
+  assert.match(noDefaultErr.content[0].text, new RegExp(emptyWs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(noDefaultErr.content[0].text, /Pass 'workspace'/);
+
+  const linkWs = path.join(testDir, "link-ws");
+  fs.symlinkSync(workspace, linkWs, "dir");
+  assert.equal(
+    handleDispatchSquad({ squadId: "alpha", workspace: linkWs, manifestPath: "swarm-manifest.json" }, testDir).isError,
+    undefined
+  );
+  assert.equal(
+    handleDispatchSquad(
+      { squadId: "alpha", workspace: linkWs, manifestPath: path.join(linkWs, "swarm-manifest.json") },
+      testDir
+    ).isError,
+    undefined
+  );
+  assert.equal(
+    handleDispatchSquad(
+      { squadId: "all_l1", workspace: linkWs, manifestPath: path.join(linkWs, "escape.json") },
+      testDir
+    ).isError,
+    true
+  );
+
+  for (const badWs of ["", 123, null, manifestPath]) {
+    const errRes = handleDispatchSquad({ squadId: "all_l1", workspace: badWs }, workspace);
+    assert.equal(errRes.isError, true);
+  }
+  assert.match(
+    handleDispatchSquad({ squadId: "all_l1" }, "   ").content[0].text,
+    /workspace must be a non-empty string/
+  );
+
   fs.symlinkSync(manifestPath, path.join(workspace, "internal.json"), "file");
   assert.equal(payload({ squadId: "all_l1", manifestPath: "internal.json" }).length, 2);
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");

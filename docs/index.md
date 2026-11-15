@@ -1,6 +1,6 @@
 # Agy-Squad
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux, macOS, and WSL2**.
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2**.
 
 `squad_planner` and `dispatch_squad` assign scoped tasks to specialist or lead cohorts, cap `Pointer-Over-Wire` receipts at `500` UTF-8 bytes, and pair with `node bin/agy-squad.mjs` (`mcp/handoffs.mjs`) to verify SHA-256 input and report digests. During live Desktop IDE runs, `Agy-Context-Saver` (`2.0.1+`) rewrites shell commands through `rtk >= 1.1.0` (`rtk hook antigravity`), enforces 5-tier transcript access governance, and applies Reactive Wakeup backoff.
 
@@ -14,7 +14,7 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 - **[Concepts and terminology](concepts.md):** Definitions for stages (`all_l1` vs. `<squadId>` vs. `integrity_auditor` / `audit-<id>`), `squad_planner`, report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L43`).
 - **[Manifest and tool contract](tools.md):** Schema and CLI flags for `squad_planner` (`plan`), `dispatch_squad` (`dispatch`), `node bin/agy-squad.mjs`, and `mcp/handoffs.mjs` (library module).
 - **[Native enforcement ledger](plans/native-enforcement-ledger.md):** Host hook boundary (`PreToolUse`, `StopHook`), `/swarm` channel limits, and Spike status.
-- **[Benchmarks](benchmarks.md):** Canonical metric table, unit definitions, and reproduction guide for the November 8, 2026 audit against Antigravity `/teamwork`.
+- **[Benchmarks](benchmarks.md):** Canonical metric tables, per-agent telemetry, and reproduction guide for the November 15, 2026 matched-`High` `/swarm` retest and November 8, 2026 Phase 1 baseline against Antigravity `/teamwork`.
 
 ## Core capabilities
 
@@ -38,10 +38,10 @@ Run `agy-context setup` once on a new host so the `rtk >= 1.1.0` binary and `agy
 
 ## Recorded comparison vs. Antigravity `/teamwork`
 
-On November 8, 2026, a sequential audit compared both approaches on the six-defect event-relay fixture ([`benchmarks.md`](benchmarks.md)). Both caught all six planted defect categories (`6 / 6`).
+On November 15, 2026, a matched-effort sequential retest (`Gemini 4 Hydrogen (High)` on all parents and child workers) compared native `/swarm` (`Agy-Squad` + `Agy-Context-Saver 2.0.1`, `rtk 1.1.0`) against `/teamwork [skip-interview]` on the six-defect event-relay fixture ([`benchmarks.md`](benchmarks.md)). Both arms caught all six planted defect categories (`6 / 6`):
 
-- **Runtime and steps:** **Agy-Squad + Agy-Context-Saver (`1.8.1`, `rtk 0.51.0`)** finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)** and executed **`64` vs. `645` transcript steps** (`90.1%` fewer steps).
-- **Context and transcript size:** Raw transcripts totaled **`148.2 KB` vs. `817.4 KB`** (`81.9%` smaller), and parent context wakeup payloads totaled **`249 B` vs. `4,940 B`** (`95.0%` fewer wakeup bytes).
-- **Verification and cleanup:** The squad lead verified cited fixture lines directly and ran a 20 ms SHA-256 bundle digest check (`handoffs.mjs verify` during the Phase 1 trial; now `node bin/agy-squad.mjs verify`) before pruning loose reports under the 3-scope teardown policy.
+- **Runtime and steps (end-to-end parent + all workers):** **Agy-Squad `/swarm`** finished in **`6m 30s` (`390s`) vs. `22m 41s` (`1,361s`, `3.49x` faster)** and executed **`178` vs. `655` combined transcript steps** (`72.8%` fewer steps; `90` vs. `636` child-only steps).
+- **Context, transcript size, and wakeups:** Combined raw transcripts totaled **`336.8 KB` (`183.6 KB` child-only) vs. `801.8 KB` (`773.7 KB` child-only)** (`58.0%` smaller overall, `76.3%` smaller child-only), and parent wakeup payloads totaled **`1,629 B` vs. `18,322 B`** (`91.1%` fewer parent bytes).
+- **Verification and evidence quality:** Agy-Squad found **`21` unique defects (`10 P1`, `11 P2`)** backed by SHA-256 bundle `4c28db49...` and an independent `audit-ab-audit` `CLEAN` verdict, whereas `/teamwork` found **`16` defects (`8 P1`, `8 P2`)** and its `Victory Auditor` approved Sentinel-fabricated snippets that the parent session had to catch and fix in Steps 11–17.
 
-See [Benchmarks](benchmarks.md) for the full metric table, unit definitions, prompts, and offline vs. live reproduction steps.
+See [Benchmarks](benchmarks.md) for the complete November 15 matched-`High` per-agent table, the historical November 8, 2026 Phase 1 baseline (`6m 15s` vs. `26m 19s`, `148.2 KB` vs. `817.4 KB` subagent-only), unit definitions, and reproduction steps.

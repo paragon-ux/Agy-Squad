@@ -48,7 +48,7 @@ When launching `/swarm` and any of the four execution choices below are unspecif
 
 ## Planner and Dispatch Commands
 
-`Agy-Squad` is a workspace-private package (`"private": true`), so always invoke the CLI from the workspace root with `node bin/agy-squad.mjs` (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only).
+`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad` — pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via `node bin/agy-squad.mjs` (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only).
 
 ### Manifest & Task Planning (`squad_planner` / `agy-squad plan`)
 

@@ -1,8 +1,60 @@
 # Benchmarks: Agy-Squad vs. Antigravity Teamwork
 
-On November 8, 2026, we ran a recorded sequential comparison between **Agy-Squad + Agy-Context-Saver 1.8.1 (`rtk 0.51.0`)** and **Antigravity `/teamwork` (`[skip-interview]` control)** on a two-domain event-relay fixture containing six planted `P1` and `P2` defects ([`benchmarks/teamwork-vs-squad/`](https://github.com/paragon-ux/Agy-Squad/tree/main/benchmarks/teamwork-vs-squad)).
+This page records two head-to-head sequential evaluations on the two-domain event-relay fixture (`6` planted `P1`/`P2` defects, [`benchmarks/teamwork-vs-squad/`](https://github.com/paragon-ux/Agy-Squad/tree/main/benchmarks/teamwork-vs-squad)):
 
-## Canonical recorded comparison (November 8, 2026)
+1. **November 15, 2026 Matched-`High` Retest (current Phase 2 path):** Native `/swarm` + `Agy-Context-Saver 2.0.1` (`rtk 1.1.0`) vs. Antigravity `/teamwork [skip-interview]`, pinned to `Gemini 4 Hydrogen (High)` on all parents and child workers.
+2. **November 8, 2026 Historical Baseline (retired Phase 1 path):** `agy-squad run --launch` + `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) vs. Antigravity `/teamwork [skip-interview]`.
+
+## Matched-`High` Retest (November 15, 2026 — Native `/swarm` + `Agy-Context-Saver 2.0.1`)
+
+Both arms caught all six planted defect categories (`6 / 6`). Counting **all sessions end-to-end (`parent + workers`)**, Agy-Squad finished in **`6m 30s` (`390s`) vs. `22m 41s` (`1,361s`, `3.49x` faster)**, used **`4` vs. `9` total sessions** (`3` vs. `8` spawned child workers), executed **`178` vs. `655` transcript steps** (`72.8%` reduction; `90` vs. `636` child-only steps), generated **`336.8 KB` vs. `801.8 KB` of raw transcripts** (`58.0%` smaller overall; `183.6 KB` vs. `773.7 KB`, `76.3%` smaller child-only), and sent **`1,629 B` vs. `18,322 B` into the parent inbox** (`91.1%` fewer wakeup bytes).
+
+| Metric | Agy-Squad `/swarm` (`ab_audit`, flat) | Antigravity `/teamwork` (`[skip-interview]`) | Recorded difference |
+| --- | ---: | ---: | --- |
+| **Model & effort tier (all parents + children)** | `Gemini 4 Hydrogen (High)` | `Gemini 4 Hydrogen (High)` | Exact matched-effort parity |
+| **Planted defect categories caught** | **`6 / 6`** (`21` defects: `10 P1`, `11 P2`) | **`6 / 6`** (`16` defects: `8 P1`, `8 P2`) | Equal recall; Arm 1 found 5 more unique defects |
+| **Active wall-clock time** | **`6m 30s` (`390s`)** (`385s` internal clock) | **`22m 41s` (`1,361s`)** | **`3.49x` faster (`71.3%` less time)** |
+| **Time to first specialist delegation** | **`47s`** (`42s` from initial `date`) | **`244s`** (Sentinel `9s`, Orchestrator `127s`) | **`5.19x` faster first domain worker** |
+| **Total sessions (`parent + child workers`)** | **`4`** (`1` coordinator + `3` `/swarm` workers) | **`9`** (`1` parent + `8` subagents) | **`2.25x` fewer sessions (`3` vs. `8` children)** |
+| **Combined transcript steps (end-to-end)** | **`178`** (`88` parent + `90` workers) | **`655`** (`19` parent + `636` subagents) | **`3.68x` fewer steps (`72.8%` reduction)** |
+| **Combined assistant LLM turns** | **`49`** (`25` parent + `24` workers) | **`319`** (`8` parent + `311` subagents) | **`6.51x` fewer turns (`84.6%` reduction)** |
+| **Combined tool calls (errors)** | **`117`** (`57` + `60`; `5` errors) | **`311`** (`6` + `305`; `16` errors) | **`2.66x` fewer tool calls (`62.4%` reduction)** |
+| **Combined raw transcript size (end-to-end)** | **`336.8 KB`** (`153.2 KB` + `183.6 KB`) | **`801.8 KB`** (`28.2 KB` + `773.7 KB`) | **`2.38x` smaller (`58.0%` byte reduction)** |
+| **Child-only raw transcript size** | **`183.6 KB`** (`3` workers) | **`773.7 KB`** (`8` subagents) | **`4.21x` smaller (`76.3%` byte reduction)** |
+| **Parent wakeups and injected bytes** | **`5` notices (`1,629 B`; `647 B` handoffs)** | **`4` wakeups (`18,322 B` incl. `15,839 B` Step 10 CLI output)** | **`11.2x` fewer parent bytes (`91.1%` reduction)** |
+| **Busy-polling violations** | **`0`** | **`0`** | Both compliant |
+| **Quality & integrity verification** | Bundle SHA-256 `4c28db49...`, Digest `ad876bd4...`, `audit-ab-audit` `CLEAN` | `Victory Auditor` approved Sentinel-fabricated snippets/symbols; caught by parent (`Steps 11–17`) | Cryptographic proof + trace audit vs. missed fabrication |
+| **Scratch artifacts retained** | **`4` files (`72,320 B`, specialists pruned, gitignored)** | **`33` files (`183,670 B` in `.agents/teamwork/`)** | **`29` fewer files (`60.6%` fewer bytes)** |
+
+### Matched-`High` per-agent telemetry (November 15, 2026)
+
+#### Arm 1: Agy-Squad native `/swarm` (`4` sessions total, `336,829 B` / `336.8 KB`)
+
+| Role | Conversation ID | Steps | Turns | Tool calls | Errors | Raw transcript |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Parent Coordinator & Verification Lead | `5e4a24e1-0dd6-4028-b690-7a731772f2bf` | `88` | `25` | `57` | `1` | `153.2 KB` (`153,216 B`) |
+| `ab-audit-gateway-securit` | `583dd7ae-d639-4bbd-91f4-f810f4426542` | `21` | `8` | `11` | `0` | `38.1 KB` (`38,121 B`) |
+| `ab-audit-worker-retry-le` | `031e3bc7-7721-4427-a5e8-f531be0176ce` | `23` | `9` | `12` | `0` | `41.7 KB` (`41,722 B`) |
+| `audit-ab-audit` (Integrity Auditor) | `15f815c6-7dec-480c-b7e8-3f6a71256f9c` | `46` | `7` | `37` | `4` | `103.8 KB` (`103,770 B`) |
+
+> [!NOTE]
+> **Friction investigated and fixed in `v0.1.1`:** During Arm 1 above, Parent Step 7 hit `1` `ENOENT` error when `mcp_agy-squad_squad_planner` ran with MCP server `cwd` outside the repository root (resolved via optional `workspace` parameter, `initialize` `rootUri` fallback, and actionable `ENOENT` diagnostics), and `audit-ab-audit` hit `4` pre-tool hook denials on unbounded `read_file` in Steps 5–8 before falling back to `rtk read` (resolved by adding bounded `<=150`-line / `rtk read` guidance in `mcp/briefs.mjs`).
+
+#### Arm 2: Antigravity `/teamwork` control (`9` sessions total, `801,839 B` / `801.8 KB`)
+
+| Role | Conversation ID | Steps | Turns | Tool calls | Errors | Raw transcript |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Parent Session | `c657d27b-892e-487a-b461-1ebc5484e860` | `19` | `8` | `6` | `0` | `28.2 KB` (`28,177 B`) |
+| Sentinel | `0d03a8bb-a10b-48b1-8996-283e6ed47611` | `97` | `46` | `44` | `0` | `94.3 KB` (`94,290 B`) |
+| Orchestrator | `1912c806-59e3-4df8-bc10-ee70b955bca9` | `102` | `51` | `45` | `6` | `136.0 KB` (`136,047 B`) |
+| Security Explorer | `08eb6ae7-b109-43cb-95ac-b6dd0e6a8942` | `65` | `29` | `35` | `4` | `85.6 KB` (`85,609 B`) |
+| Reliability Explorer | `9aa12cb7-aac5-43b1-9b83-7529002f8b5a` | `74` | `37` | `36` | `1` | `88.8 KB` (`88,837 B`) |
+| Contract Explorer | `3d6d877a-ebfb-4e7c-b152-39874f9ee5ca` | `81` | `40` | `40` | `2` | `104.5 KB` (`104,516 B`) |
+| Quality Reviewer | `b6a2378b-cce9-412b-a8b7-8fb117ba3f07` | `62` | `31` | `30` | `2` | `87.1 KB` (`87,072 B`) |
+| Forensic Auditor | `65936336-840e-46e5-8556-1fb6f5bd3214` | `76` | `38` | `37` | `1` | `77.2 KB` (`77,155 B`) |
+| Victory Auditor | `0c070377-6818-41cc-ad82-b53fa4ae15bf` | `79` | `39` | `38` | `0` | `100.1 KB` (`100,136 B`) |
+
+## Historical baseline comparison (November 8, 2026)
 
 Both arms caught all six planted defect categories (`6 / 6`). Agy-Squad + Agy-Context-Saver finished in **`6m 15s` (`375s`) vs. `26m 19s` (`1,579s`, `4.2x` faster)**, used **`64` vs. `645` transcript steps** (`10.1x` fewer steps), generated **`148.2 KB` vs. `817.4 KB` of raw transcripts** (`81.9%` smaller), and sent **`249 B` vs. `4,940 B` into the parent conversation** (`95.0%` fewer parent wakeup bytes).
 
@@ -30,11 +82,11 @@ Both arms caught all six planted defect categories (`6 / 6`). Agy-Squad + Agy-Co
 
 ## Recorded session metrics and unit definitions
 
-All session counts in `benchmarks/teamwork-vs-squad/results/telemetry.json` come from `agy-context-saver`'s `check_context_health` tool:
+Session counts in [`benchmarks/teamwork-vs-squad/results/telemetry.json`](https://github.com/paragon-ux/Agy-Squad/blob/main/benchmarks/teamwork-vs-squad/results/telemetry.json) come from `agy-context transcript health --json` in the November 15, 2026 matched-`High` retest (`Agy-Context-Saver 2.0.1`) and from `check_context_health` in the November 8, 2026 baseline (`Agy-Context-Saver 1.8.1`):
 
-- **Transcript steps, turns, and tool calls:** Operational counts from `.system_generated/logs/transcript.jsonl` across every spawned subagent in each arm.
-- **Raw transcript size (`148.2 KB` vs. `817.4 KB`) and parent wakeup bytes (`249 B` vs. `4,940 B`):** Measured in decimal kilobytes (`1,000 B`) and UTF-8 message bytes. These measure transcript and parent-inbox volume, not billed API token charges.
-- **Finding adjudication (`6 / 6` categories vs. `18` and `25` total items):** Both arms caught all six planted defect categories (`N1` through `N6`). Total item counts (`18` in Agy-Squad vs. `25` in Teamwork) include sub-defects split out from `N6` (corrupt JSON reset, non-atomic write, off-by-one retry) plus secondary input-validation observations.
+- **Transcript steps, turns, and tool calls:** Operational counts from `.system_generated/logs/transcript.jsonl`. The November 15 retest records both child-worker totals (`workersSummary` / `childrenSummary`) and full end-to-end totals including parent coordination (`allSessionsSummary`), whereas the November 8 Phase 1 baseline recorded child-subagent totals (`3` vs. `8`).
+- **Raw transcript size and parent wakeup bytes:** Measured in decimal kilobytes (`1,000 B`) and UTF-8 message bytes (`336.8 KB` vs. `801.8 KB` end-to-end and `1,629 B` vs. `18,322 B` in November 15; `148.2 KB` vs. `817.4 KB` child-only and `249 B` vs. `4,940 B` in November 8). These measure transcript and parent-inbox volume, not billed API token charges.
+- **Finding adjudication (`6 / 6` categories across all runs):** Both arms caught all six planted defect categories (`N1` through `N6`). Total reported item counts (`21` vs. `16` in November 15; `18` vs. `25` in November 8) depend on how `N6` sub-defects and secondary input-validation observations are itemized.
 
 ## Benchmark fixture and six planted bugs
 
@@ -49,7 +101,7 @@ The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhoo
 | `N5` | `P1` | `worker/worker.mjs:12` vs. `config.json:3` | Worker compares millisecond timestamp delta `Math.abs(nowMs - event.timestampMs)` against `config.maxSkewSeconds` (`300`) without `* 1000`, shrinking the 5-minute window to `300 ms` | Yes (`SYN-05`) | Yes (`BUG-01`) |
 | `N6` | `P1` | `worker/ledger.mjs:9-21` & `worker/worker.mjs:16-28` | `readLedger` resets corrupt JSON to `[]` (wiping prior entries on non-atomic `writeFileSync`) and `attempt >= maxRetries` on 1-based `attempt` performs `0` retries when `maxRetries = 1` | Yes (`SYN-06`) | Yes (`REL-02` / `BUG-02`) |
 
-## Per-agent telemetry breakdown
+## Per-agent telemetry breakdown (November 8, 2026 Phase 1 baseline)
 
 ### Arm 1: Agy-Squad + Agy-Context-Saver (`3` subagents, `148.2 KB` total)
 

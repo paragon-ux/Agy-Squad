@@ -10,14 +10,14 @@ const superviseCohort = [
   "At the evidence checkpoint, the operator checks /agents even if silent, distinguishing approval waits, active progress, and stalled loops. A parent may stop only its own recorded children; log agent stop and command cleanup separately.",
   "Squad Lead Patrol & Alignment Gate: Actively patrol and audit leaf execution. Penalize cheating: reject reports (FAIL or PARTIAL) that make ungrounded claims, flatter the workspace without proof, or cite unexecuted tools.",
   "Batch-Efficient Transcript Forensics: Never inspect transcripts iteratively 1-2 steps at a time (quadratic bloat). Inspect in one single-pass batch query: 'agy-context transcript query --id <id> --summary' or 'agy-context transcript read --id <id> --last-turns 10' once across the entire run.",
-  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
+  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Inspect workspace files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine). Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 const superviseIntegrityCohort = [
   "Before launch, record neutral audit criteria, target squad, operator, shared workspace, and each unused report slot. Do not copy raw .system_generated/ transcripts into workspace files.",
   "Pass each compiled brief verbatim, map each returned worker or conversationId to its slot, yield via Reactive Wakeup, and reconcile one READY, PARTIAL, or NO_REPORT message per slot.",
   "Audit Execution Forensics: Inspect execution via single-pass batch queries ('agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10'); never inspect transcripts iteratively 1-2 steps at a time.",
-  "Independently check evidence integrity against workspace artifacts and source hashes, recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Independently check evidence integrity against workspace artifacts and source hashes (using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices with StartLine/EndLine, never unbounded read_file), recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 const superviseSwarmCohort = [
@@ -27,14 +27,14 @@ const superviseSwarmCohort = [
   "At the evidence checkpoint, inspect the board and swarm{action:\"status\"} (or monitor reports), distinguishing approval waits, active progress, and stalled loops. Retire finished workers with swarm{action:\"kill\"} only after collecting isolated copies and verify cleanup separately.",
   "Squad Lead Patrol & Alignment Gate: Actively patrol and audit leaf execution. Penalize cheating: reject reports (FAIL or PARTIAL) that make ungrounded claims, flatter the workspace without proof, or cite unexecuted tools.",
   "Execution Forensics: Inspect execution via read_board / swarm{action:\"status\"}, or in one single-pass batch query via 'agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10' — never iterate 1-2 steps at a time.",
-  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
+  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Inspect workspace files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine). Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 const superviseSwarmIntegrityCohort = [
   "Before launch, record neutral audit criteria, target squad, coordinator, workspace mode, and each unused report slot. Do not copy raw .system_generated/ transcripts into workspace files.",
   "Map each spawned worker name to its slot, use read_board and swarm_wait for Reactive Wakeup, and reconcile one READY, PARTIAL, or NO_REPORT board post per slot.",
   "Audit Execution Forensics: read_board and swarm{action:\"status\"} verify handoffs, roster, and model state only. Before CLEAN, verify worker execution traces via 'agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10', or via a coordinator-extracted sanitized transcript index in scratch/ (never rely on workspace re-execution alone); never iterate 1-2 turns at a time.",
-  "Independently check evidence integrity against workspace artifacts and source hashes, recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Independently check evidence integrity against workspace artifacts and source hashes (using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices with StartLine/EndLine, never unbounded read_file), recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -61,7 +61,8 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     executionMode = "subagent",
     workspaceIsolation = "inherit",
     isIntegrityAuditor: explicitIntegrityAuditor,
-    precompiledSpecialists = false
+    precompiledSpecialists = false,
+    workspace: delegateWorkspace
   } = options;
   if (executionMode !== "subagent" && executionMode !== "swarm") {
     throw new Error(`Unsupported executionMode '${executionMode}'.`);
@@ -130,18 +131,21 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
   const alignmentLine = isIntegrityAuditor
     ? isSwarm
-      ? "Integrity Auditor Policy: read_board and swarm{action:\"status\"} verify handoffs, roster, and model state only. Before emitting CLEAN, audit worker execution traces via 'agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10' (or query_transcript(summaryOnly=true)) when permitted, or require a coordinator-extracted sanitized transcript index in scratch/ plus direct workspace artifact/command re-execution; never copy raw .system_generated/ transcripts into scratch/. If neither transcript CLI/tools nor a coordinator transcript index covers material worker claims (or on fabrication/tampering), fail closed and report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-      : "Integrity Auditor Policy: Audit working reports and execution traces via single-pass batch queries ('agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10' or query_transcript summaryOnly=true) plus direct artifact/hash checks. Never copy raw .system_generated/ transcripts into scratch files. Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker.`;
+      ? "Integrity Auditor Policy: read_board and swarm{action:\"status\"} verify handoffs, roster, and model state only. Inspect workspace files and reports via bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file. Before emitting CLEAN, audit worker execution traces via 'agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10' (or query_transcript(summaryOnly=true)) when permitted, or require a coordinator-extracted sanitized transcript index in scratch/ plus direct workspace artifact/command re-execution; never copy raw .system_generated/ transcripts into scratch/. If neither transcript CLI/tools nor a coordinator transcript index covers material worker claims (or on fabrication/tampering), fail closed and report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+      : "Integrity Auditor Policy: Audit working reports and execution traces via single-pass batch queries ('agy-context transcript query --id <id> --summary' / 'agy-context transcript read --id <id> --last-turns 10' or query_transcript summaryOnly=true) plus direct artifact/hash checks using bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file. Never copy raw .system_generated/ transcripts into scratch files. Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Inspect files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker.`;
 
   const hasManifestFile =
     typeof manifestPath === "string" &&
     manifestPath.trim().length > 0 &&
     manifestPath !== "inline-manifest" &&
     manifestPath !== "inline-task";
+  const dispatchArgs = delegateWorkspace
+    ? { squadId, manifestPath, workspace: delegateWorkspace }
+    : { squadId, manifestPath };
   const dispatchCall =
     !isSwarm && hasManifestFile && !precompiledSpecialists
-      ? `Call dispatch_squad with ${JSON.stringify({ squadId, manifestPath })}.`
+      ? `Call dispatch_squad with ${JSON.stringify(dispatchArgs)}.`
       : null;
 
   const integritySupervision = isSwarm ? superviseSwarmIntegrityCohort : superviseIntegrityCohort;

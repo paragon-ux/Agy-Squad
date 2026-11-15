@@ -82,6 +82,7 @@ if (pkg) {
   const requiredPackageFiles = [
     "bin/agy-squad.mjs",
     "mcp/index.js",
+    "mcp/dispatch.mjs",
     "mcp/planner.mjs",
     "mcp/briefs.mjs",
     "mcp/handoffs.mjs",
@@ -91,6 +92,8 @@ if (pkg) {
     ".agents/skills/pr-review/SKILL.md",
     ".agents/skills/full-review/SKILL.md",
     ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+    ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
     ".agents/skills/swarm-governance/SKILL.md",
     "plugin.json",
     "install.sh",
@@ -100,6 +103,27 @@ if (pkg) {
     "LICENSE"
   ];
 
+  const fileEntries = (pkg.files ?? [])
+    .filter((entry) => typeof entry === "string" && entry.trim())
+    .map((entry) => {
+      const negated = entry.startsWith("!");
+      const normalized = (negated ? entry.slice(1) : entry)
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "")
+        .replace(/\/+$/, "");
+      return { negated, normalized };
+    });
+  const positiveEntries = fileEntries.filter((entry) => !entry.negated);
+  const negativeEntries = fileEntries.filter((entry) => entry.negated);
+  const matchesPackageEntry = (relativePath, normalized) => {
+    if (!normalized) return false;
+    if (normalized.includes("*")) {
+      const escaped = normalized.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`^${escaped.replace(/\*\*|\*/g, (m) => (m === "**" ? ".*" : "[^/]*"))}$`).test(relativePath);
+    }
+    return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
+  };
+
   for (const relativePath of requiredPackageFiles) {
     if (!exists(relativePath)) {
       errors.push(`Required runtime/release file is missing: ${relativePath}`);
@@ -107,10 +131,8 @@ if (pkg) {
     const alwaysIncluded = ["package.json", "README.md", "CHANGELOG.md", "LICENSE"].includes(relativePath);
     const coveredByFiles =
       alwaysIncluded ||
-      (pkg.files ?? []).some((entry) => {
-        const normalized = entry.replace(/\\/g, "/").replace(/\/$/, "");
-        return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
-      });
+      (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
+        !negativeEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)));
     if (!coveredByFiles) {
       errors.push(`package.json "files" does not clearly include ${relativePath}.`);
     }
@@ -122,8 +144,15 @@ if (pkg) {
     }
   }
 
-  if (!pkg.scripts?.setup || !pkg.scripts?.status || !pkg.scripts?.uninstall || !pkg.scripts?.preflight || !pkg.scripts?.test) {
-    errors.push("Expected npm scripts setup, status, uninstall, preflight, and test to be present.");
+  if (
+    !pkg.scripts?.setup ||
+    !pkg.scripts?.status ||
+    !pkg.scripts?.uninstall ||
+    !pkg.scripts?.preflight ||
+    !pkg.scripts?.test ||
+    !pkg.scripts?.["verify:package"]
+  ) {
+    errors.push("Expected npm scripts setup, status, uninstall, preflight, test, and verify:package to be present.");
   }
 
   if (Object.keys(pkg.dependencies ?? {}).length > 0) {

@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleDispatchSquad } from "../../mcp/dispatch.mjs";
+import { planSquadCohort } from "../../mcp/planner.mjs";
 import { verifyWebhookSignature, createRateLimiter, buildWorkerEnvelope } from "./fixture/gateway/gateway.mjs";
 import { appendLedgerEntry, readLedger } from "./fixture/worker/ledger.mjs";
 import { processWorkerEnvelope } from "./fixture/worker/worker.mjs";
@@ -154,6 +155,11 @@ const stage2 = handleDispatchSquad({ squadId: "ab_audit", manifestPath }, repoRo
 assert.equal(Boolean(stage2.isError), false);
 assert.equal(JSON.parse(stage2.content[0].text).Subagents.length, 2);
 
+const swarmPlan = planSquadCohort({ manifestPath, squadId: "ab_audit", topology: "flat", executionMode: "swarm" }, repoRoot);
+assert.equal(swarmPlan.topology.compiledPattern, "flat");
+assert.equal(swarmPlan.workers[0].specialists.length, 2);
+assert.equal(swarmPlan.integrityAuditPlan.length, 1);
+
 // Verify recorded telemetry ledger integrity, adjudication rubric, and provenance metadata
 const telemetry = JSON.parse(fs.readFileSync(path.join(benchDir, "results/telemetry.json"), "utf8"));
 assert.equal(typeof telemetry.studyType, "string");
@@ -175,5 +181,63 @@ for (const arm of [telemetry.arms.agySquad, telemetry.arms.teamworkControl]) {
   assert.equal(Number(arm.agents.reduce((s, a) => s + a.transcriptKb, 0).toFixed(1)), arm.totalTranscriptKb);
   assert.equal(arm.needlesCaught, 6);
 }
+
+const retest = telemetry.matchedHighRetest;
+assert.equal(retest.benchmarkId, "teamwork-vs-agy-squad-2026-11-15-high");
+assert.equal(typeof retest.studyType, "string");
+assert.ok(retest.studyType.length > 0);
+assert.equal(retest.date, "2026-11-15");
+assert.equal(retest.environment.model, "Gemini 4 Hydrogen (High)");
+assert.equal(retest.environment.agyContextSaver, "2.0.1");
+assert.equal(retest.environment.rtk, "1.1.0");
+assert.match(retest.arms.agySquad.bundleSha256, /^[0-9a-f]{64}$/);
+assert.match(retest.arms.agySquad.evidenceDigest, /^[0-9a-f]{64}$/);
+assert.equal(retest.arms.agySquad.integrityVerdict, "CLEAN");
+assert.ok(Number.isInteger(retest.arms.agySquad.parentWakeups) && retest.arms.agySquad.parentWakeups > 0);
+assert.ok(Number.isInteger(retest.arms.agySquad.parentInjectedBytes) && retest.arms.agySquad.parentInjectedBytes > 0);
+assert.ok(retest.arms.agySquad.boardHandoffs <= retest.arms.agySquad.parentWakeups);
+assert.ok(retest.arms.agySquad.boardHandoffBytes <= retest.arms.agySquad.parentInjectedBytes);
+for (const [arm, childKey] of [
+  [retest.arms.agySquad, "workersSummary"],
+  [retest.arms.teamworkControl, "childrenSummary"]
+]) {
+  assert.equal(arm.model, retest.environment.model);
+  assert.equal(arm.agents.length, arm.subagentsSpawned);
+  assert.equal(arm.agents.length + 1, arm.totalSessionsIncludingParent);
+  const childSum = (k) => arm.agents.reduce((s, a) => s + a[k], 0);
+  assert.equal(childSum("steps"), arm[childKey].steps);
+  assert.equal(childSum("turns"), arm[childKey].turns);
+  assert.equal(childSum("toolCalls"), arm[childKey].toolCalls);
+  assert.equal(childSum("toolErrors"), arm[childKey].toolErrors);
+  assert.equal(childSum("transcriptBytes"), arm[childKey].transcriptBytes);
+  assert.equal(Number((arm[childKey].transcriptBytes / 1000).toFixed(1)), arm[childKey].transcriptKb);
+  const all = [arm.parent, ...arm.agents];
+  for (const session of all) {
+    assert.equal(typeof session.conversationId, "string");
+    assert.ok(session.conversationId.length > 0);
+    assert.equal(Number((session.transcriptBytes / 1000).toFixed(1)), session.transcriptKb);
+  }
+  const allSum = (k) => all.reduce((s, a) => s + a[k], 0);
+  assert.equal(allSum("steps"), arm.allSessionsSummary.steps);
+  assert.equal(allSum("turns"), arm.allSessionsSummary.turns);
+  assert.equal(allSum("toolCalls"), arm.allSessionsSummary.toolCalls);
+  assert.equal(allSum("toolErrors"), arm.allSessionsSummary.toolErrors);
+  assert.equal(allSum("transcriptBytes"), arm.allSessionsSummary.transcriptBytes);
+  assert.equal(Number((arm.allSessionsSummary.transcriptBytes / 1000).toFixed(1)), arm.allSessionsSummary.transcriptKb);
+  assert.equal(arm.needlesCaught, 6);
+  assert.equal(arm.severityBreakdown.p1 + arm.severityBreakdown.p2, arm.totalFindingsReported);
+  for (const id of ["N1", "N2", "N3", "N4", "N5", "N6"]) {
+    assert.equal(typeof arm.plantedNeedleMappings?.[id], "string");
+    assert.ok(arm.plantedNeedleMappings[id].trim().length > 0);
+  }
+}
+assert.equal(
+  retest.arms.teamworkControl.parentWakeupSizesBytes.length,
+  retest.arms.teamworkControl.parentWakeups
+);
+assert.equal(
+  retest.arms.teamworkControl.parentWakeupSizesBytes.reduce((s, b) => s + b, 0),
+  retest.arms.teamworkControl.parentInjectedBytes
+);
 
 console.log("✓ Offline benchmark check passed (fixture suites, 6 seeded defects, manifest stages, and telemetry ledger arithmetic).");
