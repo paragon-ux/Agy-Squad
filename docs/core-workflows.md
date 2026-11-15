@@ -4,7 +4,7 @@ Agy-Squad runs four connected workflows across **Antigravity Desktop (IDE)** and
 
 1. **Task-proportional orchestration** (`squad_planner` / `agy-squad plan`, `dispatch_squad` / `agy-squad dispatch`, and `node bin/agy-squad.mjs` backed by `mcp/handoffs.mjs`)
 2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))
-3. **Governed PR & non-diff reviews under Standard v1.3.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [`full-review`](roles-and-workflows.md#full-review))
+3. **Governed PR & non-diff reviews under Standard v1.4.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [`full-review`](roles-and-workflows.md#full-review))
 4. **Three-scope evidence retention and teardown** (`L41`)
 
 For the canonical definition of every role, Task-Spec vs. Execution-Modifier skill composition, MCP/CLI surface map, and the 4-check runtime closure gate, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
@@ -17,20 +17,22 @@ Agy-Squad structures each cohort run into four ordered stages: Pre-Flight Intake
 
 ### Phase 0: Pre-flight intake interview
 
-Before compiling manifests or launching workers, the primary agent runs an interactive intake check via `ask_question` (or a multiple-choice prompt) to lock four operator choices:
+Before compiling manifests or launching workers, the primary agent runs an interactive intake check via `ask_question` (or a multiple-choice prompt) to lock the operator choices below when unspecified:
 
 | Decision | Options | Governing control |
 | --- | --- | --- |
-| **Topology** | Ask neutrally (no default bias): **Flat** (specialists report to parent/coordinator), **Layered** (`all_l1` leads in `dispatch_squad` or domain coordinators in `/swarm`), or single-squad run | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `all_specialists` / `<squadId>`) |
+| **Topology** | Ask neutrally (no default bias): **Flat** (specialists report to parent/coordinator), **Layered** (`all_l1` leads in `dispatch_squad` or domain coordinators in `/swarm`), or single-squad run | `squad_planner` (omit `squadId` for all squads), `dispatch_squad` (`all_l1` / `<squadId>`), or `diagnose.mjs --print-dispatch all_specialists` |
+| **Workspace isolation** | `inherit` (shared coordinator root for read-only or disjoint `scopeFiles`), `share` (shared-storage copy), or `branch` (isolated clone) | `squad_planner` (`workspaceIsolation`, `/swarm` only; `subagent` requires `inherit`) |
 | **Teardown and provenance** | Full retention (`--keep-reports`, preserving `scratch/agy-squad/`) or automatic atomic teardown (`--teardown`) | `bin/agy-squad.mjs prune` and `diagnose.mjs` |
+| **Model** | Coordinator active model (default: omit `model`/`--model`) or explicit user-selected model ID (`swarm{action: "models"}`) | `squad_planner` (`model`, `knownModels`) and `swarm{action: "status"}` |
 | **Integrity rigor** | Independent flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `CLEAN` or `INTEGRITY VIOLATION`) or `--allow-unaudited` opt-out | `bin/agy-squad.mjs bundle` and `mcp/verdicts.mjs` |
 | **Instruction self-containment** | Explicit file paths, objectives, and criteria in every brief; unanchored codes (such as `H4` or `D2`) are rejected | `mcp/briefs.mjs` |
 
 ### Stage 1: Working cohort execution
 
-1. **Compile the stage:** For Antigravity native `/swarm`, `squad_planner` (`agy-squad plan`) compiles `swarmAdd` payloads and a parent-authored `provenanceScaffold` (omit `squadId` to compile all manifest squads). For `invoke_subagent`, `dispatch_squad` (`agy-squad dispatch`) builds direct working specialists (`squadId: "<id>"` / `"all_specialists"`) or squad leads (`squadId: "all_l1"`) ([`docs/tools.md`](tools.md)).
+1. **Compile the stage:** For Antigravity native `/swarm`, `squad_planner` (`agy-squad plan`) compiles `swarmAdd` payloads and a parent-authored `provenanceScaffold` (omit `squadId` to compile all manifest squads). For `invoke_subagent`, `dispatch_squad` (`agy-squad dispatch`) builds direct working specialists (`squadId: "<id>"`), squad leads (`squadId: "all_l1"`), or self-diagnosis `all_specialists` via `diagnose.mjs --print-dispatch all_specialists` ([`docs/tools.md`](tools.md)).
 2. **Inject brief invariants:** `mcp/briefs.mjs` adds alignment rules, flattery penalties, and transcript query rules to every compiled brief so the operator does not repeat boilerplate across squads.
-3. **Query transcripts in batches:** Squad leads and reviewers inspect child sessions with single-pass batch calls (`query_transcript` with `summaryOnly: true` or `read_transcript` with `lastTurns: 10`). Iterative 1-to-2-step transcript polling is prohibited.
+3. **Query transcripts in batches:** Squad leads and reviewers inspect child sessions with single-pass batch CLI calls (`agy-context transcript query --id <id> --summary` or `agy-context transcript read --id <id> --last-turns 10`). Iterative 1-to-2-step transcript polling is prohibited.
 4. **Write to workspace report slots:** `dispatch_squad` sets `TypeName: "self"` and `Workspace: "inherit"` so each specialist writes directly to `scratch/agy-squad/.../specialist-<N>/report.md`.
 5. **Send a `<= 500` byte receipt (`Pointer-Over-Wire`):** Each child posts one single-line receipt (`READY`, `PARTIAL`, or `NO_REPORT`) under `500` UTF-8 bytes through `send_message`, waking its parent via Reactive Wakeup without pasting full reports into parent context.
 6. **Run the Squad Lead Patrol Gate:** The squad lead checks leaf traces against primary source files and test output, rejects guessed or sycophantic claims (`Subagent Alignment Policy`), and writes `lead/report.md` with `Content Verdict: PASS`, `FAIL`, or `BLOCKED` on its own line (bare `Verdict:` is accepted only as a legacy alias).
@@ -39,14 +41,14 @@ Before compiling manifests or launching workers, the primary agent runs an inter
 
 Run the integrity auditor **after working squads finish** and **before acceptance**. For Antigravity native `/swarm` runs, follow `.agents/skills/swarm-governance/SKILL.md`.
 
-1. **Dispatch or spawn the flat auditor:** On `/swarm`, add flat `audit-<targetSquad>` (writes to `scratch/agy-squad/squad-integrity_auditor-<targetSquad>/specialist-1/report.md`). On `invoke_subagent`, call `dispatch_squad` with `squadId: "integrity_auditor:<targetSquad>"` (or `integrity_auditor` for single-squad manifests). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` stages have been removed.
+1. **Dispatch or spawn the flat auditor:** On `/swarm`, add flat `audit-<id>` (`squad-integrity_auditor/specialist-1/report.md` for single-squad manifests, flat or layered, or `squad-integrity_auditor-<targetSquad>/specialist-1/report.md` for multi-squad manifests, flat or layered). On `invoke_subagent`, call `dispatch_squad` with `squadId: "integrity_auditor:<targetSquad>"` (or `integrity_auditor` for single-squad manifests). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` stages have been removed.
 2. **Audit execution traces:** The auditor runs single-pass batch queries (`summaryOnly=true` or `lastTurns=10`) to confirm that specialists executed real tools instead of guessing from memory, avoided sycophantic filler, and had their claims checked by the squad lead.
-3. **Emit an audit verdict:** The auditor writes `Target Squad: <targetSquad>` and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`).
+3. **Emit an audit verdict with Evidence Digest:** Run `node bin/agy-squad.mjs digest <record.json>` first so the auditor records `Target Squad: <targetSquad>`, `Evidence Digest: <64-hex>`, and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`).
 
 ### Stage 3: Acceptance and cryptographic bundling
 
-1. **Enforce the dual-verdict gate:** `node bin/agy-squad.mjs bundle <record.json>` requires both `Content Verdict: PASS` on `lead/report.md` and `Integrity Verdict: CLEAN` for the matching `Target Squad` via `mcp/verdicts.mjs`. Any `INTEGRITY VIOLATION`, hedged verdict, or missing audit blocks bundling unless `--allow-unaudited` is passed.
-2. **Record and verify SHA-256 digests:** `mcp/handoffs.mjs` hashes all cited `verifiedFiles`, specialist reports, and the `integrityAudit` report into `lead/report.sources.json`. `node bin/agy-squad.mjs verify <report.sources.json>` checks disk presence and digest matches, and `prune <report.sources.json> <accepted-sha256> [--keep-reports]` optionally removes loose specialist reports.
+1. **Enforce the dual-verdict gate:** `node bin/agy-squad.mjs bundle <record.json>` requires `Content Verdict: PASS` on `lead/report.md`, `Evidence Digest: <64-hex>`, and `Integrity Verdict: CLEAN` for every auditor slot matching `Target Squad` via `mcp/verdicts.mjs`. Any `INTEGRITY VIOLATION`, stale digest, hedged verdict, or missing audit blocks bundling unless `--allow-unaudited` is passed (`auditPolicy: "required"` vs `"unaudited-explicit"`).
+2. **Record and verify SHA-256 digests:** `mcp/handoffs.mjs` hashes all cited `verifiedFiles`, specialist reports, and every `integrityAudit` / `integrityAudits` report into `lead/report.sources.json`. `node bin/agy-squad.mjs verify <report.sources.json>` enforces the persisted `auditPolicy` alongside archived Markdown and digest matches, and `prune <report.sources.json> <accepted-sha256> [--keep-reports]` safely removes matching loose specialist reports.
 
 ## 2. Diagnose and optimize the harness (`self-diagnosis`)
 
@@ -54,7 +56,7 @@ The [`self-diagnosis` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.
 
 ### Run the zero-subagent profiler
 
-From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, `dispatch_squad` and `squad_planner` compilation, handoff pipeline canaries, and the v1.3.0 review ledger schema:
+From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, `dispatch_squad` and `squad_planner` compilation, handoff pipeline canaries, and the v1.4.0 review ledger schema:
 
 ```bash
 # Markdown diagnostic report:
@@ -88,9 +90,9 @@ Every diagnostic pass follows one fixed sequence:
 
 `run zero-subagent profiler -> launch cohort -> reconcile & bundle reports -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> run diagnose.mjs --teardown -> remediate -> re-verify with the same specialists -> terminate subagents`
 
-## 3. Review pull requests to the v1.3.0 standard
+## 3. Review pull requests to the v1.4.0 standard
 
-The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [PR Review Standard v1.3.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
+The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [PR Review Standard v1.4.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
 
 | Standard section | Requirement |
 | --- | --- |

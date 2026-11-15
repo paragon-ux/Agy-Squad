@@ -42,6 +42,7 @@ Agy-Squad delegates orchestration to Antigravity (native `/swarm`, `invoke_subag
 | V-08 | `BuiltinTools` includes `INVOKE_SUBAGENT`; **no reference to "swarm" exists anywhere in the SDK Python sources** (`grep -rnI swarm` returns empty; raw binary `bin/localharness` matches the byte string `"swarm"`) | `grep -rnI swarm` over installed package | Verified for v0.1.23 |
 | V-09 | `Agent` exposes `chat`, `conversation`, `conversation_id`, `sandbox_status`, `is_started`, `beta` | Introspected | `API-verified` |
 | V-10 | Native swarm: `swarm{action:"status"}` lists each worker's state and model; `add` refuses a model whose quota is exhausted; `kill` deletes a worker's workspace | Local swarm skill and `swarm` tool description | Documented, not tested |
+| V-11 | Live `/swarm` worker capability split (Session `87cb96f4`, 2026-11-14): global `PreToolUse` hooks **do** propagate to all `/swarm` workers (blocking `read_file` and `.system_generated/` shell reads on `audit-code` `a03d8f1e`, `audit-gov` `bf53c412`, `gov-lead` `c33d1552`, `gov-docs-site-reviewer` `fed707af`), while parent `agy-context-saver` MCP tools (`query_transcript`, `read_transcript`) **do not** attach to `/swarm` worker toolsets | Observed across all 9 `/swarm` workers via coordinator `query_transcript` audit | `Observed` (splits NE-10: hook propagation observed, MCP inheritance absent) |
 | W-01 | (Web, secondary sources) tool calls inside spawned subagents may bypass workspace-level hooks unless registered globally or via plugin; blocking a spawn tool with `PreToolUse` may not stop the spawn under some runtime flags (e.g. `--dangerously-skip-permissions`); `PostToolUse` cannot block | One search summary; redirect-only citations | **Unverified. Treat as a risk to test, not a fact.** |
 
 ## 3. Two enforcement planes
@@ -74,7 +75,7 @@ Threat sources: PR #3 evidence (model deleted `FAIL` to evade the verdict parser
 | **NE-07** | No lateral communication in contention arms | A (by construction), B | A: isolated `Agent` instances; B: `PreToolUse` deny on `post_message` for worker members; channels | A: `API-verified`; B: `Unverified` | B: a worker attempts to post; it is denied; a control run without the hook posts | Hook must identify the caller as a worker; V-02 | concurrency protocol |
 | **NE-08** | Review/health gate is independent of the change's author | In-repo (not native) | `diagnose.mjs` requires a ledger from a different conversation or a commit not written by the author; `conversation_id` as identity | `Unverified` | Add an author-written ledger newer than the independent one; the gate must still target the independent one or fail | Needs an identity convention for ledgers | PR5-SCRIPT-02 |
 | **NE-09** | The governed agent cannot edit its own guard (hook config, policy files, audit log) | A, B | Host/file permissions; hook config and log outside agent-writable roots; `workspace_only` policy | `Unverified` | On a **disposable copy** of the config, an agent told to disable the hook fails to; the live `hooks.json` must never be used for this test | Precondition for NE-01..NE-07 being enforcement at all | all |
-| **NE-10** | Hooks and policies propagate to subagents and swarm workers | A, B | A: `HookContext.parent`; B: global `hooks.json`, plugin hooks | `Unverified` | A child agent's tool call hits the parent's deny hook; for B, a worker's `run_command` hits a marker hook | W-01 reports gaps; V-02 | all |
+| **NE-10** | Hooks, policies, and MCP tools propagate to subagents and swarm workers | A, B | A: `HookContext.parent`; B: global `hooks.json`, plugin hooks, MCP inheritance | A: `Unverified`; B: **Split (`Observed`)** — `PreToolUse` hooks propagate to `/swarm` workers (`V-11`), parent MCP servers (`agy-context-saver`) do not | A child agent's tool call hits the parent's deny hook; for B, a worker's `run_command` hits a marker hook and attached MCP list is checked | Requires coordinator transcript index extraction for `/swarm` auditors until MCP propagates | all |
 | NE-11 | SDK-hosted agents appear in the native Swarm UI / board | n/a | None found | `Not supported` (v0.1.23, V-08) | Re-check on SDK upgrades: `grep -rnI swarm` over the package | Pre-1.0 API | direction |
 | NE-12 | SDK agents can run on the maintainer's existing subscriptions | A | `api_key` / `vertex` / `project` / `location` config; unknown whether subscription auth is supported | `Unverified` | Spawn one read-only `Agent` and complete one `chat()` call | **Blocks every Plane A behavioral test.** Credentials are an owner decision | all Plane A rows |
 
@@ -108,8 +109,9 @@ S5 must not edit or probe the live `~/.gemini/config/hooks.json`. First establis
 ## 8. Reproduction (evidence for V-03 to V-09)
 
 ```bash
-~/.local/share/patchdiff-runtime/venv/bin/pip install --target scratch/sdk_pkgs google-antigravity
-PYTHONPATH=scratch/sdk_pkgs ~/.local/share/patchdiff-runtime/venv/bin/python - <<'EOF'
+python3 -m venv scratch/sdk_venv
+scratch/sdk_venv/bin/pip install --target scratch/sdk_pkgs "google-antigravity==0.1.23"
+PYTHONPATH=scratch/sdk_pkgs scratch/sdk_venv/bin/python - <<'EOF'
 import inspect, google.antigravity as ag
 import google.antigravity.types as t
 import google.antigravity.hooks as h
@@ -121,4 +123,4 @@ EOF
 grep -rnI swarm scratch/sdk_pkgs/google/antigravity   # expect: no output (V-08)
 ```
 
-The system Python on the review host (3.14, Debian) has no `ensurepip`, so `python3 -m venv` fails. `--target` into the gitignored `scratch/` avoids touching system packages.
+If the host Python lacks `ensurepip`, point any existing Python 3.11+ interpreter with `pip` (for example `pip install --target scratch/sdk_pkgs "google-antigravity==0.1.23"`) into the gitignored `scratch/` directory to avoid modifying system packages.

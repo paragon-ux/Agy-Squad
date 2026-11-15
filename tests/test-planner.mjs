@@ -34,6 +34,9 @@ try {
   assert.equal(overlapTask.workers[0].specialists[0].swarmAdd.model, "gemini-3.8-flash-high");
   assert.equal(overlapTask.integrityAuditPlan.length, 1);
   assert.equal(overlapTask.integrityAuditPlan[0].swarmAdd.model, "gemini-3.8-flash-high");
+  assert.doesNotMatch(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /or direct re-execution before CLEAN/);
+  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /coordinator-extracted sanitized transcript index in scratch\//);
+  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable/);
   assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /L6 convention/);
   assert.equal(overlapTask.provenanceScaffold.entries.length, 2);
   assert.ok(overlapTask.bundleRecordTemplates.task_squad.requireIntegrityAudit);
@@ -43,7 +46,7 @@ try {
     manifest: {
       squads: {
         alpha: {
-          lead: { role: "Alpha Lead", objective: "Coordinate alpha", scopeFiles: ["mcp"] },
+          lead: { role: "Alpha Lead", objective: "Coordinate alpha", scopeFiles: ["mcp"], readOnly: true },
           specialists: [
             { role: "Dispatch Spec", objective: "Audit dispatch", scopeFiles: ["mcp/dispatch.mjs"] },
             { role: "Planner Spec", objective: "Audit planner", scopeFiles: ["mcp/planner.mjs"] }
@@ -440,6 +443,151 @@ try {
   }, root);
   assert.equal(pascalReadOnlyPlan.topology.scopeOverlaps.length, 0);
   assert.equal(pascalReadOnlyPlan.workers[0].specialists[0].swarmAdd.brief.includes("ReadOnly"), false);
+
+  // ARCH-001: Multi-squad topology='flat' omits leads cleanly while 'layered' requires lead on each working squad
+  const multiFlat = planSquadCohort({
+    manifest: {
+      squads: {
+        alpha: {
+          lead: { role: "A", objective: "O", scopeFiles: ["a"], readOnly: true },
+          specialists: [{ role: "A1", objective: "O", scopeFiles: ["a/1"] }]
+        },
+        beta: {
+          lead: { role: "B", objective: "O", scopeFiles: ["b"], readOnly: true },
+          specialists: [{ role: "B1", objective: "O", scopeFiles: ["b/1"] }]
+        }
+      }
+    },
+    topology: "flat",
+    includeIntegrityAuditor: false
+  }, root);
+  assert.equal(multiFlat.topology.compiledPattern, "flat");
+  assert.equal(multiFlat.workers[0].lead, null);
+  assert.equal(multiFlat.workers[1].lead, null);
+  assert.throws(() => planSquadCohort({
+    manifest: {
+      squads: {
+        alpha: { specialists: [{ role: "A1", objective: "O", scopeFiles: ["a"] }] },
+        beta: { specialists: [{ role: "B1", objective: "O", scopeFiles: ["b"] }] }
+      }
+    },
+    topology: "layered",
+    includeIntegrityAuditor: false
+  }, root), /does not define a lead \(required for topology 'layered'\)/);
+  assert.throws(() => planSquadCohort({
+    task: "Audit auth",
+    topology: "layered",
+    includeIntegrityAuditor: false
+  }, root), /topology 'layered' requires a manifest with per-squad leads/);
+
+  // ARCH-002: Writable lead whose scopeFiles overlaps a specialist reports scopeOverlaps
+  const writableLeadOverlap = planSquadCohort({
+    manifest: {
+      squads: {
+        alpha: {
+          lead: { role: "Writable Lead", objective: "Edit mcp", scopeFiles: ["mcp"] },
+          specialists: [{ role: "Planner Spec", objective: "Edit planner", scopeFiles: ["mcp/planner.mjs"] }]
+        }
+      }
+    },
+    topology: "layered",
+    includeIntegrityAuditor: false
+  }, root);
+  assert.equal(writableLeadOverlap.topology.scopeOverlaps.length, 1);
+
+  // MCP-002: scopeFiles: undefined defaults to ["."] while empty [] fails validation
+  const defaultScopePlan = planSquadCohort({
+    task: "Inspect repo",
+    includeIntegrityAuditor: false
+  }, root);
+  assert.deepEqual(defaultScopePlan.topology.scopeOverlaps, []);
+  assert.ok(defaultScopePlan.workers[0].specialists[0].swarmAdd.brief.includes("Work within these files or directories:\n- ."));
+  assert.throws(() => planSquadCohort({
+    task: "Invalid empty scopeFiles",
+    scopeFiles: [],
+    includeIntegrityAuditor: false
+  }, root), /scopeFiles/);
+
+  // RUN-004, RUN-007, RUN-008, S1-SVC-01: Reserved keys rejected, readOnly: null rejected, PascalCase Model normalized/stripped so top-level model override wins
+  const safeKeys = JSON.parse('{"squads":{"safe_sq":{"lead":{"role":"Safe","objective":"Audit","scopeFiles":["a"],"readOnly":true,"Model":"StalePascal"},"specialists":[{"role":"S1","objective":"Audit","scopeFiles":["a/1"]}]}}}');
+  const safePlan = planSquadCohort({ manifest: safeKeys, model: "gemini-3.8-flash-high", includeIntegrityAuditor: false }, root);
+  assert.equal(safePlan.workers[0].lead.swarmAdd.model, "gemini-3.8-flash-high");
+  assert.equal(safePlan.workers[0].lead.swarmAdd.brief.includes("StalePascal"), false);
+  const protoSquad = JSON.parse('{"squads":{"__proto__":{"specialists":[{"role":"Bad","objective":"Bad","scopeFiles":["a"]}]}}}');
+  assert.throws(() => planSquadCohort({ manifest: protoSquad, includeIntegrityAuditor: false }, root), /Invalid reserved squad ID '__proto__'\./);
+  assert.throws(() => planSquadCohort({
+    manifest: {
+      squads: {
+        bad: {
+          lead: { role: "Bad", objective: "Bad", scopeFiles: ["a"], readOnly: null },
+          specialists: [{ role: "S1", objective: "Audit", scopeFiles: ["a/1"] }]
+        }
+      }
+    },
+    includeIntegrityAuditor: false
+  }, root), /readOnly/);
+
+  // RUN-013: Symlink pointing to overlapping real target detects scopeOverlaps
+  const symDir = path.join(root, "sym-src");
+  const realDir = path.join(root, "real-src");
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, "item.js"), "// item\n", "utf8");
+  fs.symlinkSync(realDir, symDir);
+  const symlinkOverlap = planSquadCohort({
+    manifest: {
+      squads: {
+        alpha: {
+          lead: { role: "Lead", objective: "L", scopeFiles: ["docs"], readOnly: true },
+          specialists: [
+            { role: "Spec A", objective: "Edit real", scopeFiles: ["real-src/item.js"] },
+            { role: "Spec B", objective: "Edit link", scopeFiles: ["sym-src/item.js"] }
+          ]
+        }
+      }
+    },
+    topology: "layered",
+    includeIntegrityAuditor: false
+  }, root);
+  assert.equal(symlinkOverlap.topology.scopeOverlaps.length, 1);
+
+  // RUN-014 & SVC-007 & SVC-001: precompiledSpecialists omits Call dispatch_squad; occupiedWorkerNames deduplicates; integrityAuditSlots populated
+  assert.equal(subagentPlan.workers[0].lead.Subagent.Prompt.includes("Call dispatch_squad"), false);
+  assert.equal(Array.isArray(overlapTask.bundleRecordTemplates.task_squad.integrityAuditSlots), true);
+  assert.equal(overlapTask.bundleRecordTemplates.task_squad.integrityAuditSlots.length, 1);
+  const deduplicatedPlan = planSquadCohort({
+    manifest: {
+      squads: {
+        task_squad: {
+          lead: { role: "Lead", objective: "L", scopeFiles: ["a"], readOnly: true },
+          specialists: [{ role: "Worker Reviewer Extra", objective: "W", scopeFiles: ["a/1"] }]
+        }
+      }
+    },
+    occupiedWorkerNames: ["Task-Squad-Lead", "task-squad-worker-review"],
+    includeIntegrityAuditor: false
+  }, root);
+  assert.equal(deduplicatedPlan.workers[0].lead.workerName, "task-squad-lead-2");
+  assert.equal(deduplicatedPlan.workers[0].specialists[0].workerName, "task-squad-worker-revi-2");
+  assert.equal(deduplicatedPlan.workers[0].specialists[0].workerName.length <= 24, true);
+
+  const exact18Squad = "s".repeat(18);
+  const exact18Plan = planSquadCohort({
+    manifest: { squads: { [exact18Squad]: { specialists: [{ role: "W", objective: "W", scopeFiles: ["a"] }] } } },
+    includeIntegrityAuditor: false
+  }, root);
+  assert.equal(exact18Plan.warnings.some((w) => /occupiedWorkerNames/.test(w)), false);
+
+  const longNamePlan = planSquadCohort({
+    manifest: {
+      squads: {
+        ["s".repeat(19)]: {
+          specialists: [{ role: "Worker", objective: "W", scopeFiles: ["a"] }]
+        }
+      }
+    },
+    includeIntegrityAuditor: false
+  }, root);
+  assert.ok(longNamePlan.warnings.some((w) => /24 characters/.test(w) && /occupiedWorkerNames/.test(w)));
 
   console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {

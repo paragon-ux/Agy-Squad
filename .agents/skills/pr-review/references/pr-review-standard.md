@@ -1,6 +1,6 @@
 # Agy-Squad PR Review Standard
 
-Version: 1.3.0
+Version: 1.4.0
 Status: Active repository workflow standard (enforced by `.agents/skills/pr-review/SKILL.md` and `.agents/skills/self-diagnosis/SKILL.md`)
 Established: 2026-11-08
 
@@ -156,6 +156,7 @@ Keep local review reports under `docs/reviews/`. Cite the reviewed base and head
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.4.0 | 2026-11-14 | Enforce mandatory Sections `1–8` and cross-section ID-status consistency in `validateTargetReviewLedger`; surface open P0–P2 ledger blockers explicitly; require `Evidence Digest: <64-hex>` binding (`agy-squad digest`), multi-auditor `integrityAudits[]` consensus, persisted bundle `auditPolicy`, atomic pre-delete teardown preflight, and documented single- vs multi-squad audit slots (`squad-integrity_auditor` vs `squad-integrity_auditor-<id>`). |
 | 1.3.0 | 2026-11-08 | Enforce `1 ID = 1 Row` (ban umbrella/range IDs) and 6-status enum, add tiered record density for `P3` tables, require Section 1 Session Provenance and mandatory Section 8 (`Post-Remediation Residuals & Deferred Dispositions`), and standardize Section 9 (`/self-diagnosis` Cohort & Bundle Ledger). |
 | 1.2.0 | 2026-11-08 | Adapt standard to Agy-Squad with 5 WSL runtime verification boundaries, durable review ledger coupling with `/self-diagnosis`, and distinct version bump per Section 0. |
 | 1.1.0 | 2026-10-20 | Require explicit P1/P2/P3 triage inside every category, including empty versus unassessed buckets; preserve separate verification gaps. |

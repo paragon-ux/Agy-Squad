@@ -1,18 +1,35 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
-import { bundleReports, fingerprint, inspectHandoffs, pruneReports, readFile, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, computeEvidenceDigest, decodeUtf8, fingerprint, inspectHandoffs, pruneReports, readFile, verifyBundle } from "../mcp/handoffs.mjs";
 import { planSquadCohort } from "../mcp/planner.mjs";
 import { parseContentVerdict, parseIntegrityVerdict } from "../mcp/verdicts.mjs";
+import { printStatus, runCheckOnly, runInstall, runRestoreBackups, runUninstall } from "../scripts/install-register.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkgVersion = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+})();
 
 const usage = [
   "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm):",
-  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...]",
+  "  agy-squad setup [--check]                                              Install or synchronize plugin, skills, MCP server, and CLI shim",
+  "  agy-squad status                                                       Check live integration status across Antigravity",
+  "  agy-squad uninstall [--restore-backups]                                Remove plugin link, MCP entry, and CLI shims",
+  "  agy-squad restore-backups                                              Restore configuration backups (*.bak)",
+  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...]",
   "  agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]       Compile invoke_subagent payload (subagent mode only)",
   "  agy-squad fingerprint <file...>                                        Compute SHA-256 fingerprints for verifiedFiles",
   "  agy-squad inspect <record.json>                                        Reconcile handoff readiness for a cohort",
-  "  agy-squad bundle <record.json> [--allow-unaudited]                     Create a SHA-256 verified proof bundle",
+  "  agy-squad digest <record.json>                                         Compute canonical Evidence Digest for integrity audit binding",
+  "  agy-squad bundle <record.json> [--allow-unaudited] [--replace] [--predecessor <sha256>]  Create a SHA-256 verified proof bundle",
   "  agy-squad verify <report.sources.json>                                 Verify bundle integrity, synthesis, and audit hashes",
   "  agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports] Prune loose reports after verification",
   "  agy-squad verdict [--integrity] <report.md>                            Strictly parse a content or integrity verdict"
@@ -21,7 +38,7 @@ const usage = [
 function runPlanCommand(rest, root) {
   if (!rest.length) {
     throw new Error(
-      "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...]"
+      "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...]"
     );
   }
   const { values, positionals } = parseArgs({
@@ -38,7 +55,8 @@ function runPlanCommand(rest, root) {
       role: { type: "string", multiple: true },
       "no-integrity": { type: "boolean", default: false },
       "report-root": { type: "string" },
-      "known-model": { type: "string", multiple: true }
+      "known-model": { type: "string", multiple: true },
+      "occupied-worker": { type: "string", multiple: true }
     }
   });
   const task = positionals.join(" ").trim();
@@ -54,7 +72,8 @@ function runPlanCommand(rest, root) {
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
     ...(values["report-root"] !== undefined ? { reportRoot: values["report-root"] } : {}),
-    ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {})
+    ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {}),
+    ...(values["occupied-worker"] !== undefined ? { occupiedWorkerNames: values["occupied-worker"] } : {})
   };
   return planSquadCohort(planArgs, root);
 }
@@ -95,10 +114,16 @@ function runDispatchCommand(rest, root) {
 }
 
 const KNOWN_COMMANDS = new Set([
+  "setup",
+  "install",
+  "status",
+  "uninstall",
+  "restore-backups",
   "plan",
   "dispatch",
   "fingerprint",
   "inspect",
+  "digest",
   "bundle",
   "verify",
   "prune",
@@ -124,15 +149,47 @@ async function main(args) {
     console.log(usage);
     return 0;
   }
+  if (args[0] === "--version" || args[0] === "-v") {
+    console.log(pkgVersion);
+    return 0;
+  }
   const [command, ...rest] = args;
   if (!KNOWN_COMMANDS.has(command)) {
-    throw new Error(`Unknown command '${command}'. Expected plan, dispatch, fingerprint, inspect, bundle, verify, prune, or verdict.`);
+    throw new Error(`Unknown command '${command}'. Expected setup, status, uninstall, restore-backups, plan, dispatch, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
   }
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
   if (rest.includes("--help") || rest.includes("-h")) {
     console.log(usage);
+    return 0;
+  }
+
+  if (command === "setup" || command === "install") {
+    const isCheck = rest.includes("--check") || rest.includes("-c");
+    const isRestore = rest.includes("--restore-backups") || rest.includes("restore-backups");
+    const isUninstall = rest.includes("--uninstall") || rest.includes("uninstall");
+    if (isCheck && (isRestore || isUninstall)) {
+      throw new Error("Conflicting flags: --check is read-only and cannot be combined with --uninstall or --restore-backups.");
+    }
+    if (isCheck) {
+      await runCheckOnly();
+      return 0;
+    }
+    await runInstall();
+    return 0;
+  }
+  if (command === "status") {
+    const st = printStatus();
+    return st.isInstalled ? 0 : 1;
+  }
+  if (command === "uninstall") {
+    const isRestore = rest.includes("--restore-backups") || rest.includes("restore-backups");
+    await runUninstall({ restoreBackups: isRestore });
+    return 0;
+  }
+  if (command === "restore-backups") {
+    await runRestoreBackups();
     return 0;
   }
 
@@ -157,23 +214,38 @@ async function main(args) {
     const usageLine = "Usage: agy-squad inspect <record.json>";
     const { positionals } = parseSubcommandArgs(rest, usageLine);
     if (positionals.length !== 1) throw new Error(usageLine);
-    const record = JSON.parse(readFile(root, positionals[0]).toString("utf8"));
+    const record = JSON.parse(decodeUtf8(readFile(root, positionals[0]), positionals[0]));
     console.log(JSON.stringify(inspectHandoffs(root, record), null, 2));
     return 0;
   }
+  if (command === "digest") {
+    const usageLine = "Usage: agy-squad digest <record.json>";
+    const { positionals } = parseSubcommandArgs(rest, usageLine);
+    if (positionals.length !== 1) throw new Error(usageLine);
+    const record = JSON.parse(decodeUtf8(readFile(root, positionals[0]), positionals[0]));
+    console.log(JSON.stringify(computeEvidenceDigest(root, record), null, 2));
+    return 0;
+  }
   if (command === "bundle") {
-    const usageLine = "Usage: agy-squad bundle <record.json> [--allow-unaudited]";
+    const usageLine = "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--replace] [--predecessor <sha256>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
-      "allow-unaudited": { type: "boolean", default: false }
+      "allow-unaudited": { type: "boolean", default: false },
+      replace: { type: "boolean", default: false },
+      predecessor: { type: "string" }
     });
     if (positionals.length !== 1) throw new Error(usageLine);
-    const record = JSON.parse(readFile(root, positionals[0]).toString("utf8"));
+    const record = JSON.parse(decodeUtf8(readFile(root, positionals[0]), positionals[0]));
     if (!record || typeof record !== "object" || Array.isArray(record)) {
       throw new Error("Provide a valid bundle record.");
     }
-    const bundleInput = values["allow-unaudited"]
-      ? { ...record, requireIntegrityAudit: false }
-      : (record.requireIntegrityAudit === undefined ? { ...record, requireIntegrityAudit: true } : record);
+    const bundleInput = {
+      ...record,
+      ...(values["allow-unaudited"]
+        ? { requireIntegrityAudit: false }
+        : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
+      ...(values.replace ? { replaceExisting: true } : {}),
+      ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
+    };
     console.log(JSON.stringify(bundleReports(root, bundleInput), null, 2));
     return 0;
   }
@@ -203,13 +275,13 @@ async function main(args) {
     if (positionals.length !== 1) {
       throw new Error(usageLine);
     }
-    const markdown = readFile(root, positionals[0]).toString("utf8");
+    const markdown = decodeUtf8(readFile(root, positionals[0]), positionals[0]);
     const verdict = values.integrity ? parseIntegrityVerdict(markdown) : parseContentVerdict(markdown);
     console.log(JSON.stringify({ verdict }, null, 2));
     return 0;
   }
 
-  throw new Error(`Unknown command '${command}'. Expected plan, dispatch, fingerprint, inspect, bundle, verify, prune, or verdict.`);
+  throw new Error(`Unknown command '${command}'. Expected plan, dispatch, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
 }
 
 main(process.argv.slice(2)).then(

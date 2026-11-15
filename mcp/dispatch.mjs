@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildSubagentSpec } from "./briefs.mjs";
+import { validateSquadId } from "./verdicts.mjs";
+
+const RETIRED_ADVERSARIAL_RE = /^adversarial_(?:review|l1|flat)$|^adversarial_/i;
 
 const defaultManifests = [
   "task-01-manifest.json",
@@ -40,11 +43,25 @@ function readManifest(root, filename) {
 
 function manifestSquads(manifest) {
   const squads = manifest?.squads;
-  if (!squads || typeof squads !== "object" || Array.isArray(squads) || Object.keys(squads).length === 0) {
+  if (!squads || typeof squads !== "object" || Array.isArray(squads)) {
     throw new Error("Manifest must define at least one squad.");
   }
-  if (Object.hasOwn(squads, "all_l1")) {
-    throw new Error("Squad ID 'all_l1' is reserved for lead compilation.");
+  const proto = Object.getPrototypeOf(squads);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new Error("Manifest 'squads' cannot define reserved prototype keys.");
+  }
+  const keys = Object.keys(squads);
+  if (keys.length === 0) {
+    throw new Error("Manifest must define at least one squad.");
+  }
+  for (const id of Object.getOwnPropertyNames(squads)) {
+    if (id === "all_l1") {
+      throw new Error("Squad ID 'all_l1' is reserved for lead compilation.");
+    }
+    if (RETIRED_ADVERSARIAL_RE.test(id)) {
+      throw new Error(`Squad ID '${id}' was retired in Phase 2; migrate to 'integrity_auditor' (or 'integrity_auditor:<targetSquad>').`);
+    }
+    validateSquadId(id);
   }
   return squads;
 }
@@ -80,8 +97,11 @@ function resolveIntegrityAuditor(squads, targetSquad) {
       }
       const customSpecs = squads.integrity_auditor.children ?? squads.integrity_auditor.specialists;
       const customLead = resolveSquadLead(squads.integrity_auditor, "integrity_auditor", false);
-      if (Array.isArray(customSpecs) && customSpecs.length > 0) {
-        if (customLead) buildSubagentSpec(customLead, slotId, undefined);
+      if (customSpecs !== undefined) {
+        if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
+          throw new Error("Custom 'integrity_auditor' children or specialists must be a non-empty array.");
+        }
+        if (customLead) buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true });
         return customSpecs.map((spec, index) => ({
           spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
           id: slotId,
@@ -101,7 +121,7 @@ function resolveIntegrityAuditor(squads, targetSquad) {
         role: "Integrity Auditor",
         objective: `Audit working squad (${resolvedTarget}) for Subagent Alignment Policy compliance, empirical execution, absence of guessing or sycophancy, and truthfulness of reported evidence.`,
         scopeFiles: ["."],
-        expectedDeliverable: `Markdown audit report recording 'Target Squad: ${resolvedTarget}' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+        expectedDeliverable: `Markdown audit report recording 'Target Squad: ${resolvedTarget}', 'Evidence Digest: <sha256>' (via 'agy-squad digest <record.json>'), and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
       },
       id: slotId,
       number: 1
@@ -158,7 +178,13 @@ function resolveSquadLead(squad, squadId, requireLead) {
     }
     return squad.lead;
   }
-  return hasInlineLead || requireLead ? squad : undefined;
+  return hasInlineLead
+    ? squad
+    : requireLead
+      ? (() => {
+          throw new Error(`Squad '${squadId}' does not define a lead (required for topology 'layered').`);
+        })()
+      : undefined;
 }
 
 function specialistAssignments(squads, squadId) {
@@ -208,7 +234,8 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       throw new Error(`Unknown targetSquad '${flatTarget}'.`);
     }
 
-    const build = ({ spec, id, number }) => buildSubagentSpec(spec, id, selectedManifest, number);
+    const build = ({ spec, id, number }) =>
+      buildSubagentSpec(spec, id, selectedManifest, number, undefined, { isIntegrityAuditor });
     let assignments;
     if (squadId === "all_l1") {
       const workingSquads = Object.entries(squads).filter(

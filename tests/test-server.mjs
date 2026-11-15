@@ -127,11 +127,29 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(badPlan.result.isError, true);
   assert.match(badPlan.result.content[0].text, /exactly one/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
-  assert.equal(unknown.error.code, -32601);
-  for (const invalid of [null, 123, [], { jsonrpc: "2.0", id: 99 }, { id: 99, method: "ping" }]) {
+  assert.equal(unknown.error.code, -32602);
+  for (const invalid of [
+    null,
+    123,
+    [],
+    { jsonrpc: "2.0", id: 99 },
+    { id: 99, method: "ping" },
+    { jsonrpc: "2.0", id: null, method: "ping" },
+    { jsonrpc: "2.0", id: true, method: "ping" },
+    { jsonrpc: "2.0", id: {}, method: "ping" }
+  ]) {
     const err = await handleRequest(invalid);
     assert.equal(err.error.code, -32600);
   }
+  // MCP-007: subagent mode coerces non-alias models to 'inherit'
+  const subagentCoerced = await handleRequest({
+    jsonrpc: "2.0",
+    id: 199,
+    method: "tools/call",
+    params: { name: "squad_planner", arguments: { task: "Verify coercion", executionMode: "subagent", model: "gemini-3.8-flash-high" } }
+  });
+  const coercedPayload = JSON.parse(subagentCoerced.result.content[0].text);
+  assert.equal(coercedPayload.workers[0].specialists[0].Subagent.Model, "inherit");
   const unknownMethod = await send("resources/list");
   assert.equal(unknownMethod.error.code, -32601);
   proc.stdin.write("{malformed json\n");
@@ -196,7 +214,60 @@ console.log("Agy-Squad MCP server tests\n");
   assert.deepEqual(cappedMsgs[1].result, {});
   capped.stdin.end();
   await new Promise((resolve) => capped.on("exit", resolve));
-  console.log("✓ incremental chunk-level 10MB stdio framing cap before newline and split UTF-8 recovery");
+  console.log("✓ incremental chunk-level 2048-byte override stdio framing cap and split UTF-8 recovery");
+}
+{
+  // TEST-001, MCP-003, MCP-004, MCP-005: default 10 MiB boundary, split \r\n framing, >500 KB early-EOF stdout drain, and invalid UTF-8 -32700
+  const maxDefaultProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const maxChunks = [];
+  maxDefaultProc.stdout.on("data", (d) => maxChunks.push(d));
+  const maxExited = new Promise((resolve) => maxDefaultProc.on("exit", resolve));
+  maxDefaultProc.stdin.write(Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+  maxDefaultProc.stdin.write("\n");
+  maxDefaultProc.stdin.end();
+  assert.equal(await maxExited, 0);
+  const maxMsg = JSON.parse(Buffer.concat(maxChunks).toString("utf8").trim());
+  assert.equal(maxMsg.error.code, -32600);
+  assert.match(maxMsg.error.message, /10485760-byte safety ceiling/);
+
+  // MCP-003 & MCP-005: split CRLF across chunks and invalid UTF-8 fatal parse error
+  const crlfProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const crlfChunks = [];
+  crlfProc.stdout.on("data", (d) => crlfChunks.push(d));
+  const crlfExited = new Promise((resolve) => crlfProc.on("exit", resolve));
+  crlfProc.stdin.write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 11, method: "ping" }) + "\r", "utf8"));
+  crlfProc.stdin.write(Buffer.from("\n", "utf8"));
+  crlfProc.stdin.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":12,"method":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}\n')]));
+  crlfProc.stdin.end();
+  assert.equal(await crlfExited, 0);
+  const crlfMsgs = Buffer.concat(crlfChunks).toString("utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(crlfMsgs.length, 2);
+  assert.equal(crlfMsgs[0].id, 11);
+  assert.equal(crlfMsgs[1].error.code, -32700);
+
+  // MCP-004: >500 KB response written while stdin closes immediately after sending the request (early EOF)
+  const manyRoles = Array.from({ length: 120 }, (_, i) => `Role ${i + 1} Large Objective Padding`);
+  const largeProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
+  const largeChunks = [];
+  largeProc.stdout.on("data", (d) => largeChunks.push(d));
+  const largeExited = new Promise((resolve) => largeProc.on("exit", resolve));
+  largeProc.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 404,
+      method: "tools/call",
+      params: { name: "squad_planner", arguments: { task: "Large stdio frame drain test", roles: manyRoles, executionMode: "swarm" } }
+    }) + "\n"
+  );
+  largeProc.stdin.end();
+  const largeExitCode = await largeExited;
+  assert.equal(largeExitCode, 0);
+  const largeRaw = Buffer.concat(largeChunks).toString("utf8");
+  assert.ok(Buffer.byteLength(largeRaw, "utf8") > 500_000, `Expected >500 KB payload, got ${Buffer.byteLength(largeRaw, "utf8")}`);
+  const largeParsed = JSON.parse(largeRaw.trim());
+  assert.equal(largeParsed.id, 404);
+  assert.equal(largeParsed.result.isError, undefined);
+  console.log("✓ default 10 MiB framing ceiling, split CRLF, invalid UTF-8 -32700, and >500 KB early-EOF stdout drain");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

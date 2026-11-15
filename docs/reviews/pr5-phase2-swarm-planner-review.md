@@ -16,7 +16,7 @@
 
 | Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |
 | --- | --- | --- | --- | --- | --- |
-| Session 1 | `69506793-2b07-43f0-ae50-6e7aa009232d` | Coordinator `/swarm` session (`pr5_review`) | `2026-11-13` | `1fde6054af13b47680fcced40974fa5abb97d9d8..657b037840d7f5ec81f276992dc9e2b8b01b6987` (clean tracked tree at audit start; active review scratch in `scratch/agy-squad/squad-pr5_review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` (`coordinator` -> `pr5-runtime-auditor`, `pr5-cli-docs-auditor`, `pr5-live-tester` -> `pr5-review-lead`) |
+| Session 1 | `69506793-2b07-43f0-ae50-6e7aa009232d` | Parent coordinator `/swarm` session (Section 9 subagent provenance logged historical child conversation `63469708-ef4c-4f3e-9d29-545cee047070` from the `pr5_review` dispatch transcript) | `2026-11-13` | `1fde6054af13b47680fcced40974fa5abb97d9d8..657b037840d7f5ec81f276992dc9e2b8b01b6987` (clean tracked tree at audit start; active review scratch in `scratch/agy-squad/squad-pr5_review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` (`coordinator` -> `pr5-runtime-auditor`, `pr5-cli-docs-auditor`, `pr5-live-tester` -> `pr5-review-lead`) |
 | Session 2 (Re-Verification) | `69506793-2b07-43f0-ae50-6e7aa009232d` | Coordinator `/swarm` session (`pr5_review`) | `2026-11-13` | `657b037840d7f5ec81f276992dc9e2b8b01b6987..279e30d428c758f05c734d703984d88801de1fde` (remediation `279e30d`; active review scratch in `scratch/agy-squad/squad-pr5_review/`) | `pr-review` (`v1.3.0`) + `swarm-governance` re-verification (`pr5-runtime-fixer`, `pr5-docs-tests-fixer` -> `pr5-runtime-auditor`, `pr5-cli-docs-auditor`, `pr5-live-tester` -> `pr5-review-lead`) |
 
 ### Evidence Available & Limits

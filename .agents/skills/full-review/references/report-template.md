@@ -8,11 +8,11 @@ Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>
 
 # <Review title>
 
-**Governing Standard:** Agy-Squad PR Review Standard `v1.3.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md))
+**Governing Standard:** Agy-Squad PR Review Standard `v1.4.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md))
 **Review type:** `<PR / branch / working tree / subsystem / evidence bundle / direction decision>`
 **Review date:** `<YYYY-MM-DD>`
 **Reviewer:** `<name / agent>`
-**Standard version:** `1.3.0`
+**Standard version:** `1.4.0`
 
 ## 1. Review metadata, Session Provenance, and evidence limits
 

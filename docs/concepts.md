@@ -34,12 +34,12 @@ Antigravity attaches one persistent board to each parent conversation (`board: "
 An intermediate subagent compiled when `dispatch_squad` (`agy-squad dispatch`) runs with `squadId: "all_l1"` on a manifest defining one or more squads (or a `/swarm` lead in `Layered` mode). Each squad lead inspects its specialists' cited files, writes `scratch/agy-squad/.../lead/report.md` (`Content Verdict: PASS`, `FAIL`, or `BLOCKED`; bare `Verdict:` is accepted only as a legacy alias), pairs with an independent flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`), and bundles SHA-256 digests via `node bin/agy-squad.mjs bundle`.
 
 ### Specialist
-A focused worker compiled for a single squad (`squadId: "<id>"`). Under `invoke_subagent`, `dispatch_squad` compiles every specialist with `TypeName: "self"` and `Workspace: "inherit"` so it can inspect its assigned `scopeFiles` and write its evidence report to `scratch/agy-squad/.../specialist-<N>/report.md`. Under `/swarm`, `squad_planner` supports `workspaceIsolation` (`inherit`, `share`, or `branch`) while mapping worker report slots under `scratch/agy-squad/` (or custom `reportRoot`).
+A focused worker compiled for a single squad (`squadId: "<id>"`). Under `invoke_subagent`, `dispatch_squad` defaults `typeName` to `"self"` (rejecting `"research"`, `"browser"`, and `"image-generator"`) and enforces `Workspace: "inherit"` so it can inspect its assigned `scopeFiles` and write its evidence report to `scratch/agy-squad/.../specialist-<N>/report.md`. Under `/swarm`, `squad_planner` supports `workspaceIsolation` (`inherit`, `share`, or `branch`) while mapping worker report slots under `scratch/agy-squad/` (or custom `reportRoot`).
 
 ### Stage (`all_l1` vs. `<squadId>`)
 A single compilation step returned by `dispatch_squad` (`agy-squad dispatch`) for `invoke_subagent` (in `squad_planner` / `agy-squad plan`, omit `squadId` to compile all squads; `all_l1` is not used in `squad_planner`):
 
-- **Direct specialist stage (`squadId: "<id>"` or `"all_specialists"`):** Returns the `Subagents` array for that squad (or all manifest specialists reporting directly to the caller).
+- **Direct specialist stage (`squadId: "<id>"`):** Returns the `Subagents` array for that manifest squad (`diagnose.mjs --print-dispatch all_specialists` aggregates all self-diagnosis squads in one CLI call).
 - **Lead stage (`squadId: "all_l1"`):** Returns one lead subagent per squad defined in the manifest (`1` or more squads).
 
 ### Manifest
@@ -58,7 +58,7 @@ The single-line message a child sends back to its parent when it finishes (`send
 `mcp/handoffs.mjs` enforces the `500` UTF-8 byte ceiling and single-line format.
 
 ### Evidence bundle (`report.sources.json`)
-A JSON manifest written by `node bin/agy-squad.mjs bundle` alongside `lead/report.md`. It records the SHA-256 digest and byte size of `lead/report.md`, every `specialist-<N>/report.md`, any `integrityAudit` report (`path`, `sha256`, `verdict: "CLEAN"`, `targetSquad`), and every workspace file listed in `verifiedFiles`. Running `node bin/agy-squad.mjs verify` confirms that none of those files (including the integrity audit report on disk) changed or disappeared after bundling.
+A JSON archive written by `node bin/agy-squad.mjs bundle` alongside `lead/report.md`. It records `schemaVersion: 2`, `auditPolicy` (`"required"` or `"unaudited-explicit"`), the SHA-256 digest and archived Markdown snapshot of `lead/report.md` and every `specialist-<N>/report.md`, `integrityAudits` (`path`, `sha256`, `evidenceDigest`, `verdict: "CLEAN"`, `targetSquad`), and every workspace file digest listed in `verifiedFiles`. Running `node bin/agy-squad.mjs verify` validates the persisted `auditPolicy`, checks archived Markdown verdicts and SHA-256 digests against the bundle and final workspace files, and verifies any loose reports that still remain on disk (allowing pruned loose reports to be absent).
 
 ## Companion and governance terms
 
@@ -66,12 +66,12 @@ A JSON manifest written by `node bin/agy-squad.mjs bundle` alongside `lead/repor
 Antigravity's event-driven resumption mechanism: when a background task or subagent calls `send_message` (or finishes), or a `/swarm` worker posts an `@mention`, the parent agent wakes automatically without polling `manage_task(Action='status')` in a loop.
 
 ### RTK (`Rust Token Killer`)
-The command-line companion binary (`v0.51.0`) provisioned by `Agy-Context-Saver` (`v1.8.1+`). During live subagent sessions, `Agy-Context-Saver` routes workspace file reads and shell commands through `rtk read`, `rtk rg`, and `rtk find` to keep child transcripts compact.
+The command-line companion binary (`>= 1.1.0`) provisioned by `Agy-Context-Saver` (`v2.0.1+`). During live subagent and `/swarm` sessions, `Agy-Context-Saver` delegates shell command rewrites to `rtk hook antigravity` (`rtk read`, `rtk grep`, `rtk find`, `rtk git`) and enforces the 3-tier `read_file` slice policy (`<= 150` lines) to keep child transcripts compact.
 
 ### Self-diagnosis (`/self-diagnosis`)
 Agy-Squad's harness diagnostic and optimization skill (`.agents/skills/self-diagnosis/SKILL.md`). It provides a zero-subagent local profiler (`diagnose.mjs`) and three targeted specialist cohorts that audit skills, runtime contracts, and token budgets under operator supervision.
 
-### PR Review Standard `v1.3.0` (`/pr-review`)
+### PR Review Standard `v1.4.0` (`/pr-review`)
 The repository's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` finding records in `docs/reviews/`.
 
 ### Decision ledger codes (`L1` through `L43`)

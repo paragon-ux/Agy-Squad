@@ -158,7 +158,7 @@ Content Verdict: PASS
 - **Scope:** Active `/swarm` worker toolsets, `scratch/agy-squad/*` cohort lifecycle, Session 5–7 retained bundles.
 - **Coverage:** Complete.
 - **P1 — high priority:** None identified within reviewed scope.
-- **P2 — medium priority:** `WT-SVC-01` (Closed — Scope 3 cleanup removed all retained `scratch/` cohorts; `diagnose.mjs` passes without `--allow-active-cohort`); `FR-EVID-SVC-01` (brief alignment Closed; host boundary tracked in §8).
+- **P2 — medium priority:** `WT-SVC-01` (Closed — Scope 3 cleanup removed all retained `scratch/` cohorts; `diagnose.mjs` passes without `--allow-active-cohort`); `FR-EVID-SVC-01` (`Residual (Open)` — historical brief-qualification note; live host `/swarm` worker capability boundary tracked in §8).
 - **P3 — low priority:** `FR-EVID-SVC-02` (Informational historical bundle snapshot note).
 - **Verification:** `swarm status`, `read_board`, `diagnose.mjs` (with vs without `--allow-active-cohort`).
 - **Category Verdict:** No findings within reviewed scope (`WT-SVC-01` Scope 3 cleaned).
@@ -220,24 +220,20 @@ Content Verdict: PASS
 
 ## 6. Consolidated findings index (`1 ID = 1 Row`)
 
+*(Post-remediation, residual, deferred, and informational items — `WT-SVC-01`, `FR-EVID-SVC-01`, `FR-EVID-SVC-02`, `WT-DOC-03`, `WT-DEP-01`, `RES-DIR-01`, `RES-DIR-04` — are tracked canonically under their single governing status in Section 8.)*
+
 | Finding ID | Category | Priority | Status | Source Location | Observation & Disposition |
 | --- | --- | --- | --- | --- | --- |
 | `FR-EVID-ARCH-01` | ARCH | P3 | Closed | `.agents/skills/full-review/references/review-roles.md:60` | Clarified Phase 2 Agy-Squad cohorts default to one flat peer `audit-<id>` Integrity Auditor |
 | `FR-EVID-DOC-01` | DOC | P2 | Closed | `docs/reviews/pr5-layered-swarm-review.md:12,16,338,353,439` | Fixed tracked modified count (39), §8 tally (17), Session 5 vs 7 byte counts, and Layered `p1_leftovers` UUIDs |
 | `FR-EVID-DOC-02` | DOC | P3 | Closed | `docs/reviews/pr5-independent-review.md:25` | Added Session 6–8 Continuation row linking `pr5-layered-swarm-review.md` and `pr5-full-review-direction.md` |
 | `FR-EVID-SKILL-01` | SKILL | P3 | Closed | `.agents/skills/full-review/references/evidence-intake.md:77` | Clarified Node JSONL recipe for exported files vs coordinator batch MCP transcript extraction |
-| `FR-EVID-SVC-01` | SVC | P2 | Closed | `mcp/briefs.mjs:28,35,126` | Qualified `query_transcript` / `read_transcript` instructions; host worker MCP absence tracked separately in §8 |
-| `FR-EVID-SVC-02` | SVC | P3 | Closed | `scratch/agy-squad/` historical bundles | Documented historical Session 5–7 snapshot semantics vs live working-tree verification; tracked in §8 |
-| `WT-SVC-01` | SVC | P2 | Closed | `scratch/agy-squad/squad-integrity_auditor/` | Closed after Stage 3 via Option 2C Scope 3 cleanup; bare `diagnose.mjs` exits 0 (`HEALTHY`) |
+| `FR-EVID-SVC-01-BRIEF` | SVC | P2 | Closed | `mcp/briefs.mjs:28,35,126` | Qualified `query_transcript` / `read_transcript` instructions in briefs (open host capability boundary `FR-EVID-SVC-01` tracked canonically in §8) |
 | `WT-DOC-01` | DOC | P3 | Closed | `docs/tools.md:20,102` | Documented `topology` parameter and `--topology flat or layered` CLI flag |
 | `WT-DOC-02` | DOC | P3 | Closed | `docs/getting-started.md:14` | Documented `python3 -m zensical ...` fallback when `zensical` is not on `PATH` |
-| `WT-DOC-03` | DOC | P3 | Closed | Historical comparative plans / `pr3` ledger | Deferred in §8 (44 pre-existing strict warnings outside PR #5 scope) |
 | `WT-SCRIPT-01` | SCRIPT | P3 | Closed | `bin/agy-squad.mjs:24` | Added `[--topology flat or layered]` to `runPlanCommand` usage output |
-| `WT-DEP-01` | DEP | P3 | Closed | `package.json:22` | Deferred in §8 (`"docs": "zensical serve"`; fallback documented in `getting-started.md:14`) |
-| `RES-DIR-01` | SCRIPT | P2 | Closed | `.agents/skills/self-diagnosis/scripts/diagnose.mjs:426-595` | Deferred post-PR #5 in §8; mitigated in Stage 2/3 by explicit Scope 3 cleanup of custom scratch dirs/files |
 | `RES-DIR-02` | DOC | P3 | Closed | `docs/reviews/pr5-layered-swarm-review.md:12,16,439` | Synchronized tracked file count (39), §8 tally (17), and `p1_leftovers` provenance row |
 | `RES-DIR-03` | DOC | P3 | Closed | `docs/reviews/pr5-independent-review.md:25` | Linked Session 6–8 provenance to existing `pr5-full-review-direction.md` |
-| `RES-DIR-04` | SCRIPT | P3 | Closed | `.agents/skills/self-diagnosis/scripts/diagnose.mjs:124-135` | Deferred in §8; mitigated by explicit `--ledger docs/reviews/<slug>.md` flag |
 | `RES-DIR-05` | DOC | P3 | Closed | `docs/getting-started.md:14` | Added `python3 -m zensical` compatibility guidance |
 
 ---
@@ -288,7 +284,7 @@ Content Verdict: PASS
 | `FR-EVID-SVC-01` | `full_review` (Session 8) | SVC | Residual (Open) | Antigravity `/swarm` worker MCP boundary | Workers lack `agy-context-saver` MCP (`query_transcript` / `read_transcript`) | Qualified `mcp/briefs.mjs`; coordinator supplies `E01` batch index | `E01` examined; `mcp/briefs.mjs` tested via `npm test` |
 | `WT-SVC-01` | `full_review` (Session 8) | SVC | Closed (Post-Remediation) | `scratch/agy-squad/squad-integrity_auditor/` | Active/retained cohort dir triggers `SVC-TEARDOWN-integrity_auditor` without `--allow-active-cohort` | Removed all Stage 1–3 scratch cohorts & files via Option 2C Scope 3 cleanup | Post-cleanup `diagnose.mjs` (no `--allow-active-cohort`) exit 0 (`HEALTHY`) |
 | `RES-DIR-01` | `full_review` (Session 8) | SCRIPT | Deferred / Won't Fix | `.agents/skills/self-diagnosis/scripts/diagnose.mjs:426-595` | Expand `--teardown all` to sweep custom cohort roots and top-level metadata files | Deferred post-PR #5; mitigated by explicit Option 2C Scope 3 cleanup | Audited `diagnose.mjs:426-595` |
-| `RES-DIR-04` | `full_review` (Session 8) | SCRIPT | Deferred / Won't Fix | `.agents/skills/self-diagnosis/scripts/diagnose.mjs:124-135` | Without `--ledger`, equal mtime tie-breaker picks `pr5-phase2-swarm-planner-review.md` | Mitigated by always passing explicit `--ledger docs/reviews/<slug>.md` | Audited `diagnose.mjs:124-135` |
+| `RES-DIR-04` | `full_review` (Session 8) | SCRIPT | Residual (Open) | `.agents/skills/self-diagnosis/scripts/diagnose.mjs:124-135` | Without `--ledger`, equal mtime tie-breaker picked `pr5-phase2-swarm-planner-review.md` | Superseded/fixed in working tree (`diagnose.mjs` prefers `-reconciled*`); kept `Residual (Open)` in historical Session 8 snapshot | Audited `diagnose.mjs:124-135` |
 | `WT-DOC-03` | `full_review` (Session 8) | DOC | Deferred / Won't Fix | Historical comparative plans / `pr3` ledger | 44 pre-existing strict warnings outside PR #5 scope | Historical artifacts left unchanged; non-strict CI build passes | `python3 -m zensical build` exit 0 |
 | `WT-DEP-01` | `full_review` (Session 8) | DEP | Deferred / Won't Fix | `package.json:22` | `"docs": "zensical serve"` assumes `zensical` on `PATH` | Documented `python3 -m zensical` fallback in `docs/getting-started.md:14` | `python3 -m zensical --version` 0.0.74 |
 | `FR-EVID-SVC-02` | `full_review` (Session 8) | SVC | Informational | `scratch/agy-squad/*` | Historical Session 5–7 bundles fail live `verify` after subsequent source edits | Expected tamper-evidence behavior on superseded files | `node bin/agy-squad.mjs verify` spot-checks |
@@ -300,15 +296,15 @@ Content Verdict: PASS
 | `full_review` (Stage 2 `/full-review` Flat Cohort) | `72686908-b468-479a-ad86-db9b9cacf078` | Evidence Manifest, Working Tree Readiness & Direction Decision (`specialist-1..3` -> coordinator -> flat `audit-full-review`) | `full-review-evidence-tra` (`8589849f`), `full-review-working-tree` (`9a3fb2d9`), `full-review-direction-op` (`916b6ecb`), `monitor-5` (`f224d3a3`), `audit-full-review` (`ad4f0166`) | Remediation verified post-fix before synthesis (`npm test`, `verify:package`, `diagnose.mjs` exit 0) | Bundle `5650274db8364601b56bb73e15aeb0e558309a995ed331ac39d64fff0119eb4f` (Audit CLEAN `1feb29307b95...`) | Scope 2 pruned -> Scope 3 cleaned |
 | `task_squad` (Stage 3 `/swarm-governance` standalone `share`) | `72686908-b468-479a-ad86-db9b9cacf078` | Standalone `/swarm-governance` (`--workspace-isolation share`) across `docs/tools.md` & `README.md` (`specialist-1..2` -> coordinator -> flat `audit-task-squad`) | `task-squad-tools-docs-ve` (`c66cbab0`), `task-squad-readme-verifi` (`14c02400`), `audit-task-squad` (`1f17d94a`), `monitor-6` (`d990f902`) | Pre-kill worktree collection verified by `audit-task-squad` (`npm test`, `verify:package` 53 files exit 0) | Bundle `f08727e95739510ec2e028805716231a9e91becdb90127f8ecaf2bdbd487b2b0` (Audit CLEAN `a06012365b55...`) | Scope 2 pruned -> Scope 3 cleaned |
 
-| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `WT-SVC-01` | `full_review` (Session 8) | SVC | Closed | `scratch/agy-squad/squad-integrity_auditor/` | Active/retained cohort dir triggers `SVC-TEARDOWN-integrity_auditor` without `--allow-active-cohort` | Executed Option 2C Scope 3 cleanup post-Stage 3 | Post-cleanup `diagnose.mjs` exit 0 (`HEALTHY`) |
+None (0 wave findings) — *(post-remediation item `WT-SVC-01` tracked canonically in Section 8).*
 
 ## Appendix A. Verified file SHA-256 table
 
+> Historical Session 8 baseline snapshot prior to `198356a` / post-remediation PR #5 edits.
+
 | File Path | SHA-256 Digest |
 | --- | --- |
-| `docs/reviews/pr5-layered-swarm-review.md` | `02d5dc637a2e3b27064edc46c92525edecb11db98f690e224e2edd914eecf174` |
+| `docs/reviews/pr5-layered-swarm-review.md` | `02d5dc637a2e3b27064edc46c92525edecb11db98f690e224e2edd914eecf174` (Session 8 intake snapshot prior to `198356a` / post-remediation updates) |
 | `docs/reviews/pr5-independent-review.md` | `d0375e1694406862f6c5e70c8deb80d471a798136a9edd7da9a34d8e918d08b3` |
 | `.agents/skills/full-review/SKILL.md` | `63cbfb0f70390ac44f0883bdcd0638f6bb442d55b09e9714aaa3dab9ab65a6fd` |
 | `.agents/skills/full-review/references/evidence-intake.md` | `281d8b01ba262484a2578714b3c5da1cd9433a341c8ce9093b148e084cf7fd5e` |

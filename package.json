@@ -1,8 +1,7 @@
 {
   "name": "agy-squad",
   "version": "0.1.0",
-  "private": true,
-  "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Antigravity.",
+  "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "main": "mcp/index.js",
   "bin": {
     "agy-squad": "bin/agy-squad.mjs",
@@ -11,13 +10,24 @@
   "files": [
     "bin",
     "mcp",
+    "scripts",
     ".agents/skills",
-    "docs"
+    "docs",
+    "plugin.json",
+    "install.sh",
+    "install.ps1",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "type": "module",
   "scripts": {
     "start": "node mcp/index.js",
-    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-comparative-dossier.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
+    "setup": "node scripts/install-register.mjs",
+    "uninstall": "node scripts/install-register.mjs --uninstall",
+    "status": "node scripts/install-register.mjs --status",
+    "preflight": "node scripts/release-preflight.mjs",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-comparative-dossier.mjs && node tests/test-lifecycle-installer.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
     "verify:package": "node tests/verify-package.mjs --self-test && npm pack --dry-run --json | node tests/verify-package.mjs",
     "docs": "zensical serve"
   },
@@ -26,8 +36,14 @@
     "url": "https://github.com/paragon-ux/Agy-Squad.git"
   },
   "homepage": "https://paragon-ux.github.io/agy-squad/",
+  "bugs": {
+    "url": "https://github.com/paragon-ux/Agy-Squad/issues"
+  },
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "antigravity",
@@ -35,7 +51,8 @@
     "subagents",
     "swarm",
     "governance",
-    "wsl"
+    "pr-review",
+    "cli"
   ],
   "author": "paragon-ux",
   "license": "MIT"

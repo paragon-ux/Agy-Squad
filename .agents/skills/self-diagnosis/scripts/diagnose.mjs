@@ -9,6 +9,7 @@ import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../../../../mcp/dispatch.mjs";
 import {
   bundleReports,
+  computeEvidenceDigest,
   ensureDirectory,
   fingerprint,
   inspectHandoffs,
@@ -109,8 +110,17 @@ function resolveTargetReviewLedger(ledgerArg) {
       const revision = revMatch ? Number.parseInt(revMatch[1], 10) : 1;
       const prMatch = /^pr(\d+)-/i.exec(entry.name);
       const prNumber = prMatch ? Number.parseInt(prMatch[1], 10) : 0;
+      const isReconciled = /-reconciled(?:-review)?(?:-r\d+)?\.md$/i.test(entry.name);
       const family = entry.name.replace(/-r\d+(?=\.md$)/i, "").toLowerCase();
-      candidates.push({ relative: `docs/reviews/${entry.name}`, absolute: real, stat, family, revision, prNumber });
+      candidates.push({
+        relative: `docs/reviews/${entry.name}`,
+        absolute: real,
+        stat,
+        family,
+        revision,
+        prNumber,
+        isReconciled
+      });
     }
   }
   const latestByFamily = new Map();
@@ -127,6 +137,9 @@ function resolveTargetReviewLedger(ledgerArg) {
     }
     if (b.prNumber !== a.prNumber) {
       return b.prNumber - a.prNumber;
+    }
+    if (b.isReconciled !== a.isReconciled) {
+      return b.isReconciled ? 1 : -1;
     }
     if (b.revision !== a.revision) {
       return b.revision - a.revision;
@@ -264,8 +277,29 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
   const markdown = fs.readFileSync(targetLedger.absolute, "utf8");
   const errors = [];
   const openResiduals = [];
+  const openBlockingFindings = [];
   const recordedFindingIds = extractCohortFindingIds(markdown);
   const recordedBundleShas = [];
+  const statusById = new Map();
+
+  const recordIdStatus = (primaryId, cleanStatus, label) => {
+    if (!primaryId) return;
+    const prev = statusById.get(primaryId);
+    if (prev && prev.status !== cleanStatus) {
+      errors.push(
+        `${label} assigns conflicting status '${cleanStatus}' to '${primaryId}' (already recorded as '${prev.status}' in ${prev.label}).`
+      );
+    } else if (!prev) {
+      statusById.set(primaryId, { status: cleanStatus, label });
+    }
+  };
+
+  for (const reqSec of [1, 2, 3, 4, 5, 6, 7]) {
+    const sec = extractTopLevelSection(markdown, reqSec);
+    if (!sec) {
+      errors.push(`Missing mandatory '## ${reqSec}.' ledger section.`);
+    }
+  }
 
   const sec1 = extractTopLevelSection(markdown, 1);
   const expectedSessionHeaders = [
@@ -276,9 +310,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     "Base..Head + Working-Tree State",
     "Skill / Topology Invoked"
   ];
-  if (!sec1) {
-    errors.push("Missing mandatory '## 1.' review metadata section.");
-  } else {
+  if (sec1) {
     const sessionTable = parseMarkdownTables(sec1.body).find(
       t => t.headers.length === expectedSessionHeaders.length && t.headers.every((h, idx) => h === expectedSessionHeaders[idx])
     );
@@ -289,9 +321,15 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   }
 
-  const validateFindingTable = (table, label, { section8Only = false } = {}) => {
+  const inferPriorityFromHeading = (text, fallback = "P2") => {
+    const m = /\b(P[0-3])\b/.exec(text);
+    return m ? m[1] : fallback;
+  };
+
+  const validateFindingTable = (table, label, { section8Only = false, defaultPriority = "P2" } = {}) => {
     const idIdx = 0;
     const statusIdx = table.headers.indexOf("Status");
+    const prioIdx = table.headers.findIndex(h => /^(?:Priority|Severity|Sev|Prio)$/i.test(h));
     if (statusIdx === -1) {
       errors.push(`${label} finding table is missing a 'Status' column.`);
       return;
@@ -324,10 +362,18 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
         errors.push(`Section 8 row '${primaryId || rawId}' must use a residual/deferred/by-design status (found '${cleanStatus}').`);
       } else if (!section8Only && SECTION8_STATUSES.has(cleanStatus)) {
         errors.push(`${label} row '${primaryId || rawId}' has status '${cleanStatus}', which belongs in Section 8.`);
+      } else if (primaryId) {
+        recordIdStatus(primaryId, cleanStatus, label);
       }
 
       if (section8Only && cleanStatus === "Residual (Open)" && primaryId) {
         openResiduals.push(primaryId);
+      } else if (!section8Only && cleanStatus === "Open (Pre-Remediation)" && primaryId) {
+        const prioText = prioIdx !== -1 ? row[prioIdx] : row.find(c => /\bP[0-3]\b/.test(c)) || defaultPriority;
+        const prio = /\b(P[0-3])\b/.exec(prioText)?.[1] ?? defaultPriority;
+        if (prio !== "P3") {
+          openBlockingFindings.push({ id: primaryId, priority: prio, label });
+        }
       }
     }
   };
@@ -335,9 +381,37 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
   for (const secNum of [5, 6, 7]) {
     const sec = extractTopLevelSection(markdown, secNum);
     if (!sec) continue;
-    for (const table of parseMarkdownTables(sec.body)) {
-      if ((table.headers[0] === "ID" || table.headers[0] === "Finding ID") && table.headers.includes("Status")) {
-        validateFindingTable(table, `Section ${secNum}`, { section8Only: false });
+    // Track subsections so tables under "### 5.4 P3" inherit P3 rather than P2
+    const chunks = sec.body.split(/^(###\s+[^\r\n]+)$/m);
+    let currentSubPrio = "P2";
+    for (const chunk of chunks) {
+      if (/^###\s+/.test(chunk)) {
+        currentSubPrio = inferPriorityFromHeading(chunk, "P2");
+        continue;
+      }
+      for (const table of parseMarkdownTables(chunk)) {
+        if ((table.headers[0] === "ID" || table.headers[0] === "Finding ID") && table.headers.includes("Status")) {
+          validateFindingTable(table, `Section ${secNum}`, { section8Only: false, defaultPriority: currentSubPrio });
+        }
+      }
+      // Also inspect atomic "#### `ID` — Title | P1 | Open (Pre-Remediation)" heading records
+      const strippedChunk = chunk.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
+      const recRe = /^#{3,4}\s+`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`?[^|\r\n]*\|\s*(P[0-3])\s*\|\s*([^\r\n|]+)$/gm;
+      for (const match of strippedChunk.matchAll(recRe)) {
+        const recId = match[1].trim();
+        const recPrio = match[2].trim();
+        const recStatus = match[3].replace(/\*\*|`/g, "").trim();
+        recordedFindingIds.add(recId);
+        if (!ALLOWED_LEDGER_STATUSES.has(recStatus)) {
+          errors.push(`Section ${secNum} record '${recId}' uses non-canonical status '${recStatus}'.`);
+        } else if (SECTION8_STATUSES.has(recStatus)) {
+          errors.push(`Section ${secNum} record '${recId}' has status '${recStatus}', which belongs in Section 8.`);
+        } else {
+          recordIdStatus(recId, recStatus, `Section ${secNum}`);
+          if (recStatus === "Open (Pre-Remediation)" && recPrio !== "P3") {
+            openBlockingFindings.push({ id: recId, priority: recPrio, label: `Section ${secNum}` });
+          }
+        }
       }
     }
   }
@@ -420,7 +494,24 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   }
 
-  return { errors, openResiduals, recordedFindingIds, recordedBundleShas };
+  return { errors, openResiduals, openBlockingFindings, recordedFindingIds, recordedBundleShas };
+}
+
+function isCanaryPidAlive(canaryAbsDir) {
+  const ownerFile = path.join(canaryAbsDir, "canary-owner.json");
+  if (!fs.existsSync(ownerFile)) {
+    return false;
+  }
+  try {
+    const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+    if (!Number.isInteger(owner?.pid) || owner.pid <= 0) {
+      return false;
+    }
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
 }
 
 function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = false, ledgerPath } = {}) {
@@ -438,6 +529,25 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
   const validatedDirs = [];
   const tornDown = [];
   const removedParents = [];
+  const accountedAuditFiles = new Set();
+  let ledgerCheck = null;
+
+  const ensureLedgerValid = failingRelDir => {
+    if (!targetLedger) {
+      throw new Error(
+        `Refusing to tear down ${failingRelDir}: no durable target PR review ledger found under docs/reviews/. Export or update docs/reviews/<slug>.md before --teardown.`
+      );
+    }
+    if (!ledgerCheck) {
+      ledgerCheck = validateTargetReviewLedger(targetLedger, { requireCohortSection: true });
+      if (ledgerCheck.errors.length > 0) {
+        throw new Error(
+          `Refusing to tear down ${failingRelDir}: ${targetLedger.relative} violates PR Review Standard v1.4.0 schema: ${ledgerCheck.errors.join(" ")}`
+        );
+      }
+    }
+    return ledgerCheck;
+  };
 
   for (const id of targetSquads) {
     const relDir = `${scratchSquadRel}/squad-${encodeURIComponent(id)}`;
@@ -459,17 +569,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
     const bundleAbs = path.join(repoRoot, bundleRel);
 
     if (!force) {
-      if (!targetLedger) {
-        throw new Error(
-          `Refusing to tear down ${hasWorking ? relDir : auditRelDir}: no durable target PR review ledger found under docs/reviews/. Export or update docs/reviews/<slug>.md before --teardown.`
-        );
-      }
-      const ledgerCheck = validateTargetReviewLedger(targetLedger, { requireCohortSection: true });
-      if (ledgerCheck.errors.length > 0) {
-        throw new Error(
-          `Refusing to tear down ${hasWorking ? relDir : auditRelDir}: ${targetLedger.relative} violates PR Review Standard v1.3.0 schema: ${ledgerCheck.errors.join(" ")}`
-        );
-      }
+      const activeLedger = ensureLedgerValid(hasWorking ? relDir : auditRelDir);
       if (hasWorking && fs.existsSync(bundleAbs)) {
         const verified = verifyBundle(repoRoot, bundleRel, acceptedHash);
         const bundleStat = fs.statSync(bundleAbs);
@@ -478,7 +578,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
             `Refusing to tear down ${relDir} before updating the durable target PR review ledger (${targetLedger.relative}). Update ${targetLedger.relative} with this cohort's findings and bundle digest before running --teardown.`
           );
         }
-        const digestRecorded = ledgerCheck.recordedBundleShas.some(
+        const digestRecorded = activeLedger.recordedBundleShas.some(
           token => verified.sha256 === token || verified.sha256.startsWith(token)
         );
         if (!digestRecorded) {
@@ -497,10 +597,41 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
             }
           }
         }
+        const bundledAudits = [
+          ...(bundleJson.integrityAudit ? [bundleJson.integrityAudit] : []),
+          ...(Array.isArray(bundleJson.integrityAudits) ? bundleJson.integrityAudits : [])
+        ];
+        const auditMarkdowns = [];
+        const bundledAuditPaths = new Set();
+        for (const auditEntry of bundledAudits) {
+          if (auditEntry?.path) {
+            bundledAuditPaths.add(auditEntry.path);
+            accountedAuditFiles.add(auditEntry.path);
+          }
+          if (typeof auditEntry?.markdown === "string" && auditEntry.markdown.trim()) {
+            auditMarkdowns.push(auditEntry.markdown);
+          } else if (auditEntry?.path) {
+            const absAuditReport = path.join(repoRoot, auditEntry.path);
+            if (fs.existsSync(absAuditReport)) {
+              auditMarkdowns.push(fs.readFileSync(absAuditReport, "utf8"));
+            }
+          }
+        }
+        if (hasAudit) {
+          for (const entry of fs.readdirSync(auditAbsDir, { withFileTypes: true })) {
+            if (entry.isDirectory() && /^specialist-[1-9]\d*$/.test(entry.name)) {
+              const repPath = path.join(auditAbsDir, entry.name, "report.md");
+              if (fs.existsSync(repPath)) {
+                auditMarkdowns.push(fs.readFileSync(repPath, "utf8"));
+              }
+            }
+          }
+        }
         const cohortMarkdowns = [
           ...(fs.existsSync(leadReportAbs) ? [fs.readFileSync(leadReportAbs, "utf8")] : []),
           ...(Array.isArray(bundleJson.reports) ? bundleJson.reports.map(r => r.markdown || "") : []),
-          ...looseReports
+          ...looseReports,
+          ...auditMarkdowns
         ];
         const cohortFindingIds = new Set();
         for (const md of cohortMarkdowns) {
@@ -508,7 +639,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
             cohortFindingIds.add(fid);
           }
         }
-        const missingIds = [...cohortFindingIds].filter(fid => !ledgerCheck.recordedFindingIds.has(fid));
+        const missingIds = [...cohortFindingIds].filter(fid => !activeLedger.recordedFindingIds.has(fid));
         if (missingIds.length > 0) {
           throw new Error(
             `Refusing to tear down ${relDir}: cohort finding ID(s) [${missingIds.join(", ")}] are missing from ${targetLedger.relative}.`
@@ -528,8 +659,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
           );
         }
         if (hasAudit) {
-          const bundledAuditPath = bundleJson.integrityAudit?.path;
-          const unexpectedAuditArtifacts = listArtifacts(auditAbsDir).filter(file => file !== bundledAuditPath);
+          const unexpectedAuditArtifacts = listArtifacts(auditAbsDir).filter(file => !bundledAuditPaths.has(file));
           if (unexpectedAuditArtifacts.length) {
             throw new Error(
               `Refusing to tear down ${auditRelDir}: unbundled artifacts remain: ${unexpectedAuditArtifacts.join(", ")}`
@@ -555,34 +685,62 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
     if (hasAudit) validatedDirs.push({ absDir: auditAbsDir, relDir: auditRelDir });
   }
 
-  for (const { relDir } of validatedDirs) {
-    // REVIEW: Recheck the full parent chain immediately before destructive cleanup.
-    fs.rmSync(assertSafeDeleteTarget(relDir), { recursive: true, force: true });
-    tornDown.push(relDir);
-  }
-
-  if (squadId === "all" && fs.existsSync(scratchSquadRoot)) {
+  // Preflight flat unscoped squad-integrity_auditor and canary directories BEFORE deleting anything (SVC-002, SVC-006)
+  if ((squadId === "all" || squadId === "self_diagnosis") && fs.existsSync(scratchSquadRoot)) {
     assertSafeDeleteTarget(scratchSquadRel); // REVIEW: don't enumerate external symlink trees.
     const flatAuditRel = `${scratchSquadRel}/squad-integrity_auditor`;
     const flatAuditAbs = path.join(repoRoot, flatAuditRel);
-    if (fs.existsSync(flatAuditAbs)) {
+    const hasSelfDiagBundleMatch = [...accountedAuditFiles].some(f => f.startsWith(`${flatAuditRel}/`));
+    if (fs.existsSync(flatAuditAbs) && (squadId === "all" || hasSelfDiagBundleMatch)) {
       assertSafeDeleteTarget(flatAuditRel);
       const flatAuditArtifacts = listArtifacts(flatAuditAbs);
-      if (!force && flatAuditArtifacts.length > 0) {
+      const unbundledFlatAudit = flatAuditArtifacts.filter(file => !accountedAuditFiles.has(file));
+      if (!force && unbundledFlatAudit.length > 0) {
         throw new Error(
           `Refusing to tear down unbundled evidence in ${flatAuditRel} without bundle verification or --force.`
         );
       }
-      fs.rmSync(assertSafeDeleteTarget(flatAuditRel), { recursive: true, force: true });
-      tornDown.push(flatAuditRel);
+      if (!force && flatAuditArtifacts.length > 0) {
+        const activeLedger = ensureLedgerValid(flatAuditRel);
+        const flatAuditFindingIds = new Set();
+        for (const relFile of flatAuditArtifacts) {
+          const absFile = path.join(repoRoot, relFile);
+          if (relFile.endsWith(".md") && fs.existsSync(absFile)) {
+            const md = fs.readFileSync(absFile, "utf8");
+            for (const fid of extractCohortFindingIds(md, { includeProseHeadingsAndBullets: true })) {
+              flatAuditFindingIds.add(fid);
+            }
+          }
+        }
+        const missingFlatIds = [...flatAuditFindingIds].filter(fid => !activeLedger.recordedFindingIds.has(fid));
+        if (missingFlatIds.length > 0) {
+          throw new Error(
+            `Refusing to tear down ${flatAuditRel}: cohort finding ID(s) [${missingFlatIds.join(", ")}] are missing from ${targetLedger.relative}.`
+          );
+        }
+      }
+      validatedDirs.push({ absDir: flatAuditAbs, relDir: flatAuditRel });
     }
+  }
+
+  if (squadId === "all" && fs.existsSync(scratchSquadRoot)) {
     for (const entry of fs.readdirSync(scratchSquadRoot, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name.startsWith("self-diag-canary-")) {
         const relCanary = `${scratchSquadRel}/${entry.name}`;
-        fs.rmSync(assertSafeDeleteTarget(relCanary), { recursive: true, force: true });
-        tornDown.push(relCanary);
+        const absCanary = path.join(repoRoot, relCanary);
+        assertSafeDeleteTarget(relCanary);
+        if (!force && isCanaryPidAlive(absCanary)) {
+          continue;
+        }
+        validatedDirs.push({ absDir: absCanary, relDir: relCanary });
       }
     }
+  }
+
+  for (const { relDir } of validatedDirs) {
+    // REVIEW: Recheck the full parent chain immediately before destructive cleanup.
+    fs.rmSync(assertSafeDeleteTarget(relDir), { recursive: true, force: true });
+    tornDown.push(relDir);
   }
 
   for (const parentRel of [scratchSquadRel, scratchBase]) {
@@ -748,7 +906,10 @@ function auditSkills(ledgerArg) {
   const findings = [];
   const targetLedger = resolveTargetReviewLedger(ledgerArg);
 
+  let ledgerDisposition = "CLEAN";
+  let openLedgerBlockers = [];
   if (!targetLedger) {
+    ledgerDisposition = "MISSING";
     findings.push({
       id: "DOC-LEDGER-MISSING",
       category: "DOC",
@@ -758,14 +919,26 @@ function auditSkills(ledgerArg) {
   } else {
     const ledgerCheck = validateTargetReviewLedger(targetLedger);
     if (ledgerCheck.errors.length > 0) {
+      ledgerDisposition = "INVALID";
       findings.push({
         id: "DOC-LEDGER-SCHEMA",
         category: "DOC",
         priority: "P2",
-        summary: `${targetLedger.relative} violates PR Review Standard v1.3.0 ledger structure: ${ledgerCheck.errors.join(" ")}`
+        summary: `${targetLedger.relative} violates PR Review Standard v1.4.0 ledger structure: ${ledgerCheck.errors.join(" ")}`
       });
     }
-    if (ledgerCheck.openResiduals.length > 0) {
+    if (ledgerCheck.openBlockingFindings.length > 0) {
+      if (ledgerDisposition === "CLEAN") ledgerDisposition = "OPEN_BLOCKERS";
+      openLedgerBlockers = ledgerCheck.openBlockingFindings.map(item => `${item.id} (${item.priority})`);
+      const preview = openLedgerBlockers.slice(0, 10).join(", ");
+      findings.push({
+        id: "DOC-LEDGER-OPEN-BLOCKERS",
+        category: "DOC",
+        priority: "P2",
+        summary: `${targetLedger.relative} declares ${ledgerCheck.openBlockingFindings.length} Open (Pre-Remediation) blocking finding(s): ${preview}${openLedgerBlockers.length > 10 ? ", ..." : ""}.`
+      });
+    } else if (ledgerCheck.openResiduals.length > 0) {
+      if (ledgerDisposition === "CLEAN") ledgerDisposition = "RESIDUALS_ONLY";
       findings.push({
         id: "DOC-LEDGER-RESIDUALS-OPEN",
         category: "DOC",
@@ -1011,7 +1184,13 @@ function auditSkills(ledgerArg) {
     }
   }
 
-  return { skills, findings, targetReviewLedger: targetLedger?.relative ?? null };
+  return {
+    skills,
+    findings,
+    targetReviewLedger: targetLedger?.relative ?? null,
+    ledgerDisposition,
+    openLedgerBlockers
+  };
 }
 
 function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
@@ -1075,17 +1254,27 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     stagePayloads[id] = JSON.parse(res.content[0].text).Subagents;
   }
   timings.dispatchCompileMs = Number((performance.now() - t0).toFixed(2));
-  if (timings.dispatchCompileMs > 25) {
+  const dispatchCallCount = 1 + squadIds.length;
+  timings.dispatchCompilePerCallMs = Number((timings.dispatchCompileMs / dispatchCallCount).toFixed(2));
+  if (timings.dispatchCompilePerCallMs > 25) {
     findings.push({
       id: "RUN-LATENCY-COMPILE",
       category: "RUN",
       priority: "P3",
-      summary: `Stage compilation took ${timings.dispatchCompileMs} ms (target < 10 ms, flag > 25 ms).`
+      summary: `Stage compilation averaged ${timings.dispatchCompilePerCallMs} ms/call (${timings.dispatchCompileMs} ms total across ${dispatchCallCount} calls; target < 10 ms/call, flag > 25 ms/call).`
     });
   }
   const tPlan = performance.now();
   const planned = planSquadCohort({ manifestPath: manifestRelative, executionMode: "swarm" }, repoRoot);
   timings.squadPlannerMs = Number((performance.now() - tPlan).toFixed(2));
+  if (timings.squadPlannerMs > 25) {
+    findings.push({
+      id: "RUN-LATENCY-PLANNER",
+      category: "RUN",
+      priority: "P3",
+      summary: `squad_planner compilation took ${timings.squadPlannerMs} ms (target < 10 ms, flag > 25 ms).`
+    });
+  }
   if (!planned?.provenanceScaffold?.entries?.length) {
     findings.push({
       id: "RUN-PLANNER-SCAFFOLD",
@@ -1096,17 +1285,27 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
   }
 
   // 2. Check scopeFiles existence (lead + specialists) and overlap within each squad
+  const isPackagedDistribution =
+    !fs.existsSync(path.join(repoRoot, ".git")) &&
+    !fs.existsSync(path.join(repoRoot, "tests")) &&
+    !fs.existsSync(path.join(repoRoot, ".github"));
+  const isCheckoutOnlyPath = relPath => /^(?:tests|\.github|benchmarks)\//.test(relPath);
+  const packagedCheckoutOmissions = new Set();
   const topology = [];
   for (const [id, squad] of Object.entries(manifest.squads)) {
     const leadSpec = squad.lead ?? squad;
     for (const file of leadSpec.scopeFiles ?? []) {
       if (!fs.existsSync(path.join(repoRoot, file))) {
-        findings.push({
-          id: `RUN-LEADSCOPE-${id}`,
-          category: "RUN",
-          priority: "P2",
-          summary: `Missing lead scopeFile '${file}' in self-diagnosis squad '${id}'.`
-        });
+        if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
+          packagedCheckoutOmissions.add(file);
+        } else {
+          findings.push({
+            id: `RUN-LEADSCOPE-${id}`,
+            category: "RUN",
+            priority: "P2",
+            summary: `Missing lead scopeFile '${file}' in self-diagnosis squad '${id}'.`
+          });
+        }
       }
     }
     const specialists = squad.specialists ?? squad.children ?? [];
@@ -1119,12 +1318,16 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
         totalFiles += 1;
         seen.add(file);
         if (!fs.existsSync(path.join(repoRoot, file))) {
-          findings.push({
-            id: `RUN-SCOPE-${id}`,
-            category: "RUN",
-            priority: "P2",
-            summary: `Missing specialist scopeFile '${file}' in self-diagnosis squad '${id}'.`
-          });
+          if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
+            packagedCheckoutOmissions.add(file);
+          } else {
+            findings.push({
+              id: `RUN-SCOPE-${id}`,
+              category: "RUN",
+              priority: "P2",
+              summary: `Missing specialist scopeFile '${file}' in self-diagnosis squad '${id}'.`
+            });
+          }
         }
       }
       if (sp.readOnly !== true) {
@@ -1157,6 +1360,14 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       overlapRatio
     });
   }
+  if (packagedCheckoutOmissions.size > 0) {
+    findings.push({
+      id: "DEP-PACKAGED-CHECKOUT-SCOPE",
+      category: "DEP",
+      priority: "P3",
+      summary: `Running inside packaged distribution without git checkout; ${packagedCheckoutOmissions.size} checkout-only scopeFile(s) (${[...packagedCheckoutOmissions].join(", ")}) are omitted by package.json files allowlist.`
+    });
+  }
 
   // 3. Measure prompt overhead budgets (mcp/briefs.mjs)
   const minimalAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
@@ -1187,6 +1398,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
   const created = [];
   const canaryRel = `${scratchSquadRel}/self-diag-canary-${randomUUID()}`;
   const canaryDir = ensureDirectory(repoRoot, canaryRel, created);
+  fs.writeFileSync(path.join(canaryDir, "canary-owner.json"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
   const cleanupCanary = () => {
     fs.rmSync(canaryDir, { recursive: true, force: true });
     for (const dir of [...created].reverse()) {
@@ -1210,12 +1422,10 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
       const leadSlot = reportPath(id);
-      const auditSlot = reportPath(`integrity_auditor-${id}`, 1);
       for (const [slot, text] of [
         [s1, `# ${id} Specialist 1\nVerified target.txt.\n`],
         [s2, `# ${id} Specialist 2\nVerified target.txt.\n`],
-        [leadSlot, `# ${id} Lead Synthesis\nContent Verdict: PASS\nVerified both specialist reports against target.txt.\n`],
-        [auditSlot, `# ${id} Integrity Audit\nTarget Squad: ${id}\nIntegrity Verdict: CLEAN\n`]
+        [leadSlot, `# ${id} Lead Synthesis\nContent Verdict: PASS\nVerified both specialist reports against target.txt.\n`]
       ]) {
         const full = path.join(canaryDir, slot);
         fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -1232,6 +1442,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       const s1 = reportPath(id, 1);
       const s2 = reportPath(id, 2);
       const leadSlot = reportPath(id);
+      const auditSlot = reportPath(`integrity_auditor-${id}`, 1);
       const record = {
         workspace: canaryDir,
         squadId: id,
@@ -1246,6 +1457,13 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
           { sender: `${id}-child-2`, message: `READY ${s2} — Specialist 2 verified ${id}.` }
         ]
       };
+      const { evidenceDigest } = computeEvidenceDigest(canaryDir, record);
+      const auditFull = path.join(canaryDir, auditSlot);
+      fs.mkdirSync(path.dirname(auditFull), { recursive: true });
+      fs.writeFileSync(
+        auditFull,
+        `# ${id} Integrity Audit\nTarget Squad: ${id}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${evidenceDigest}\n`
+      );
       inspectHandoffs(canaryDir, record);
       const bundled = bundleReports(canaryDir, record);
       const verified = verifyBundle(canaryDir, bundled.path, bundled.sha256);
@@ -1270,8 +1488,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     for (const [slot, text] of [
       [cs1, `# ${customId} Custom 1\nVerified target.txt.\n`],
       [cs2, `# ${customId} Custom 2\nVerified target.txt.\n`],
-      [cLead, `# ${customId} Custom Lead\nContent Verdict: PASS\nVerified custom reportRoot.\n`],
-      [cAudit, `# ${customId} Custom Integrity Audit\nTarget Squad: ${customId}\nIntegrity Verdict: CLEAN\n`]
+      [cLead, `# ${customId} Custom Lead\nContent Verdict: PASS\nVerified custom reportRoot.\n`]
     ]) {
       const full = path.join(canaryDir, slot);
       fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -1292,6 +1509,13 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
         { sender: `${customId}-c2`, message: `READY ${cs2} — Custom 2 verified.` }
       ]
     };
+    const { evidenceDigest: customDigest } = computeEvidenceDigest(canaryDir, customRecord);
+    const cAuditFull = path.join(canaryDir, cAudit);
+    fs.mkdirSync(path.dirname(cAuditFull), { recursive: true });
+    fs.writeFileSync(
+      cAuditFull,
+      `# ${customId} Custom Integrity Audit\nTarget Squad: ${customId}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${customDigest}\n`
+    );
     inspectHandoffs(canaryDir, customRecord);
     const customBundled = bundleReports(canaryDir, customRecord);
     const customVerified = verifyBundle(canaryDir, customBundled.path, customBundled.sha256);
@@ -1336,6 +1560,20 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
   if (serverRes.status !== 0) {
     throw new Error(`MCP server tools/list check failed: ${serverRes.stderr}`);
   }
+  let toolsPayload;
+  try {
+    toolsPayload = JSON.parse(serverRes.stdout.trim());
+  } catch (error) {
+    throw new Error(`MCP server tools/list returned invalid JSON: ${error.message}`);
+  }
+  const advertisedTools = Array.isArray(toolsPayload?.result?.tools)
+    ? toolsPayload.result.tools.map(tool => tool?.name)
+    : [];
+  for (const requiredTool of ["dispatch_squad", "squad_planner"]) {
+    if (!advertisedTools.includes(requiredTool)) {
+      throw new Error(`MCP server tools/list is missing required tool '${requiredTool}'.`);
+    }
+  }
   const schemaBytes = Buffer.byteLength(serverRes.stdout.trim(), "utf8");
   if (schemaBytes > 4096) {
     findings.push({
@@ -1350,7 +1588,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     Object.entries(stagePayloads).map(([id, agents]) => [
       id,
       agents.map((a, idx) => {
-        const slot = a.Prompt.match(/^Report slot: (\S+)$/m)?.[1];
+        const slot = a.Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
         const prefixBytes = Buffer.byteLength(`READY ${slot} — `, "utf8");
         const receiptHeadroomBytes = messageLimit - prefixBytes;
         if (receiptHeadroomBytes < 340) {
@@ -1659,10 +1897,17 @@ const squadAudit = runSquadCanaryAndOptimization({ allowActiveCohort: cli.allowA
 const findings = [...skillAudit.findings, ...squadAudit.findings];
 const prReviewMatrix = buildPrReviewCategoryMatrix(findings);
 const blockingCount = findings.filter(f => f.priority === "P1" || f.priority === "P2").length;
+const LEDGER_DIAGNOSTIC_IDS = new Set(["DOC-LEDGER-OPEN-BLOCKERS", "DOC-LEDGER-SCHEMA", "DOC-LEDGER-MISSING"]);
+const profilerBlockingCount = findings.filter(
+  f => !LEDGER_DIAGNOSTIC_IDS.has(f.id) && (f.priority === "P1" || f.priority === "P2")
+).length;
 
 const report = {
   status: blockingCount === 0 ? "HEALTHY" : "CHANGES_REQUIRED",
-  standardVersion: "1.3.0",
+  profilerHealth: profilerBlockingCount === 0 ? "HEALTHY" : "CHANGES_REQUIRED",
+  ledgerDisposition: skillAudit.ledgerDisposition,
+  openLedgerBlockers: skillAudit.openLedgerBlockers,
+  standardVersion: "1.4.0",
   manifestPath: manifestRelative,
   targetReviewLedger: skillAudit.targetReviewLedger,
   skills: skillAudit.skills,
@@ -1682,10 +1927,10 @@ if (cli.markdown) {
   const lines = [
     "# Agy-Squad Self-Diagnosis & Optimization Report",
     "",
-    `- **Status:** \`${report.status}\` (PR Review Standard \`v${report.standardVersion}\`)`,
+    `- **Status:** \`${report.status}\` (Profiler: \`${report.profilerHealth}\`, Ledger: \`${report.ledgerDisposition}\`, PR Review Standard \`v${report.standardVersion}\`)`,
     `- **Self-Diagnosis Manifest:** \`${report.manifestPath}\``,
     `- **Target PR Review Ledger:** \`${report.targetReviewLedger ?? "MISSING"}\``,
-    `- **Timings:** dispatch \`${report.timings.dispatchCompileMs} ms\`, squad_planner \`${report.timings.squadPlannerMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
+    `- **Timings:** dispatch \`${report.timings.dispatchCompilePerCallMs} ms/call\` (\`${report.timings.dispatchCompileMs} ms\` total), squad_planner \`${report.timings.squadPlannerMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
     "",
     "## 1. Workspace Skills Progressive Disclosure & Token Audit",
     "",
@@ -1704,7 +1949,7 @@ if (cli.markdown) {
     `- **Lead Template:** \`${report.promptBudgets.leadTemplateBytes} B\` (~${report.promptBudgets.leadEstimatedTokens} tokens)`,
     `- **MCP \`tools/list\` Response:** \`${report.promptBudgets.mcpToolsListResponseBytes} B\` (~${report.promptBudgets.mcpToolsListEstimatedTokens} tokens)`,
     "",
-    "## 3. PR-Review Standard v1.3.0 Category Matrix",
+    "## 3. PR-Review Standard v1.4.0 Category Matrix",
     "",
     "| Category | P1 | P2 | P3 (Advisory) | Verdict |",
     "| --- | ---: | ---: | ---: | --- |",

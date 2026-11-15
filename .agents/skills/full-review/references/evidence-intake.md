@@ -1,6 +1,6 @@
 # Evidence intake for full reviews
 
-This reference supports Step 1 and Step 2 of [../SKILL.md](../SKILL.md). It is a procedure, not a substitute for the [PR Review Standard v1.3.0](../../pr-review/references/pr-review-standard.md).
+This reference supports Step 1 and Step 2 of [../SKILL.md](../SKILL.md). It is a procedure, not a substitute for the [PR Review Standard v1.4.0](../../pr-review/references/pr-review-standard.md).
 
 ## 0. Target types and minimum evidence
 

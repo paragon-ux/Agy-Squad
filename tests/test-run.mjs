@@ -4,23 +4,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bundleReports, fingerprint, inspectHandoffs, reportPath } from "../mcp/handoffs.mjs";
+import { bundleReports, computeEvidenceDigest, fingerprint, inspectHandoffs, reportPath } from "../mcp/handoffs.mjs";
 
 const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cli-diag-")));
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function copyIsolatedRepo(targetDir) {
-  for (const rel of ["bin", "mcp", ".agents", "docs", "tests", "package.json", "README.md", "zensical.toml"]) {
+  for (const rel of ["bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
     fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
   }
   return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
 }
 
-function buildTestLedger({ bundleSha = "pending", includeFindingRow = false } = {}) {
-  const findingRow = includeFindingRow
-    ? "| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| `SD-TEST-01` | Wave 1 | `TEST` | `Closed` | `target.txt#L1` | Synthetic test finding | Verified | `bundle` |"
+function buildTestLedger({ bundleSha = "pending", includeFindingRow = false, includeAuditFinding = false, openBlocking = false } = {}) {
+  const rows = [];
+  if (includeFindingRow) {
+    rows.push("| `SD-TEST-01` | Wave 1 | `TEST` | `Closed` | `target.txt#L1` | Synthetic test finding | Verified | `bundle` |");
+  }
+  if (includeAuditFinding) {
+    rows.push("| `SD-AUDIT-99` | Wave 1 | `TEST` | `Closed` | `target.txt#L1` | Synthetic audit finding | Verified | `bundle` |");
+  }
+  const findingRow = rows.length
+    ? "| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n" + rows.join("\n")
     : "None (0 wave findings)";
+  const p1Status = openBlocking ? "Open (Pre-Remediation)" : "Closed";
   return [
     "# Synthetic Test Review Ledger",
     "",
@@ -29,6 +37,34 @@ function buildTestLedger({ bundleSha = "pending", includeFindingRow = false } = 
     "| Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |",
     "| --- | --- | --- | --- | --- | --- |",
     "| Session 1 | `test-op-1` | `root` | `2026-11-13` | `main..HEAD` | `self-diagnosis` |",
+    "",
+    "## 2. Executive Summary & Overall Verdict",
+    "",
+    "Verdict: PASS (synthetic ledger).",
+    "",
+    "## 3. Scope, Baseline & PR Review Standard Compliance Matrix",
+    "",
+    "| Category | Status | Notes |",
+    "| --- | --- | --- |",
+    "| ARCH | Checked | Verified |",
+    "",
+    "## 4. Architecture-Before-Runtime Execution & Verification Trace",
+    "",
+    "Verified command execution trace.",
+    "",
+    "## 5. Prioritized Findings Ledger (1 ID Per Row)",
+    "",
+    "| ID | Severity | Category | Status | Location / Evidence | Finding | Suggested Fix |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    `| \`P1-SYN-01\` | P1 | \`SVC\` | \`${p1Status}\` | \`target.txt#L1\` | Synthetic P1 | Resolved |`,
+    "",
+    "## 6. Re-Verification Checklist & Acceptance Gate",
+    "",
+    "1. All items verified.",
+    "",
+    "## 7. Direction & Pre-Merge Readiness",
+    "",
+    "Proceed after verification.",
     "",
     "## 8. Post-Remediation Residuals & Deferred Dispositions",
     "",
@@ -196,6 +232,7 @@ try {
   // SKILL-PR5-04: Verify skill drift check catches retired Phase 1/2 symbols in references/*.md without false positives on retired notices
   const driftRefDir = path.join(isoRepo, ".agents/skills/swarm-governance/references");
   const driftRefFile = path.join(driftRefDir, "drift-probe.md");
+  const hadDriftRefDir = fs.existsSync(driftRefDir);
   fs.mkdirSync(driftRefDir, { recursive: true });
   try {
     fs.writeFileSync(driftRefFile, "Run `bin/terminal.py`, `adversarial_l1`, `node mcp/handoffs.mjs`, and wait for `.mcp-ready`.\n");
@@ -215,7 +252,10 @@ try {
     assert.equal(driftOk.status, 0, driftOk.stderr);
     assert.equal(JSON.parse(driftOk.stdout).status, "HEALTHY");
   } finally {
-    fs.rmSync(driftRefDir, { recursive: true, force: true });
+    fs.rmSync(driftRefFile, { force: true });
+    if (!hadDriftRefDir) {
+      fs.rmSync(driftRefDir, { recursive: true, force: true });
+    }
   }
 
   // Canonical roles-and-workflows & runtime closure checklist enforcement tests
@@ -392,9 +432,6 @@ try {
   };
   writeTd(aS1, "# Spec 1\nVerified target.txt.\n");
   writeTd(aLead, "Content Verdict: PASS\nNo open defects.\n");
-  writeTd(aInt, `Target Squad: ${auditedId}\nIntegrity Verdict: CLEAN\nVerified.\n`);
-  const unbundledAuditRefusal = spawnSync(process.execPath, [tdDiag, "--teardown", auditedId], { cwd: tdRepo, encoding: "utf8" });
-  assert.equal(unbundledAuditRefusal.status, 1);
   const auditedRecord = {
     workspace: tdRepo,
     squadId: auditedId,
@@ -404,6 +441,10 @@ try {
     assignments: [{ conversationId: "s1-id", report: aS1 }],
     handoffs: [{ sender: "s1-id", message: `READY ${aS1} — Audited check.` }]
   };
+  const { evidenceDigest: auditedDigest } = computeEvidenceDigest(tdRepo, auditedRecord);
+  writeTd(aInt, `Target Squad: ${auditedId}\nEvidence Digest: ${auditedDigest}\nIntegrity Verdict: CLEAN\nVerified.\n`);
+  const unbundledAuditRefusal = spawnSync(process.execPath, [tdDiag, "--teardown", auditedId], { cwd: tdRepo, encoding: "utf8" });
+  assert.equal(unbundledAuditRefusal.status, 1);
   inspectHandoffs(tdRepo, auditedRecord);
   const auditedBundled = bundleReports(tdRepo, auditedRecord);
   const auditedMtimeSec = Math.floor(fs.statSync(path.join(tdRepo, auditedBundled.path)).mtimeMs / 1000);
@@ -467,6 +508,144 @@ try {
     assert.match(JSON.parse(freshRun.stdout).targetReviewLedger, /^docs\/reviews\/pr5-/);
   } finally {
     fs.rmSync(freshRepo, { recursive: true, force: true });
+  }
+
+  // 5. Wave C4 Regressions: SVC-002 flat teardown atomic preflight, SVC-006 live-PID canary, SVC-009 audit finding ID, SCRIPT-001/002/003, DEP-001 tarball
+  const svcRepo = path.join(temporary, "svc-repo");
+  fs.mkdirSync(svcRepo, { recursive: true });
+  const svcDiag = copyIsolatedRepo(svcRepo);
+  try {
+    fs.writeFileSync(path.join(svcRepo, "target.txt"), "flat self-diag\n");
+    const svcFiles = fingerprint(svcRepo, ["target.txt"]);
+    const flatId = "self_diagnosis";
+    const flatS1 = reportPath(flatId, 1);
+    const flatLead = reportPath(flatId, undefined);
+    const flatAudit = reportPath("integrity_auditor", 1);
+    const writeSvc = (rel, body) => {
+      const abs = path.join(svcRepo, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body);
+    };
+    writeSvc(flatS1, "# Flat Spec 1\nVerified target.txt.\n");
+    writeSvc(flatLead, "Content Verdict: PASS\nVerified flat cohort.\n");
+    const flatRecord = {
+      workspace: svcRepo,
+      squadId: flatId,
+      verdict: "PASS",
+      requireIntegrityAudit: true,
+      integrityAuditSlots: [flatAudit],
+      verifiedFiles: svcFiles,
+      assignments: [{ conversationId: "flat-s1", report: flatS1 }],
+      handoffs: [{ sender: "flat-s1", message: `READY ${flatS1} — Verified flat.` }]
+    };
+    const { evidenceDigest: flatDigest } = computeEvidenceDigest(svcRepo, flatRecord);
+    // SVC-009: audit-only finding SD-AUDIT-99 must block teardown until added to ledger; SVC-002 atomic preflight preserves working bundle when auditor/ledger fails
+    writeSvc(flatAudit, `Target Squad: ${flatId}\nEvidence Digest: ${flatDigest}\nIntegrity Verdict: CLEAN\n- \`SD-AUDIT-99\`: unexported audit finding.\n`);
+    inspectHandoffs(svcRepo, flatRecord);
+    const flatBundled = bundleReports(svcRepo, flatRecord);
+    const svcLedgerRel = "docs/reviews/svc-ledger.md";
+    const svcLedgerAbs = path.join(svcRepo, svcLedgerRel);
+    const flatMtimeSec = Math.floor(fs.statSync(path.join(svcRepo, flatBundled.path)).mtimeMs / 1000);
+    fs.writeFileSync(svcLedgerAbs, buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: false, includeAuditFinding: false }));
+    fs.utimesSync(svcLedgerAbs, flatMtimeSec + 5, flatMtimeSec + 5);
+    const failAuditFinding = spawnSync(process.execPath, [svcDiag, "--teardown", "all", "--ledger", svcLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(failAuditFinding.status, 1);
+    assert.match(failAuditFinding.stderr, /SD-AUDIT-99/);
+    assert.equal(fs.existsSync(path.join(svcRepo, flatS1)), true, "SVC-002 atomic preflight must not delete working evidence on failure");
+    assert.equal(fs.existsSync(path.join(svcRepo, flatBundled.path)), true);
+
+    // SVC-006: live-PID canary is skipped while dead-PID canary is reaped and valid flat cohort + flat auditor dir are both removed
+    writeSvc("scratch/agy-squad/self-diag-canary-live/canary-owner.json", JSON.stringify({ pid: process.pid }));
+    writeSvc("scratch/agy-squad/self-diag-canary-dead/canary-owner.json", JSON.stringify({ pid: 9999999 }));
+    fs.writeFileSync(svcLedgerAbs, buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: false, includeAuditFinding: true }));
+    fs.utimesSync(svcLedgerAbs, flatMtimeSec + 5, flatMtimeSec + 5);
+    const okFlatTd = spawnSync(process.execPath, [svcDiag, "--teardown", "all", "--ledger", svcLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(okFlatTd.status, 0, okFlatTd.stderr);
+    const okFlatJson = JSON.parse(okFlatTd.stdout);
+    assert.ok(okFlatJson.tornDown.includes("scratch/agy-squad/squad-self_diagnosis"));
+    assert.ok(okFlatJson.tornDown.includes("scratch/agy-squad/squad-integrity_auditor"));
+    assert.ok(okFlatJson.tornDown.includes("scratch/agy-squad/self-diag-canary-dead"));
+    assert.equal(fs.existsSync(path.join(svcRepo, "scratch/agy-squad/squad-integrity_auditor")), false);
+    assert.equal(fs.existsSync(path.join(svcRepo, "scratch/agy-squad/self-diag-canary-live/canary-owner.json")), true);
+    fs.rmSync(path.join(svcRepo, "scratch"), { recursive: true, force: true });
+
+    // SCRIPT-001 & SCRIPT-002: Missing section, cross-section conflict, and Open (Pre-Remediation) P1 fail with structured ledger diagnostics
+    const openLedgerRel = "docs/reviews/open-blocker.md";
+    fs.writeFileSync(path.join(svcRepo, openLedgerRel), buildTestLedger({ openBlocking: true }));
+    const openRun = spawnSync(process.execPath, [svcDiag, "--ledger", openLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(openRun.status, 1);
+    const openJson = JSON.parse(openRun.stdout);
+    assert.equal(openJson.ledgerDisposition, "OPEN_BLOCKERS");
+    assert.ok(openJson.findings.some((f) => f.id === "DOC-LEDGER-OPEN-BLOCKERS"));
+
+    const schemaLedgerRel = "docs/reviews/bad-schema.md";
+    fs.writeFileSync(path.join(svcRepo, schemaLedgerRel), "# Incomplete Ledger\n## 1. Review Metadata\n");
+    const schemaRun = spawnSync(process.execPath, [svcDiag, "--ledger", schemaLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(schemaRun.status, 1);
+    const schemaJson = JSON.parse(schemaRun.stdout);
+    assert.ok(schemaJson.findings.some((f) => f.id === "DOC-LEDGER-SCHEMA"));
+
+    const conflictLedgerRel = "docs/reviews/conflict-schema.md";
+    const conflictText = buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true }).replace(
+      "None (0 open residuals, 0 deferred items)",
+      "| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| `P1-SYN-01` | Wave 1 | `SVC` | `Residual (Open)` | `target.txt#L1` | Conflicting status | Deferred | `open` |"
+    );
+    fs.writeFileSync(path.join(svcRepo, conflictLedgerRel), conflictText);
+    const conflictRun = spawnSync(process.execPath, [svcDiag, "--ledger", conflictLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(conflictRun.status, 1);
+    const conflictJson = JSON.parse(conflictRun.stdout);
+    assert.ok(conflictJson.findings.some((f) => f.id === "DOC-LEDGER-SCHEMA" && /P1-SYN-01/.test(f.summary)));
+
+    // SCRIPT-003: Spaced AGY_SQUAD_SCRATCH_ROOT handled cleanly by diagnose.mjs and CLI bundle
+    const spacedEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "scratch/custom spaced" };
+    const spacedRun = spawnSync(process.execPath, [svcDiag, "--ledger", svcLedgerRel], { cwd: svcRepo, env: spacedEnv, encoding: "utf8" });
+    assert.equal(spacedRun.status, 0, spacedRun.stderr);
+    const spacedJson = JSON.parse(spacedRun.stdout);
+    const spacedSlot = spacedJson.compiledStages?.squads?.skill_and_pr_review_audit?.[0]?.reportSlot;
+    assert.equal(spacedSlot, "scratch/custom spaced/agy-squad/squad-skill_and_pr_review_audit/specialist-1/report.md");
+    assert.ok(spacedJson.compiledStages.squads.skill_and_pr_review_audit[0].receiptHeadroomBytes > 0);
+    const spS1 = "scratch/custom spaced/agy-squad/squad-spaced_cli/specialist-1/report.md";
+    const spLead = "scratch/custom spaced/agy-squad/squad-spaced_cli/lead/report.md";
+    writeSvc(spS1, "# Spaced CLI Spec\nVerified target.txt.\n");
+    writeSvc(spLead, "Content Verdict: PASS\nVerified spaced root.\n");
+    const spRecPath = "scratch/custom spaced/spaced-record.json";
+    writeSvc(spRecPath, JSON.stringify({
+      workspace: svcRepo,
+      squadId: "spaced_cli",
+      verdict: "PASS",
+      requireIntegrityAudit: false,
+      verifiedFiles: svcFiles,
+      assignments: [{ conversationId: "sp-1", report: spS1 }],
+      handoffs: [{ sender: "sp-1", message: `READY ${spS1} — Verified spaced scratch root.` }]
+    }));
+    const spBundle = spawnSync(process.execPath, [cli, "bundle", spRecPath], { cwd: svcRepo, env: spacedEnv, encoding: "utf8" });
+    assert.equal(spBundle.status, 0, spBundle.stderr);
+    assert.equal(JSON.parse(spBundle.stdout).path, "scratch/custom spaced/agy-squad/squad-spaced_cli/lead/report.sources.json");
+    fs.rmSync(path.join(svcRepo, "scratch"), { recursive: true, force: true });
+
+    // DEP-001: Packaged tarball offline run of diagnose.mjs completes without failing on checkout-only paths
+    const packDir = path.join(temporary, "pack-out");
+    const unpackDir = path.join(temporary, "unpack-pkg");
+    fs.mkdirSync(packDir, { recursive: true });
+    fs.mkdirSync(unpackDir, { recursive: true });
+    const packRes = spawnSync("npm", ["pack", "--pack-destination", packDir], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(packRes.status, 0, packRes.stderr);
+    const tgzName = packRes.stdout.trim().split(/\r?\n/).pop();
+    const untarRes = spawnSync("tar", ["-xzf", path.join(packDir, tgzName), "-C", unpackDir], { encoding: "utf8" });
+    assert.equal(untarRes.status, 0, untarRes.stderr);
+    const pkgRoot = path.join(unpackDir, "package");
+    const pkgDiagRes = spawnSync(
+      process.execPath,
+      [".agents/skills/self-diagnosis/scripts/diagnose.mjs"],
+      { cwd: pkgRoot, encoding: "utf8" }
+    );
+    assert.equal(pkgDiagRes.status, 0, pkgDiagRes.stderr);
+    const pkgDiagJson = JSON.parse(pkgDiagRes.stdout);
+    assert.equal(pkgDiagJson.targetReviewLedger, "docs/reviews/pr5-reconciled-review.md");
+    assert.ok(pkgDiagJson.findings.some((f) => f.id === "DEP-PACKAGED-CHECKOUT-SCOPE" && f.priority === "P3"));
+    assert.equal(pkgDiagJson.status, "HEALTHY");
+  } finally {
+    fs.rmSync(svcRepo, { recursive: true, force: true });
   }
 
   console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");

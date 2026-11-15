@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { bundleReports, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -106,7 +106,7 @@ try {
 
   const initialBundle = bundleReports(root, record);
   write(lead, "Verdict: PASS\nPASS after independent inspection and recheck of fixture.txt.");
-  const accepted = bundleReports(root, record);
+  const accepted = bundleReports(root, { ...record, replaceExisting: true });
   assert.notEqual(accepted.sha256, initialBundle.sha256);
   assert.deepEqual(bundleReports(root, record), accepted);
 
@@ -132,19 +132,21 @@ try {
 
   // 3. Valid integrity audit unblocks default bundleReports, and tampering fails verifyBundle
   const intAuditSlot = reportPath(`integrity_auditor-${squadId}`, 1);
-  write(intAuditSlot, `Target Squad: ${squadId}\nIntegrity Verdict: CLEAN\nVerified empirical execution.\n`);
-  const intAcceptedBundle = bundleReports(root, defaultRecord);
+  const intDigest = computeEvidenceDigest(root, defaultRecord).evidenceDigest;
+  write(intAuditSlot, `Target Squad: ${squadId}\nEvidence Digest: ${intDigest}\nIntegrity Verdict: CLEAN\nVerified empirical execution.\n`);
+  const intAcceptedBundle = bundleReports(root, { ...defaultRecord, replaceExisting: true });
   assert.ok(intAcceptedBundle.sha256);
   const bundledWithInt = JSON.parse(fs.readFileSync(path.join(root, bundle), "utf8"));
   assert.equal(bundledWithInt.integrityAudit.path, intAuditSlot);
+  assert.equal(bundledWithInt.auditPolicy, "required");
   assert.equal(verifyBundle(root, bundle).path, bundle);
 
-  write(intAuditSlot, `Target Squad: ${squadId}\nIntegrity Verdict: CLEAN\nTampered after bundling.`);
+  write(intAuditSlot, `Target Squad: ${squadId}\nEvidence Digest: ${intDigest}\nIntegrity Verdict: CLEAN\nTampered after bundling.`);
   assert.throws(() => verifyBundle(root, bundle), /Integrity audit report changed/);
 
   // Clean up integrity slot for remaining baseline tests
   fs.unlinkSync(path.join(root, intAuditSlot));
-  bundleReports(root, record);
+  bundleReports(root, { ...record, replaceExisting: true });
   write(lead, "FAIL: synthesis changed after bundling.");
   assert.throws(() => verifyBundle(root, bundle), /unambiguous PASS verdict/);
   assert.throws(() => pruneReports(root, bundle, accepted.sha256), /unambiguous PASS verdict/);
@@ -342,7 +344,9 @@ try {
   assert.match(nullBundle.stderr, /Provide a valid bundle record\./);
   assert.ok(!/TypeError/.test(nullBundle.stderr));
 
-  // Verify SVC-HANDOFF-PREFIX-AND-LENGTH: reportPath enforces < 500 B READY prefix and accepts optional /swarm @mention prefix
+  // Verify SVC-HANDOFF-PREFIX-AND-LENGTH: reportPath enforces < 500 B READY prefix (with 26 B @mention reserve = 474 B ceiling)
+  assert.equal(reportPath("a", undefined, "x".repeat(439)).endsWith("/squad-a/lead/report.md"), true);
+  assert.throws(() => reportPath("a", undefined, "x".repeat(440)), /500-byte Pointer-Over-Wire/);
   assert.throws(() => reportPath("alpha", 1, "a/".repeat(230) + "out"), /500-byte Pointer-Over-Wire/);
   write(first, firstEvidence);
   assert.deepEqual(
@@ -353,6 +357,136 @@ try {
     }).map(({ status }) => status),
     ["READY"]
   );
+
+  // Regression suite for SVC-001, SVC-003, SVC-004, SVC-005, SVC-008, RUN-001..005 & CLI digest/--replace/--predecessor
+  const regSquad = "reg-svc";
+  const regSpec1 = reportPath(regSquad, 1);
+  const regSpec2 = reportPath(regSquad, 2);
+  const regLead = reportPath(regSquad);
+  const regBundle = regLead.replace(/\.md$/, ".sources.json");
+  const regAudit1 = reportPath(`integrity_auditor-${regSquad}`, 1);
+  const regAudit2 = reportPath(`integrity_auditor-${regSquad}`, 2);
+  write("reg-input.txt", "reg-alpha\n");
+  // RUN-003: UTF-8 BOM stripped cleanly on specialist & lead reports
+  write(regSpec1, "\uFEFF# Spec 1\nVerified reg-input.txt line 1: reg-alpha\n");
+  write(regSpec2, "# Spec 2\nVerified reg-input.txt second check: reg-alpha\n");
+  write(regLead, "\uFEFFVerdict: PASS\nVerified reg-alpha after checking both reports.\n");
+  const regBaseRecord = {
+    workspace: root,
+    squadId: regSquad,
+    verdict: "PASS",
+    integrityAuditSlots: [regAudit1, regAudit2],
+    verifiedFiles: fingerprint(root, ["reg-input.txt"]),
+    assignments: [
+      { conversationId: "reg-s1", report: regSpec1 },
+      { conversationId: "reg-s2", report: regSpec2 }
+    ],
+    handoffs: [
+      { sender: "reg-s1", message: `READY ${regSpec1} — reg-alpha 1` },
+      { sender: "reg-s2", message: `READY ${regSpec2} — reg-alpha 2` }
+    ]
+  };
+
+  // RUN-001 & RUN-002: unsafe squadId & control characters in paths rejected
+  assert.throws(() => bundleReports(root, { ...regBaseRecord, squadId: "../escape" }), /Invalid squad ID|workspace-relative/i);
+  assert.throws(() => fingerprint(root, ["bad\x07path.txt"]), /workspace-relative/i);
+  assert.throws(() => inspectHandoffs(root, {
+    workspace: root,
+    assignments: [{ conversationId: "reg-s1", report: regSpec1 }],
+    handoffs: [{ sender: "reg-s1", message: `READY ${regSpec1} — line1\nline2` }]
+  }), /one line/i);
+
+  // SVC-005: missing/stale Evidence Digest blocks acceptance; computeEvidenceDigest matches CLI digest
+  write(regAudit1, `Target Squad: ${regSquad}\nIntegrity Verdict: CLEAN\nNo digest provided.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nIntegrity Verdict: CLEAN\nNo digest provided.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /Evidence Digest/i);
+  const { evidenceDigest: regDigest } = computeEvidenceDigest(root, regBaseRecord);
+  write("reg-record.json", JSON.stringify(regBaseRecord));
+  const cliDigest = spawnSync(process.execPath, [agySquadCli, "digest", "reg-record.json"], { cwd: root, encoding: "utf8" });
+  assert.equal(cliDigest.status, 0, cliDigest.stderr);
+  assert.equal(JSON.parse(cliDigest.stdout).evidenceDigest, regDigest);
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${"f".repeat(64)}\nIntegrity Verdict: CLEAN\nStale digest.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor CLEAN.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /Evidence Digest .* does not match/i);
+
+  // SVC-001: second auditor reporting INTEGRITY VIOLATION blocks bundling even when first is CLEAN
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nFirst auditor CLEAN.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: INTEGRITY VIOLATION\nSecond auditor flagged trace gap.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /INTEGRITY VIOLATION/);
+
+  // Both CLEAN with matching digest succeed and record integrityAudits array + auditPolicy='required'
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor verified.\n`);
+  const regBundled1 = bundleReports(root, regBaseRecord);
+  const regBundleObj = JSON.parse(fs.readFileSync(path.join(root, regBundled1.path), "utf8"));
+  assert.equal(regBundleObj.schemaVersion, 2);
+  assert.equal(regBundleObj.auditPolicy, "required");
+  assert.equal(regBundleObj.integrityAudits.length, 2);
+  assert.equal(verifyBundle(root, regBundle).auditPolicy, "required");
+
+  // SVC-003: verifyBundle enforces auditPolicy, rejects missing required audits / invalid policy, and surfaces explicit unaudited policy or digest mismatch
+  const savedRegJson = fs.readFileSync(path.join(root, regBundle), "utf8");
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, auditPolicy: "bogus" }));
+  assert.throws(() => verifyBundle(root, regBundle), /Invalid auditPolicy/);
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, integrityAudits: undefined, integrityAudit: undefined }));
+  assert.throws(() => verifyBundle(root, regBundle), /missing integrityAudit/i);
+  const downgraded = { ...regBundleObj, auditPolicy: "unaudited-explicit", integrityAudits: undefined, integrityAudit: undefined };
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify(downgraded));
+  assert.equal(verifyBundle(root, regBundle).auditPolicy, "unaudited-explicit");
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({ ...regBundleObj, integrityAudits: [] }));
+  assert.throws(() => verifyBundle(root, regBundle), /Invalid integrityAudits array/);
+  fs.writeFileSync(path.join(root, regBundle), JSON.stringify({
+    ...regBundleObj,
+    integrityAudit: { ...regBundleObj.integrityAudit, evidenceDigest: "0".repeat(64) }
+  }));
+  assert.throws(() => verifyBundle(root, regBundle), /disagrees with integrityAudits\[0\]/);
+  assert.throws(() => verifyBundle(root, regBundle, regBundled1.sha256), /Bundle differs from the primary's accepted digest/);
+  fs.writeFileSync(path.join(root, regBundle), savedRegJson);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nTampered second auditor.\n`);
+  assert.throws(() => verifyBundle(root, regBundle), /Integrity audit report changed/);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest}\nIntegrity Verdict: CLEAN\nSecond auditor verified.\n`);
+  const missSpec = reportPath("missing-prev", 1);
+  const missLead = reportPath("missing-prev");
+  write(missSpec, "# Missing Prev Spec\nVerified reg-target.txt.\n");
+  write(missLead, "Content Verdict: PASS\nMissing prev lead.\n");
+  assert.throws(() => bundleReports(root, {
+    workspace: root,
+    squadId: "missing-prev",
+    verdict: "PASS",
+    requireIntegrityAudit: false,
+    verifiedFiles: regBaseRecord.verifiedFiles,
+    assignments: [{ conversationId: "mp-1", report: missSpec }],
+    handoffs: [{ sender: "mp-1", message: `READY ${missSpec} — Verified.` }],
+    expectedPredecessorSha256: regBundled1.sha256
+  }), /does not exist\./);
+
+  // SVC-008: silent overwrite blocked without replaceExisting or matching expectedPredecessorSha256
+  write(regLead, "Verdict: PASS\nPASS updated synthesis text.\n");
+  const { evidenceDigest: regDigest2 } = computeEvidenceDigest(root, regBaseRecord);
+  write(regAudit1, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest2}\nIntegrity Verdict: CLEAN\nFirst auditor re-verified.\n`);
+  write(regAudit2, `Target Squad: ${regSquad}\nEvidence Digest: ${regDigest2}\nIntegrity Verdict: CLEAN\nSecond auditor re-verified.\n`);
+  assert.throws(() => bundleReports(root, regBaseRecord), /replaceExisting|expectedPredecessorSha256/i);
+  assert.throws(() => bundleReports(root, { ...regBaseRecord, expectedPredecessorSha256: "0".repeat(64) }), /predecessor/i);
+  const cliReplace = spawnSync(process.execPath, [agySquadCli, "bundle", "reg-record.json", "--predecessor", regBundled1.sha256], { cwd: root, encoding: "utf8" });
+  assert.equal(cliReplace.status, 0, cliReplace.stderr);
+  const regBundled2 = JSON.parse(cliReplace.stdout);
+  assert.notEqual(regBundled2.sha256, regBundled1.sha256);
+
+  // SVC-004: partial prune failure reports removed/remaining cleanly and retry finishes removal
+  const spec2Dir = path.dirname(path.join(root, regSpec2));
+  fs.chmodSync(spec2Dir, 0o555);
+  let partialErr;
+  try {
+    pruneReports(root, regBundle, regBundled2.sha256);
+  } catch (err) {
+    partialErr = err;
+  } finally {
+    fs.chmodSync(spec2Dir, 0o755);
+  }
+  assert.ok(partialErr, "Expected partial prune permission error when specialist 2 directory is read-only");
+  assert.deepEqual(partialErr.removed, [regSpec1]);
+  assert.deepEqual(partialErr.remaining, [regSpec2]);
+  const retryPruned = pruneReports(root, regBundle, regBundled2.sha256);
+  assert.deepEqual(retryPruned.removed, [regSpec2]);
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
 } finally {

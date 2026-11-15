@@ -4,18 +4,22 @@ Agy-Squad relies on Antigravity's native stop controls (`L3`, `L5`) and separate
 
 ## Stopping order for `/swarm` and subagents
 
-Terminate workers **after** collecting and verifying their evidence so worktrees and uncommitted report slots are not destroyed prematurely:
+- **User-directed immediate stop:** If the user explicitly asks to stop or kill workers, execute `swarm{action: "kill", name: "<worker>"}` (including `monitor`) or `manage_subagents(Action='kill', ConversationIds=[...])` **immediately**—never delay a user-requested kill on bundling, auditing, or worktree merges (preserve already-written local slots if present; uncollected edits in terminated `share`/`branch` copies are discarded).
+- **Normal end-of-run teardown:** When finishing a completed run, terminate workers **after** collecting and verifying their evidence so worktrees and uncommitted report slots are not destroyed prematurely:
 
 | Step | Native `/swarm` workers | `invoke_subagent` cohorts |
 | --- | --- | --- |
 | **1. Preserve evidence** | Verify `lead/report.md`, specialist reports, and `integrity_auditor` reports are written under `scratch/agy-squad/` (or merged from `share`/`branch` workspaces). | Check `/agents` for pending approvals, partial output, or repeated activity before stopping silent children. |
 | **2. Bundle and verify** | Run `node bin/agy-squad.mjs bundle <record.json>`, `verify <report.sources.json>`, and `prune <report.sources.json> <accepted-sha256> [--keep-reports]`. | Run `bundle`, `verify`, and `prune` (plus `diagnose.mjs --teardown` after updating `docs/reviews/<slug>.md` for self-diagnosis runs). |
-| **3. Stop workers and monitors** | Post `[done] <summary>`, then call `swarm{action: "kill", name: "<worker>"}` for finished workers **and `monitor` (or any `monitor-*` peer from `swarm status`)** when ending a session (`kill` is permanent and deletes `share` or `branch` worktrees). | Use the CLI `/agents` panel or `manage_subagents(Action='kill', ConversationIds=[...])` with the native IDs recorded from launch receipts. |
+| **3. Stop workers and monitors** | Post `[done] <summary>`, then call `swarm{action: "kill", name: "<worker>"}` for finished workers **and `monitor` (or any `monitor-*` peer from `swarm status`)** when ending a session (`kill` is permanent and deletes `share` or `branch` worktrees). **Do not emit `open_board` (`sidecar://swarm/swarm_board/`) after all workers are killed**; reserve `open_board` for the active launch turn and in-flight user updates. | Use the CLI `/agents` panel or `manage_subagents(Action='kill', ConversationIds=[...])` with the native IDs recorded from launch receipts. |
 | **4. Run the closure check** | Complete the 4-check runtime closure gate below (`swarm status`, `manage_subagents`, `manage_task`, child OS commands). | Confirm child sessions stopped, `manage_task` shows zero active tasks, and any started child commands exited. |
+
+> [!WARNING]
+> On the initial `/swarm` launch turn, ending the turn with `open_board` and **without** calling `swarm_wait` lets Antigravity render the Swarm UI pill right away, **but the Antigravity UI will show `"waiting for my reply"` / `"waiting for user reply"` until a worker message (`@coordinator`) or scheduled watchdog wakes the coordinator**. Use `swarm_wait` on subsequent intermediate quiet turns, and never emit `open_board` once `swarm{action: "kill"}` has stopped all workers.
 
 ## Four-check runtime closure checklist
 
-`node bin/agy-squad.mjs bundle` and `verify` check disk artifact SHA-256 digests (`L1`); they do not inspect live Antigravity runtime state. Until `Spike S5` in the [native enforcement ledger](plans/native-enforcement-ledger.md) verifies whether Desktop IDE `StopHook` and `PostToolUse` fire on `swarm`, `post_message`, and exit events, coordinators must run all four checks before ending a governed run:
+`node bin/agy-squad.mjs bundle` and `verify` check disk artifact SHA-256 digests (`L1`); they do not inspect live Antigravity runtime state. Until `Spike S5` in the [native enforcement ledger](plans/native-enforcement-ledger.md) verifies whether Desktop IDE `.agents/hooks.json` (`PreToolUse` / `PostToolUse`) covers `swarm`, `post_message`, and exit events—and Plane A Python SDK hooks (`StopHook`, `PostToolCallHook`) remain separate runtime controls—coordinators must run all four checks before ending a governed run:
 
 1. **`swarm{action: "status"}`:** Every non-coordinator member (including `monitor` or any `monitor-*` instance when ending the session, overriding native `/swarm`'s wait-for-cron convention) reports `state: "killed"`, `killed: true`.
 2. **`manage_subagents(Action='list')`:** Reports `0 active subagent(s): []`.

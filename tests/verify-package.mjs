@@ -5,8 +5,14 @@ import { text } from "node:stream/consumers";
 
 const REQUIRED = [
   "package.json",
+  "plugin.json",
   "README.md",
+  "CHANGELOG.md",
+  "install.sh",
+  "install.ps1",
   "bin/agy-squad.mjs",
+  "scripts/install-register.mjs",
+  "scripts/release-preflight.mjs",
   "mcp/index.js",
   "mcp/dispatch.mjs",
   "mcp/briefs.mjs",
@@ -14,12 +20,33 @@ const REQUIRED = [
   "mcp/handoffs.mjs",
   "mcp/verdicts.mjs",
   ".agents/skills/full-review/SKILL.md",
+  ".agents/skills/full-review/references/evidence-intake.md",
+  ".agents/skills/full-review/references/report-template.md",
+  ".agents/skills/full-review/references/review-roles.md",
   ".agents/skills/pr-review/SKILL.md",
   ".agents/skills/pr-review/references/pr-review-standard.md",
   ".agents/skills/self-diagnosis/SKILL.md",
-  ".agents/skills/swarm-governance/SKILL.md",
+  ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
+  ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
+  ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
   ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
-  "docs/roles-and-workflows.md"
+  ".agents/skills/swarm-governance/SKILL.md",
+  ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
+  ".agents/skills/swarm-governance/references/intake-and-planning.md",
+  ".agents/skills/swarm-governance/references/large-swarms.md",
+  "docs/concepts.md",
+  "docs/core-workflows.md",
+  "docs/getting-started.md",
+  "docs/index.md",
+  "docs/roles-and-workflows.md",
+  "docs/stopping-agents.md",
+  "docs/tools.md"
+];
+
+const RETIRED_DENYLIST = [
+  "bin/terminal.py",
+  "mcp/run-state.mjs",
+  "mcp/subagent-brief.mjs"
 ];
 
 function validate(packages) {
@@ -40,12 +67,15 @@ function validate(packages) {
   assert.deepEqual(unsafe, [], `Unsafe package paths: ${unsafe.join(", ")}`);
 
   const allowed = names.filter(name =>
-    name === "package.json" || name === "README.md" ||
+    name === "package.json" || name === "plugin.json" ||
+    name === "README.md" || name === "CHANGELOG.md" ||
+    name === "install.sh" || name === "install.ps1" ||
     name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
     name.startsWith("bin/") || name.startsWith("mcp/") ||
+    name.startsWith("scripts/") ||
     name.startsWith(".agents/skills/") || name.startsWith("docs/")
   );
-  const forbidden = names.filter(name => !allowed.includes(name));
+  const forbidden = names.filter(name => !allowed.includes(name) || RETIRED_DENYLIST.includes(name));
   assert.deepEqual(forbidden, [],
     `Forbidden npm package contents: ${forbidden.join(", ")}`);
 
@@ -58,14 +88,17 @@ function validate(packages) {
 
 function selfTest() {
   const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
-  assert.equal(validate(fixture(["docs/index.md"])), REQUIRED.length + 1);
+  assert.equal(validate(fixture(["docs/benchmarks.md"])), REQUIRED.length + 1);
   for (const bad of [
     "tests/leaked.mjs",
     "benchmarks/private.json",
     "scratch/trace.log",
     ".agents/teamwork/session.json",
     "other/private.txt",
-    "../outside.txt"
+    "../outside.txt",
+    "bin/terminal.py",
+    "mcp/run-state.mjs",
+    "mcp/subagent-brief.mjs"
   ]) {
     assert.throws(() => validate(fixture([bad])),
       /Forbidden npm package contents|Unsafe package paths/,
@@ -74,7 +107,7 @@ function selfTest() {
   assert.throws(() => validate([{ files: REQUIRED
     .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log("Package verifier self-test passed (positive + 7 negatives)");
+  console.log("Package verifier self-test passed (positive + 10 negatives)");
 }
 
 if (process.argv[2] === "--self-test") {

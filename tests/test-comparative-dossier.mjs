@@ -7,9 +7,9 @@
  * - Tier 1: Feature Coverage & Completeness (R1, R2, R3, R4)
  * - Tier 2: Boundary & Format Checks (Score bounds, receipt byte budget, markdown integrity)
  * - Tier 3: Cross-Feature Consistency & Internal Coherence (Score parity, rubric anchors, yield points)
- * - Tier 4: Real-World Workload & Empirical Citation Validation (Benchmark metrics, codebase paths, L1–L43)
+ * - Tier 4: Structural Citation & Dossier Coverage Validation (Pattern & File Presence)
  * 
- * Standard: Agy-Squad PR Review Standard v1.3.0 & Architectural Decision Ledger (L1–L43; historical dossier L1–L41)
+ * Standard: Agy-Squad PR Review Standard v1.4.0 & Architectural Decision Ledger (L1–L43; historical dossier L1–L41)
  */
 
 import assert from "node:assert/strict";
@@ -28,7 +28,7 @@ class TestRunner {
       "Tier 1 (Feature Coverage)": { passed: 0, failed: 0 },
       "Tier 2 (Boundary & Format)": { passed: 0, failed: 0 },
       "Tier 3 (Cross-Feature Consistency)": { passed: 0, failed: 0 },
-      "Tier 4 (Real-World & Citations)": { passed: 0, failed: 0 }
+      "Tier 4 (Structural & Citations)": { passed: 0, failed: 0 }
     };
     this.errors = [];
   }
@@ -65,7 +65,7 @@ class TestRunner {
       console.error(`FAILED: ${this.failed} test(s) failed.`);
       process.exit(1);
     } else {
-      console.log("SUCCESS: All dossier verification tests passed cleanly (100% compliance).");
+      console.log("SUCCESS: All dossier structural and citation checks passed cleanly (pattern & file-presence coverage).");
       process.exit(0);
     }
   }
@@ -478,11 +478,11 @@ runner.run("Tier 3 (Cross-Feature Consistency)", "Coherence: Architectural Yield
 });
 
 // ============================================================================
-// TIER 4: REAL-WORLD WORKLOAD & EMPIRICAL CITATION VALIDATION
+// TIER 4: STRUCTURAL CITATION & DOSSIER COVERAGE VALIDATION
 // ============================================================================
-console.log("\nExecuting Tier 4: Real-World Workload & Empirical Citation Validation...");
+console.log("\nExecuting Tier 4: Structural Citation & Dossier Coverage Validation (Pattern & File Presence)...");
 
-runner.run("Tier 4 (Real-World & Citations)", "Grounded Benchmark: November 8, 2026 Empirical Benchmark Metrics", () => {
+runner.run("Tier 4 (Structural & Citations)", "Citation Coverage: November 8, 2026 Empirical Benchmark Metrics", () => {
   // Key data points from the benchmark on 6-defect event-relay fixture
   const requiredDataPoints = [
     { label: "Wall clock time (26m 19s vs 6m 15s or 1579s vs 375s)", regex: /26m\s*19s.*6m\s*15s|1,?579.*375/s },
@@ -500,13 +500,13 @@ runner.run("Tier 4 (Real-World & Citations)", "Grounded Benchmark: November 8, 2
   }
 });
 
-runner.run("Tier 4 (Real-World & Citations)", "Fixture Reference: Event-Relay Fixture (gateway/ and worker/)", () => {
+runner.run("Tier 4 (Structural & Citations)", "Fixture Reference: Event-Relay Fixture (gateway/ and worker/)", () => {
   assert.match(content, /gateway/i, "Must cite event-relay fixture component: gateway/");
   assert.match(content, /worker/i, "Must cite event-relay fixture component: worker/");
   assert.match(content, /6-defect|six-defect/i, "Must cite the 6-defect benchmark fixture");
 });
 
-runner.run("Tier 4 (Real-World & Citations)", "Codebase Verification: Referenced Core Implementation Files Physically Exist", () => {
+runner.run("Tier 4 (Structural & Citations)", "Codebase Verification: Referenced Core Implementation Files Physically Exist", () => {
   const referencedFiles = [
     "mcp/dispatch.mjs",
     "mcp/handoffs.mjs",
@@ -521,10 +521,10 @@ runner.run("Tier 4 (Real-World & Citations)", "Codebase Verification: Referenced
   }
 });
 
-runner.run("Tier 4 (Real-World & Citations)", "Standard & Ledger: Architectural Decision Citations (L1–L43)", () => {
+runner.run("Tier 4 (Structural & Citations)", "Standard & Ledger: Architectural Decision Citations (L1–L43)", () => {
   assert.match(content, /L41/i, "Dossier must cite decision L41 (governed teardown / lifecycle cleanup contract).");
-  assert.match(content, /L1.*L41|Architectural\s+Decision\s+Ledger/i,
-    "Dossier must cite the Architectural Decision Ledger (L1–L41).");
+  assert.match(content, /L1.*L4[13]|Architectural\s+Decision\s+Ledger/i,
+    "Dossier must cite the Architectural Decision Ledger (L1–L41 / L1–L43).");
   const ledgerPath = path.resolve(process.cwd(), "docs/plans/LEDGER.md");
   assert.ok(fs.existsSync(ledgerPath), "docs/plans/LEDGER.md must exist.");
   const ledger = fs.readFileSync(ledgerPath, "utf8");

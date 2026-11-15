@@ -6,14 +6,14 @@ description: >-
   diagnosis, or direction recommendation on Agy-Squad using repository state or
   supplied evidence (transcripts, logs, CI output, review ledgers, diffs),
   including work that is not a pull request. Applies the Agy-Squad PR Review
-  Standard v1.3.0 with cited, commit-pinned evidence and 1-ID-per-row findings.
+  Standard v1.4.0 with cited, commit-pinned evidence and 1-ID-per-row findings.
 ---
 
-# Agy-Squad Full Review Skill (Standard v1.3.0)
+# Agy-Squad Full Review Skill (Standard v1.4.0)
 
 Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs and `self-diagnosis` for automated harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`node bin/agy-squad.mjs plan`) for `/swarm` or `dispatch_squad` (`node bin/agy-squad.mjs dispatch`) for `invoke_subagent`.
 
-The governing report contract is [Agy-Squad PR Review Standard v1.3.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](../../../docs/roles-and-workflows.md#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
+The governing report contract is [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](../../../docs/roles-and-workflows.md#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
 
 ## Use this skill when
 
@@ -23,7 +23,7 @@ The governing report contract is [Agy-Squad PR Review Standard v1.3.0](../pr-rev
 
 For a standard PR/branch diff without non-diff direction framing, prefer `pr-review`. Keep diagnosis separate from unauthorized code edits.
 
-## Non-negotiables
+## Invariants (Non-negotiables)
 
 1. **Read the standard first.** Its ten categories, category records, finding schema, status enums, evidence rules, and report structure are mandatory; this skill adds non-PR intake and Direction decisions.
 2. **Pin target and evidence.** Record revisions, SHA-256 hashes, dirty state, access status, and unexamined scope.
@@ -35,6 +35,14 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 8. **Separate content acceptance from integrity audit.** Content reviewer/lead owns `PASS`/`FAIL`/`BLOCKED` (or `APPROVE`/`REQUEST_CHANGES`); an independent auditor (`audit-<id>` on `/swarm` or `integrity_auditor[:<target>]` via slot) owns `CLEAN`/`INTEGRITY VIOLATION` and cannot waive content defects. Lead re-reviews after `CLEAN`. See [review roles](references/review-roles.md).
 9. **Enforce report readability.** Reserve inline backticks for code identifiers, file paths, flags, CLI commands, and verdict enums. Write plain numbers, counts, English statuses, labels, and quoted sentences as clean prose (no backtick-pill clutter).
 
+### Citation contract
+
+- **Code:** commit-pinned `path#Lx-Ly` with `HEAD`/tree pinned in Section 1.
+- **Transcript:** manifest SHA-256 hash, `step N @ ISO timestamp`, and verbatim quote.
+- **Command:** working directory, exact command, exit code, and observed output excerpt.
+- **External source:** title, URL, version/date, access date; label inference as `Source-derived inference`.
+- **Prior review:** prior report + finding ID + explicit status (`accepted`, `revised`, or `rejected`).
+
 ## Workflow
 
 ### Step 0 — Frame the request and execution mode
@@ -42,7 +50,7 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 1. State the decision/review question in one sentence, name the target type (`PR/branch`, `working tree`, `commit range`, `repository/subsystem`, `evidence bundle`, `direction question`, or `incident/regression`), and pin minimum evidence per [references/evidence-intake.md](references/evidence-intake.md).
 2. Check ambiguity once upfront without asking for facts already visible in git/evidence:
    - If stacked on an unmerged PR base, confirm base branch and merge order.
-   - If running with `/swarm` and topology (`Flat` vs `Layered`) or workspace isolation (`inherit` vs `share` vs `branch`) is unspecified, **ask the user** rather than imposing a default topology bias; on launch, verify pinned models via `swarm{action: "status"}` and end that turn with `open_board` (`[Open the Swarm UI](sidecar://swarm/swarm_board/)`) on its own line so the Swarm UI pill renders immediately.
+   - If running on `/swarm`, delegate Step 0 intake (neutral `Flat` vs `Layered` topology, `workspaceIsolation`, retention, coordinator-default model), `open_board` (`?tab=graph`), `swarm_wait`, pointer receipts, multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
 
 ### Step 1 — Pin the review
 
@@ -79,11 +87,3 @@ Keep coverage and disposition separate: do not recommend merging while material 
 ### Step 6 — Write, recheck, and close
 
 Save under `docs/reviews/<review-slug>.md` using [references/report-template.md](references/report-template.md) (omit Section 9 unless `/self-diagnosis` cohorts ran; write `None (0 open residuals, 0 deferred items)` if Section 8 is empty). Recheck fixes against primary and cross-referenced categories at the fixed revision—a fix commit alone is not closure. Before delivering, verify all checks in [references/report-template.md](references/report-template.md#quality-gates).
-
-## Citation contract
-
-- **Code:** commit-pinned `path#Lx-Ly` with `HEAD`/tree pinned in Section 1.
-- **Transcript:** manifest SHA-256 hash, `step N @ ISO timestamp`, and verbatim quote.
-- **Command:** working directory, exact command, exit code, and observed output excerpt.
-- **External source:** title, URL, version/date, access date; label inference as `Source-derived inference`.
-- **Prior review:** prior report + finding ID + explicit status (`accepted`, `revised`, or `rejected`).
