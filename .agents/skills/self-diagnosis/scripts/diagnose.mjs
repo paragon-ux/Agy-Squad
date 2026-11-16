@@ -871,7 +871,7 @@ function walkFiles(dir) {
 }
 
 const RETIRED_SKILL_SYMBOL_RE =
-  /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?|adversarial_l1|adversarial_flat|adversarial_review|integrity-auditor)\b|\bnode\s+mcp\/handoffs\.mjs\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
+  /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?|adversarial_l1|adversarial_flat|adversarial_review|integrity-auditor|query_transcript|read_transcript|check_context_health)\b|\bnode\s+mcp\/handoffs\.mjs\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
 const HISTORICAL_NOTICE_RE =
   /\b(?:retired|historical|deprecated|removed|superseded|obsolete|replaced\s+by|do\s+not\s+use|never\s+use)\b/i;
 
@@ -1182,6 +1182,33 @@ function auditSkills(ledgerArg) {
         }
       }
     }
+  }
+
+  // Scan active MCP prompt builders and top-level docs/ pages for retired Phase 1/v1.x symbols (SQ-SCRIPT-001)
+  const runtimeDriftTargets = [
+    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
+      .map(rel => path.join(repoRoot, rel))
+      .filter(abs => fs.existsSync(abs)),
+    ...(fs.existsSync(docsRoot)
+      ? fs.readdirSync(docsRoot, { withFileTypes: true })
+          .filter(entry => entry.isFile() && entry.name.endsWith(".md"))
+          .map(entry => path.join(docsRoot, entry.name))
+      : [])
+  ];
+  const runtimeDriftHits = [];
+  for (const absFile of runtimeDriftTargets) {
+    const symbols = findSkillDriftMatches(fs.readFileSync(absFile, "utf8"));
+    if (symbols.length > 0) {
+      runtimeDriftHits.push(`${path.relative(repoRoot, absFile)} (${symbols.join(", ")})`);
+    }
+  }
+  if (runtimeDriftHits.length > 0) {
+    findings.push({
+      id: "DOC-MCP-DRIFT",
+      category: "DOC",
+      priority: "P2",
+      summary: `Active runtime/docs files in ${runtimeDriftHits.join("; ")} reference retired Phase 1 or v1.x symbol(s) without an explicit retired/historical notice.`
+    });
   }
 
   return {

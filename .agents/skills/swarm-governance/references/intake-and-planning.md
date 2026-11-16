@@ -102,12 +102,10 @@ node bin/agy-squad.mjs dispatch --squad integrity_auditor:storage --manifest tas
 
 ## Swarm UI and Turn Lifecycle
 
-1. **Active Launch Turn (`open_board`, no `swarm_wait`):**
-   - Right after spawning workers via `swarm{action: "add"}` and confirming models via `swarm{action: "status"}`, end the launch turn with the live board link from `open_board` on its own line:
-     - Standard board view: `[Open the Swarm UI](sidecar://swarm/swarm_board/)`
-     - Mention graph view: `[Open Swarm Graph](sidecar://swarm/swarm_board/?tab=graph)` (use `?tab=graph` when inspecting or explaining the `@mention` routing graph)
-   - **Do not** call `swarm_wait` silently on the launch turn; ending the turn renders the Swarm UI pill immediately for the user.
-   - **Explicit UI warning:** Ending the turn without calling `swarm_wait` causes Antigravity to show `"waiting for my reply"` / `"waiting for user reply"` until a worker post (`@coordinator`) or scheduled watchdog wakes the coordinator. Mention or account for this behavior cleanly rather than waiting passively for user input.
+1. **Active Launch Turn (verbatim `open_board`, `swarm_wait` arrives next turn):**
+   - Right after spawning workers via `swarm{action: "add"}` and confirming models via `swarm{action: "status"}`, end the launch turn with only the **exact verbatim `open_board` string returned by `swarm`** on its own line (never write or fabricate a `sidecar://...` board link yourself, per `native_swarm`).
+   - Because `swarm_wait`, `post_message`, and `read_board` become available one turn after the first `swarm add`, ending the launch turn without calling `swarm_wait` renders the Swarm UI pill immediately for the user.
+   - **Explicit UI warning:** Ending the turn without calling `swarm_wait` causes Antigravity to show `"waiting for my reply"` / `"waiting for user reply"` until a worker post (`@coordinator`) or `swarm_monitor` trigger wakes the coordinator (**never** create a one-shot `schedule` watchdog timer to poll `/swarm`, which `Agy-Context-Saver` denies). Mention or account for this behavior cleanly rather than waiting passively for user input.
 2. **In-Flight Quiet Turns (`swarm_wait`):**
    - On intermediate quiet turns while waiting for active workers, park via `swarm_wait` (`since` = highest board `seq` seen) instead of emitting repeated user turns or polling `read_board`.
    - Emit `open_board` only on active launch turns or active in-flight user status updates while workers are running or waiting.

@@ -61,10 +61,18 @@ try {
     "Verdict: CONDITIONAL PASS",
     "Content Verdict: PASS (caveats apply)",
     "Verdict: PASS\nSecondary check: FAIL",
-    "Verdict: PASS\ndid not PASS smoke test"
+    "Verdict: PASS\ndid not PASS smoke test",
+    "Content Verdict: FAIL\nFinal Status: PASS",
+    "Content Verdict: BLOCKED\n| Gate | PASS |",
+    "Content Verdict: FAIL\nPASS: all checks succeeded"
   ]) {
     assert.throws(() => parseContentVerdict(hedged));
   }
+  assert.equal(
+    parseContentVerdict("Content Verdict: FAIL\n| Check | Prior Wave | Current |\n| --- | --- | --- |\n| Auth | PASS | FAIL |\n"),
+    "FAIL",
+    "Historical comparison column PASS must not trigger false conflict against Content Verdict: FAIL (SQ-RUN-002)"
+  );
 
   assert.equal(parseIntegrityVerdict("Target Squad: alpha\nIntegrity Verdict: CLEAN\n"), "CLEAN");
   assert.equal(
@@ -189,7 +197,7 @@ try {
   assert.match(payload.Subagents[0].Prompt, /squad-integrity_auditor-alpha\/specialist-1\/report\.md/);
   assert.match(payload.Subagents[0].Prompt, /Integrity Verdict: CLEAN/);
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(payload.Subagents[0].Prompt, /summaryOnly=true/);
+  assert.match(payload.Subagents[0].Prompt, /agy-context transcript query --id <id> --summary/);
 
   // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "squads.json" }, root).isError, true);
@@ -218,9 +226,11 @@ try {
   assert.equal(untargetedSingle.isError, undefined);
   const singlePayload = JSON.parse(untargetedSingle.content[0].text);
   assert.equal(singlePayload.Subagents.length, 1);
+  assert.ok(Array.isArray(singlePayload.warnings) && singlePayload.warnings.some(w => /ignored/.test(w)), "Custom integrity_auditor.lead must emit explicit warning (SQ-RUN-007)");
   assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
   assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor Policy/);
   assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
+  assert.doesNotMatch(singlePayload.Subagents[0].Prompt, /query_transcript|read_transcript/, "SQ-MCP-002: briefs must not reference retired MCP transcript tools");
 
   // GOV-07: Swarm integrity auditor briefs must not treat workspace re-execution alone as sufficient for CLEAN
   const swarmAuditSpec = buildSubagentSpec(
@@ -232,6 +242,7 @@ try {
     { executionMode: "swarm" }
   );
   assert.doesNotMatch(swarmAuditSpec.Prompt, /or direct workspace artifact\/command re-execution/);
+  assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript/);
   assert.match(swarmAuditSpec.Prompt, /coordinator-extracted sanitized transcript index in scratch\//);
   assert.match(swarmAuditSpec.Prompt, /report 'Integrity Verdict: INTEGRITY VIOLATION' \(never CLEAN\)/);
 

@@ -25,7 +25,7 @@
             ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file; pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine); pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort.",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -38,7 +38,7 @@
             "docs/plans/LEDGER.md",
             "docs/tools.md"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
           "expectedDeliverable": "Markdown evidence report with SKILL/ARCH/DOC P1/P2/P3 triage, contract provenance checks, and concrete optimization recommendations."
         }
       ]
@@ -72,7 +72,7 @@
             "mcp/verdicts.mjs",
             "mcp/planner.mjs"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
@@ -88,7 +88,7 @@
             "tests/test-run.mjs",
             "tests/test-server.mjs"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
           "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP P1/P2/P3 triage and verification gap analysis."
         }
       ]
@@ -122,7 +122,7 @@
             ".agents/skills/self-diagnosis/SKILL.md",
             ".agents/skills/pr-review/SKILL.md"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
           "expectedDeliverable": "Markdown evidence report with exact byte/token measurements and concrete before/after optimization proposals."
         },
         {
@@ -135,7 +135,7 @@
             "mcp/handoffs.mjs",
             "bin/agy-squad.mjs"
           ],
-          "instructions": "Use rtk read via run_command to inspect your scopeFiles (never call read_file).",
+          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
           "expectedDeliverable": "Markdown evidence report with syscall/latency analysis and ranked runtime optimization proposals."
         }
       ]

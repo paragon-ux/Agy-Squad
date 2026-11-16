@@ -428,7 +428,69 @@ console.log("Agy-Squad MCP server tests\n");
   ], { AGY_SQUAD_WORKSPACE: "   " });
   assert.equal(blankEnvResponses[1].result.isError, true);
   assert.doesNotMatch(blankEnvResponses[1].result.content[0].text, /workspace: '   '/);
-  console.log("✓ explicit workspace arg, initialize URIs, fallback precedence, and env isolation work cleanly");
+
+  // SQ-MCP-001: Multi-root workspaceFolders matches manifestPath on secondary workspace root & surfaces multi-root ambiguity
+  const emptySecondary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-empty-")));
+  const dupManifestRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-dup-")));
+  try {
+    fs.mkdirSync(path.join(dupManifestRoot, ".agents", "skills", "self-diagnosis", "resources"), { recursive: true });
+    fs.copyFileSync(
+      path.join(repoRoot, ".agents", "skills", "self-diagnosis", "resources", "self-diagnosis-manifest.json"),
+      path.join(dupManifestRoot, ".agents", "skills", "self-diagnosis", "resources", "self-diagnosis-manifest.json")
+    );
+    const multiRootHit = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(emptySecondary).href, name: "other" },
+            { uri: pathToFileURL(repoRoot).href, name: "agy-squad" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+      }
+    ]);
+    assert.equal(Boolean(multiRootHit[1].result.isError), false, multiRootHit[1].result.content[0].text);
+    assert.equal(
+      JSON.parse(multiRootHit[1].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+      repoRoot
+    );
+
+    const multiRootAmbiguous = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(dupManifestRoot).href, name: "dup" },
+            { uri: pathToFileURL(repoRoot).href, name: "agy-squad" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" } }
+      }
+    ]);
+    assert.equal(multiRootAmbiguous[1].result.isError, true);
+    assert.match(multiRootAmbiguous[1].result.content[0].text, /Ambiguous multi-root workspace/);
+  } finally {
+    fs.rmSync(emptySecondary, { recursive: true, force: true });
+    fs.rmSync(dupManifestRoot, { recursive: true, force: true });
+  }
+  console.log("✓ explicit workspace arg, initialize URIs, multi-root resolution, fallback precedence, and env isolation work cleanly");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

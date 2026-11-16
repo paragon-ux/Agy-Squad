@@ -101,6 +101,8 @@ function parseContentVerdict(markdown) {
   }
 
   const clean = stripCode(markdown);
+  let inTable = false;
+  let headerSkipped = [];
   for (const line of clean.split(/\r?\n/)) {
     // Reject explicit negations targeting PASS (uppercase PASS, or lowercase "pass" at clause end)
     const negMatch = line.match(
@@ -109,21 +111,40 @@ function parseContentVerdict(markdown) {
     if (negMatch && (negMatch[2] === "PASS" || negMatch[3] !== undefined)) {
       found.add("FAIL");
     }
-    // Reject secondary labeled verdict/status/check lines or table cells asserting FAIL/BLOCKED
+    // Reject secondary labeled verdict/status/check lines or table cells asserting conflicting verdicts
     const labeled = line.match(
       /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*(?:[:—–-]|\bis\b)\s*(?:[*_]{1,3})?\s*(PASS|FAIL|BLOCKED)(?![-\w])/i
     );
     if (labeled) {
-      const token = labeled[1].toUpperCase();
-      if (token !== "PASS") found.add(token);
+      found.add(labeled[1].toUpperCase());
     }
-    const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
+    const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
     if (leading) {
       found.add(leading[1]);
     }
-    const tableCell = line.match(/\|\s*(?:[*_]{1,3})?(FAIL|BLOCKED)(?:[*_]{1,3})?\s*\|/);
-    if (tableCell) {
-      found.add(tableCell[1]);
+    const trimmed = line.trim();
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      const cells = trimmed.slice(1, -1).split(/(?<!\\)\|/).map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) {
+        inTable = true;
+      } else {
+        const isFirstRow = !inTable;
+        if (isFirstRow) {
+          inTable = true;
+          headerSkipped = cells.map(h =>
+            /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old)\b/i.test(h) &&
+            !/\b(?:current|now|final|post|after)\b/i.test(h)
+          );
+        }
+        cells.forEach((cell, colIdx) => {
+          if (!isFirstRow && headerSkipped[colIdx]) return;
+          const m = cell.match(/^(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?$/);
+          if (m) found.add(m[1]);
+        });
+      }
+    } else {
+      inTable = false;
+      headerSkipped = [];
     }
   }
 

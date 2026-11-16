@@ -640,6 +640,31 @@ try {
     assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", undefined).Prompt, "utf8") <= 3300);
     const minSwarmAudit = planSquadCohort({ task: "Do work", scopeFiles: ["a"] }, root).integrityAuditPlan[0].swarmAdd.brief;
     assert.ok(Buffer.byteLength(minSwarmAudit, "utf8") <= 3000, `Expected swarm auditor brief <= 3000 B, got ${Buffer.byteLength(minSwarmAudit, "utf8")}`);
+
+    // SQ-RUN-003: Reserved /swarm names (all, coordinator, narrator, monitor) must never be allocated
+    const reservedPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          "___": {
+            specialists: [
+              { role: "monitor", objective: "O1", scopeFiles: ["a"] },
+              { role: "coordinator", objective: "O2", scopeFiles: ["b"] },
+              { role: "narrator", objective: "O3", scopeFiles: ["c"] },
+              { role: "all", objective: "O4", scopeFiles: ["d"] }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    }, root);
+    const reservedNames = new Set(["all", "coordinator", "narrator", "monitor"]);
+    const emittedNames = reservedPlan.workers[0].specialists.map(s => s.workerName);
+    assert.ok(emittedNames.every(n => !reservedNames.has(n)), `Expected no reserved swarm names, got: ${emittedNames.join(", ")}`);
+    assert.equal(new Set(emittedNames).size, 4);
+
+    // SQ-MCP-002: Subagent provenance and integrity briefs must not mention retired read_transcript / query_transcript
+    const subProvPlan = planSquadCohort({ task: "Check provenance", executionMode: "subagent" }, root);
+    assert.doesNotMatch(JSON.stringify(subProvPlan), /query_transcript|read_transcript/);
   } finally {
     fs.rmSync(linkRoot, { recursive: true, force: true });
     fs.rmSync(altDir, { recursive: true, force: true });

@@ -28,8 +28,8 @@ const usage = [
   "  agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]       Compile invoke_subagent payload (subagent mode only)",
   "  agy-squad fingerprint <file...>                                        Compute SHA-256 fingerprints for verifiedFiles",
   "  agy-squad inspect <record.json>                                        Reconcile handoff readiness for a cohort",
-  "  agy-squad digest <record.json>                                         Compute canonical Evidence Digest for integrity audit binding",
-  "  agy-squad bundle <record.json> [--allow-unaudited] [--replace] [--predecessor <sha256>]  Create a SHA-256 verified proof bundle",
+  "  agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]  Compute canonical Evidence Digest for integrity audit binding",
+  "  agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>]  Create a SHA-256 verified proof bundle",
   "  agy-squad verify <report.sources.json>                                 Verify bundle integrity, synthesis, and audit hashes",
   "  agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports] Prune loose reports after verification",
   "  agy-squad verdict [--integrity] <report.md>                            Strictly parse a content or integrity verdict"
@@ -219,17 +219,30 @@ async function main(args) {
     return 0;
   }
   if (command === "digest") {
-    const usageLine = "Usage: agy-squad digest <record.json>";
-    const { positionals } = parseSubcommandArgs(rest, usageLine);
+    const usageLine = "Usage: agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      "allow-non-passing": { type: "boolean", default: false },
+      "allow-partial": { type: "boolean", default: false }
+    });
     if (positionals.length !== 1) throw new Error(usageLine);
     const record = JSON.parse(decodeUtf8(readFile(root, positionals[0]), positionals[0]));
-    console.log(JSON.stringify(computeEvidenceDigest(root, record), null, 2));
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("Provide a valid bundle or handoff record.");
+    }
+    const digestInput = {
+      ...record,
+      ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
+      ...(values["allow-partial"] ? { allowPartial: true } : {})
+    };
+    console.log(JSON.stringify(computeEvidenceDigest(root, digestInput), null, 2));
     return 0;
   }
   if (command === "bundle") {
-    const usageLine = "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--replace] [--predecessor <sha256>]";
+    const usageLine = "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       "allow-unaudited": { type: "boolean", default: false },
+      "allow-non-passing": { type: "boolean", default: false },
+      "allow-partial": { type: "boolean", default: false },
       replace: { type: "boolean", default: false },
       predecessor: { type: "string" }
     });
@@ -243,6 +256,8 @@ async function main(args) {
       ...(values["allow-unaudited"]
         ? { requireIntegrityAudit: false }
         : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
+      ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
+      ...(values["allow-partial"] ? { allowPartial: true } : {}),
       ...(values.replace ? { replaceExisting: true } : {}),
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
@@ -280,8 +295,6 @@ async function main(args) {
     console.log(JSON.stringify({ verdict }, null, 2));
     return 0;
   }
-
-  throw new Error(`Unknown command '${command}'. Expected plan, dispatch, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
 }
 
 main(process.argv.slice(2)).then(

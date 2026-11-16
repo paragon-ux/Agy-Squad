@@ -471,6 +471,12 @@ try {
   const regBundled2 = JSON.parse(cliReplace.stdout);
   assert.notEqual(regBundled2.sha256, regBundled1.sha256);
 
+  // SQ-RUN-001: Identical-byte republish with wrong expectedPredecessorSha256 must STILL fail
+  assert.throws(
+    () => bundleReports(root, { ...regBaseRecord, replaceExisting: true, expectedPredecessorSha256: "f".repeat(64) }),
+    /predecessor digest mismatch/i
+  );
+
   // SVC-004: partial prune failure reports removed/remaining cleanly and retry finishes removal
   const spec2Dir = path.dirname(path.join(root, regSpec2));
   fs.chmodSync(spec2Dir, 0o555);
@@ -488,7 +494,86 @@ try {
   const retryPruned = pruneReports(root, regBundle, regBundled2.sha256);
   assert.deepEqual(retryPruned.removed, [regSpec2]);
 
-  console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, and retryable report cleanup");
+  // SQ-RUN-005: Multiple @mention prefixes in READY receipt must strip cleanly
+  const multiMentionSpec = reportPath("multi_mention", 1);
+  write(multiMentionSpec, "Multi-mention evidence.\n");
+  const multiMentionRec = {
+    workspace: root,
+    assignments: [{ conversationId: "m-multi", report: multiMentionSpec }],
+    handoffs: [{ sender: "m-multi", message: `@lead @coordinator READY ${multiMentionSpec} — Multi-mention verified.` }]
+  };
+  assert.equal(inspectHandoffs(root, multiMentionRec)[0].status, "READY");
+
+  // SQ-RUN-006: Single-segment custom root derives without reportRoot; explicit reportRoot="scratch/agy-squad" stays strict under AGY_SQUAD_SCRATCH_ROOT
+  const singleSegSpec = reportPath("alpha", 1, "custom-out");
+  write(singleSegSpec, "Single-segment root evidence.\n");
+  assert.equal(
+    inspectHandoffs(root, {
+      workspace: root,
+      assignments: [{ conversationId: "seg-1", report: singleSegSpec }],
+      handoffs: [{ sender: "seg-1", message: `READY ${singleSegSpec} — Single segment verified.` }]
+    })[0].status,
+    "READY"
+  );
+  write("strict-scratch-env.json", JSON.stringify({
+    workspace: root,
+    reportRoot: "scratch/agy-squad",
+    assignments: [{ conversationId: "s-env", report: "alt-scratch/agy-squad/squad-alpha/specialist-1/report.md" }],
+    handoffs: [{ sender: "s-env", message: "READY alt-scratch/agy-squad/squad-alpha/specialist-1/report.md — Should fail." }]
+  }));
+  const envStrictCheck = spawnSync(process.execPath, [agySquadCli, "inspect", "strict-scratch-env.json"], {
+    cwd: root,
+    env: { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "alt-scratch" },
+    encoding: "utf8"
+  });
+  assert.notEqual(envStrictCheck.status, 0, "Explicit reportRoot='scratch/agy-squad' must reject alt-scratch slot");
+
+  // SQ-ARCH-001: Opt-in allowNonPassing + allowPartial bundles & verifies FAIL cohorts with PARTIAL + NO_REPORT slots
+  const failRoot = "scratch/agy-squad-fail";
+  const failSpec1 = reportPath("fail_squad", 1, failRoot);
+  const failSpec2 = reportPath("fail_squad", 2, failRoot);
+  const failLead = reportPath("fail_squad", undefined, failRoot);
+  const failAudit = reportPath("integrity_auditor-fail_squad", 1, failRoot);
+  write(failSpec1, "# Partial Spec 1\nReproduced bug #1.\n");
+  write(failLead, "Content Verdict: FAIL\nTwo blocking issues identified.\n");
+  const failRecord = {
+    workspace: root,
+    reportRoot: failRoot,
+    squadId: "fail_squad",
+    verdict: "FAIL",
+    verifiedFiles: regBaseRecord.verifiedFiles,
+    assignments: [
+      { conversationId: "f-1", report: failSpec1 },
+      { conversationId: "f-2", report: failSpec2 }
+    ],
+    handoffs: [
+      { sender: "f-1", message: `PARTIAL ${failSpec1} — Partial reproduction recorded.` },
+      { sender: "f-2", message: `NO_REPORT — Worker timed out before write.` }
+    ]
+  };
+  write("fail-record.json", JSON.stringify(failRecord));
+  const failDigestCli = spawnSync(process.execPath, [agySquadCli, "digest", "fail-record.json", "--allow-non-passing", "--allow-partial"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.equal(failDigestCli.status, 0, failDigestCli.stderr);
+  const failDigest = JSON.parse(failDigestCli.stdout).evidenceDigest;
+  write(failAudit, `Target Squad: fail_squad\nEvidence Digest: ${failDigest}\nIntegrity Verdict: CLEAN\nVerified failure bundle.\n`);
+  const failBundleCli = spawnSync(process.execPath, [agySquadCli, "bundle", "fail-record.json", "--allow-non-passing", "--allow-partial"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.equal(failBundleCli.status, 0, failBundleCli.stderr);
+  const failBundled = JSON.parse(failBundleCli.stdout);
+  const failVerifiedCli = spawnSync(process.execPath, [agySquadCli, "verify", failBundled.path], { cwd: root, encoding: "utf8" });
+  assert.equal(failVerifiedCli.status, 0, failVerifiedCli.stderr);
+  // Strict verify rejects forged verdict=FAIL without allowNonPassing=true
+  const failBundleJson = JSON.parse(fs.readFileSync(path.join(root, failBundled.path), "utf8"));
+  delete failBundleJson.allowNonPassing;
+  write(failBundled.path, JSON.stringify(failBundleJson, null, 2) + "\n");
+  assert.throws(() => verifyBundle(root, failBundled.path), /PASS verdict/);
+
+  console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

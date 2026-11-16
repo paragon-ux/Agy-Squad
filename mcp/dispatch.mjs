@@ -84,7 +84,7 @@ function appendTargetInstruction(spec, targetLine) {
   return { ...spec, [key]: `${existing}${targetLine}` };
 }
 
-function resolveIntegrityAuditor(squads, targetSquad) {
+function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
   const slotId = targetSquad ? `integrity_auditor-${targetSquad}` : "integrity_auditor";
   const targetIds = targetSquad
     ? [targetSquad]
@@ -111,7 +111,12 @@ function resolveIntegrityAuditor(squads, targetSquad) {
         if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
           throw new Error("Custom 'integrity_auditor' children or specialists must be a non-empty array.");
         }
-        if (customLead) buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true });
+        if (customLead) {
+          buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true });
+          if (Array.isArray(warnings)) {
+            warnings.push("Custom 'integrity_auditor' lead is ignored in flat integrity_auditor execution; only its specialists run.");
+          }
+        }
         return customSpecs.map((spec, index) => ({
           spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
           id: slotId,
@@ -297,6 +302,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
         workspace: delegateWorkspace
       });
     let assignments;
+    const warnings = [];
     if (squadId === "all_l1") {
       const workingSquads = Object.entries(squads).filter(
         ([id]) => id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
@@ -306,7 +312,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
         id
       }));
     } else if (isIntegrityAuditor) {
-      assignments = resolveIntegrityAuditor(squads, flatTarget);
+      assignments = resolveIntegrityAuditor(squads, flatTarget, warnings);
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
@@ -320,7 +326,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       if (leadSpec) build({ spec: leadSpec, id: squadId });
     }
     return {
-      content: [{ type: "text", text: JSON.stringify({ Subagents }, null, 2) }]
+      content: [{ type: "text", text: JSON.stringify({ Subagents, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;

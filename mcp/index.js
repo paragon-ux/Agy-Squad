@@ -12,14 +12,16 @@ const isEntryPoint = Boolean(process.argv[1] && realOrSelf(process.argv[1]) === 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
 const SERVER_NAME = "agy-squad";
-let sessionWorkspace;
+let sessionWorkspaces = [];
 
-function workspaceFromInitializeParams(params) {
-  if (!params || typeof params !== "object") return undefined;
+function workspacesFromInitializeParams(params) {
+  if (!params || typeof params !== "object") return [];
   const candidates = [
     ...(Array.isArray(params.workspaceFolders) ? params.workspaceFolders.map((folder) => folder?.uri) : []),
     params.rootUri
   ];
+  const resolved = [];
+  const seen = new Set();
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
     const trimmed = candidate.trim();
@@ -27,15 +29,59 @@ function workspaceFromInitializeParams(params) {
     try {
       const parsedUrl = new URL(trimmed);
       if (!parsedUrl.pathname || parsedUrl.pathname === "/") continue;
-      return fileURLToPath(parsedUrl);
+      const localPath = fileURLToPath(parsedUrl);
+      if (!seen.has(localPath)) {
+        seen.add(localPath);
+        resolved.push(localPath);
+      }
     } catch {
       continue;
     }
   }
   if (typeof params.rootPath === "string" && params.rootPath.trim()) {
-    return params.rootPath.trim();
+    const trimmedRootPath = params.rootPath.trim();
+    if (!seen.has(trimmedRootPath)) {
+      seen.add(trimmedRootPath);
+      resolved.push(trimmedRootPath);
+    }
   }
-  return undefined;
+  return resolved;
+}
+
+function resolveDefaultWorkspaceForCall(args, envWorkspace) {
+  if (typeof args?.workspace === "string" && args.workspace.trim()) {
+    return args.workspace.trim();
+  }
+  if (sessionWorkspaces.length > 1 && typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
+    const rel = args.manifestPath.trim();
+    if (!path.isAbsolute(rel) && !rel.split(/[\\/]/).includes("..")) {
+      const matching = sessionWorkspaces.filter((root) => {
+        try {
+          return fs.existsSync(path.join(root, rel));
+        } catch {
+          return false;
+        }
+      });
+      if (matching.length === 1) {
+        return matching[0];
+      }
+      if (matching.length > 1) {
+        throw new Error(
+          `Ambiguous multi-root workspace for manifestPath '${rel}' (matched: ${matching.join(", ")}). Pass 'workspace' explicitly.`
+        );
+      }
+    }
+  }
+  if (sessionWorkspaces.length > 1 && args?.manifestPath === undefined && args?.manifest === undefined && args?.task === undefined) {
+    const defaultCandidates = [".agents/squads.json", ".agents/squad-manifest.json"];
+    const matching = sessionWorkspaces.filter((root) =>
+      defaultCandidates.some((rel) => {
+        try { return fs.existsSync(path.join(root, rel)); } catch { return false; }
+      })
+    );
+    if (matching.length === 1) return matching[0];
+  }
+  return sessionWorkspaces[0] || envWorkspace || process.cwd();
 }
 
 const WORKSPACE_SCHEMA = {
@@ -122,7 +168,7 @@ async function handleRequest(request) {
   }
 
   if (method === "initialize") {
-    sessionWorkspace = workspaceFromInitializeParams(params);
+    sessionWorkspaces = workspacesFromInitializeParams(params);
     return {
       jsonrpc: "2.0",
       id,
@@ -148,14 +194,23 @@ async function handleRequest(request) {
     }
     const { name, arguments: args = {} } = params;
     const envWorkspace = process.env.AGY_SQUAD_WORKSPACE?.trim();
-    const defaultWorkspace = sessionWorkspace || envWorkspace || process.cwd();
+    if (name !== "dispatch_squad" && name !== "squad_planner") {
+      return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
+    }
+    let defaultWorkspace;
+    try {
+      defaultWorkspace = resolveDefaultWorkspaceForCall(args, envWorkspace);
+    } catch (error) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: { isError: true, content: [{ type: "text", text: `${name}: ${error.message}` }] }
+      };
+    }
     if (name === "dispatch_squad") {
       return { jsonrpc: "2.0", id, result: handleDispatchSquad(args, defaultWorkspace) };
     }
-    if (name === "squad_planner") {
-      return { jsonrpc: "2.0", id, result: handleSquadPlanner(args, defaultWorkspace) };
-    }
-    return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };
+    return { jsonrpc: "2.0", id, result: handleSquadPlanner(args, defaultWorkspace) };
   }
 
   return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };

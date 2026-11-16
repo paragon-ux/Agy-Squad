@@ -14,7 +14,5 @@
     "governance",
     "pr-review",
     "mcp"
-  ],
-  "skills": "./skills",
-  "mcpServers": "./mcp_config.json"
+  ]
 }
