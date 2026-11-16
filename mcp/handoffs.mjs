@@ -1009,8 +1009,9 @@ function collectReportSlots(root, options = {}) {
     if (isExpectedRealPath(root, realSrc)) {
       throw new Error(`Worktree source '${src}' resolves to the coordinator workspace itself.`);
     }
-    if (!seenRealSources.has(realSrc)) {
-      seenRealSources.add(realSrc);
+    const seenKey = process.platform === "win32" || process.platform === "darwin" ? realSrc.toLowerCase() : realSrc;
+    if (!seenRealSources.has(seenKey)) {
+      seenRealSources.add(seenKey);
       resolvedSources.push({ raw: src, real: realSrc });
     }
   }

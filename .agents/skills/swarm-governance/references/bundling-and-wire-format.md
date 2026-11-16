@@ -23,7 +23,7 @@ Never conflate content acceptance with integrity auditing:
 | Role | Native `/swarm` Member | Strict Verdict Format | Responsibility & Constraints |
 | :--- | :--- | :--- | :--- |
 | **Working Lead / Coordinator** | `<squad>-lead` (layered) or coordinator (flat) | `Content Verdict: PASS` \| `FAIL` \| `BLOCKED` | Reviews specialist deliverables, inspects cited files and executed tests, and owns final technical acceptance (`lead/report.md`). Never self-certifies execution integrity. |
-| **Integrity Auditor** | `audit-<id>` (flat peer) | `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION` | Independent flat peer auditing tool traces (`agy-context transcript query --id <id> --summary` / `agy-context transcript read --id <id> --last-turns 10` with `[agy-transcript-access: allow]`, or coordinator-extracted sanitized transcript index in `scratch/`), primary evidence, absence of sycophancy or guessing, and SHA-256 `Evidence Digest`. Never treats workspace re-execution alone as sufficient for `CLEAN` (fails closed with `INTEGRITY VIOLATION` if traces are unavailable). Must declare `Target Squad: <id>`. Cannot waive defects or issue content `PASS`. |
+| **Integrity Auditor** | `audit-<id>` (flat peer) | `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION` | Independent flat peer auditing tool traces (`agy-context transcript list --parent <id> --lineage`, `agy-context transcript query --id <id> --summary`, or `agy-context transcript read --id <id> --last-turns 10` with `[agy-transcript-access: allow]`, or coordinator `export --parent <id> --sanitized --out scratch/...` index), primary evidence, absence of sycophancy or guessing, and SHA-256 `Evidence Digest`. Never treats workspace re-execution alone as sufficient for `CLEAN` (fails closed with `INTEGRITY VIOLATION` if traces are unavailable). Must declare `Target Squad: <id>`. Cannot waive defects or issue content `PASS`. |
 
 - **Strict single-line enforcement (`mcp/verdicts.mjs`):** Reject hedged, inline-wrapped, or contradictory verdicts (`PASS with Advisories`, `CONDITIONAL PASS`, `PASS / FAIL`). Note: `Verdict:` without `Content ` is accepted only as a legacy alias on lead reports; prefer `Content Verdict:`.
 - **Canonical flat auditor slots:**
@@ -80,7 +80,7 @@ Start from `agy-squad bundle-init --plan <plan.json>` (or `squad_planner`'s `bun
   "handoffs": [
     {
       "sender": "storage-wal-reviewer",
-      "message": "@lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
+      "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
     }
   ]
 }

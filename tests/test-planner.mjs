@@ -17,6 +17,7 @@ try {
   assert.equal(scopesOverlap(".", "docs/tools.md"), true);
   assert.equal(scopesOverlap("src", "src-extra/a.js"), false);
   assert.equal(scopesOverlap("mcp/dispatch.mjs", "mcp/handoffs.mjs"), false);
+  assert.equal(scopesOverlap("README.md", "./README.md", path.join(repoRoot, "mcp", "..")), true);
 
   // 2. Task-mode swarm planning with explicit model pinning and overlapping scopes warning
   const overlapTask = planSquadCohort({
@@ -622,6 +623,10 @@ try {
     }, altDir);
     assert.equal(symlinkAbsPlan.isError, undefined, symlinkAbsPlan.content[0].text);
     assert.equal(JSON.parse(symlinkAbsPlan.content[0].text).bundleRecordTemplates.alpha.workspace, root);
+
+    fs.writeFileSync(path.join(root, "scope-real.txt"), "x\n");
+    fs.symlinkSync(path.join(root, "scope-real.txt"), path.join(root, "scope-alias.txt"), "file");
+    assert.equal(scopesOverlap("scope-real.txt", "scope-alias.txt", linkRoot), true);
 
     const taskOverridePlan = handleSquadPlanner({ task: "Audit task override", workspace: root }, altDir);
     assert.equal(taskOverridePlan.isError, undefined, taskOverridePlan.content[0].text);

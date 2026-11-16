@@ -129,9 +129,13 @@ function normalizeScopePath(scopeEntry, root) {
   if (trimmed === ".") return "";
   if (root) {
     try {
-      const candidate = path.resolve(root, trimmed);
+      let canonicalRoot = root;
+      try {
+        canonicalRoot = fs.realpathSync(root);
+      } catch {}
+      const candidate = path.resolve(canonicalRoot, trimmed);
       const real = fs.realpathSync(candidate);
-      const rel = path.relative(root, real).split(path.sep).join("/");
+      const rel = path.relative(canonicalRoot, real).split(path.sep).join("/");
       if (rel === "") return "";
       if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
         return rel;
