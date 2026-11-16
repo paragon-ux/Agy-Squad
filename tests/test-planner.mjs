@@ -534,7 +534,7 @@ try {
   const realDir = path.join(root, "real-src");
   fs.mkdirSync(realDir, { recursive: true });
   fs.writeFileSync(path.join(realDir, "item.js"), "// item\n", "utf8");
-  fs.symlinkSync(realDir, symDir);
+  fs.symlinkSync(realDir, symDir, os.platform() === "win32" ? "junction" : "dir");
   const symlinkOverlap = planSquadCohort({
     manifest: {
       squads: {
@@ -594,7 +594,7 @@ try {
   // 11. Workspace argument, symlinked workspaces, handleSquadPlanner errors, and bounded-read/budget checks
   const altDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-alt-")));
   const linkRoot = path.join(path.dirname(root), `${path.basename(root)}-link`);
-  fs.symlinkSync(root, linkRoot, "dir");
+  fs.symlinkSync(root, linkRoot, os.platform() === "win32" ? "junction" : "dir");
   try {
     const overridePlan = planSquadCohort({
       manifestPath: "plan-manifest.json",
@@ -625,8 +625,16 @@ try {
     assert.equal(JSON.parse(symlinkAbsPlan.content[0].text).bundleRecordTemplates.alpha.workspace, root);
 
     fs.writeFileSync(path.join(root, "scope-real.txt"), "x\n");
-    fs.symlinkSync(path.join(root, "scope-real.txt"), path.join(root, "scope-alias.txt"), "file");
-    assert.equal(scopesOverlap("scope-real.txt", "scope-alias.txt", linkRoot), true);
+    let scopeAliasCreated = false;
+    try {
+      fs.symlinkSync(path.join(root, "scope-real.txt"), path.join(root, "scope-alias.txt"), "file");
+      scopeAliasCreated = true;
+    } catch (err) {
+      if (err?.code !== "EPERM") throw err;
+    }
+    if (scopeAliasCreated) {
+      assert.equal(scopesOverlap("scope-real.txt", "scope-alias.txt", linkRoot), true);
+    }
 
     const taskOverridePlan = handleSquadPlanner({ task: "Audit task override", workspace: root }, altDir);
     assert.equal(taskOverridePlan.isError, undefined, taskOverridePlan.content[0].text);

@@ -71,7 +71,11 @@ function probeBinaryVersion(target, args = ["--version"]) {
     if (useCmdShell) {
       if (/["&|<>^%\r\n]/.test(target)) return null;
       const cmdLine = `"${target}" ${args.join(" ")}`;
-      res = spawnSync("cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
+      const comspec =
+        process.env.ComSpec ||
+        process.env.COMSPEC ||
+        path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "cmd.exe");
+      res = spawnSync(comspec, ["/d", "/s", "/c", `"${cmdLine}"`], {
         encoding: "utf8",
         timeout: 3000,
         windowsHide: true,
@@ -431,11 +435,11 @@ export function formatWindowsCmdShim(targetRoot) {
 
 async function installCliShims({ targetRoot, log }) {
   await fsPromises.mkdir(antigravityBinDir, { recursive: true });
-  const cliTarget = normalizeSlash(path.join(targetRoot, "bin", "agy-squad.mjs"));
+  const cliTarget = normalizeSlash(path.join(targetRoot, "bin", "agy-squad.mjs")).replace(/(["\\$`])/g, "\\$1");
   const posixShimPath = path.join(antigravityBinDir, "agy-squad");
   const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
 
-  const escapedExecPath = process.execPath.replace(/(["\\$`])/g, "\\$1");
+  const escapedExecPath = normalizeSlash(process.execPath).replace(/(["\\$`])/g, "\\$1");
   const posixContent = [
     "#!/usr/bin/env sh",
     "if command -v node >/dev/null 2>&1; then",
@@ -753,7 +757,25 @@ Commands & Options:
 `);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  const tryRealpath = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const resolvedArg = tryRealpath(path.resolve(process.argv[1]));
+  const resolvedSelf = tryRealpath(fileURLToPath(import.meta.url));
+  if (resolvedArg === resolvedSelf) return true;
+  if (os.platform() === "win32" || os.platform() === "darwin") {
+    return resolvedArg.toLowerCase() === resolvedSelf.toLowerCase();
+  }
+  return false;
+}
+
+if (isDirectExecution()) {
   const args = process.argv.slice(2);
   const isHelp = args.includes("--help") || args.includes("-h") || args.includes("help");
   const isUninstall = args.includes("--uninstall") || args.includes("uninstall");

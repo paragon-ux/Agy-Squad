@@ -68,7 +68,7 @@ See [references/evidence-intake.md](references/evidence-intake.md) for batch ext
 
 ### Step 3 — Trace architecture before runtime
 
-Trace `design thesis / invariant -> architecture decision -> public contract -> implementation -> verification` using normative records (`docs/plans/LEDGER.md`, `.github/workflows/ci-matrix.yml`, historical `docs/plans/wsl-cli-verification.md`, commit `ee10ebc`). Distinguish historical design records from active contracts and note compatibility impacts of intentional changes.
+Trace `design thesis / invariant -> architecture decision -> public contract -> implementation -> verification` using normative records (`docs/plans/LEDGER.md`, `.github/workflows/ci.yml`, historical `docs/plans/wsl-cli-verification.md`, commit `ee10ebc`). Distinguish historical design records from active contracts and note compatibility impacts of intentional changes.
 
 ### Step 4 — Review the ten categories & record findings
 

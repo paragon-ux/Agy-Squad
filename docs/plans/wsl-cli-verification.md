@@ -1,7 +1,7 @@
 # WSL CLI verification (Historical Baseline)
 
 > [!NOTE]
-> Cross-platform Node.js parity (Linux, macOS, Windows) is tested in `.github/workflows/ci-matrix.yml`; physical macOS/Windows live Antigravity `agy` IDE/CLI execution remains an open verification gate under [`L46`](LEDGER.md). The records below preserve the November 7-8, 2026 WSL2 baseline trials verbatim.
+> Cross-platform Node.js parity (Linux, macOS, Windows) is tested in `.github/workflows/ci.yml`; physical macOS/Windows live Antigravity `agy` IDE/CLI execution remains an open verification gate under [`L46`](LEDGER.md). The records below preserve the November 7-8, 2026 WSL2 baseline trials verbatim.
 
 Use a disposable workspace with synthetic files. Keep configuration local to that workspace. Agy-Squad compiles payloads while Antigravity owns permissions and launch.
 

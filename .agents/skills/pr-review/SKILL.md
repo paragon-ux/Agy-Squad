@@ -46,7 +46,7 @@ If topology, workspace isolation, model, or retention options are unspecified, a
 3. **Integrity Gate:** Confirm `Mandatory Flat Integrity Auditor Gate` (`audit-<id>` on `/swarm` or `integrity_auditor[:<id>]` on `invoke_subagent`).
 
 ### Step 1: Pin Review & Session Provenance
-Record repository, target PR/branch/tree state, date, reviewer, standard version `1.4.0`, base/head SHAs, dirty delta, CI SHAs, and **Session Provenance** (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`). List changed files and unchanged dependencies, available evidence (`docs/plans/LEDGER.md`, `.github/workflows/ci-matrix.yml`, historical `docs/plans/wsl-cli-verification.md`, prior reviews, transcripts, CI logs), and explicit exclusions.
+Record repository, target PR/branch/tree state, date, reviewer, standard version `1.4.0`, base/head SHAs, dirty delta, CI SHAs, and **Session Provenance** (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`). List changed files and unchanged dependencies, available evidence (`docs/plans/LEDGER.md`, `.github/workflows/ci.yml`, historical `docs/plans/wsl-cli-verification.md`, prior reviews, transcripts, CI logs), and explicit exclusions.
 
 ### Step 2: Trace Architecture Before Runtime
 For every behavior change, inspect and document the architecture chain (`design thesis -> decision -> contract -> implementation -> verification`) against `LEDGER.md` and public contracts before running or trusting runtime checks.
