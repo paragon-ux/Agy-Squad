@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
@@ -124,41 +125,99 @@ function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overri
   };
 }
 
-function normalizeScopePath(scopeEntry, root) {
-  let trimmed = scopeEntry.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+function normalizeScopePath(scopeEntry, root, options = {}) {
+  let resolvedRoot = root;
+  let resolvedOptions = options;
+  if (root && typeof root === "object") {
+    resolvedOptions = root;
+    resolvedRoot = undefined;
+  }
+  const safeOptions = resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {};
+  const caseInsensitive =
+    typeof safeOptions.caseInsensitive === "boolean"
+      ? safeOptions.caseInsensitive
+      : os.platform() === "win32" || os.platform() === "darwin";
+  const applyCase = value => (caseInsensitive ? value.toLowerCase() : value);
+
+  let trimmed = scopeEntry
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^(?:\.\/)+/, "")
+    .replace(/\/\.(?=\/|$)/g, "")
+    .replace(/\/+$/, "");
   if (trimmed === ".") trimmed = "";
   if (trimmed === "") return "";
-  if (root) {
+  if (resolvedRoot) {
     try {
-      let canonicalRoot = root;
+      let canonicalRoot = path.resolve(resolvedRoot);
       try {
-        canonicalRoot = fs.realpathSync(root);
+        canonicalRoot = fs.realpathSync(canonicalRoot);
       } catch {}
       const candidate = path.resolve(canonicalRoot, trimmed);
-      const real = fs.realpathSync(candidate);
-      const rel = path.relative(canonicalRoot, real).split(path.sep).join("/");
-      if (rel === "") return "";
-      if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
-        return rel;
+      const lexRel = path.relative(canonicalRoot, candidate).split(path.sep).join("/");
+      if (lexRel === "") return "";
+      if (lexRel !== ".." && !lexRel.startsWith("../") && !path.isAbsolute(lexRel)) {
+        let probe = candidate;
+        const suffixParts = [];
+        let resolvedBase = null;
+        while (true) {
+          try {
+            resolvedBase = fs.realpathSync(probe);
+            break;
+          } catch (err) {
+            if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") {
+              break;
+            }
+            if (probe === canonicalRoot) {
+              break;
+            }
+            const parent = path.dirname(probe);
+            if (parent === probe) break;
+            suffixParts.unshift(path.basename(probe));
+            probe = parent;
+          }
+        }
+        if (resolvedBase !== null) {
+          const resolvedTarget = suffixParts.length ? path.join(resolvedBase, ...suffixParts) : resolvedBase;
+          const rel = path.relative(canonicalRoot, resolvedTarget).split(path.sep).join("/");
+          if (rel === "") return "";
+          if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
+            return applyCase(rel);
+          }
+        }
+        return applyCase(lexRel);
       }
     } catch {
       // Planned path may not exist on disk yet; keep normalized lexical form.
     }
   }
-  return trimmed;
+  return applyCase(trimmed);
 }
 
-function scopesOverlap(a, b, root) {
-  const normA = normalizeScopePath(a, root);
-  const normB = normalizeScopePath(b, root);
+function scopesOverlap(a, b, root, options = {}) {
+  let resolvedRoot = root;
+  let resolvedOptions = options;
+  if (root && typeof root === "object") {
+    resolvedOptions = root;
+    resolvedRoot = undefined;
+  }
+  const normA = normalizeScopePath(a, resolvedRoot, resolvedOptions);
+  const normB = normalizeScopePath(b, resolvedRoot, resolvedOptions);
   if (normA === "" || normB === "") return true;
   return normA === normB || normA.startsWith(`${normB}/`) || normB.startsWith(`${normA}/`);
 }
 
-function findScopeOverlaps(entries, root) {
+function findScopeOverlaps(entries, root, options = {}) {
+  let resolvedRoot = root;
+  let resolvedOptions = options;
+  if (root && typeof root === "object") {
+    resolvedOptions = root;
+    resolvedRoot = undefined;
+  }
   const normalizedEntries = entries.map(entry => ({
     label: entry.label,
-    scopes: entry.scopeFiles.map(raw => ({ raw, norm: normalizeScopePath(raw, root) }))
+    scopes: entry.scopeFiles.map(raw => ({ raw, norm: normalizeScopePath(raw, resolvedRoot, resolvedOptions) }))
   }));
   const overlaps = [];
   for (let i = 0; i < normalizedEntries.length; i++) {
@@ -248,7 +307,11 @@ function buildSwarmWorkerBrief(compiledBrief, targetModel, workspaceIsolation) {
  * or invoke_subagent dispatch, explicit model provenance, scope-overlap checks, and L6-safe
  * integrity audit scaffolding.
  */
-function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
+function planSquadCohort(
+  args = {},
+  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd(),
+  options = {}
+) {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Provide a planner options object.");
   }
@@ -639,7 +702,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
     modelProvenance.warning = `Manifest model(s) (${uniqueOverridden.join(", ")}) cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`;
   }
 
-  const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root);
+  const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root, options);
   const warnings = [...new Set(auditWarnings)];
   if (scopeOverlaps.length > 0 && workspaceIsolation === "inherit") {
     warnings.push(
@@ -774,4 +837,4 @@ function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPA
   }
 }
 
-export { handleSquadPlanner, planSquadCohort, scopesOverlap };
+export { findScopeOverlaps, handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap };

@@ -23,9 +23,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.1";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.2";
   } catch {
-    return "0.1.1";
+    return "0.1.2";
   }
 })();
 
@@ -266,7 +266,19 @@ export function detectExistingInstallation(options = {}) {
   const includeCompanions = options.includeCompanions !== false;
   const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
-    plugin: { exists: false, skillsReady: false, docsReady: false, path: pluginDest },
+    plugin: {
+      exists: false,
+      skillsReady: false,
+      docsReady: false,
+      runtimeReady: false,
+      path: pluginDest,
+      target: null,
+      isSymlink: false,
+      isCopyFallback: false,
+      pointsElsewhere: false,
+      version: null,
+      versionMismatch: false
+    },
     mcp: {
       registered: false,
       pluginRegistered: false,
@@ -280,15 +292,135 @@ export function detectExistingInstallation(options = {}) {
     companions: null
   };
 
+  const isLocalCheckout =
+    fs.existsSync(path.join(repoRoot, ".git")) &&
+    !repoRoot.includes("_npx") &&
+    !repoRoot.includes("npm-cache") &&
+    !repoRoot.includes("node_modules");
+  const pathsEqual = (a, b) =>
+    os.platform() === "win32" || os.platform() === "darwin"
+      ? a.toLowerCase() === b.toLowerCase()
+      : a === b;
+
+  let pluginLst = null;
+  try {
+    pluginLst = fs.lstatSync(pluginDest);
+  } catch {}
+
   try {
     if (fs.existsSync(pluginDest)) {
       details.plugin.exists = true;
+      const pluginDirIsSymlink = Boolean(pluginLst && pluginLst.isSymbolicLink());
+      if (pluginDirIsSymlink) {
+        details.plugin.isSymlink = true;
+        try {
+          details.plugin.target = fs.readlinkSync(pluginDest);
+        } catch {
+          details.plugin.target = "symlink";
+        }
+        if (isLocalCheckout) {
+          try {
+            details.plugin.pointsElsewhere = !pathsEqual(fs.realpathSync(pluginDest), fs.realpathSync(repoRoot));
+          } catch {
+            details.plugin.pointsElsewhere = true;
+          }
+        }
+      } else {
+        const linkedDirs = [
+          ["bin", "bin"],
+          ["docs", "docs"],
+          ["mcp", "mcp"],
+          ["scripts", "scripts"],
+          [".agents", ".agents"],
+          ["skills", path.join(".agents", "skills")]
+        ];
+        let dotAgentsIsSymlink = false;
+        for (const [relDir, repoRel] of linkedDirs) {
+          const linkPath = path.join(pluginDest, relDir);
+          let linkLst = null;
+          try {
+            linkLst = fs.lstatSync(linkPath);
+          } catch {}
+          if (linkLst && linkLst.isSymbolicLink()) {
+            if (relDir === ".agents") {
+              dotAgentsIsSymlink = true;
+            }
+            if (relDir === "skills" && !dotAgentsIsSymlink) {
+              try {
+                const localAgentsSkills = path.join(pluginDest, ".agents", "skills");
+                if (
+                  fs.existsSync(localAgentsSkills) &&
+                  pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(localAgentsSkills))
+                ) {
+                  continue;
+                }
+              } catch {}
+            }
+            details.plugin.isSymlink = true;
+            let subdirRedirected = false;
+            if (isLocalCheckout) {
+              try {
+                if (!pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(path.join(repoRoot, repoRel)))) {
+                  details.plugin.pointsElsewhere = true;
+                  subdirRedirected = true;
+                }
+              } catch {
+                details.plugin.pointsElsewhere = true;
+                subdirRedirected = true;
+              }
+            }
+            if (subdirRedirected || !details.plugin.target) {
+              try {
+                const rawTarget = fs.readlinkSync(linkPath);
+                const suffix = `${path.sep}${repoRel}`;
+                if (rawTarget.endsWith(suffix)) {
+                  details.plugin.target = rawTarget.slice(0, -suffix.length) || rawTarget;
+                } else {
+                  const expectedBase = path.basename(repoRel);
+                  details.plugin.target = path.basename(rawTarget) === expectedBase ? path.dirname(rawTarget) : rawTarget;
+                }
+              } catch {
+                if (!details.plugin.target || subdirRedirected) details.plugin.target = "symlink";
+              }
+            }
+          }
+        }
+        if (!details.plugin.isSymlink) {
+          details.plugin.target = "direct folder or junction";
+        }
+      }
+      details.plugin.isCopyFallback = !details.plugin.isSymlink;
+
+      try {
+        const installedPkg = JSON.parse(fs.readFileSync(path.join(pluginDest, "package.json"), "utf8"));
+        if (typeof installedPkg?.version === "string" && installedPkg.version.trim()) {
+          details.plugin.version = installedPkg.version.trim();
+        }
+      } catch {}
+      details.plugin.versionMismatch = Boolean(
+        details.plugin.version && details.plugin.version !== PACKAGE_VERSION
+      );
+
       const skillsPath = path.join(pluginDest, "skills");
       const requiredSkills = ["pr-review", "full-review", "self-diagnosis", "swarm-governance"];
       details.plugin.skillsReady = requiredSkills.every((skillName) =>
         fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
       );
       details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
+      details.plugin.runtimeReady =
+        fs.existsSync(path.join(pluginDest, "package.json")) &&
+        fs.existsSync(path.join(pluginDest, "plugin.json")) &&
+        Boolean(details.plugin.version) &&
+        fs.existsSync(path.join(pluginDest, "bin", "agy-squad.mjs")) &&
+        fs.existsSync(path.join(pluginDest, "mcp", "index.js"));
+    } else if (pluginLst && pluginLst.isSymbolicLink()) {
+      details.plugin.isSymlink = true;
+      details.plugin.pointsElsewhere = true;
+      try {
+        details.plugin.target = fs.readlinkSync(pluginDest);
+      } catch {
+        details.plugin.target = "broken symlink";
+      }
     }
   } catch {}
 
@@ -368,13 +500,23 @@ export function detectExistingInstallation(options = {}) {
   }
 
   const isInstalled =
+    details.plugin.exists ||
+    Boolean(pluginLst) ||
+    details.mcp.pluginRegistered ||
+    details.mcp.globalDuplicate ||
+    details.cliShim.exists;
+
+  const isComplete =
     details.plugin.exists &&
+    !details.plugin.pointsElsewhere &&
+    !details.plugin.versionMismatch &&
+    details.plugin.runtimeReady &&
     details.plugin.skillsReady &&
     details.mcp.registered &&
     details.cliShim.exists &&
     details.config.enabled;
 
-  return { isInstalled, details };
+  return { isInstalled, isComplete, details };
 }
 
 async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
@@ -448,6 +590,7 @@ export function formatWindowsCmdShim(targetRoot) {
   const winTarget = path.join(targetRoot, "bin", "agy-squad.mjs");
   return [
     "@echo off",
+    "chcp 65001 >nul",
     "setlocal",
     "where node >nul 2>nul",
     "if errorlevel 1 goto :fallback",
@@ -541,9 +684,23 @@ export async function runInstall(options = {}) {
 
   if (existing.isInstalled) {
     log("Existing Agy-Squad installation detected:");
-    log(`   [OK] Native Plugin Link: ${pluginDest}`);
-    log(`   [OK] Plugin MCP Server (${PLUGIN_KEY}): Registered in ${path.join(pluginDest, "mcp_config.json")}`);
-    log(`   [OK] CLI Shim (agy-squad): Installed in ${antigravityBinDir}`);
+    if (existing.details.plugin.exists) {
+      if (existing.details.plugin.pointsElsewhere) {
+        log(`   [WARN] Native Plugin Link: ${pluginDest} (redirected -> ${existing.details.plugin.target}; re-linking)`);
+      } else if (existing.details.plugin.versionMismatch) {
+        log(`   [WARN] Native Plugin Link: ${pluginDest} (stale v${existing.details.plugin.version}; updating)`);
+      } else {
+        log(`   [OK] Native Plugin Link: ${pluginDest}`);
+      }
+    } else if (existing.details.plugin.isSymlink) {
+      log(`   [WARN] Native Plugin Link: ${pluginDest} (broken symlink -> ${existing.details.plugin.target}; re-linking)`);
+    }
+    if (existing.details.mcp.registered) {
+      log(`   [OK] Plugin MCP Server (${PLUGIN_KEY}): Registered in ${path.join(pluginDest, "mcp_config.json")}`);
+    }
+    if (existing.details.cliShim.exists) {
+      log(`   [OK] CLI Shim (agy-squad): Installed in ${antigravityBinDir}`);
+    }
     log(`\nRe-verifying and synchronizing to v${PACKAGE_VERSION}...`);
   } else {
     log(`Installing Agy-Squad v${PACKAGE_VERSION}...`);
@@ -673,10 +830,13 @@ export async function runUninstall(options = {}) {
   const validatedMcp = readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   const validatedConfig = readAndValidateJsonFile(configJsonPath, "config.json");
 
-  if (fs.existsSync(pluginDest)) {
+  let pluginStat = null;
+  try {
+    pluginStat = fs.lstatSync(pluginDest);
+  } catch {}
+  if (pluginStat) {
     try {
-      const stat = fs.lstatSync(pluginDest);
-      if (stat.isSymbolicLink()) {
+      if (pluginStat.isSymbolicLink()) {
         await fsPromises.unlink(pluginDest);
       } else {
         await fsPromises.rm(pluginDest, { recursive: true, force: true });
@@ -749,10 +909,22 @@ function formatCompanionLine(label, info, note) {
 export function printStatus(options = {}) {
   const log = options.silent ? () => {} : console.log;
   const status = detectExistingInstallation({ includeCompanions: true });
+  const plug = status.details.plugin;
+  const pluginNote = !plug.exists
+    ? (plug.isSymlink
+        ? `BROKEN SYMLINK (${plug.path} -> ${plug.target}; re-run agy-squad setup)`
+        : `MISSING (${plug.path})`)
+    : plug.pointsElsewhere
+      ? `REDIRECTED (${plug.path} -> ${plug.target}; re-run agy-squad setup)`
+      : plug.versionMismatch
+        ? `STALE VERSION (${plug.version} != ${PACKAGE_VERSION} at ${plug.path}; re-run agy-squad setup)`
+        : !plug.runtimeReady
+          ? `INCOMPLETE (${plug.path}; re-run agy-squad setup)`
+          : plug.isCopyFallback
+            ? `ACTIVE COPY (${plug.path})`
+            : `ACTIVE (${plug.path})`;
   log("Checking Agy-Squad installation status...\n");
-  log(
-    `- Native Plugin Link: ${status.details.plugin.exists ? "ACTIVE" : "MISSING"} (${status.details.plugin.path})`
-  );
+  log(`- Native Plugin Link: ${pluginNote}`);
   log(
     `- Governance Skills (pr-review, full-review, self-diagnosis, swarm-governance): ${
       status.details.plugin.skillsReady ? "READY" : "MISSING"
@@ -782,10 +954,10 @@ export function printStatus(options = {}) {
   if (!agyContext?.available || !rtk?.available) {
     log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1) + RTK (>= 1.1.0) for full live integrity audits.");
   }
-  const overallLabel = status.isInstalled
+  const overallLabel = status.isComplete
     ? "HEALTHY & ACTIVE"
-    : !status.details.config.enabled
-      ? "DISABLED"
+    : status.isInstalled
+      ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
       : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
   return status;
@@ -876,7 +1048,7 @@ if (isDirectExecution()) {
       if (isJson) {
         console.log(JSON.stringify(st, null, 2));
       }
-      process.exit(st.isInstalled ? 0 : 1);
+      process.exit(st.isComplete ? 0 : 1);
     } else if (isCheck) {
       await runCheckOnly();
     } else if (isUninstall) {

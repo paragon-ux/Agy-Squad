@@ -26,9 +26,9 @@ import { printStatus, runCheckOnly, runInstall, runRestoreBackups, runUninstall 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkgVersion = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.1";
+    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.2";
   } catch {
-    return "0.1.1";
+    return "0.1.2";
   }
 })();
 
@@ -342,7 +342,7 @@ async function main(args) {
     if (values.json) {
       console.log(JSON.stringify(st, null, 2));
     }
-    return st.isInstalled ? 0 : 1;
+    return st.isComplete ? 0 : 1;
   }
   if (command === "uninstall") {
     const usageLine = "Usage: agy-squad uninstall [--restore-backups]";

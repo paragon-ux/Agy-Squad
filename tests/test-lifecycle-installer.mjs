@@ -220,6 +220,11 @@ try {
   assert.equal(missingCompanionStatus.status, 0, "Missing companions must be non-fatal when Agy-Squad is installed (SQ-DEP-005)");
   const missingCompanionJson = JSON.parse(missingCompanionStatus.stdout);
   assert.equal(missingCompanionJson.isInstalled, true);
+  assert.equal(missingCompanionJson.isComplete, true);
+  assert.equal(missingCompanionJson.details.plugin.isSymlink, true);
+  assert.equal(missingCompanionJson.details.plugin.isCopyFallback, false);
+  assert.equal(missingCompanionJson.details.plugin.pointsElsewhere, false);
+  assert.equal(missingCompanionJson.details.plugin.versionMismatch, false);
   assert.equal(missingCompanionJson.details.companions.agyContext.available, false);
   assert.equal(missingCompanionJson.details.companions.rtk.available, false);
 
@@ -358,6 +363,8 @@ try {
   }
 
   const cmdShimText = formatWindowsCmdShim(pluginDir);
+  assert.match(cmdShimText, /^@echo off\r\nchcp 65001 >nul\r\n/);
+  assert.match(cmdShimText, /chcp 65001 >nul/);
   assert.match(cmdShimText, /setlocal/);
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
@@ -394,6 +401,131 @@ try {
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
   assert.equal(fs.existsSync(path.join(pluginDir, "stale-old-file.txt")), false, "forceCopyFallback must prune stale non-symlink files (SQ-DEP-004)");
   assert.equal(fs.lstatSync(pluginDir).isSymbolicLink(), false);
+  const copyDetect = detectExistingInstallation({ includeCompanions: false });
+  assert.equal(copyDetect.isComplete, true);
+  assert.equal(copyDetect.details.plugin.isSymlink, false);
+  assert.equal(copyDetect.details.plugin.isCopyFallback, true);
+  assert.equal(copyDetect.details.plugin.versionMismatch, false);
+
+  // SQ-BOOST-DEP-001: Stale copy-fallback package.json version must print STALE VERSION + PARTIAL INSTALLATION and exit 1
+  const pluginPkgPath = path.join(pluginDir, "package.json");
+  const savedPluginPkg = fs.readFileSync(pluginPkgPath, "utf8");
+  const stalePkg = JSON.parse(savedPluginPkg);
+  stalePkg.version = "0.1.1";
+  fs.writeFileSync(pluginPkgPath, JSON.stringify(stalePkg, null, 2) + "\n");
+  const staleCliStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(staleCliStatus.status, 1, "Stale copy-fallback version must exit 1 on agy-squad status");
+  assert.match(staleCliStatus.stdout, /STALE VERSION/);
+  assert.match(staleCliStatus.stdout, /PARTIAL INSTALLATION/);
+  const staleDirectStatus = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "install-register.mjs"), "--status"], {
+    cwd: repoRoot,
+    env: testEnv,
+    encoding: "utf8"
+  });
+  assert.equal(staleDirectStatus.status, 1, "Stale copy-fallback version must exit 1 on install-register.mjs --status");
+  const staleJsonStatus = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(staleJsonStatus.status, 1);
+  const staleJson = JSON.parse(staleJsonStatus.stdout);
+  assert.equal(staleJson.isInstalled, true);
+  assert.equal(staleJson.isComplete, false);
+  assert.equal(staleJson.details.plugin.isCopyFallback, true);
+  assert.equal(staleJson.details.plugin.version, "0.1.1");
+  assert.equal(staleJson.details.plugin.versionMismatch, true);
+  fs.writeFileSync(pluginPkgPath, savedPluginPkg);
+
+  // SQ-BOOST-DEP-001: Redirected symlinked bin / mcp / skills / pluginDest must print REDIRECTED (citing redirected checkout) + PARTIAL INSTALLATION and exit 1
+  const otherCheckout = path.join(tmpProfile, "other-checkout");
+  fs.mkdirSync(path.join(otherCheckout, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(otherCheckout, "mcp"), { recursive: true });
+  fs.mkdirSync(path.join(otherCheckout, ".agents", "skills"), { recursive: true });
+  fs.writeFileSync(path.join(otherCheckout, "bin", "agy-squad.mjs"), "// other\n");
+  fs.writeFileSync(path.join(otherCheckout, "mcp", "index.js"), "// other\n");
+  const pluginBinDir = path.join(pluginDir, "bin");
+  fs.rmSync(pluginBinDir, { recursive: true, force: true });
+  fs.symlinkSync(path.join(otherCheckout, "bin"), pluginBinDir, os.platform() === "win32" ? "junction" : "dir");
+  const redirectedStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(redirectedStatus.status, 1, "Redirected plugin bin symlink must exit 1 on status");
+  assert.match(redirectedStatus.stdout, /REDIRECTED/);
+  assert.match(redirectedStatus.stdout, /PARTIAL INSTALLATION/);
+  const redirectedDetect = detectExistingInstallation({ includeCompanions: false });
+  assert.equal(redirectedDetect.isInstalled, true);
+  assert.equal(redirectedDetect.isComplete, false);
+  assert.equal(redirectedDetect.details.plugin.isSymlink, true);
+  assert.equal(redirectedDetect.details.plugin.pointsElsewhere, true);
+
+  // When bin points to repoRoot yet mcp points to otherCheckout, REDIRECTED target must name otherCheckout (not repoRoot)
+  await runAgySquadInstall({ silent: true });
+  const pluginMcpDir = path.join(pluginDir, "mcp");
+  fs.rmSync(pluginMcpDir, { recursive: true, force: true });
+  fs.symlinkSync(path.join(otherCheckout, "mcp"), pluginMcpDir, os.platform() === "win32" ? "junction" : "dir");
+  const mcpRedirectStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(mcpRedirectStatus.status, 1, "Redirected plugin mcp symlink must exit 1 on status");
+  assert.match(mcpRedirectStatus.stdout, /REDIRECTED/);
+  assert.ok(mcpRedirectStatus.stdout.includes(otherCheckout), `Expected REDIRECTED target to cite ${otherCheckout}, got:\n${mcpRedirectStatus.stdout}`);
+
+  // Also verify redirected skills symlink triggers REDIRECTED + exit 1
+  await runAgySquadInstall({ silent: true });
+  const pluginSkillsDir = path.join(pluginDir, "skills");
+  fs.rmSync(pluginSkillsDir, { recursive: true, force: true });
+  fs.symlinkSync(path.join(otherCheckout, ".agents", "skills"), pluginSkillsDir, os.platform() === "win32" ? "junction" : "dir");
+  const skillsRedirectStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(skillsRedirectStatus.status, 1, "Redirected plugin skills symlink must exit 1 on status");
+  assert.match(skillsRedirectStatus.stdout, /REDIRECTED/);
+
+  // Also verify direct pluginDest symlink pointing elsewhere triggers REDIRECTED + exit 1
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+  fs.symlinkSync(otherCheckout, pluginDir, os.platform() === "win32" ? "junction" : "dir");
+  const directRedirectStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(directRedirectStatus.status, 1, "Redirected pluginDest symlink must exit 1 on status");
+  assert.match(directRedirectStatus.stdout, /REDIRECTED/);
+  assert.match(directRedirectStatus.stdout, /PARTIAL INSTALLATION/);
+  const directRedirectDetect = detectExistingInstallation({ includeCompanions: false });
+  assert.equal(directRedirectDetect.isInstalled, true);
+  assert.equal(directRedirectDetect.isComplete, false);
+  assert.equal(directRedirectDetect.details.plugin.isSymlink, true);
+  assert.equal(directRedirectDetect.details.plugin.pointsElsewhere, true);
+
+  // Broken symlink at pluginDest must report BROKEN SYMLINK + exit 1 AND be cleanly removed by uninstall
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+  let brokenPluginSymCreated = false;
+  try {
+    fs.symlinkSync(path.join(tmpProfile, "missing-checkout"), pluginDir, os.platform() === "win32" ? "junction" : "dir");
+    brokenPluginSymCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (brokenPluginSymCreated) {
+    const brokenStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+    assert.equal(brokenStatus.status, 1);
+    assert.match(brokenStatus.stdout, /BROKEN SYMLINK/);
+    assert.match(brokenStatus.stdout, /PARTIAL INSTALLATION/);
+    const brokenUninst = spawnSync(process.execPath, [cli, "uninstall"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+    assert.equal(brokenUninst.status, 0, brokenUninst.stderr || brokenUninst.stdout);
+    assert.throws(() => fs.lstatSync(pluginDir), { code: "ENOENT" }, "uninstall must remove broken pluginDest symlink");
+  }
+
+  // Re-running setup heals stale/redirected/broken install cleanly
+  await runAgySquadInstall({ silent: true });
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).isComplete, true);
+
+  // Missing package.json in pluginDest must fail runtimeReady -> INCOMPLETE + exit 1 (not HEALTHY & ACTIVE)
+  const missingPkgPath = path.join(pluginDir, "package.json");
+  const restoredPkgBody = fs.readFileSync(missingPkgPath, "utf8");
+  fs.rmSync(missingPkgPath);
+  const missingPkgStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(missingPkgStatus.status, 1, "Missing pluginDest/package.json must exit 1 on status");
+  assert.match(missingPkgStatus.stdout, /INCOMPLETE/);
+  assert.match(missingPkgStatus.stdout, /PARTIAL INSTALLATION/);
+  fs.writeFileSync(missingPkgPath, restoredPkgBody);
+
+  // Partial install (missing CLI shim) must exit 1 with PARTIAL INSTALLATION
+  const shimFile = path.join(tmpProfile, ".gemini", "antigravity", "bin", os.platform() === "win32" ? "agy-squad.cmd" : "agy-squad");
+  const savedShim = fs.readFileSync(shimFile, "utf8");
+  fs.rmSync(shimFile);
+  const partialStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(partialStatus.status, 1, "Partial install missing CLI shim must exit 1");
+  assert.match(partialStatus.stdout, /PARTIAL INSTALLATION/);
+  fs.writeFileSync(shimFile, savedShim, os.platform() === "win32" ? undefined : { mode: 0o755 });
 
   // L49: skillsReady must require all 4 skills (including swarm-governance) and lifecycle subcommands enforce strict args
   const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
@@ -465,9 +597,17 @@ try {
     process.env.AGY_TEST_PROFILE_DIR = emptyDynProfile;
     const dynEmpty = installerMod.detectExistingInstallation();
     assert.equal(dynEmpty.isInstalled, false);
+    assert.equal(dynEmpty.isComplete, false);
     assert.equal(dynEmpty.details.plugin.exists, false);
     assert.equal(dynEmpty.details.mcp.registered, false);
     assert.equal(dynEmpty.details.plugin.path.startsWith(emptyDynProfile), true);
+    const emptyCliStatus = spawnSync(process.execPath, [cli, "status"], {
+      cwd: repoRoot,
+      env: { ...testEnv, AGY_TEST_PROFILE_DIR: emptyDynProfile },
+      encoding: "utf8"
+    });
+    assert.equal(emptyCliStatus.status, 1);
+    assert.match(emptyCliStatus.stdout, /Overall Status: NOT INSTALLED/);
   } finally {
     process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
     fs.rmSync(emptyDynProfile, { recursive: true, force: true });

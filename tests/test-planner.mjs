@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
-import { handleSquadPlanner, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
+import { handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -20,6 +20,58 @@ try {
   assert.equal(scopesOverlap("README.md", "./README.md", path.join(repoRoot, "mcp", "..")), true);
   assert.equal(scopesOverlap("./nonexistent-scope.js", "nonexistent-scope.js", root), true);
   assert.equal(scopesOverlap("./mcp-missing/a.js", "mcp-missing\\a.js", root), true);
+
+  // SQ-BOOST-MCP-001: Case-insensitive uncreated planned scopes + ancestor symlink resolution without breaking Linux ext4 sensitivity
+  assert.equal(normalizeScopePath("src/Foo.js", { caseInsensitive: true }), "src/foo.js");
+  assert.equal(scopesOverlap("src//Foo.js", "src/foo.js", { caseInsensitive: true }), true);
+  assert.equal(scopesOverlap("src/./Foo.js", "src/foo.js", { caseInsensitive: true }), true);
+  assert.equal(scopesOverlap(".//Foo.js", "foo.js", { caseInsensitive: true }), true);
+  assert.equal(scopesOverlap("src/Foo.js", "src/foo.js", root, { caseInsensitive: true }), true);
+  assert.equal(scopesOverlap("src/Foo", "src/foo/bar.js", root, { caseInsensitive: true }), true);
+  assert.equal(scopesOverlap("src/Foo.js", "src/foo.js", root, { caseInsensitive: false }), false);
+  assert.equal(scopesOverlap("src/Foo", "src/foo/bar.js", root, { caseInsensitive: false }), false);
+  assert.equal(
+    scopesOverlap("src/Foo.js", "src/foo.js", root),
+    os.platform() === "win32" || os.platform() === "darwin"
+  );
+  const caseInsensitivePlan = planSquadCohort(
+    {
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [
+              { role: "Spec Upper", objective: "Create Foo", scopeFiles: ["uncreated/Foo.js"] },
+              { role: "Spec Lower", objective: "Create foo", scopeFiles: ["uncreated/foo.js"] }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    },
+    root,
+    { caseInsensitive: true }
+  );
+  assert.equal(caseInsensitivePlan.topology.scopeOverlaps.length, 1);
+  assert.match(caseInsensitivePlan.warnings[0], /scopeFiles overlap/);
+
+  const caseSensitivePlan = planSquadCohort(
+    {
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [
+              { role: "Spec Upper", objective: "Create Foo", scopeFiles: ["uncreated/Foo.js"] },
+              { role: "Spec Lower", objective: "Create foo", scopeFiles: ["uncreated/foo.js"] }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    },
+    root,
+    { caseInsensitive: false }
+  );
+  assert.equal(caseSensitivePlan.topology.scopeOverlaps.length, 0);
 
   // 2. Task-mode swarm planning with explicit model pinning and overlapping scopes warning
   const overlapTask = planSquadCohort({
@@ -553,6 +605,33 @@ try {
     includeIntegrityAuditor: false
   }, root);
   assert.equal(symlinkOverlap.topology.scopeOverlaps.length, 1);
+
+  // SQ-BOOST-MCP-001: Existing ancestor symlink resolves even when nested planned files do not exist yet
+  assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/NewFile.js", root, { caseInsensitive: false }), true);
+  assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/newfile.js", root, { caseInsensitive: false }), false);
+  assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/newfile.js", root, { caseInsensitive: true }), true);
+  const escapeOutsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-escape-")));
+  try {
+    fs.symlinkSync(escapeOutsideDir, path.join(root, "sym-escape"), os.platform() === "win32" ? "junction" : "dir");
+    assert.equal(
+      normalizeScopePath("sym-escape/uncreated/item.js", root, { caseInsensitive: false }),
+      "sym-escape/uncreated/item.js"
+    );
+  } finally {
+    fs.rmSync(escapeOutsideDir, { recursive: true, force: true });
+  }
+  const missingTarget = path.join(root, "does-not-exist-target");
+  let brokenScopeSymCreated = false;
+  try {
+    fs.symlinkSync(missingTarget, path.join(root, "sym-broken"), os.platform() === "win32" ? "junction" : "dir");
+    brokenScopeSymCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (brokenScopeSymCreated) {
+    assert.equal(scopesOverlap("sym-broken/Foo.js", "sym-broken/foo.js", root, { caseInsensitive: true }), true);
+    assert.equal(scopesOverlap("sym-broken/Foo.js", "sym-broken/foo.js", root, { caseInsensitive: false }), false);
+  }
 
   // RUN-014 & SVC-007 & SVC-001: precompiledSpecialists omits Call dispatch_squad; occupiedWorkerNames deduplicates; integrityAuditSlots populated
   assert.equal(subagentPlan.workers[0].lead.Subagent.Prompt.includes("Call dispatch_squad"), false);
