@@ -5,7 +5,7 @@
  * Zero-clone cross-platform installer for Google Antigravity:
  * - Links or installs native plugin into ~/.gemini/config/plugins/agy-squad
  * - Links plugin skills (skills -> .agents/skills) for Antigravity discovery
- * - Registers agy-squad MCP server in ~/.gemini/config/mcp_config.json (preserving foreign servers)
+ * - Registers agy-squad MCP server in ~/.gemini/config/plugins/agy-squad/mcp_config.json and sweeps duplicate global ~/.gemini/config/mcp_config.json entries
  * - Enables agy-squad plugin in ~/.gemini/config/config.json
  * - Provisions executable agy-squad CLI shims in ~/.gemini/antigravity/bin/
  */
@@ -90,9 +90,17 @@ function readAndValidateJsonFile(filePath, label) {
 }
 
 export function detectExistingInstallation() {
+  const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
-    plugin: { exists: false, skillsReady: false, path: pluginDest },
-    mcp: { registered: false, path: mcpJsonPath },
+    plugin: { exists: false, skillsReady: false, docsReady: false, path: pluginDest },
+    mcp: {
+      registered: false,
+      pluginRegistered: false,
+      globalDuplicate: false,
+      staleSchemaCount: 0,
+      path: pluginMcpJsonPath,
+      globalPath: mcpJsonPath
+    },
     cliShim: { exists: false, path: antigravityBinDir },
     config: { enabled: false, path: configJsonPath }
   };
@@ -103,18 +111,42 @@ export function detectExistingInstallation() {
       const skillsPath = path.join(pluginDest, "skills");
       const prReviewSkill = path.join(skillsPath, "pr-review", "SKILL.md");
       details.plugin.skillsReady = fs.existsSync(prReviewSkill);
+      details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
+    }
+  } catch {}
+
+  try {
+    if (fs.existsSync(pluginMcpJsonPath)) {
+      const parsedPluginMcp = JSON.parse(fs.readFileSync(pluginMcpJsonPath, "utf8"));
+      const entry = parsedPluginMcp?.mcpServers?.[PLUGIN_KEY];
+      if (entry && typeof entry.command === "string" && Array.isArray(entry.args) && entry.args.length > 0) {
+        details.mcp.pluginRegistered = true;
+      }
     }
   } catch {}
 
   try {
     if (fs.existsSync(mcpJsonPath)) {
-      const parsed = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
-      const entry = parsed?.mcpServers?.[PLUGIN_KEY];
-      if (entry && typeof entry.command === "string" && Array.isArray(entry.args) && entry.args.length > 0) {
-        details.mcp.registered = true;
+      const parsedGlobalMcp = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
+      if (parsedGlobalMcp?.mcpServers && typeof parsedGlobalMcp.mcpServers === "object" && PLUGIN_KEY in parsedGlobalMcp.mcpServers) {
+        details.mcp.globalDuplicate = true;
+        details.mcp.staleSchemaCount += 1;
       }
     }
   } catch {}
+
+  try {
+    if (fs.existsSync(antigravityMcpRootDir)) {
+      for (const entry of fs.readdirSync(antigravityMcpRootDir)) {
+        if (entry === PLUGIN_KEY || entry.startsWith(`${PLUGIN_KEY}_`)) {
+          details.mcp.globalDuplicate = true;
+          details.mcp.staleSchemaCount += 1;
+        }
+      }
+    }
+  } catch {}
+
+  details.mcp.registered = details.mcp.pluginRegistered && !details.mcp.globalDuplicate;
 
   try {
     const isWin = os.platform() === "win32";
@@ -122,12 +154,28 @@ export function detectExistingInstallation() {
     details.cliShim.exists = fs.existsSync(shimPath);
   } catch {}
 
+  let pluginDefaultEnabled = true;
+  try {
+    const manifestPath = fs.existsSync(path.join(pluginDest, "plugin.json"))
+      ? path.join(pluginDest, "plugin.json")
+      : path.join(repoRoot, "plugin.json");
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (manifest?.disabled === true) pluginDefaultEnabled = false;
+    }
+  } catch {}
+
   try {
     if (fs.existsSync(configJsonPath)) {
       const parsed = JSON.parse(fs.readFileSync(configJsonPath, "utf8"));
-      details.config.enabled = parsed?.plugins?.[PLUGIN_KEY]?.enabled === true;
+      const cfgEntry = parsed?.plugins?.[PLUGIN_KEY];
+      if (cfgEntry && typeof cfgEntry.enabled === "boolean") {
+        details.config.enabled = cfgEntry.enabled;
+      } else {
+        details.config.enabled = pluginDefaultEnabled;
+      }
     } else {
-      details.config.enabled = true;
+      details.config.enabled = pluginDefaultEnabled;
     }
   } catch {}
 
@@ -135,7 +183,8 @@ export function detectExistingInstallation() {
     details.plugin.exists &&
     details.plugin.skillsReady &&
     details.mcp.registered &&
-    details.cliShim.exists;
+    details.cliShim.exists &&
+    details.config.enabled;
 
   return { isInstalled, details };
 }
@@ -151,6 +200,7 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
   const isWin = os.platform() === "win32";
   const linkMappings = [
     ["bin", path.join(sourceRoot, "bin")],
+    ["docs", path.join(sourceRoot, "docs")],
     ["mcp", path.join(sourceRoot, "mcp")],
     ["scripts", path.join(sourceRoot, "scripts")],
     [".agents", path.join(sourceRoot, ".agents")],
@@ -206,6 +256,22 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
   await safeWriteFileIfChanged(pluginMcpJson, pluginMcpContent);
 }
 
+export function formatWindowsCmdShim(targetRoot) {
+  const winTarget = path.join(targetRoot, "bin", "agy-squad.mjs");
+  return [
+    "@echo off",
+    "setlocal",
+    "where node >nul 2>nul",
+    "if errorlevel 1 goto :fallback",
+    `node "${winTarget}" %*`,
+    "exit /b %errorlevel%",
+    ":fallback",
+    `"${process.execPath}" "${winTarget}" %*`,
+    "exit /b %errorlevel%",
+    ""
+  ].join("\r\n");
+}
+
 async function installCliShims({ targetRoot, log }) {
   await fsPromises.mkdir(antigravityBinDir, { recursive: true });
   const cliTarget = normalizeSlash(path.join(targetRoot, "bin", "agy-squad.mjs"));
@@ -213,7 +279,7 @@ async function installCliShims({ targetRoot, log }) {
   const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
 
   const posixContent = `#!/usr/bin/env sh\nexec node "${cliTarget}" "$@"\n`;
-  const cmdContent = `@echo off\r\nnode "${path.join(targetRoot, "bin", "agy-squad.mjs")}" %*\r\n`;
+  const cmdContent = formatWindowsCmdShim(targetRoot);
 
   const posixChanged = await safeWriteFileIfChanged(posixShimPath, posixContent, 0o755);
   let cmdChanged = false;
@@ -255,7 +321,7 @@ export async function runInstall(options = {}) {
   if (existing.isInstalled) {
     log("Existing Agy-Squad installation detected:");
     log(`   [OK] Native Plugin Link: ${pluginDest}`);
-    log(`   [OK] MCP Server (${PLUGIN_KEY}): Registered in ${mcpJsonPath}`);
+    log(`   [OK] Plugin MCP Server (${PLUGIN_KEY}): Registered in ${path.join(pluginDest, "mcp_config.json")}`);
     log(`   [OK] CLI Shim (agy-squad): Installed in ${antigravityBinDir}`);
     log(`\nRe-verifying and synchronizing to v${PACKAGE_VERSION}...`);
   } else {
@@ -273,11 +339,13 @@ export async function runInstall(options = {}) {
     return ![".git", "node_modules", ".venv", "scratch", "site", "benchmarks", "tests"].includes(topSegment);
   };
 
+  let pluginLst = null;
   try {
-    if (fs.existsSync(pluginDest) && fs.lstatSync(pluginDest).isSymbolicLink()) {
-      await fsPromises.unlink(pluginDest);
-    }
+    pluginLst = fs.lstatSync(pluginDest);
   } catch {}
+  if (pluginLst) {
+    await fsPromises.rm(pluginDest, { recursive: true, force: true });
+  }
 
   if (isTempOrNpx || options.forceCopyFallback) {
     await fsPromises.cp(repoRoot, pluginDest, { recursive: true, filter: copyFilter });
@@ -287,34 +355,41 @@ export async function runInstall(options = {}) {
     await populateLinkedPluginDir(repoRoot, pluginDest);
     log(`[OK] Native Antigravity Plugin linked: ${pluginDest} -> ${repoRoot}`);
   }
-  log(`[OK] Plugin skills & manifest verified: ${path.join(pluginDest, "skills")}`);
+  log(`[OK] Plugin skills, docs & manifest verified: ${path.join(pluginDest, "skills")}`);
 
-  const mcpEntryPoint = normalizeSlash(path.join(pluginDest, "mcp", "index.js"));
-  const nextMcp = validatedMcp ? { ...validatedMcp } : {};
-  const existingServers =
-    nextMcp.mcpServers && typeof nextMcp.mcpServers === "object" && !Array.isArray(nextMcp.mcpServers)
-      ? { ...nextMcp.mcpServers }
-      : {};
-  existingServers[PLUGIN_KEY] = {
-    command: "node",
-    args: [mcpEntryPoint]
-  };
-  nextMcp.mcpServers = existingServers;
-  const nextMcpRaw = JSON.stringify(nextMcp, null, 2) + "\n";
+  // Strip duplicate global mcp_config.json entry; plugin-scoped mcp_config.json is canonical (SQ-DEP-001)
+  if (validatedMcp?.mcpServers && typeof validatedMcp.mcpServers === "object" && !Array.isArray(validatedMcp.mcpServers) && PLUGIN_KEY in validatedMcp.mcpServers) {
+    const nextServers = { ...validatedMcp.mcpServers };
+    delete nextServers[PLUGIN_KEY];
+    const nextMcp = { ...validatedMcp, mcpServers: nextServers };
+    const nextMcpRaw = JSON.stringify(nextMcp, null, 2) + "\n";
 
-  if (fs.existsSync(mcpJsonPath) && !fs.existsSync(mcpBakPath)) {
-    try {
-      const currentRaw = fs.readFileSync(mcpJsonPath, "utf8");
-      if (currentRaw !== nextMcpRaw && Object.keys(validatedMcp?.mcpServers || {}).length > 0) {
-        await fsPromises.copyFile(mcpJsonPath, mcpBakPath);
-        log(`[OK] Created configuration backup: ${mcpBakPath}`);
+    if (fs.existsSync(mcpJsonPath) && !fs.existsSync(mcpBakPath)) {
+      try {
+        const currentRaw = fs.readFileSync(mcpJsonPath, "utf8");
+        if (currentRaw !== nextMcpRaw) {
+          await fsPromises.copyFile(mcpJsonPath, mcpBakPath);
+          log(`[OK] Created configuration backup: ${mcpBakPath}`);
+        }
+      } catch (err) {
+        warn(`[WARN] Could not create backup of ${mcpJsonPath}: ${err.message}`);
       }
-    } catch (err) {
-      warn(`[WARN] Could not create backup of ${mcpJsonPath}: ${err.message}`);
     }
+    await safeWriteFileIfChanged(mcpJsonPath, nextMcpRaw);
+    log(`[OK] Removed duplicate global '${PLUGIN_KEY}' entry from: ${mcpJsonPath} (plugin mcp_config.json is canonical)`);
   }
-  const mcpChanged = await safeWriteFileIfChanged(mcpJsonPath, nextMcpRaw);
-  log(`[OK] MCP server (${PLUGIN_KEY}) ${mcpChanged ? "registered" : "verified"} in: ${mcpJsonPath}`);
+
+  // Sweep stale global/cached agy-squad* MCP schema directories
+  if (fs.existsSync(antigravityMcpRootDir)) {
+    try {
+      for (const entry of fs.readdirSync(antigravityMcpRootDir)) {
+        if (entry === PLUGIN_KEY || entry.startsWith(`${PLUGIN_KEY}_`)) {
+          await fsPromises.rm(path.join(antigravityMcpRootDir, entry), { recursive: true, force: true });
+          log(`[OK] Swept stale MCP schema cache: ${path.join(antigravityMcpRootDir, entry)}`);
+        }
+      }
+    } catch {}
+  }
 
   const nextConfig = validatedConfig ? { ...validatedConfig } : {};
   const prevPluginEntry = nextConfig.plugins?.[PLUGIN_KEY];
@@ -444,15 +519,29 @@ export function printStatus() {
     }`
   );
   console.log(
-    `- MCP Server (${PLUGIN_KEY}): ${status.details.mcp.registered ? "REGISTERED" : "MISSING"} (${status.details.mcp.path})`
+    `- Plugin Docs & Links: ${status.details.plugin.docsReady ? "READY" : "MISSING"} (${path.join(status.details.plugin.path, "docs")})`
+  );
+  console.log(
+    `- MCP Server (${PLUGIN_KEY}): ${
+      status.details.mcp.registered
+        ? "REGISTERED (plugin mcp_config.json only)"
+        : status.details.mcp.globalDuplicate
+          ? "DUPLICATE GLOBAL ENTRY (re-run agy-squad setup)"
+          : "MISSING"
+    } (${status.details.mcp.path})`
   );
   console.log(
     `- CLI Shim (agy-squad): ${status.details.cliShim.exists ? "INSTALLED" : "MISSING"} (${status.details.cliShim.path})`
   );
   console.log(
-    `- Plugin Enabled (config.json): ${status.details.config.enabled ? "ENABLED" : "DISABLED"}`
+    `- Plugin Enabled (config.json / plugin.json): ${status.details.config.enabled ? "ENABLED" : "DISABLED"}`
   );
-  console.log(`\nOverall Status: ${status.isInstalled ? "HEALTHY & ACTIVE" : "NOT INSTALLED"}`);
+  const overallLabel = status.isInstalled
+    ? "HEALTHY & ACTIVE"
+    : !status.details.config.enabled
+      ? "DISABLED"
+      : "NOT INSTALLED";
+  console.log(`\nOverall Status: ${overallLabel}`);
   return status;
 }
 

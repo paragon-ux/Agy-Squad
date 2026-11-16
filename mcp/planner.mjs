@@ -33,6 +33,7 @@ const ALLOWED_PLANNER_KEYS = new Set([
 
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
 const MAX_SWARM_NAME_LENGTH = 24;
+const RESERVED_SWARM_NAMES = new Set(["all", "coordinator", "narrator", "monitor"]);
 const AGENT_ALIAS_PAIRS = [
   ["role", "Role"],
   ["objective", "Objective"],
@@ -62,8 +63,11 @@ function slugifyName(value, fallback) {
 }
 
 function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
-  const base = slugifyName(rawValue, fallback);
-  if (!usedWorkerNames.has(base)) {
+  const rawBase = slugifyName(rawValue, fallback);
+  const base = RESERVED_SWARM_NAMES.has(rawBase)
+    ? `w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH).replace(/-+$/, "")
+    : rawBase;
+  if (!usedWorkerNames.has(base) && !RESERVED_SWARM_NAMES.has(base)) {
     usedWorkerNames.add(base);
     return base;
   }
@@ -76,7 +80,7 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
       safeFallback.slice(0, maxPrefixLen).replace(/-+$/, "") ||
       "w";
     const candidate = `${prefix}${suffix}`;
-    if (!usedWorkerNames.has(candidate)) {
+    if (!usedWorkerNames.has(candidate) && !RESERVED_SWARM_NAMES.has(candidate)) {
       usedWorkerNames.add(candidate);
       return candidate;
     }
@@ -378,7 +382,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
         effectiveModel: effectiveSubagentModel,
         pinningSupported: false,
         perChildModelExposed: false,
-        verificationMethod: "invoke_subagent inherits or aliases ('inherit'|'flash'|'flash_lite'|'pro'); neither 'agy-context transcript read' (read_transcript) nor manage_subagents exposes per-child resolved model IDs.",
+        verificationMethod: "invoke_subagent inherits or aliases ('inherit'|'flash'|'flash_lite'|'pro'); neither 'agy-context transcript read' nor manage_subagents exposes per-child resolved model IDs.",
         ...(requestedModel && !SUBAGENT_MODEL_ALIASES.has(requestedModel)
           ? {
               warning: `Requested explicit model '${requestedModel}' cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`
@@ -394,7 +398,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
   const workers = [];
   const provenanceEntries = [];
   const bundleRecordTemplates = Object.create(null);
-  const usedWorkerNames = new Set();
+  const usedWorkerNames = new Set(RESERVED_SWARM_NAMES);
   for (const occupied of occupiedWorkerNames ?? []) {
     const trimmed = occupied.trim();
     usedWorkerNames.add(trimmed);
@@ -562,11 +566,13 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
     };
   }
 
+  const auditWarnings = [];
   const integrityAuditPlan = includeIntegrityAuditor
     ? targetWorkingIds.flatMap(id => {
         const auditSpecs = resolveIntegrityAuditor(
           loadedSquads,
-          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined
+          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined,
+          auditWarnings
         );
         const compiledAudits = auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
@@ -629,7 +635,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
   }
 
   const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root);
-  const warnings = [];
+  const warnings = [...new Set(auditWarnings)];
   if (scopeOverlaps.length > 0 && workspaceIsolation === "inherit") {
     warnings.push(
       `Detected ${scopeOverlaps.length} writable sibling scopeFiles overlap(s) with workspaceIsolation='inherit'; split scopeFiles across workers or use executionMode='swarm' with workspaceIsolation='share'.`

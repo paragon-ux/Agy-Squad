@@ -16,7 +16,7 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 
 ## 1. Install via NPX (Recommended — zero clone required)
 
-Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/mcp_config.json`, and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
+Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/plugins/agy-squad/mcp_config.json` (sweeping any duplicate global entry in `~/.gemini/config/mcp_config.json`), and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
 
 ```bash
 npx --package=agy-squad agy-squad setup
@@ -109,7 +109,7 @@ node bin/agy-squad.mjs plan \
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `Unknown command ...` or `'agy-squad run' was retired` | `agy-squad run` was invoked after Phase 2 retirement ([`L17`](plans/LEDGER.md)) | Run `node bin/agy-squad.mjs plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
+| `Unknown command ...` or `'agy-squad run' was retired` | Retired `agy-squad run` was invoked in Phase 2 ([`L17`](plans/LEDGER.md)) | Run `node bin/agy-squad.mjs plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
 | Unbounded `read_file` denied by `Agy-Context-Saver` hook during live run | `Agy-Context-Saver` (`>= 2.0.1`) enforces the 3-tier Hybrid Slice Policy (`StartLine`/`EndLine` `<= 150` lines, or full-file `<= 800` lines & `<= 45 KiB`) | Pass bounded `StartLine`/`EndLine` (`<= 150` lines) to `read_file` or run `rtk read <file>` via `run_command`; run `agy-context setup` if `rtk` (`>= 1.1.0`) is missing |
 | `Requested explicit model ... cannot be pinned under executionMode 'subagent'` | `invoke_subagent` accepts only `inherit|flash|flash_lite|pro` | Set `executionMode: "swarm"` (`--mode swarm`) in `squad_planner` to explicitly pin and verify exact model IDs via `swarm status` |
 | Swarm UI shows old posts, retired workers, or loads slowly across waves | Antigravity keeps one append-only board per conversation (`killed: true` entries stay in history) and does not expose user-configurable channels when `swarm` lacks `action: "channel"` | Start a fresh Antigravity conversation per major `/swarm` wave for a clean board, or run follow-up cohorts via `invoke_subagent` ([Shared swarm board and channel limits](concepts.md#shared-swarm-board-and-channel-limits)) |

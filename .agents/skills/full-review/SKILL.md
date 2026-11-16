@@ -50,7 +50,7 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 1. State the decision/review question in one sentence, name the target type (`PR/branch`, `working tree`, `commit range`, `repository/subsystem`, `evidence bundle`, `direction question`, or `incident/regression`), and pin minimum evidence per [references/evidence-intake.md](references/evidence-intake.md).
 2. Check ambiguity once upfront without asking for facts already visible in git/evidence:
    - If stacked on an unmerged PR base, confirm base branch and merge order.
-   - If running on `/swarm`, delegate Step 0 intake (neutral `Flat` vs `Layered` topology, `workspaceIsolation`, retention, coordinator-default model), `open_board` (`?tab=graph`), `swarm_wait`, pointer receipts, multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
+   - If running on `/swarm`, delegate Step 0 intake (neutral `Flat` vs `Layered` topology, `workspaceIsolation`, retention, coordinator-default model), `open_board`, `swarm_wait`, pointer receipts, multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
 
 ### Step 1 — Pin the review
 

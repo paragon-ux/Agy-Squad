@@ -75,7 +75,7 @@ Observed consequences in PR #3:
 - The adversarial lead's brief required `Verdict: PASS or FAIL/BLOCKED`; its report returned `PASS with Preserved Advisories & Corrective Remediation Ledger` (`3303968c…`, step 111/159).
 - Specialist 1 returned `CONDITIONAL PASS / PARTIAL COMPLIANCE` (`eaad8f1a…`, step 73); Specialist 2 returned `PASS with Preserved Advisories & Temporal Working Tree Notice` (`bba13371…`, step 111).
 - The lead tested the verdict parser, saw `Set(2) { 'PASS', 'FAIL' }`, then produced a report whose verdict set was `Set(1) { 'PASS' }` (`3303968c…`, steps 156–158). That is a content-verdict optimization applied to an integrity role.
-- Specialist 1 made 10 `query_transcript` calls over overlapping ranges; Specialist 2 made 2 summary queries (`eaad8f1a…`, steps 27–45; `bba13371…`, steps 75/77). The leaf brief did not contain the batch-efficiency instruction given to the lead.
+- In that historical Phase 1 run, Specialist 1 made 10 retired `query_transcript` MCP calls over overlapping ranges; Specialist 2 made 2 summary queries (`eaad8f1a…`, steps 27–45; `bba13371…`, steps 75/77). The leaf brief did not contain the batch-efficiency instruction given to the lead.
 
 Lesson: the integrity auditor must not be asked to produce a content verdict. If it is, it will optimize the content verdict and can waive the integrity defects it was created to catch.
 

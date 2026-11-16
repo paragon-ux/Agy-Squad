@@ -71,7 +71,7 @@ function resolveReportRoot(recordOrPath, allowCustomPrefix = false) {
     return normalizeReportRoot(recordOrPath.reportRoot);
   }
   const firstSlot = recordOrPath?.assignments?.[0]?.report;
-  return typeof firstSlot === "string" ? resolveReportRoot(firstSlot) : defaultReportRoot();
+  return typeof firstSlot === "string" ? resolveReportRoot(firstSlot, true) : defaultReportRoot();
 }
 
 function reconcileHandoffs(assignments, handoffs, customReportRoot) {
@@ -80,10 +80,7 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
   }
   let allowedRoots = new Set(["scratch/agy-squad", defaultReportRoot()]);
   if (customReportRoot !== undefined) {
-    const trimmed = normalizeReportRoot(customReportRoot);
-    if (trimmed !== "scratch/agy-squad") {
-      allowedRoots = new Set([trimmed]);
-    }
+    allowedRoots = new Set([normalizeReportRoot(customReportRoot)]);
   }
   const expected = new Map();
   const slots = new Set();
@@ -115,8 +112,8 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n\u2028\u2029]/.test(message)) {
       throw new Error("Handoff must be one line within 500 UTF-8 bytes.");
     }
-    // Allow optional leading /swarm @mention prefix before Pointer-Over-Wire verbs.
-    const parsedMessage = message.replace(/^@[A-Za-z0-9._:-]+\s+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
+    // Allow one or more leading /swarm @mention prefixes before Pointer-Over-Wire verbs.
+    const parsedMessage = message.replace(/^(?:@[A-Za-z0-9._:-]+\s+)+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
     const readyPrefix = `READY ${report} — `;
     const partialPrefix = `PARTIAL ${report} — `;
     const status = parsedMessage.startsWith(readyPrefix)
@@ -177,10 +174,20 @@ function workspacePath(root, relative, verifiedDirs) {
 }
 
 function readOpenedFileWithStat(file, relative) {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const linkStat = fs.lstatSync(file);
+  if (linkStat.isSymbolicLink()) {
+    const err = new Error(`ELOOP: symlinked file is unsupported: ${relative}`);
+    err.code = "ELOOP";
+    throw err;
+  }
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file)) {
+    if (
+      !stat.isFile() ||
+      (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file) ||
+      fs.realpathSync(file) !== file
+    ) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
     return { bytes: fs.readFileSync(fd), stat };
@@ -238,23 +245,23 @@ function publish(root, relative, contents, replace = false, verifiedDirs, expect
   let existingBytes;
   try {
     existingBytes = readOpenedFile(destination, relative);
-    if (existingBytes.equals(contents)) return;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   if (existingBytes !== undefined) {
     const existingHash = sha256(existingBytes);
+    if (expectedPredecessorSha256 !== undefined && existingHash !== expectedPredecessorSha256) {
+      throw new Error(
+        `Bundle predecessor digest mismatch at '${relative}': expected '${expectedPredecessorSha256}', found '${existingHash}'.`
+      );
+    }
+    if (existingBytes.equals(contents)) return;
     if (!replace) {
       const err = new Error(
         `Existing file at '${relative}' differs (SHA-256 ${existingHash}); pass replaceExisting: true or matching expectedPredecessorSha256 to overwrite.`
       );
       err.code = "EEXIST";
       throw err;
-    }
-    if (expectedPredecessorSha256 !== undefined && existingHash !== expectedPredecessorSha256) {
-      throw new Error(
-        `Bundle predecessor digest mismatch at '${relative}': expected '${expectedPredecessorSha256}', found '${existingHash}'.`
-      );
     }
   } else if (expectedPredecessorSha256 !== undefined) {
     throw new Error(
@@ -303,19 +310,23 @@ function readEvidence(root, report, verifiedDirs) {
   return bytes;
 }
 
-function readSynthesis(root, report, verifiedDirs) {
+function readSynthesis(root, report, verifiedDirs, { allowNonPassing = false } = {}) {
   const bytes = readEvidence(root, report, verifiedDirs);
   const markdown = decodeUtf8(bytes, report);
   let verdict;
   try {
     verdict = parseContentVerdict(markdown);
   } catch (error) {
-    throw new Error(`Synthesis report must record an unambiguous PASS verdict. (${error.message})`);
+    throw new Error(
+      allowNonPassing
+        ? `Synthesis report must record an unambiguous PASS, FAIL, or BLOCKED verdict. (${error.message})`
+        : `Synthesis report must record an unambiguous PASS verdict. (${error.message})`
+    );
   }
-  if (verdict !== "PASS") {
+  if (!allowNonPassing && verdict !== "PASS") {
     throw new Error("Synthesis report must record an unambiguous PASS verdict.");
   }
-  return { bytes, verdict: "PASS" };
+  return { bytes, verdict };
 }
 
 function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expectedEvidenceDigest) {
@@ -411,17 +422,24 @@ function computeEvidenceDigest(root, record) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle or handoff record.");
   }
-  const { squadId, verifiedFiles } = record;
+  const { squadId, verifiedFiles, allowPartial = false, allowNonPassing = false } = record;
+  if (typeof allowPartial !== "boolean") throw new Error("allowPartial must be a boolean.");
+  if (typeof allowNonPassing !== "boolean") throw new Error("allowNonPassing must be a boolean.");
   validateSquadId(squadId);
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs);
+  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
+  const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(
-      ({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1, rootPrefix)
+      ({ status, report }, index) => !allowedStatuses.has(status) || report !== reportPath(squadId, index + 1, rootPrefix)
     )
   ) {
-    throw new Error("Computing evidence digest requires a READY handoff from each recorded specialist in its compiled slot.");
+    throw new Error(
+      allowPartial
+        ? "Computing evidence digest requires a READY, PARTIAL, or NO_REPORT handoff from each recorded specialist in its compiled slot."
+        : "Computing evidence digest requires a READY handoff from each recorded specialist in its compiled slot."
+    );
   }
   const synthesisSlot = reportPath(squadId, undefined, rootPrefix);
   const relative = bundlePath(squadId, rootPrefix);
@@ -433,9 +451,13 @@ function computeEvidenceDigest(root, record) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
-  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs);
+  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs, { allowNonPassing });
   const synthesis = sha256(synthesisCheck.bytes);
-  const reports = assignments.map(({ report, bytes }) => ({ path: report, sha256: sha256(bytes) }));
+  const reports = assignments.map(({ report, status, bytes }) => ({
+    path: report,
+    ...(status !== "READY" ? { status } : {}),
+    sha256: sha256(bytes ?? Buffer.alloc(0))
+  }));
   const evidenceDigest = canonicalSnapshotDigest(squadId, synthesis, verifiedFiles, reports);
   return { squadId, evidenceDigest, synthesis, verifiedFiles, reports };
 }
@@ -463,7 +485,7 @@ function ensureDirectory(root, relative, created = [], verifiedDirs) {
   return directory;
 }
 
-function inspectReports(root, record, verifiedDirs = new Set()) {
+function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnNoReport = false } = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
@@ -473,7 +495,12 @@ function inspectReports(root, record, verifiedDirs = new Set()) {
   const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
-    const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;
+    let bytes;
+    if (status === "READY" || status === "PARTIAL") {
+      bytes = readEvidence(root, report, verifiedDirs);
+    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(root, report, verifiedDirs)) {
+      throw new Error(`Unexpected loose file present at NO_REPORT slot: ${report}`);
+    }
     return { conversationId, report, status, bytes };
   });
 }
@@ -499,7 +526,9 @@ function bundleReports(root, record) {
     integrityAuditSlots,
     retainReports,
     replaceExisting = false,
-    expectedPredecessorSha256
+    expectedPredecessorSha256,
+    allowNonPassing = false,
+    allowPartial = false
   } = record;
   validateSquadId(squadId);
   if (retainReports !== undefined && typeof retainReports !== "boolean") {
@@ -511,6 +540,12 @@ function bundleReports(root, record) {
   if (typeof replaceExisting !== "boolean") {
     throw new Error("replaceExisting must be a boolean.");
   }
+  if (typeof allowNonPassing !== "boolean") {
+    throw new Error("allowNonPassing must be a boolean.");
+  }
+  if (typeof allowPartial !== "boolean") {
+    throw new Error("allowPartial must be a boolean.");
+  }
   if (expectedPredecessorSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedPredecessorSha256)) {
     throw new Error("expectedPredecessorSha256 must be a 64-character lowercase hex SHA-256 digest.");
   }
@@ -520,16 +555,24 @@ function bundleReports(root, record) {
   ) {
     throw new Error("integrityAuditSlots must be an array of nonempty workspace-relative paths.");
   }
-  if (verdict !== "PASS") throw new Error("Only independently passing cohorts are eligible for bundling.");
+  const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
+  if (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS") {
+    throw new Error("Only independently passing cohorts are eligible for bundling.");
+  }
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs);
+  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
+  const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(
-      ({ status, report }, index) => status !== "READY" || report !== reportPath(squadId, index + 1, rootPrefix)
+      ({ status, report }, index) => !allowedStatuses.has(status) || report !== reportPath(squadId, index + 1, rootPrefix)
     )
   ) {
-    throw new Error("Bundling requires a READY handoff from each recorded specialist in its compiled slot.");
+    throw new Error(
+      allowPartial
+        ? "Bundling requires a READY, PARTIAL, or NO_REPORT handoff from each recorded specialist in its compiled slot."
+        : "Bundling requires a READY handoff from each recorded specialist in its compiled slot."
+    );
   }
   const synthesisSlot = reportPath(squadId, undefined, rootPrefix);
   const relative = bundlePath(squadId, rootPrefix);
@@ -541,14 +584,24 @@ function bundleReports(root, record) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
-  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs);
+  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs, { allowNonPassing });
   if (synthesisCheck.verdict !== verdict) {
-    throw new Error("Synthesis report must record an unambiguous PASS verdict.");
+    throw new Error(
+      allowNonPassing
+        ? `Synthesis report verdict '${synthesisCheck.verdict}' does not match record verdict '${verdict}'.`
+        : "Synthesis report must record an unambiguous PASS verdict."
+    );
   }
   const synthesis = sha256(synthesisCheck.bytes);
-  const reports = assignments.map(({ report, bytes }) => {
-    const markdown = decodeUtf8(bytes, report);
-    return { path: report, sha256: sha256(bytes), markdown };
+  const reports = assignments.map(({ report, status, bytes }) => {
+    const rawBytes = bytes ?? Buffer.alloc(0);
+    const markdown = status === "NO_REPORT" ? "" : decodeUtf8(rawBytes, report);
+    return {
+      path: report,
+      ...(status !== "READY" ? { status } : {}),
+      sha256: sha256(rawBytes),
+      markdown
+    };
   });
   const evidenceDigest = canonicalSnapshotDigest(squadId, synthesis, verifiedFiles, reports);
 
@@ -593,6 +646,8 @@ function bundleReports(root, record) {
         squadId,
         verdict: synthesisCheck.verdict,
         auditPolicy,
+        ...(allowNonPassing ? { allowNonPassing: true } : {}),
+        ...(allowPartial ? { allowPartial: true } : {}),
         synthesis,
         verifiedFiles,
         ...(retainReports ? { retainReports: true } : {}),
@@ -632,8 +687,16 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (parsed.auditPolicy !== undefined && parsed.auditPolicy !== "required" && parsed.auditPolicy !== "unaudited-explicit") {
     throw new Error(`Invalid auditPolicy '${parsed.auditPolicy}' in bundle.`);
   }
+  if (parsed.allowNonPassing !== undefined && typeof parsed.allowNonPassing !== "boolean") {
+    throw new Error("Invalid allowNonPassing boolean in bundle.");
+  }
+  if (parsed.allowPartial !== undefined && typeof parsed.allowPartial !== "boolean") {
+    throw new Error("Invalid allowPartial boolean in bundle.");
+  }
+  const allowNonPassing = Boolean(parsed.allowNonPassing);
+  const allowPartial = Boolean(parsed.allowPartial);
   const verdict = Object.hasOwn(parsed, "verdict") ? parsed.verdict : "PASS"; // legacy: field absent only
-  if (verdict !== "PASS") {
+  if (allowNonPassing ? !["PASS", "FAIL", "BLOCKED"].includes(verdict) : verdict !== "PASS") {
     throw new Error("Bundle must record an independently verified PASS verdict.");
   }
   const rootPrefix = resolveReportRoot(relative, true);
@@ -648,7 +711,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   ) {
     throw new Error("Bundle must contain the recorded squad's exact specialist slots.");
   }
-  const synthesisCheck = readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs);
+  const synthesisCheck = readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs, { allowNonPassing });
   if (synthesisCheck.verdict !== verdict || sha256(synthesisCheck.bytes) !== synthesis) {
     throw new Error("Synthesis changed after bundling.");
   }
@@ -662,6 +725,23 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   for (const report of reports) {
     if (typeof report.markdown !== "string" || typeof report.sha256 !== "string") {
       throw new Error(`Invalid archived report entry: ${report?.path}`);
+    }
+    if (report.status !== undefined && !["READY", "PARTIAL", "NO_REPORT"].includes(report.status)) {
+      throw new Error(`Invalid archived report status '${report.status}': ${report?.path}`);
+    }
+    if (report.status === "NO_REPORT") {
+      if (!allowPartial || report.markdown !== "") {
+        throw new Error(`Invalid NO_REPORT entry: ${report?.path}`);
+      }
+      const bytes = Buffer.alloc(0);
+      const loose = readIfPresentWithStat(root, report.path, verifiedDirs);
+      if (sha256(bytes) !== report.sha256 || loose) {
+        throw new Error(`Archived or loose report changed: ${report.path}`);
+      }
+      continue;
+    }
+    if (report.status === "PARTIAL" && !allowPartial) {
+      throw new Error(`PARTIAL report requires allowPartial bundle opt-in: ${report?.path}`);
     }
     const bytes = Buffer.from(report.markdown, "utf8");
     const loose = readIfPresentWithStat(root, report.path, verifiedDirs);

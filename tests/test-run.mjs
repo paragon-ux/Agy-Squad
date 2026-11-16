@@ -628,10 +628,15 @@ try {
     const unpackDir = path.join(temporary, "unpack-pkg");
     fs.mkdirSync(packDir, { recursive: true });
     fs.mkdirSync(unpackDir, { recursive: true });
-    const packRes = spawnSync("npm", ["pack", "--pack-destination", packDir], { cwd: repoRoot, encoding: "utf8" });
+    const packRes = spawnSync(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["pack", "--pack-destination", packDir],
+      { cwd: repoRoot, encoding: "utf8", shell: process.platform === "win32" }
+    );
     assert.equal(packRes.status, 0, packRes.stderr);
     const tgzName = packRes.stdout.trim().split(/\r?\n/).pop();
-    const untarRes = spawnSync("tar", ["-xzf", path.join(packDir, tgzName), "-C", unpackDir], { encoding: "utf8" });
+    const relUnpack = path.relative(packDir, unpackDir).replace(/\\/g, "/");
+    const untarRes = spawnSync("tar", ["-xzf", tgzName, "-C", relUnpack], { cwd: packDir, encoding: "utf8" });
     assert.equal(untarRes.status, 0, untarRes.stderr);
     const pkgRoot = path.join(unpackDir, "package");
     const pkgDiagRes = spawnSync(
@@ -644,6 +649,23 @@ try {
     assert.equal(pkgDiagJson.targetReviewLedger, "docs/reviews/pr5-reconciled-review.md");
     assert.ok(pkgDiagJson.findings.some((f) => f.id === "DEP-PACKAGED-CHECKOUT-SCOPE" && f.priority === "P3"));
     assert.equal(pkgDiagJson.status, "HEALTHY");
+
+    // SQ-SCRIPT-001: diagnose.mjs flags retired v1.x symbols (query_transcript, read_transcript, check_context_health) in mcp/ and active docs/
+    const driftDocPath = path.join(svcRepo, "docs", "concepts.md");
+    const savedConcepts = fs.readFileSync(driftDocPath, "utf8");
+    fs.writeFileSync(driftDocPath, savedConcepts + "\nCall query_transcript summaryOnly=true now.\n");
+    const driftRun = spawnSync(process.execPath, [svcDiag, "--ledger", svcLedgerRel], { cwd: svcRepo, encoding: "utf8" });
+    fs.writeFileSync(driftDocPath, savedConcepts);
+    assert.notEqual(driftRun.status, 0);
+    const driftJson = JSON.parse(driftRun.stdout);
+    assert.ok(driftJson.findings.some((f) => f.id === "DOC-MCP-DRIFT" && /query_transcript/.test(f.summary)));
+
+    // SQ-SKILL-004: self-diagnosis manifest must not emit contradictory 'never call read_file' alongside bounded read_file guidance
+    assert.equal(
+      JSON.stringify(pkgDiagJson.compiledStages?.squads ?? {}).includes("never call read_file"),
+      false,
+      "Compiled self-diagnosis briefs must not contain 'never call read_file'"
+    );
   } finally {
     fs.rmSync(svcRepo, { recursive: true, force: true });
   }

@@ -42,7 +42,7 @@ Before compiling manifests or launching workers, the primary agent runs an inter
 Run the integrity auditor **after working squads finish** and **before acceptance**. For Antigravity native `/swarm` runs, follow `.agents/skills/swarm-governance/SKILL.md`.
 
 1. **Dispatch or spawn the flat auditor:** On `/swarm`, add flat `audit-<id>` (`squad-integrity_auditor/specialist-1/report.md` for single-squad manifests, flat or layered, or `squad-integrity_auditor-<targetSquad>/specialist-1/report.md` for multi-squad manifests, flat or layered). On `invoke_subagent`, call `dispatch_squad` with `squadId: "integrity_auditor:<targetSquad>"` (or `integrity_auditor` for single-squad manifests). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` stages have been removed.
-2. **Audit execution traces:** The auditor runs single-pass batch queries (`summaryOnly=true` or `lastTurns=10`) to confirm that specialists executed real tools instead of guessing from memory, avoided sycophantic filler, and had their claims checked by the squad lead.
+2. **Audit execution traces:** The auditor runs single-pass batch CLI queries (`agy-context transcript query --summary` or `read --last-turns 10`) to confirm that specialists executed real tools instead of guessing from memory, avoided sycophantic filler, and had their claims checked by the squad lead.
 3. **Emit an audit verdict with Evidence Digest:** Run `node bin/agy-squad.mjs digest <record.json>` first so the auditor records `Target Squad: <targetSquad>`, `Evidence Digest: <64-hex>`, and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`).
 
 ### Stage 3: Acceptance and cryptographic bundling

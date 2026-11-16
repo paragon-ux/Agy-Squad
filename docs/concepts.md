@@ -16,7 +16,7 @@ flowchart LR
 
 ![Role separation and dual-verdict bundle gate](assets/role-and-verdict-gate.svg)
 
-Agy-Squad splits content evaluation from execution-integrity auditing. The squad lead (or parent session) inspects cited source files and test runs to issue `Content Verdict: PASS`, `FAIL`, or `BLOCKED` on `lead/report.md`. Separately, an independent flat `integrity_auditor` queries worker transcripts in batch (`summaryOnly=true` / `lastTurns=10`) to issue `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`. `node bin/agy-squad.mjs bundle` requires both verdicts before writing `lead/report.sources.json` (unless `--allow-unaudited` is passed). For the single canonical map of every role across all four skills, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
+Agy-Squad splits content evaluation from execution-integrity auditing. The squad lead (or parent session) inspects cited source files and test runs to issue `Content Verdict: PASS`, `FAIL`, or `BLOCKED` on `lead/report.md`. Separately, an independent flat `integrity_auditor` queries worker transcripts in batch via `agy-context transcript query --summary` / `read --last-turns 10` to issue `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`. `node bin/agy-squad.mjs bundle` requires both verdicts before writing `lead/report.sources.json` (unless `--allow-unaudited` is passed). For the single canonical map of every role across all four skills, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
 
 ## Core orchestration terms
 
