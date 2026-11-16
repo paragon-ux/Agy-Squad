@@ -14,6 +14,20 @@ const prevProfileEnv = process.env.AGY_TEST_PROFILE_DIR;
 process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
 const testEnv = { ...process.env, AGY_TEST_PROFILE_DIR: tmpProfile };
 
+function withEnvPath(newPath, baseEnv = process.env) {
+  const out = { ...baseEnv };
+  for (const k of Object.keys(out)) {
+    if (k.toLowerCase() === "path") {
+      delete out[k];
+    }
+  }
+  out.PATH = newPath;
+  if (os.platform() === "win32") {
+    out.Path = newPath;
+  }
+  return out;
+}
+
 try {
   // 1. Release preflight & --version
   const preflight = spawnSync(process.execPath, [preflightScript], { cwd: repoRoot, encoding: "utf8" });
@@ -38,6 +52,29 @@ try {
     assert.notEqual(negPreflight.status, 0);
     assert.match(negPreflight.stderr, /mcp\/dispatch\.mjs/);
     assert.doesNotMatch(negPreflight.stderr, /mcp\/planner\.mjs/);
+
+    // SQ-SCRIPT-001: ./ prefix in pkg.bin is normalized cleanly
+    const binPreflightPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    binPreflightPkg.bin = { "agy-squad": "./bin/agy-squad.mjs" };
+    fs.writeFileSync(negPkgPath, JSON.stringify(binPreflightPkg, null, 2) + "\n");
+    const binPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.equal(binPreflight.status, 0, binPreflight.stderr || binPreflight.stdout);
+
+    // SQ7-DEP-002: plugin.json missing/mismatched L49 fields must fail preflight
+    const negPluginPath = path.join(negRoot, "plugin.json");
+    const negPlugin = JSON.parse(fs.readFileSync(negPluginPath, "utf8"));
+    delete negPlugin.suggestedPrompts;
+    negPlugin.homepage = "https://example.invalid/wrong";
+    fs.writeFileSync(negPluginPath, JSON.stringify(negPlugin, null, 2) + "\n");
+    const pluginNegPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.notEqual(pluginNegPreflight.status, 0);
+    assert.match(pluginNegPreflight.stderr, /plugin\.json/);
   } finally {
     fs.rmSync(negRoot, { recursive: true, force: true });
   }
@@ -63,6 +100,50 @@ try {
   });
   assert.equal(checkFresh.status, 0, checkFresh.stderr);
   assert.equal(fs.existsSync(path.join(tmpProfile, ".gemini")), false);
+
+  // Direct install-register.mjs CLI invocation & symlinked entrypoint guard
+  const directCheck = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "install-register.mjs"), "--check"], {
+    cwd: repoRoot,
+    env: testEnv,
+    encoding: "utf8"
+  });
+  assert.equal(directCheck.status, 0, directCheck.stderr || directCheck.stdout);
+  assert.match(directCheck.stdout, /Read-only check passed/);
+
+  const directLink = path.join(tmpProfile, "install-register-link.mjs");
+  let directLinkCreated = false;
+  try {
+    fs.symlinkSync(path.join(repoRoot, "scripts", "install-register.mjs"), directLink, "file");
+    directLinkCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (directLinkCreated) {
+    const linkCheck = spawnSync(process.execPath, [directLink, "--check"], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.equal(linkCheck.status, 0, linkCheck.stderr || linkCheck.stdout);
+    assert.match(linkCheck.stdout, /Read-only check passed/);
+  }
+
+  for (const badDirectArgs of [
+    ["--bogus-flag"],
+    ["bogus-arg"],
+    ["--status", "--uninstall"],
+    ["--check", "--status"],
+    ["--json"],
+    ["--help", "--check"]
+  ]) {
+    const badDirect = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "install-register.mjs"), ...badDirectArgs], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.notEqual(badDirect.status, 0, `Expected direct install-register.mjs '${badDirectArgs.join(" ")}' to fail`);
+    assert.equal(fs.existsSync(path.join(tmpProfile, ".gemini")), false, "Rejected direct flags must not mutate profile");
+  }
 
   // 3. Seed legacy duplicate global MCP registration, stale schema caches & foreign configs, then run setup
   const configDir = path.join(tmpProfile, ".gemini", "config");
@@ -102,6 +183,132 @@ try {
   assert.equal(statusRes.status, 0, statusRes.stderr || statusRes.stdout);
   assert.match(statusRes.stdout, /Overall Status: HEALTHY & ACTIVE/);
   assert.match(statusRes.stdout, /Plugin Docs & Links: READY/);
+  assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.1\):/);
+  assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
+
+  const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
+  assert.ok(posixShimBody.startsWith("#!/bin/sh\n"), "POSIX shim must use #!/bin/sh so fallback works when PATH lacks sh");
+  assert.match(posixShimBody, /command -v node/);
+  const expectedExecPath = process.execPath.replace(/\\/g, "/").replace(/(["\\$`])/g, "\\$1");
+  const expectedCliTarget = path
+    .join(tmpProfile, ".gemini", "config", "plugins", "agy-squad", "bin", "agy-squad.mjs")
+    .replace(/\\/g, "/")
+    .replace(/(["\\$`])/g, "\\$1");
+  assert.ok(
+    posixShimBody.includes(`exec "${expectedExecPath}" "${expectedCliTarget}" "$@"`),
+    "POSIX shim must include normalized process.execPath fallback"
+  );
+
+  // SQ-DEP-005: Non-fatal companion checks report MISSING, OUTDATED, and AVAILABLE cleanly across isolated profiles
+  const emptyBinDir = path.join(tmpProfile, "empty-path-bin");
+  fs.mkdirSync(emptyBinDir, { recursive: true });
+  const scrubbedEnv = withEnvPath(emptyBinDir, { Path: "C:\\Windows\\System32", PATH: "C:\\Other", KEEP: "1" });
+  assert.equal(
+    Object.keys(scrubbedEnv).filter((k) => k.toLowerCase() === "path").length,
+    os.platform() === "win32" ? 2 : 1
+  );
+  assert.equal(scrubbedEnv.PATH, emptyBinDir);
+  assert.equal(scrubbedEnv.KEEP, "1");
+  if (os.platform() === "win32") assert.equal(scrubbedEnv.Path, emptyBinDir);
+  else assert.equal("Path" in scrubbedEnv, false);
+
+  const missingCompanionStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+    cwd: repoRoot,
+    env: withEnvPath(emptyBinDir, testEnv),
+    encoding: "utf8"
+  });
+  assert.equal(missingCompanionStatus.status, 0, "Missing companions must be non-fatal when Agy-Squad is installed (SQ-DEP-005)");
+  const missingCompanionJson = JSON.parse(missingCompanionStatus.stdout);
+  assert.equal(missingCompanionJson.isInstalled, true);
+  assert.equal(missingCompanionJson.details.companions.agyContext.available, false);
+  assert.equal(missingCompanionJson.details.companions.rtk.available, false);
+
+  const specialProfile = path.join(tmpProfile, "space $dollar");
+  fs.mkdirSync(specialProfile, { recursive: true });
+  const specialSetup = spawnSync(process.execPath, [cli, "setup"], {
+    cwd: repoRoot,
+    env: { ...testEnv, AGY_TEST_PROFILE_DIR: specialProfile },
+    encoding: "utf8"
+  });
+  assert.equal(specialSetup.status, 0, specialSetup.stderr || specialSetup.stdout);
+  const specialShimPath = path.join(specialProfile, ".gemini", "antigravity", "bin", "agy-squad");
+  const specialShimBody = fs.readFileSync(specialShimPath, "utf8");
+  assert.ok(
+    specialShimBody.includes("space \\$dollar/.gemini/config/plugins/agy-squad/bin/agy-squad.mjs"),
+    "POSIX shim must escape space and $ in cliTarget"
+  );
+  if (os.platform() !== "win32") {
+    const posixFallbackRun = spawnSync(specialShimPath, ["--version"], {
+      cwd: repoRoot,
+      env: withEnvPath(emptyBinDir, testEnv),
+      encoding: "utf8"
+    });
+    assert.equal(posixFallbackRun.status, 0, posixFallbackRun.stderr || posixFallbackRun.stdout);
+    assert.match(posixFallbackRun.stdout.trim(), /^\d+\.\d+\.\d+/);
+
+    const quotedProfile = path.join(tmpProfile, 'quote "q" `bt` $var');
+    fs.mkdirSync(quotedProfile, { recursive: true });
+    const quotedSetup = spawnSync(process.execPath, [cli, "setup"], {
+      cwd: repoRoot,
+      env: { ...testEnv, AGY_TEST_PROFILE_DIR: quotedProfile },
+      encoding: "utf8"
+    });
+    assert.equal(quotedSetup.status, 0, quotedSetup.stderr || quotedSetup.stdout);
+    const quotedShimPath = path.join(quotedProfile, ".gemini", "antigravity", "bin", "agy-squad");
+    const quotedShimBody = fs.readFileSync(quotedShimPath, "utf8");
+    assert.ok(
+      quotedShimBody.includes('quote \\"q\\" \\`bt\\` \\$var/.gemini/config/plugins/agy-squad/bin/agy-squad.mjs'),
+      "POSIX shim must escape quotes, backticks, and $ in cliTarget"
+    );
+    const quotedFallbackRun = spawnSync(quotedShimPath, ["--version"], {
+      cwd: repoRoot,
+      env: withEnvPath(emptyBinDir, testEnv),
+      encoding: "utf8"
+    });
+    assert.equal(quotedFallbackRun.status, 0, quotedFallbackRun.stderr || quotedFallbackRun.stdout);
+    assert.match(quotedFallbackRun.stdout.trim(), /^\d+\.\d+\.\d+/);
+  }
+
+  const companionBinDir = path.join(tmpProfile, ".gemini", "antigravity", "bin");
+  const fakePathBinDir = path.join(tmpProfile, "fake-path-bin");
+  fs.mkdirSync(companionBinDir, { recursive: true });
+  fs.mkdirSync(fakePathBinDir, { recursive: true });
+  const writeFakeVersionBinary = (dir, baseName, versionText) => {
+    if (os.platform() === "win32") {
+      const p = path.join(dir, `${baseName}.cmd`);
+      fs.writeFileSync(p, `@echo off\r\necho ${versionText}\r\n`);
+      return p;
+    }
+    const p = path.join(dir, baseName);
+    fs.writeFileSync(p, `#!/bin/sh\necho "${versionText}"\n`, { mode: 0o755 });
+    return p;
+  };
+  const fakeAgyCtxPath = writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.0");
+  const fakeRtkPath = writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 0.9.5");
+  const outdatedCompanionStatus = spawnSync(process.execPath, [cli, "status"], {
+    cwd: repoRoot,
+    env: withEnvPath(fakePathBinDir, testEnv),
+    encoding: "utf8"
+  });
+  assert.equal(outdatedCompanionStatus.status, 0, "Outdated companions must remain non-fatal");
+  assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.1\): OUTDATED/);
+  assert.match(outdatedCompanionStatus.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\): OUTDATED/);
+
+  writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.1");
+  writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 1.1.0");
+  const availCompanionStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+    cwd: repoRoot,
+    env: withEnvPath(fakePathBinDir, testEnv),
+    encoding: "utf8"
+  });
+  assert.equal(availCompanionStatus.status, 0, availCompanionStatus.stderr);
+  const availCompanionJson = JSON.parse(availCompanionStatus.stdout);
+  assert.equal(availCompanionJson.details.companions.agyContext.available, true);
+  assert.equal(availCompanionJson.details.companions.agyContext.version, "2.0.1");
+  assert.equal(availCompanionJson.details.companions.rtk.available, true);
+  assert.equal(availCompanionJson.details.companions.rtk.version, "1.1.0");
+  fs.rmSync(fakeAgyCtxPath, { force: true });
+  fs.rmSync(fakeRtkPath, { force: true });
 
   // SQ-DEP-001: Plugin mcp_config.json is canonical; duplicate global entry & stale caches stripped while foreign kept
   const pluginDir = path.join(configDir, "plugins", "agy-squad");
@@ -130,7 +337,16 @@ try {
   fs.writeFileSync(cfgPath, JSON.stringify(installedCfg, null, 2) + "\n");
 
   // SQ-DEP-004: Copy fallback replaces prior install cleanly & Windows .cmd shim propagates errorlevel without cmd parse-time bugs
-  const { runInstall: runAgySquadInstall, detectExistingInstallation, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  const { runInstall: runAgySquadInstall, detectExistingInstallation, formatPosixShim, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  const formattedPosix = formatPosixShim(
+    'C:\\Program Files\\Agy $Squad\\"root"`1`',
+    'C:\\Program Files\\node "24" `bt` $v\\node.exe'
+  );
+  assert.ok(formattedPosix.startsWith("#!/bin/sh\n"));
+  assert.ok(
+    formattedPosix.includes('exec "C:/Program Files/node \\"24\\" \\`bt\\` \\$v/node.exe" "C:/Program Files/Agy \\$Squad/\\"root\\"\\`1\\`/bin/agy-squad.mjs" "$@"'),
+    "formatPosixShim must normalize backslashes to slashes and escape quotes, backticks, and $ in both execPath and targetRoot"
+  );
   const staleSchemaSubdir = path.join(mcpRootDir, "agy-squad_dup_probe");
   fs.mkdirSync(staleSchemaSubdir, { recursive: true });
   try {
@@ -158,10 +374,19 @@ try {
     );
     const winShimPath = path.join(tmpProfile, "agy-squad-test.cmd");
     fs.writeFileSync(winShimPath, formatWindowsCmdShim(winShimRoot));
-    const okRun = spawnSync("cmd.exe", ["/d", "/c", winShimPath, "0"], { encoding: "utf8" });
+    const comspec =
+      process.env.ComSpec ||
+      process.env.COMSPEC ||
+      path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "cmd.exe");
+    const okRun = spawnSync(comspec, ["/d", "/c", winShimPath, "0"], { encoding: "utf8" });
     assert.equal(okRun.status, 0, okRun.stderr || okRun.stdout);
-    const errRun = spawnSync("cmd.exe", ["/d", "/c", winShimPath, "7"], { encoding: "utf8" });
+    const errRun = spawnSync(comspec, ["/d", "/c", winShimPath, "7"], { encoding: "utf8" });
     assert.equal(errRun.status, 7, `Expected Windows .cmd shim to propagate exit code 7, got ${errRun.status}`);
+    const fallbackRun = spawnSync(comspec, ["/d", "/c", winShimPath, "5"], {
+      env: withEnvPath(emptyBinDir, testEnv),
+      encoding: "utf8"
+    });
+    assert.equal(fallbackRun.status, 5, `Expected Windows .cmd shim :fallback to propagate exit code 5, got ${fallbackRun.status}`);
   }
 
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
@@ -169,6 +394,37 @@ try {
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
   assert.equal(fs.existsSync(path.join(pluginDir, "stale-old-file.txt")), false, "forceCopyFallback must prune stale non-symlink files (SQ-DEP-004)");
   assert.equal(fs.lstatSync(pluginDir).isSymbolicLink(), false);
+
+  // L49: skillsReady must require all 4 skills (including swarm-governance) and lifecycle subcommands enforce strict args
+  const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
+  fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, false);
+  fs.writeFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), savedSwarmSkill);
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, true);
+
+  if (os.platform() !== "win32") {
+    const installedPosixShim = path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad");
+    fs.chmodSync(installedPosixShim, 0o644);
+    assert.equal(detectExistingInstallation({ includeCompanions: false }).details.cliShim.exists, false);
+    fs.chmodSync(installedPosixShim, 0o755);
+    assert.equal(detectExistingInstallation({ includeCompanions: false }).details.cliShim.exists, true);
+  }
+
+  for (const badArgs of [
+    ["setup", "--bogus-flag"],
+    ["setup", "extra-arg"],
+    ["uninstall", "--bogus-flag"],
+    ["uninstall", "restore-backups"],
+    ["restore-backups", "--bogus-flag"],
+    ["restore-backups", "extra-arg"]
+  ]) {
+    const badRes = spawnSync(process.execPath, [cli, ...badArgs], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.notEqual(badRes.status, 0, `Expected '${badArgs.join(" ")}' to fail strict arg parsing`);
+  }
 
   // 4. Malformed config preservation (fails closed without mutating)
   fs.writeFileSync(mcpPath, "{ malformed json");
@@ -201,6 +457,21 @@ try {
   assert.equal(restoreRes.status, 0, restoreRes.stderr || restoreRes.stdout);
   const restoredMcp = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   assert.deepEqual(restoredMcp.mcpServers["agy-squad"], { command: "node", args: ["stale.js"] });
+
+  // SQ-DEP-006: detectExistingInstallation resolves AGY_TEST_PROFILE_DIR dynamically
+  const installerMod = await import(new URL("../scripts/install-register.mjs", import.meta.url));
+  const emptyDynProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-dyn-prof-")));
+  try {
+    process.env.AGY_TEST_PROFILE_DIR = emptyDynProfile;
+    const dynEmpty = installerMod.detectExistingInstallation();
+    assert.equal(dynEmpty.isInstalled, false);
+    assert.equal(dynEmpty.details.plugin.exists, false);
+    assert.equal(dynEmpty.details.mcp.registered, false);
+    assert.equal(dynEmpty.details.plugin.path.startsWith(emptyDynProfile), true);
+  } finally {
+    process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
+    fs.rmSync(emptyDynProfile, { recursive: true, force: true });
+  }
 
   console.log("Lifecycle installer, --check, and rollback tests passed");
 } finally {

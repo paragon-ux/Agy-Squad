@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -151,6 +151,25 @@ function decodeUtf8(bytes, relative) {
   }
 }
 
+function isExpectedRealPath(expected, actual) {
+  if (actual === expected) return true;
+  if (process.platform === "win32" || process.platform === "darwin") {
+    return actual.toLowerCase() === expected.toLowerCase();
+  }
+  return false;
+}
+
+function resolveCanonicalRoot(root) {
+  if (typeof root !== "string" || !root.trim()) {
+    throw new Error("Expected a valid workspace directory path.");
+  }
+  const realRoot = fs.realpathSync(root);
+  if (!fs.lstatSync(realRoot).isDirectory()) {
+    throw new Error(`Expected workspace root to be a directory: ${root}`);
+  }
+  return realRoot;
+}
+
 function workspacePath(root, relative, verifiedDirs) {
   if (
     typeof relative !== "string" ||
@@ -165,7 +184,7 @@ function workspacePath(root, relative, verifiedDirs) {
   const file = path.join(root, relative);
   const dir = path.dirname(file);
   if (!verifiedDirs?.has(dir)) {
-    if (fs.realpathSync(dir) !== dir) {
+    if (!isExpectedRealPath(dir, fs.realpathSync(dir))) {
       throw new Error(`Symlinked directories are unsupported: ${relative}`);
     }
     verifiedDirs?.add(dir);
@@ -186,7 +205,7 @@ function readOpenedFileWithStat(file, relative) {
     if (
       !stat.isFile() ||
       (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file) ||
-      fs.realpathSync(file) !== file
+      !isExpectedRealPath(file, fs.realpathSync(file))
     ) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
@@ -201,7 +220,8 @@ function readOpenedFile(file, relative) {
 }
 
 function readFile(root, relative, verifiedDirs) {
-  return readOpenedFile(workspacePath(root, relative, verifiedDirs), relative);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
 function readIfPresentWithStat(root, relative, verifiedDirs) {
@@ -218,11 +238,12 @@ function readIfPresent(root, relative, verifiedDirs) {
 }
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!Array.isArray(files) || !files.length) {
     throw new Error("Specify the final files used for independent verification.");
   }
   const unique = [...new Set(files)];
-  const hashes = new Map(unique.map(file => [file, sha256(readFile(root, file, verifiedDirs))]));
+  const hashes = new Map(unique.map(file => [file, sha256(readFile(canonicalRoot, file, verifiedDirs))]));
   return Object.fromEntries(files.map(file => [file, hashes.get(file)]));
 }
 
@@ -241,7 +262,8 @@ function bundlePath(squadId, reportRoot = defaultReportRoot()) {
 }
 
 function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256) {
-  const destination = workspacePath(root, relative, verifiedDirs);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  const destination = workspacePath(canonicalRoot, relative, verifiedDirs);
   let existingBytes;
   try {
     existingBytes = readOpenedFile(destination, relative);
@@ -381,29 +403,51 @@ function canonicalSnapshotDigest(squadId, synthesisSha, verifiedFiles, reports) 
 
 function listCohortSlotsIfPresent(root, cohortRelDir) {
   const fullDir = path.join(root, cohortRelDir);
-  if (!fs.existsSync(fullDir)) return [];
+  let dirLstat;
+  try {
+    dirLstat = fs.lstatSync(fullDir);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  if (dirLstat.isSymbolicLink()) {
+    const err = new Error(`ELOOP: symlinked audit directory is unsupported: ${cohortRelDir}`);
+    err.code = "ELOOP";
+    throw err;
+  }
   const realDir = fs.realpathSync(fullDir);
-  if (realDir !== fullDir) {
+  if (!isExpectedRealPath(fullDir, realDir)) {
     throw new Error(`Symlinked audit directory is unsupported: ${cohortRelDir}`);
   }
-  if (!fs.lstatSync(fullDir).isDirectory()) {
+  if (!dirLstat.isDirectory()) {
     throw new Error(`Expected directory for audit cohort: ${cohortRelDir}`);
   }
   const entries = fs.readdirSync(fullDir, { withFileTypes: true });
   const slots = [];
   const specialistEntries = [];
   for (const entry of entries) {
-    if (entry.name === "lead" && entry.isDirectory()) {
-      const rel = `${cohortRelDir}/lead/report.md`;
-      if (fs.existsSync(path.join(root, rel))) slots.push(rel);
+    const isLead = entry.name === "lead";
+    const m = isLead ? null : /^specialist-([1-9]\d*)$/.exec(entry.name);
+    if (!isLead && !m) continue;
+    if (entry.isSymbolicLink()) {
+      const err = new Error(`ELOOP: symlinked slot directory is unsupported: ${cohortRelDir}/${entry.name}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+    if (!entry.isDirectory()) continue;
+    const rel = `${cohortRelDir}/${entry.name}/report.md`;
+    let slotExists = false;
+    try {
+      fs.lstatSync(path.join(root, rel));
+      slotExists = true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (!slotExists) continue;
+    if (isLead) {
+      slots.push(rel);
     } else {
-      const m = /^specialist-([1-9]\d*)$/.exec(entry.name);
-      if (m && entry.isDirectory()) {
-        const rel = `${cohortRelDir}/${entry.name}/report.md`;
-        if (fs.existsSync(path.join(root, rel))) {
-          specialistEntries.push({ num: Number(m[1]), rel });
-        }
-      }
+      specialistEntries.push({ num: Number(m[1]), rel });
     }
   }
   specialistEntries.sort((a, b) => a.num - b.num);
@@ -419,6 +463,7 @@ function discoverAuditSlots(root, squadId, rootPrefix) {
 }
 
 function computeEvidenceDigest(root, record) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle or handoff record.");
   }
@@ -428,7 +473,7 @@ function computeEvidenceDigest(root, record) {
   validateSquadId(squadId);
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
+  const assignments = inspectReports(canonicalRoot, record, verifiedDirs, { rejectLooseOnNoReport: true });
   const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(
@@ -450,8 +495,8 @@ function computeEvidenceDigest(root, record) {
   ) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
-  verifyFiles(root, verifiedFiles, verifiedDirs);
-  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs, { allowNonPassing });
+  verifyFiles(canonicalRoot, verifiedFiles, verifiedDirs);
+  const synthesisCheck = readSynthesis(canonicalRoot, synthesisSlot, verifiedDirs, { allowNonPassing });
   const synthesis = sha256(synthesisCheck.bytes);
   const reports = assignments.map(({ report, status, bytes }) => ({
     path: report,
@@ -463,10 +508,11 @@ function computeEvidenceDigest(root, record) {
 }
 
 function ensureDirectory(root, relative, created = [], verifiedDirs) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (typeof relative !== "string" || CONTROL_CHAR_RE.test(relative) || relative.includes("\\")) {
     throw new Error(`Invalid workspace directory: ${relative}`);
   }
-  let directory = root;
+  let directory = canonicalRoot;
   for (const part of relative.split("/")) {
     if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
     directory = path.join(directory, part);
@@ -486,19 +532,28 @@ function ensureDirectory(root, relative, created = [], verifiedDirs) {
 }
 
 function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnNoReport = false } = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
   const { workspace, assignments, handoffs } = record;
-  if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
+  let canonicalWorkspace;
+  try {
+    canonicalWorkspace = typeof workspace === "string" && workspace.trim() ? fs.realpathSync(workspace) : undefined;
+  } catch {
+    canonicalWorkspace = undefined;
+  }
+  if (!canonicalWorkspace || !isExpectedRealPath(canonicalRoot, canonicalWorkspace)) {
+    throw new Error("The cohort must use the current shared workspace.");
+  }
   const resolvedRoot = resolveReportRoot(record);
   const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     let bytes;
     if (status === "READY" || status === "PARTIAL") {
-      bytes = readEvidence(root, report, verifiedDirs);
-    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(root, report, verifiedDirs)) {
+      bytes = readEvidence(canonicalRoot, report, verifiedDirs);
+    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(canonicalRoot, report, verifiedDirs)) {
       throw new Error(`Unexpected loose file present at NO_REPORT slot: ${report}`);
     }
     return { conversationId, report, status, bytes };
@@ -506,7 +561,8 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
 }
 
 function inspectHandoffs(root, record) {
-  return inspectReports(root, record).map(({ conversationId, report, status }) => ({
+  const canonicalRoot = resolveCanonicalRoot(root);
+  return inspectReports(canonicalRoot, record).map(({ conversationId, report, status }) => ({
     conversationId,
     report,
     status
@@ -514,6 +570,7 @@ function inspectHandoffs(root, record) {
 }
 
 function bundleReports(root, record) {
+  root = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle record.");
   }
@@ -826,13 +883,15 @@ function verifyBundleInternal(root, relative, acceptedHash) {
 }
 
 function verifyBundle(root, relative, acceptedHash) {
-  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(root, relative, acceptedHash);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
   return { path: p, sha256: s, auditPolicy, reports };
 }
 
 function pruneReports(root, relative, acceptedHash, options = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(root, relative, acceptedHash);
+  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
   if (options.keepReports || retainReports) {
     return { removed: [], retained: loosePresent };
   }
@@ -842,7 +901,7 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
     const snap = looseSnapshots[i];
     const remaining = looseSnapshots.slice(i).map(item => item.path);
     try {
-      const targetPath = workspacePath(root, snap.path, verifiedDirs);
+      const targetPath = workspacePath(canonicalRoot, snap.path, verifiedDirs);
       const { bytes, stat } = readOpenedFileWithStat(targetPath, snap.path);
       if (
         stat.dev !== snap.dev ||
@@ -877,8 +936,450 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
   return { removed };
 }
 
+function rebaseSlotReportRoot(slotPath, targetReportRoot) {
+  if (typeof slotPath !== "string" || !targetReportRoot) return slotPath;
+  const match = /^.+\/(squad-[^/\s]+\/(?:lead\/report\.md|specialist-[1-9]\d*\/report\.md))$/.exec(slotPath);
+  if (!match) return slotPath;
+  const rebased = `${targetReportRoot}/${match[1]}`;
+  if (Buffer.byteLength(`READY ${rebased} — `) + SWARM_MENTION_RESERVE_BYTES >= messageLimit) {
+    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including /swarm @mention headroom): ${rebased}`);
+  }
+  return rebased;
+}
+
+function discoverSingleSquadAuditSlotsIfMatching(sources, squadId, rootPrefix) {
+  const flatAuditDir = `${rootPrefix}/squad-integrity_auditor`;
+  const matching = [];
+  for (const { real } of sources) {
+    for (const rel of listCohortSlotsIfPresent(real, flatAuditDir)) {
+      const opened = readIfPresentWithStat(real, rel, new Set());
+      if (opened) {
+        const text = decodeUtf8(opened.bytes, rel);
+        if (text.trim()) {
+          const declaredTarget = parseTargetSquad(text);
+          if (declaredTarget && declaredTarget !== squadId) continue;
+        }
+      }
+      matching.push(rel);
+    }
+  }
+  return matching;
+}
+
+function collectReportSlots(root, options = {}) {
+  root = resolveCanonicalRoot(root);
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("Provide valid collect options.");
+  }
+  const {
+    sources = [],
+    plan,
+    record,
+    squadId,
+    reportRoot,
+    overwrite = false,
+    dryRun = false,
+    allowEmpty = false,
+    strict = false
+  } = options;
+
+  if (!Array.isArray(sources) || sources.length === 0) {
+    throw new Error("Provide at least one worktree directory via --from <dir>.");
+  }
+  if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
+    throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
+  }
+  const overrideRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
+
+  const resolvedSources = [];
+  const seenRealSources = new Set();
+  for (const src of sources) {
+    if (typeof src !== "string" || !src.trim()) {
+      throw new Error("Worktree --from path must be a nonempty directory path.");
+    }
+    let realSrc;
+    try {
+      realSrc = fs.realpathSync(src);
+    } catch (error) {
+      throw new Error(`Worktree directory does not exist (${src}): ${error.message}`);
+    }
+    if (!fs.lstatSync(realSrc).isDirectory()) {
+      throw new Error(`Worktree path is not a directory: ${src}`);
+    }
+    if (isExpectedRealPath(root, realSrc)) {
+      throw new Error(`Worktree source '${src}' resolves to the coordinator workspace itself.`);
+    }
+    const seenKey = process.platform === "win32" || process.platform === "darwin" ? realSrc.toLowerCase() : realSrc;
+    if (!seenRealSources.has(seenKey)) {
+      seenRealSources.add(seenKey);
+      resolvedSources.push({ raw: src, real: realSrc });
+    }
+  }
+
+  const targetSlotSet = new Set();
+  const addSlot = (slot) => {
+    if (typeof slot !== "string") return;
+    targetSlotSet.add(overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  };
+  let explicitExpectations = false;
+  if (plan !== undefined) {
+    if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+      throw new Error("Provide a valid squad_planner JSON object.");
+    }
+    if (squadId !== undefined) validateSquadId(squadId);
+    let matchedPlanSquad = false;
+    for (const w of plan.workers ?? []) {
+      if (squadId !== undefined && w?.squadId !== squadId) continue;
+      matchedPlanSquad = true;
+      if (typeof w?.lead?.reportSlot === "string") addSlot(w.lead.reportSlot);
+      for (const s of w?.specialists ?? []) {
+        if (typeof s?.reportSlot === "string") addSlot(s.reportSlot);
+      }
+    }
+    for (const entry of plan.provenanceScaffold?.entries ?? []) {
+      if (squadId !== undefined && entry?.squadId !== squadId) continue;
+      matchedPlanSquad = true;
+      if (typeof entry?.reportSlot === "string") addSlot(entry.reportSlot);
+    }
+    for (const audit of plan.integrityAuditPlan ?? []) {
+      if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
+      if (typeof audit?.reportSlot === "string") addSlot(audit.reportSlot);
+    }
+    if (squadId !== undefined && !matchedPlanSquad) {
+      throw new Error(`Squad '${squadId}' was not found in the supplied plan.`);
+    }
+    explicitExpectations = true;
+  } else if (record !== undefined) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("Provide a valid bundle or handoff record.");
+    }
+    validateSquadId(record.squadId);
+    if (squadId !== undefined && squadId !== record.squadId) {
+      throw new Error(`Conflicting squad '${squadId}' for record squad '${record.squadId}'.`);
+    }
+    const rootPrefix = overrideRoot ?? resolveReportRoot(record);
+    addSlot(reportPath(record.squadId, undefined, rootPrefix));
+    for (const a of record.assignments ?? []) {
+      if (typeof a?.report === "string") addSlot(a.report);
+    }
+    let hasExplicitAuditSlot = false;
+    for (const slot of record.integrityAuditSlots ?? []) {
+      if (typeof slot === "string") {
+        addSlot(slot);
+        hasExplicitAuditSlot = true;
+      }
+    }
+    if (typeof record.integrityReport === "string") {
+      addSlot(record.integrityReport);
+      hasExplicitAuditSlot = true;
+    }
+    if (!hasExplicitAuditSlot && record.requireIntegrityAudit !== false) {
+      const scopedAuditDir = `${rootPrefix}/squad-${encodeURIComponent(`integrity_auditor-${record.squadId}`)}`;
+      let foundScoped = false;
+      for (const { real } of resolvedSources) {
+        for (const rel of listCohortSlotsIfPresent(real, scopedAuditDir)) {
+          targetSlotSet.add(rel);
+          foundScoped = true;
+        }
+      }
+      if (!foundScoped) {
+        for (const rel of discoverSingleSquadAuditSlotsIfMatching(resolvedSources, record.squadId, rootPrefix)) {
+          targetSlotSet.add(rel);
+        }
+      }
+    }
+    explicitExpectations = true;
+  } else if (squadId !== undefined) {
+    validateSquadId(squadId);
+    const rootPrefix = overrideRoot ?? defaultReportRoot();
+    const workingCohortDir = `${rootPrefix}/squad-${encodeURIComponent(squadId)}`;
+    const auditCohortDir = `${rootPrefix}/squad-${encodeURIComponent(`integrity_auditor-${squadId}`)}`;
+    let foundScopedAudit = false;
+    for (const { real } of resolvedSources) {
+      for (const rel of listCohortSlotsIfPresent(real, workingCohortDir)) {
+        targetSlotSet.add(rel);
+      }
+      for (const rel of listCohortSlotsIfPresent(real, auditCohortDir)) {
+        targetSlotSet.add(rel);
+        foundScopedAudit = true;
+      }
+    }
+    if (!foundScopedAudit) {
+      for (const rel of discoverSingleSquadAuditSlotsIfMatching(resolvedSources, squadId, rootPrefix)) {
+        targetSlotSet.add(rel);
+      }
+    }
+  } else {
+    throw new Error("Provide --plan <plan.json>, --record <record.json>, or --squad <id> to collect report slots.");
+  }
+
+  const targetSlots = [...targetSlotSet];
+  const foundBySlot = new Map();
+  for (const { raw, real } of resolvedSources) {
+    const verifiedSrcDirs = new Set();
+    for (const slotRel of targetSlots) {
+      const opened = readIfPresentWithStat(real, slotRel, verifiedSrcDirs);
+      if (!opened) continue;
+      const text = decodeUtf8(opened.bytes, slotRel);
+      if (!text.trim()) continue;
+      const hash = sha256(opened.bytes);
+      const prev = foundBySlot.get(slotRel);
+      if (prev) {
+        if (prev.hash !== hash) {
+          throw new Error(
+            `Conflict collecting '${slotRel}': '${prev.source}' (${prev.hash.slice(0, 12)}) differs from '${raw}' (${hash.slice(0, 12)}).`
+          );
+        }
+        continue;
+      }
+      foundBySlot.set(slotRel, { bytes: opened.bytes, hash, source: raw });
+    }
+  }
+
+  const missing = targetSlots.filter(slotRel => !foundBySlot.has(slotRel));
+  if (foundBySlot.size === 0 && !allowEmpty) {
+    throw new Error("No non-empty report slots were found across the provided worktrees.");
+  }
+  if (strict && explicitExpectations && missing.length > 0) {
+    throw new Error(`Missing expected report slot(s) across worktrees: ${missing.join(", ")}`);
+  }
+
+  const verifiedDestDirs = new Set();
+  const pendingActions = [];
+  for (const [slotRel, entry] of foundBySlot.entries()) {
+    const existing = readIfPresentWithStat(root, slotRel, verifiedDestDirs);
+    if (existing) {
+      if (existing.bytes.equals(entry.bytes)) {
+        pendingActions.push({ kind: "unchanged", slotRel, entry });
+        continue;
+      }
+      const existingNonEmpty = decodeUtf8(existing.bytes, slotRel).trim().length > 0;
+      if (existingNonEmpty && !overwrite) {
+        throw new Error(
+          `Conflict at destination '${slotRel}': coordinator workspace already has differing content (SHA-256 ${sha256(existing.bytes).slice(0, 12)}); pass --overwrite to replace.`
+        );
+      }
+    }
+    pendingActions.push({ kind: "copy", slotRel, entry });
+  }
+
+  const collected = [];
+  const unchanged = [];
+  for (const action of pendingActions) {
+    const { kind, slotRel, entry } = action;
+    if (kind === "unchanged") {
+      unchanged.push({
+        slot: slotRel,
+        from: entry.source,
+        sha256: entry.hash,
+        bytes: entry.bytes.length,
+        status: "unchanged"
+      });
+      continue;
+    }
+    if (!dryRun) {
+      ensureDirectory(root, path.posix.dirname(slotRel), [], verifiedDestDirs);
+      publish(root, slotRel, entry.bytes, true, verifiedDestDirs);
+    }
+    collected.push({
+      slot: slotRel,
+      from: entry.source,
+      sha256: entry.hash,
+      bytes: entry.bytes.length,
+      status: dryRun ? "would-copy" : "copied"
+    });
+  }
+
+  return {
+    workspace: root,
+    sources: resolvedSources.map(s => s.real),
+    collected,
+    unchanged,
+    missing,
+    dryRun
+  };
+}
+
+function buildBundleRecordInit(root, options = {}) {
+  root = resolveCanonicalRoot(root);
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("Provide valid bundle-init options.");
+  }
+  const {
+    plan,
+    provenance,
+    squadId,
+    files = [],
+    reportRoot,
+    verdict,
+    idMap = {},
+    handoffs,
+    allowUnaudited = false,
+    allowNonPassing = false,
+    allowPartial = false
+  } = options;
+
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    throw new Error("Provide a valid squad_planner JSON object.");
+  }
+  const templates = plan.bundleRecordTemplates;
+  if (!templates || typeof templates !== "object" || Array.isArray(templates)) {
+    throw new Error("Plan output does not contain bundleRecordTemplates.");
+  }
+  const templateKeys = Object.keys(templates);
+  let selectedSquadId = squadId;
+  if (selectedSquadId !== undefined) {
+    validateSquadId(selectedSquadId);
+    if (!Object.hasOwn(templates, selectedSquadId)) {
+      throw new Error(`Squad '${selectedSquadId}' was not found in plan.bundleRecordTemplates (${templateKeys.join(", ") || "none"}).`);
+    }
+  } else if (templateKeys.length === 1) {
+    selectedSquadId = templateKeys[0];
+  } else {
+    throw new Error(
+      `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id>.`
+    );
+  }
+
+  const template = templates[selectedSquadId];
+  const resolvedReportRoot =
+    reportRoot !== undefined
+      ? normalizeReportRoot(reportRoot)
+      : template.reportRoot !== undefined
+        ? normalizeReportRoot(template.reportRoot)
+        : defaultReportRoot();
+
+  const mergedEntries = [
+    ...(Array.isArray(plan.provenanceScaffold?.entries) ? plan.provenanceScaffold.entries : []),
+    ...(Array.isArray(provenance?.entries) ? provenance.entries : [])
+  ].filter(entry => entry && entry.squadId === selectedSquadId);
+
+  const bySlot = new Map();
+  const byWorker = new Map();
+  for (const entry of mergedEntries) {
+    if (typeof entry.reportSlot === "string") bySlot.set(entry.reportSlot, entry);
+    if (typeof entry.workerName === "string") byWorker.set(entry.workerName, entry);
+  }
+
+  const matchedIdMapKeys = new Set();
+  const assignments = (Array.isArray(template.assignments) ? template.assignments : []).map((item, idx) => {
+    const slotPath =
+      reportRoot !== undefined ? reportPath(selectedSquadId, idx + 1, resolvedReportRoot) : item.report;
+    const entry = bySlot.get(slotPath) || bySlot.get(item.report) || byWorker.get(item.conversationId);
+    let mappedId;
+    if (entry && Object.hasOwn(idMap, entry.workerName)) {
+      mappedId = idMap[entry.workerName];
+      matchedIdMapKeys.add(entry.workerName);
+    } else if (Object.hasOwn(idMap, item.conversationId)) {
+      mappedId = idMap[item.conversationId];
+      matchedIdMapKeys.add(item.conversationId);
+    }
+    let nextId = item.conversationId;
+    if (typeof mappedId === "string" && mappedId.trim()) {
+      nextId = mappedId.trim();
+    } else if (
+      plan.executionMode !== "swarm" &&
+      typeof entry?.conversationId === "string" &&
+      entry.conversationId.trim() &&
+      !/^<.*>$/.test(entry.conversationId.trim())
+    ) {
+      nextId = entry.conversationId.trim();
+    }
+    return {
+      conversationId: nextId,
+      report: slotPath
+    };
+  });
+  for (const key of Object.keys(idMap ?? {})) {
+    if (!matchedIdMapKeys.has(key)) {
+      throw new Error(`--id-map key '${key}' did not match any worker or assignment in squad '${selectedSquadId}'.`);
+    }
+  }
+
+  if (!Array.isArray(files) || files.some(f => typeof f !== "string" || !f.trim())) {
+    throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
+  }
+  let verifiedFiles = {};
+  if (files.length > 0) {
+    verifiedFiles = fingerprint(root, files);
+  } else if (
+    template.verifiedFiles &&
+    typeof template.verifiedFiles === "object" &&
+    !Array.isArray(template.verifiedFiles) &&
+    Object.keys(template.verifiedFiles).length > 0
+  ) {
+    verifiedFiles = fingerprint(root, Object.keys(template.verifiedFiles));
+  }
+
+  const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
+  let resolvedVerdict = template.verdict || "PASS";
+  if (verdict !== undefined) {
+    if (!validVerdicts.has(verdict)) {
+      throw new Error(`Invalid verdict '${verdict}': expected PASS, FAIL, or BLOCKED.`);
+    }
+    resolvedVerdict = verdict;
+  } else {
+    const leadSlot = reportPath(selectedSquadId, undefined, resolvedReportRoot);
+    const leadOpened = readIfPresentWithStat(root, leadSlot, new Set());
+    if (leadOpened) {
+      const leadText = decodeUtf8(leadOpened.bytes, leadSlot);
+      if (leadText.trim()) {
+        try {
+          resolvedVerdict = parseContentVerdict(leadText);
+        } catch (error) {
+          if (hasContentVerdictAttempt(leadText)) {
+            throw new Error(`Existing synthesis report '${leadSlot}' contains an invalid or conflicting verdict: ${error.message}`);
+          }
+        }
+      }
+    }
+  }
+
+  const requireAudit = allowUnaudited ? false : (template.requireIntegrityAudit ?? true);
+  let auditSlots = [];
+  if (requireAudit) {
+    if (reportRoot === undefined && Array.isArray(template.integrityAuditSlots) && template.integrityAuditSlots.length > 0) {
+      auditSlots = [...template.integrityAuditSlots];
+    } else if (Array.isArray(plan.integrityAuditPlan) && plan.integrityAuditPlan.length > 0) {
+      const matchingAudits = plan.integrityAuditPlan.filter(a => a && a.targetSquad === selectedSquadId);
+      auditSlots = matchingAudits.map(a =>
+        reportRoot !== undefined ? rebaseSlotReportRoot(a.reportSlot, resolvedReportRoot) : a.reportSlot
+      );
+    }
+  }
+
+  let resolvedHandoffs = Array.isArray(template.handoffs) ? [...template.handoffs] : [];
+  if (handoffs !== undefined) {
+    if (!Array.isArray(handoffs)) {
+      throw new Error("handoffs must be an array of { sender, message } entries.");
+    }
+    for (const h of handoffs) {
+      if (!h || typeof h !== "object" || typeof h.sender !== "string" || !h.sender.trim() || typeof h.message !== "string" || !h.message.trim()) {
+        throw new Error("Each handoff must include nonempty 'sender' and 'message' strings.");
+      }
+    }
+    resolvedHandoffs = handoffs.map(({ sender, message }) => ({ sender: sender.trim(), message }));
+  }
+
+  return {
+    squadId: selectedSquadId,
+    workspace: root,
+    reportRoot: resolvedReportRoot,
+    verdict: resolvedVerdict,
+    ...(allowNonPassing ? { allowNonPassing: true } : {}),
+    ...(allowPartial ? { allowPartial: true } : {}),
+    verifiedFiles,
+    assignments,
+    handoffs: resolvedHandoffs,
+    requireIntegrityAudit: requireAudit,
+    ...(requireAudit && auditSlots.length > 0 ? { integrityAuditSlots: auditSlots } : {})
+  };
+}
+
 export {
+  buildBundleRecordInit,
   bundleReports,
+  collectReportSlots,
   computeEvidenceDigest,
   decodeUtf8,
   ensureDirectory,

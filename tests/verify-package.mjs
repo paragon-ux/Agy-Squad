@@ -29,19 +29,30 @@ const REQUIRED = [
   ".agents/skills/self-diagnosis/SKILL.md",
   ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
   ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
+  ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
   ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
   ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
   ".agents/skills/swarm-governance/SKILL.md",
   ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
+  ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
   ".agents/skills/swarm-governance/references/intake-and-planning.md",
   ".agents/skills/swarm-governance/references/large-swarms.md",
+  "docs/benchmarks.md",
   "docs/concepts.md",
   "docs/core-workflows.md",
   "docs/getting-started.md",
   "docs/index.md",
   "docs/roles-and-workflows.md",
   "docs/stopping-agents.md",
-  "docs/tools.md"
+  "docs/tools.md",
+  "docs/assets/architecture-overview.svg",
+  "docs/assets/manifest-and-modes.svg",
+  "docs/assets/role-and-verdict-gate.svg",
+  "docs/assets/skill-role-workflows.svg",
+  "docs/assets/swarm-lifecycle.svg",
+  "docs/plans/LEDGER.md",
+  "docs/plans/native-enforcement-ledger.md",
+  "docs/plans/wsl-cli-verification.md"
 ];
 
 const RETIRED_DENYLIST = [
@@ -92,7 +103,7 @@ function validate(packages) {
 
 function selfTest() {
   const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
-  assert.equal(validate(fixture(["docs/benchmarks.md"])), REQUIRED.length + 1);
+  assert.equal(validate(fixture(["docs/plans/pr3-option-b-fixes.md"])), REQUIRED.length + 1);
   for (const bad of [
     "tests/leaked.mjs",
     "benchmarks/private.json",

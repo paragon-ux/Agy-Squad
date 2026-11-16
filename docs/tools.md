@@ -80,7 +80,7 @@ Agy-Squad exposes two MCP tools (`dispatch_squad` in `mcp/dispatch.mjs` and `squ
    - **Canonical Flat Integrity Auditor:** On `/swarm`, spawn `audit-<id>` (`scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md` for single-squad manifests, flat or layered, or `scratch/agy-squad/squad-integrity_auditor-<targetSquad>/specialist-1/report.md` for multi-squad manifests, flat or layered) via `squad_planner`. On `invoke_subagent`, call `dispatch_squad({ squadId: "integrity_auditor:<targetSquad>" })` (or `integrity_auditor` for single-squad manifests). Compute `node bin/agy-squad.mjs digest <record.json>` first so each auditor records `Target Squad: <targetSquad>`, `Evidence Digest: <64-hex>`, and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` auto-discovery have been removed.
    - **Acceptance gate:** `node bin/agy-squad.mjs bundle <record.json>` enforces `requireIntegrityAudit: true` by default (pass `--allow-unaudited` or `requireIntegrityAudit: false` to opt out). `bundleReports` in `mcp/handoffs.mjs` hashes all matching integrity audit reports (`integrityAudits` + `integrityAudit`), persists `schemaVersion: 2` and `auditPolicy` (`"required"` | `"unaudited-explicit"`), and guards against silent overwrites (`--replace` / `--predecessor <sha256>`). `verify` enforces the persisted `auditPolicy` and confirms matching `Evidence Digest`, `Target Squad`, `Integrity Verdict: CLEAN`, and `verifiedFiles` digests.
 
-File scope in a brief describes the assignment (see [WSL verification checklist](plans/wsl-cli-verification.md) for historical CLI boundary trials).
+File scope in a brief describes the assignment (see [Cross-Platform & WSL Verification](plans/wsl-cli-verification.md) for historical WSL CLI boundary trials).
 
 ## Governance CLI & report cleanup (`bin/agy-squad.mjs`, `mcp/handoffs.mjs`, `mcp/verdicts.mjs`)
 
@@ -90,8 +90,14 @@ Run `node bin/agy-squad.mjs` from the shared workspace root. (`mcp/handoffs.mjs`
 
 | Command | Purpose and inputs |
 | --- | --- |
+| `setup [--check]` | Installs or synchronizes the native plugin, 4 skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), plugin `mcp_config.json`, and `agy-squad` CLI shims (`install` is an alias; `--check` runs read-only preflight validation). |
+| `status [--json]` | Checks live plugin link, skills, docs, canonical plugin MCP registration, CLI shim, and non-fatal companion `agy-context (>= 2.0.1)` / `rtk (>= 1.1.0)` availability. |
+| `uninstall [--restore-backups]` | Removes the plugin link, MCP registration, CLI shims, and stale schema caches; `--restore-backups` restores prior `.bak` files. |
+| `restore-backups` | Restores pre-install `.bak` configuration files (`mcp_config.json.bak`, `config.json.bak`). |
 | `dispatch (--squad <id> \| <id>) [--manifest <path>]` | Exposes `dispatch_squad` (`mcp/dispatch.mjs`) for `invoke_subagent` cohorts (`all_l1`, `<squadId>`, or `integrity_auditor[:<target>]`). |
 | `plan (--manifest <path> \| "<task>") [options]` | Exposes `squad_planner` (`mcp/planner.mjs`) from the CLI. In `swarm` mode, bundle templates use each swarm member name as `assignments[].conversationId` and `handoffs[].sender`. |
+| `collect (--plan <plan.json> \| --record <record.json> \| --squad <id>) --from <worktree-dir>...` | Safely collects non-empty specialist/lead/auditor report slots from `/swarm` `share` or `branch` worktrees into the coordinator workspace before `bundle` and `kill`, rejecting symlink escapes and inter-worktree conflicts (`--workspace`, `--report-root`, `--overwrite`, `--dry-run`, `--strict`, `--allow-empty`). |
+| `bundle-init --plan <plan.json> [options] [<verified-file>...]` | Generates a pre-filled `bundle-record.json` from `squad_planner` output and `provenanceScaffold` (supports `--provenance`, `--squad`, `--workspace`, `--verdict`, `--file`, `--id-map`, `--handoffs`, `--handoff`, `--allow-unaudited`, `--allow-non-passing`, `--allow-partial`, `--out`, `--replace`). |
 | `verdict [--integrity] <report.md>` | Calls `mcp/verdicts.mjs` (`parseContentVerdict` or `parseIntegrityVerdict`) to parse a strict single-line `Content Verdict: PASS\|FAIL\|BLOCKED` (legacy alias `Verdict: ...`), or `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` with `--integrity`, rejecting hedged or conflicting lines. |
 | `fingerprint <file...>` | Maps workspace-relative file paths to SHA-256 digests for `verifiedFiles`. Capture hashes before and after checks on final work inputs. |
 | `inspect <record.json>` | Checks the recorded cohort against native messages and readable reports (`workspace`, ordered `assignments` with `conversationId` and `report`, and `handoffs` with native `sender` and exact `message`). |
@@ -100,12 +106,15 @@ Run `node bin/agy-squad.mjs` from the shared workspace root. (`mcp/handoffs.mjs`
 | `verify <report.sources.json>` | Enforces persisted `auditPolicy`, archived Markdown verdicts, every `integrityAudit` / `integrityAudits` digest and `Evidence Digest`, `verifiedFiles` hashes, and any remaining loose reports. |
 | `prune <report.sources.json> <accepted-sha256> [--keep-reports]` | Safely unlinks only verified loose specialist reports (re-verifying inode identity and SHA-256) after `bundle` and `verify` pass, unless `--keep-reports` or `retainReports: true` is set. |
 
-### `agy-squad plan` and governance flags
+### `agy-squad` flags reference
 
 | Flag | Applies to | Behavior |
 | --- | --- | --- |
-| `--manifest <path>` | `plan` | Load squads from a workspace manifest file (mutually exclusive with positional `<task>`). |
-| `--squad <id>` | `plan` | Target a specific squad ID in the manifest. |
+| `--check` / `-c` | `setup` | Run read-only preflight check without writing files (cannot pair with `--restore-backups` or `--uninstall`). |
+| `--restore-backups` | `uninstall` | Restore backed-up `.bak` files after removing `Agy-Squad` entries. |
+| `--json` | `status` | Emit machine-readable installation and companion status JSON. |
+| `--manifest <path>` | `plan`, `dispatch` | Load squads from a workspace manifest file (mutually exclusive with positional `<task>` in `plan`). |
+| `--squad <id>` | `plan`, `dispatch`, `collect`, `bundle-init` | Target a specific squad ID. |
 | `--topology flat\|layered` | `plan` | Override multi-squad compilation topology (`flat` strips leads; `layered` requires leads). |
 | `--mode swarm\|subagent` | `plan` | Select native `/swarm` (`swarm`, default) or `invoke_subagent` (`subagent`). |
 | `--model <id>` | `plan` | Pin a model ID for workers (under `swarm` mode, marks models `unverified` unless listed via `--known-model`). |
@@ -115,11 +124,17 @@ Run `node bin/agy-squad.mjs` from the shared workspace root. (`mcp/handoffs.mjs`
 | `--scope <path>` | `plan` | Repeatable. Workspace-relative scope paths for task-based planning. |
 | `--role <title>` | `plan` | Repeatable. Specialist role titles for task-based planning. |
 | `--no-integrity` | `plan` | Omit the `integrity_auditor` plan stage and set `requireIntegrityAudit: false` in `bundleRecordTemplates`. |
-| `--report-root <path>` | `plan` | Custom workspace-relative root for report slots instead of `scratch/agy-squad`. |
+| `--report-root <path>` | `plan`, `collect`, `bundle-init` | Custom workspace-relative root for report slots instead of `scratch/agy-squad`. |
+| `--plan <path>` / `--record <path>` | `collect`, `bundle-init` | Supply `squad_planner` JSON output (`--plan`) or a bundle record (`--record` in `collect`). |
+| `--from <worktree-dir>` / `--workspace <dir>` | `collect`, `bundle-init` | Repeatable source worktree directories (`--from` in `collect`) and optional target coordinator root (`--workspace`). |
+| `--overwrite` / `--dry-run` / `--strict` / `--allow-empty` | `collect` | Overwrite differing coordinator slots, preview copies without writing, fail on missing slots, or allow zero found slots. |
+| `--provenance <path>` / `--verdict <v>` / `--file <path>` | `bundle-init` | Merge external provenance entries, supply an explicit verdict (`PASS\|FAIL\|BLOCKED`), and add repeatable verified file inputs. |
+| `--id-map <worker=id>` / `--handoffs <json>` / `--handoff <sender=msg>` | `bundle-init` | Map worker names to runtime IDs and inject handoff receipts from JSON or inline `sender=message` pairs. |
+| `--out <path>` | `bundle-init` | Write the initialized `<record.json>` to disk instead of printing only to stdout. |
 | `--integrity` | `verdict` | Parse `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` instead of a content verdict. |
-| `--allow-unaudited` | `bundle` | Opt out of the default `requireIntegrityAudit: true` gate. |
-| `--allow-non-passing` | `digest`, `bundle` | Allow Archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
-| `--allow-partial` | `digest`, `bundle` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
-| `--replace` | `bundle` | Allow overwriting an existing `lead/report.sources.json` bundle from a prior run. |
+| `--allow-unaudited` | `bundle`, `bundle-init` | Opt out of the default `requireIntegrityAudit: true` gate. |
+| `--allow-non-passing` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
+| `--allow-partial` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
+| `--replace` | `bundle`, `bundle-init` | Allow overwriting an existing `lead/report.sources.json` bundle or `--out` record file. |
 | `--predecessor <sha256>` | `bundle` | Require the existing `lead/report.sources.json` bundle's SHA-256 to match `<sha256>` before overwriting. |
 | `--keep-reports` | `prune` | Retain loose `specialist-<N>/report.md` files after `bundle` and `verify` succeed. |

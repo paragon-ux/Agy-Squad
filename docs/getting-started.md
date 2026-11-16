@@ -1,20 +1,20 @@
-# Getting started (Desktop IDE & CLI on POSIX / WSL2)
+# Getting started (Desktop IDE & CLI)
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux and WSL2**. It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows** (Node.js parity tested in CI on `ubuntu-latest`, `macos-latest`, and `windows-latest`; live host `agy` IDE/CLI execution verified on Linux/WSL2 with physical macOS/Windows `agy` gate tracked under [`L46`](plans/LEDGER.md)). It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
 
 ## Host and companion compatibility matrix
 
 | Layer | Requirement | Check command |
 | --- | --- | --- |
-| Operating system | Linux or WSL2 on Windows | `uname -a` |
+| Operating system | Linux, macOS, or Windows (Node 22/24 CI parity; live `agy` tested on Linux/WSL2) | `node -p "process.platform + ' ' + process.arch"` |
 | Node.js | `>= 22.0.0` | `node --version` |
-| Antigravity surface | Antigravity Desktop (IDE) with `/swarm` and/or `invoke_subagent` | Open Desktop IDE |
+| Antigravity surface | Antigravity Desktop (IDE) or CLI (`agy`) with `/swarm` and/or `invoke_subagent` | `agy --version` / Desktop IDE |
 | Agy-Context-Saver | `>= 2.0.1` (`PreToolUse` hook + `agy-context` CLI active) for live governed cohorts | `agy-context status` (or `agy-context setup`) |
 | RTK binary | `>= 1.1.0` (`rtk hook antigravity`, provisioned by `Agy-Context-Saver`) | `rtk --version` (or via `agy-context setup`) |
 | Documentation site (optional) | Python 3.11+ with pinned `zensical==0.0.74` for `npm run docs` (`zensical serve`) / `zensical build` (use `python3 -m zensical ...` if `zensical` is not on `PATH`) | `pip install "zensical==0.0.74" && zensical --version` |
 | Native permissions | Controlled by Desktop IDE approvals and `/swarm` / `/agents` | Review before launching workers |
 
-## 1. Install via NPX (Recommended — zero clone required)
+## 1. Install via NPX (Recommended, zero clone required)
 
 Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/plugins/agy-squad/mcp_config.json` (sweeping any duplicate global entry in `~/.gemini/config/mcp_config.json`), and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
 
@@ -38,7 +38,7 @@ npm test
 
 ## 2. Manual workspace MCP registration (optional)
 
-If you prefer not to use `agy-squad setup`, you can register `agy-squad` manually in `.agents/mcp_config.json` (or your IDE MCP config) using the absolute path from `command -v node`:
+If you prefer not to use `agy-squad setup`, you can register `agy-squad` manually in `.agents/mcp_config.json` (or your IDE MCP config) using the absolute path to your `node` binary (`command -v node` on POSIX, `(Get-Command node).Source` on Windows):
 
 ```json
 {
@@ -58,13 +58,13 @@ If you prefer not to use `agy-squad setup`, you can register `agy-squad` manuall
 }
 ```
 
-In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` and the `swarm-governance` skill (asking once upfront when `Flat` vs `Layered` topology is unspecified), or call `dispatch_squad` / `diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>` when targeting `invoke_subagent`. Enforce strict single-line verdicts and SHA-256 bundles with `node bin/agy-squad.mjs` (`dispatch`, `plan`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
+In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` and the `swarm-governance` skill (asking once upfront when `Flat` vs `Layered` topology is unspecified), or call `dispatch_squad` / `diagnose.mjs --print-dispatch <squadId> --parent-id <conversationId>` when targeting `invoke_subagent`. Enforce strict single-line verdicts and SHA-256 bundles with `node bin/agy-squad.mjs` (`plan`, `dispatch`, `collect`, `bundle-init`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
 
 ## 3. CLI Planner and Governance (`bin/agy-squad.mjs`)
 
 ![Six-step swarm lifecycle and dual-verdict gate](assets/swarm-lifecycle.svg)
 
-For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `bin/agy-squad.mjs` provides nine subcommands (`dispatch`, `plan`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`). Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in PR #5 ([`L17`, `L42`, `L43`](plans/LEDGER.md)).
+For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `bin/agy-squad.mjs` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`) subcommands. Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in PR #5 ([`L17`, `L42`, `L43`](plans/LEDGER.md)).
 
 ### Generate a `/swarm` plan and provenance scaffold
 
@@ -92,7 +92,7 @@ node bin/agy-squad.mjs plan \
    ```text
    READY scratch/agy-squad/squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
-3. The parent (or squad lead) inspects cited source lines and tests to verify correctness, writes a strict `Content Verdict: PASS` line in `lead/report.md` (bare `Verdict: PASS` is accepted only as a legacy alias), pairs with a flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN`), and runs `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
+3. The parent (or squad lead) runs `collect` for any `share`/`branch` copies, inspects cited source lines and tests to verify correctness, writes a strict `Content Verdict: PASS` line in `lead/report.md` (bare `Verdict: PASS` is accepted only as a legacy alias), pairs with a flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN`), and runs `node bin/agy-squad.mjs` (`verdict`, `fingerprint`, `bundle-init`, `inspect`, `digest`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
 4. Run `swarm status` or `manage_subagents` to inspect running worker models or stop active children ([Stopping agents](stopping-agents.md)).
 
 ## When to use Agy-Squad vs. alternatives
@@ -102,7 +102,7 @@ node bin/agy-squad.mjs plan \
 | **Antigravity native `/swarm`** | Native shared board, worktrees (`share`/`branch`), live model switching, and `swarm_monitor` | You want Agy-Squad (`swarm-governance` + `bin/agy-squad.mjs`) on top of `/swarm` for role separation, `Pointer-Over-Wire` disk pointers, and SHA-256 CI proof bundles | You only need ephemeral board coordination without deterministic bundles or strict verdict gates |
 | **Antigravity `/teamwork`** (or `/teamwork-preview`) | Autonomous multi-milestone campaigns with built-in wrapper, explorer, and semantic reviewer agents | You want proportional 2-to-3 agent cohorts in Desktop IDE or CLI, `<= 500` B receipts, SHA-256 evidence bundles, governed teardown, and integrated `self-diagnosis` + `pr-review` (`v1.4.0`) (see [Benchmarks](benchmarks.md)) | You want a long autonomous campaign with built-in LLM reviewer/auditor agents |
 | **Antigravity native subagents** (`invoke_subagent`) | Zero setup for ad hoc parallel tasks | You want a repeatable manifest, report-slot paths, receipt length enforcement, and bundle verification | You only need one quick ad hoc delegation |
-| **Claude Code / Codex subagents** | Native role files and parallel delegation inside those tools | Your workflow runs in Antigravity Desktop or CLI on POSIX / WSL2 | Your team works inside Claude Code or OpenAI Codex |
+| **Claude Code / Codex subagents** | Native role files and parallel delegation inside those tools | Your workflow runs in Antigravity Desktop or CLI on Linux, macOS, or Windows | Your team works inside Claude Code or OpenAI Codex |
 | **CrewAI / LangGraph / Microsoft Agent Framework** | General Python/TypeScript SDKs for building standalone multi-agent applications | You want a lightweight workspace harness without building an external orchestration service | You are building a standalone application, stateful graph, or multi-cloud agent service |
 
 ## Troubleshooting common issues

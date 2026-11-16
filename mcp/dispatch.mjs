@@ -34,7 +34,7 @@ function readManifest(root, filename, logicalRoot = root) {
   }
   const file = fs.realpathSync(candidate);
   assertWithinWorkspace(root, file);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   let manifest;
   try {
     if (!fs.fstatSync(fd).isFile()) {

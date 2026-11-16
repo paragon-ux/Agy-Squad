@@ -13,17 +13,17 @@ When launching `/swarm` and any of the four execution choices below are unspecif
       "question": "Which swarm topology should coordinate this run?",
       "is_multi_select": false,
       "options": [
-        "Flat — specialists report directly to the swarm coordinator (fewer coordination hops)",
-        "Layered — domain squad leads review specialists before reporting to the coordinator (isolates multi-domain syntheses)"
+        "Flat: specialists report directly to the swarm coordinator (fewer coordination hops)",
+        "Layered: domain squad leads review specialists before reporting to the coordinator (isolates multi-domain syntheses)"
       ]
     },
     {
       "question": "Which workspaceIsolation mode should workers use?",
       "is_multi_select": false,
       "options": [
-        "inherit — shared coordinator workspace (use for read-only audits or strictly disjoint scopeFiles)",
-        "share — isolated per-worker working copy sharing repository storage (use for concurrent edits)",
-        "branch — isolated clone per worker (use when independent git history/branches are required)"
+        "inherit: shared coordinator workspace (use for read-only audits or strictly disjoint scopeFiles)",
+        "share: isolated per-worker working copy sharing repository storage (use for concurrent edits)",
+        "branch: isolated clone per worker (use when independent git history/branches are required)"
       ]
     },
     {
@@ -38,8 +38,8 @@ When launching `/swarm` and any of the four execution choices below are unspecif
       "question": "Which model should spawned workers use?",
       "is_multi_select": false,
       "options": [
-        "(Recommended) Coordinator default — omit `model` / `--model` so workers inherit the active session model",
-        "Custom explicit model ID — inspect `swarm{action: \"models\"}` first and pin the chosen ID"
+        "(Recommended) Coordinator default: omit `model` / `--model` so workers inherit the active session model",
+        "Custom explicit model ID: inspect `swarm{action: \"models\"}` first and pin the chosen ID"
       ]
     }
   ]
@@ -48,7 +48,7 @@ When launching `/swarm` and any of the four execution choices below are unspecif
 
 ## Planner and Dispatch Commands
 
-`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad` — pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via `node bin/agy-squad.mjs` (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only).
+`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via `node bin/agy-squad.mjs` (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only).
 
 ### Manifest & Task Planning (`squad_planner` / `agy-squad plan`)
 

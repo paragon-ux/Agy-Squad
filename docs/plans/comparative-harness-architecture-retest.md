@@ -50,7 +50,7 @@ We establish a **5-Axis Quantitative Evaluation Rubric** (Token & Context Preser
    - 4.2 [Comprehensive 8-Harness Quantitative Scoring Matrix](#42-comprehensive-8-harness-quantitative-scoring-matrix)
    - 4.3 [Detailed Architectural Justifications across All 8 Harnesses](#43-detailed-architectural-justifications-across-all-8-harnesses)
 5. [Empirical Evidence & Protocol Tracing (R3)](#5-empirical-evidence--protocol-tracing-r3)
-   - 5.1 [Formal Mathematical Complexity Models ($O(N^2)$ vs $O(N \cdot |S|)$ vs $O(N)$)](#51-formal-mathematical-complexity-models-on2-vs-on-s-vs-on)
+   - 5.1 [Formal Mathematical Complexity Models ($O(N^2)$ vs $O(N \cdot |S|)$ vs $O(N)$)](#51-formal-mathematical-complexity-models-on2-vs-on-cdot-s-vs-on)
    - 5.2 [Empirical Protocol Telemetry & Head-to-Head Comparison](#52-empirical-protocol-telemetry--head-to-head-comparison)
    - 5.3 [Concrete Wire Protocol Trace Analysis: Verbatim Packet Comparison](#53-concrete-wire-protocol-trace-analysis-verbatim-packet-comparison)
    - 5.4 [Pointer-Over-Wire Grammar & Invariant Contracts](#54-pointer-over-wire-grammar--invariant-contracts)
@@ -90,7 +90,7 @@ Building reliable, scalable, and verifiable multi-agent software engineering sys
    Retention, Minimal Injected Bytes)             Sandboxes, L41 Clean Teardown)
 ```
 
-1. **Orchestration Expressiveness**: The flexibility to model arbitrary execution topologies—including non-linear cyclic graph loops, dynamic peer-to-peer runtime handoffs, map-reduce fan-outs, and zero-shot role decomposition.
+1. **Orchestration Expressiveness**: The flexibility to model arbitrary execution topologies, including non-linear cyclic graph loops, dynamic peer-to-peer runtime handoffs, map-reduce fan-outs, and zero-shot role decomposition.
 2. **Context & Token Preservation**: The ability to execute long-horizon, multi-agent tasks without saturating LLM context windows, exhausting vendor rate limits, inducing prompt-cache evictions, or diluting model attention.
 3. **Verifiability & Determinism**: The capacity to independently, algorithmically, and reproducibly prove that generated deliverables satisfy stated requirements, match declared inputs, maintain repository integrity, and leave zero untracked runtime pollution.
 
@@ -971,7 +971,7 @@ Agy-Squad occupies the **Pareto frontier** across three critical systems-enginee
 A rigorous architectural audit must identify where an architecture intentionally **yields** to alternative paradigms:
 
 ### 6.3.1. Yield Point 1: Hardware MicroVM Sandboxing & Block-Level Snapshots (Devin / Cognition Sol)
-- *Where Devin Excels*: Devin executes inside dedicated AWS Firecracker Linux KVM microVMs with Copy-on-Write (CoW) block storage snapshots. It can instantly revert entire virtual machine states—including OS-level package installations, kernel configuration changes, and active system daemons.
+- *Where Devin Excels*: Devin executes inside dedicated AWS Firecracker Linux KVM microVMs with Copy-on-Write (CoW) block storage snapshots. It can instantly revert entire virtual machine states, including OS-level package installations, kernel configuration changes, and active system daemons.
 - *Agy-Squad Yield Point*: Agy-Squad operates on the local host operating system (via Linux / WSL2). While it enforces strict path confinement, deny-by-default write settings, and process isolation, it shares the host OS kernel and cannot perform full-system microVM block rollbacks. For executing untrusted, potentially hostile arbitrary code, Devin's hardware virtualization is architecturally superior.
 
 ### 6.3.2. Yield Point 2: Arbitrary Cyclic Statecharts & Human-in-the-Loop Graphs (LangGraph)
@@ -979,7 +979,7 @@ A rigorous architectural audit must identify where an architecture intentionally
 - *Agy-Squad Yield Point*: Agy-Squad intentionally enforces **acyclic staged compilation** (`all_l1` lead stage followed by specialist cohorts). While this prevents runaway token spending and non-terminating loops, complex multi-turn workflows requiring dynamic feedback loops or iterative human intervention must be modeled as sequential staged cohorts rather than dynamic cyclic statecharts.
 
 ### 6.3.3. Yield Point 3: Zero-Configuration Onboarding & Ad-Hoc Ergonomics
-- *Where Claude Code & SWE-agent Excel*: Interactive software engineering harnesses—specifically Anthropic's **Claude Code** and Princeton's **SWE-agent**—outperform Agy-Squad in zero-overhead, ad-hoc terminal adoption and developer ergonomics. A developer can immediately initialize Claude Code or SWE-agent directly inside any ambient repository with zero prerequisite configuration, instant CLI evaluation, and interactive terminal loops. Key architectural strengths include:
+- *Where Claude Code & SWE-agent Excel*: Interactive software engineering harnesses, specifically Anthropic's **Claude Code** and Princeton's **SWE-agent**, outperform Agy-Squad in zero-overhead, ad-hoc terminal adoption and developer ergonomics. A developer can immediately initialize Claude Code or SWE-agent directly inside any ambient repository with zero prerequisite configuration, instant CLI evaluation, and interactive terminal loops. Key architectural strengths include:
   1. **Zero-Configuration Onboarding**: Requires no declarative task manifests, pre-allocated scratch directories, or environment daemon initialization before executing interactive commands.
   2. **Ad-Hoc Developer Ergonomics**: Developers can directly explore codebases, inspect test failures, and execute single-file hotfixes through a native interactive REPL with bounded diff inspection.
   3. **Direct Ambient Shell Access**: Commands execute directly in the developer's pre-existing shell without requiring custom socket multiplexers or WSL2/PTY bridge configurations.
@@ -1061,12 +1061,12 @@ To collect quantitative telemetry without manual intervention, the Multi-Agent P
 
 The canonical head-to-head empirical audit evaluates harness recall across six planted defects in `benchmarks/teamwork-vs-squad/fixture/`:
 
-1. **Needle 1 (`N1` - P1 Critical Security / DoS)**: `gateway.mjs:10` — `verifyWebhookSignature` calls `crypto.timingSafeEqual` without validating buffer length equality, throwing an unhandled `RangeError` crash DoS if signature length diverges.
-2. **Needle 2 (`N2` - P2 Reliability / Starvation)**: `gateway.mjs:25` — `checkRateLimit` updates the client timestamp before checking the request count, causing timestamp reset starvation and bypassing window expiration.
-3. **Needle 3 (`N3` - P2 Reliability / Data Loss)**: `gateway.mjs:40` — `processWebhookRequest` fails to validate the `X-Request-Id` header, permitting duplicate webhook processing and breaking idempotency contracts.
-4. **Needle 4 (`N4` - P1 Cross-Domain Protocol Mismatch)**: `gateway.mjs:43` vs. `worker.mjs:8` — Gateway emits events conforming to schema `"2.0"`, while Worker strictly rejects events not matching schema `"1.0"`.
-5. **Needle 5 (`N5` - P1 Protocol Unit Mismatch)**: `worker.mjs:12` vs. `config.json:4` — Worker interprets `maxClockSkew` in seconds while `config.json` specifies milliseconds ($300\text{s}$ vs $300\text{ms}$), permitting 5-minute replay attacks.
-6. **Needle 6 (`N6` - P1 Data Integrity / Off-by-One)**: `ledger.mjs:9-21` & `worker.mjs:16-28` — Ledger overwrite bug truncates historical transaction logs, combined with an off-by-one retry loop dropping failed events silently.
+1. **Needle 1 (`N1` - P1 Critical Security / DoS)**: `gateway.mjs:10`: `verifyWebhookSignature` calls `crypto.timingSafeEqual` without validating buffer length equality, throwing an unhandled `RangeError` crash DoS if signature length diverges.
+2. **Needle 2 (`N2` - P2 Reliability / Starvation)**: `gateway.mjs:25`: `checkRateLimit` updates the client timestamp before checking the request count, causing timestamp reset starvation and bypassing window expiration.
+3. **Needle 3 (`N3` - P2 Reliability / Data Loss)**: `gateway.mjs:40`: `processWebhookRequest` fails to validate the `X-Request-Id` header, permitting duplicate webhook processing and breaking idempotency contracts.
+4. **Needle 4 (`N4` - P1 Cross-Domain Protocol Mismatch)**: `gateway.mjs:43` vs. `worker.mjs:8`: Gateway emits events conforming to schema `"2.0"`, while Worker strictly rejects events not matching schema `"1.0"`.
+5. **Needle 5 (`N5` - P1 Protocol Unit Mismatch)**: `worker.mjs:12` vs. `config.json:4`: Worker interprets `maxClockSkew` in seconds while `config.json` specifies milliseconds ($300\text{s}$ vs $300\text{ms}$), permitting 5-minute replay attacks.
+6. **Needle 6 (`N6` - P1 Data Integrity / Off-by-One)**: `ledger.mjs:9-21` & `worker.mjs:16-28`: Ledger overwrite bug truncates historical transaction logs, combined with an off-by-one retry loop dropping failed events silently.
 
 ---
 

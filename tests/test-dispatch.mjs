@@ -224,10 +224,18 @@ try {
 
   const externalManifest = path.join(testDir, "outside.json");
   fs.writeFileSync(externalManifest, JSON.stringify(manifest));
-  fs.symlinkSync(externalManifest, path.join(workspace, "escape.json"), "file");
+  let escapeLinkCreated = false;
+  try {
+    fs.symlinkSync(externalManifest, path.join(workspace, "escape.json"), "file");
+    escapeLinkCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
   rejects({ squadId: "all_l1", manifestPath: externalManifest }, /inside the workspace/);
   rejects({ squadId: "all_l1", manifestPath: "../outside.json" }, /inside the workspace/);
-  rejects({ squadId: "all_l1", manifestPath: "escape.json" }, /inside the workspace/);
+  if (escapeLinkCreated) {
+    rejects({ squadId: "all_l1", manifestPath: "escape.json" }, /inside the workspace/);
+  }
   assert.match(payload({ squadId: "all_l1", manifestPath: " swarm-manifest.json " })[0].Prompt, /dispatch_squad/);
   const l1WithExplicitWs = handleDispatchSquad(
     { squadId: "all_l1", manifestPath: "swarm-manifest.json", workspace },
@@ -253,7 +261,7 @@ try {
   assert.match(noDefaultErr.content[0].text, /Pass 'workspace'/);
 
   const linkWs = path.join(testDir, "link-ws");
-  fs.symlinkSync(workspace, linkWs, "dir");
+  fs.symlinkSync(workspace, linkWs, os.platform() === "win32" ? "junction" : "dir");
   assert.equal(
     handleDispatchSquad({ squadId: "alpha", workspace: linkWs, manifestPath: "swarm-manifest.json" }, testDir).isError,
     undefined
@@ -265,13 +273,15 @@ try {
     ).isError,
     undefined
   );
-  assert.equal(
-    handleDispatchSquad(
-      { squadId: "all_l1", workspace: linkWs, manifestPath: path.join(linkWs, "escape.json") },
-      testDir
-    ).isError,
-    true
-  );
+  if (escapeLinkCreated) {
+    assert.equal(
+      handleDispatchSquad(
+        { squadId: "all_l1", workspace: linkWs, manifestPath: path.join(linkWs, "escape.json") },
+        testDir
+      ).isError,
+      true
+    );
+  }
 
   for (const badWs of ["", 123, null, manifestPath]) {
     const errRes = handleDispatchSquad({ squadId: "all_l1", workspace: badWs }, workspace);
@@ -282,8 +292,16 @@ try {
     /workspace must be a non-empty string/
   );
 
-  fs.symlinkSync(manifestPath, path.join(workspace, "internal.json"), "file");
-  assert.equal(payload({ squadId: "all_l1", manifestPath: "internal.json" }).length, 2);
+  let internalLinkCreated = false;
+  try {
+    fs.symlinkSync(manifestPath, path.join(workspace, "internal.json"), "file");
+    internalLinkCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (internalLinkCreated) {
+    assert.equal(payload({ squadId: "all_l1", manifestPath: "internal.json" }).length, 2);
+  }
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 # PR #3 Option B Remediation: Integrity-Role Separation and Host Enforcement
 
-**Status:** Proposed patch plan — not applied in this session
+**Status:** Proposed patch plan (not applied in this session)
 **Target:** `feat/squad-alignment` at `f2ad744a553f1a938ee8128a2f5d1dfad1d9a9b8`
 **Base:** `rebuild/wsl-dispatch` at `6708c35fabf3254ea8a8109c51511b7237fe6e28`
 **Governing review:** [`docs/reviews/pr3-squad-alignment-full-review.md`](../reviews/pr3-squad-alignment-full-review.md) (Revision 2, Addendum A)
@@ -54,7 +54,7 @@ The plan is deliberately split into **code patches** (P1–P6), **documentation/
 
 ---
 
-## 2. P1 — Strict verdict module
+## 2. P1: Strict verdict module
 
 ### 2.1 New file: `mcp/verdicts.mjs`
 
@@ -187,7 +187,7 @@ function readIntegrityReport(root, report, verifiedDirs) {
 
 ---
 
-## 3. P2 — Bundle lifecycle, hard block, target binding, retention
+## 3. P2: Bundle lifecycle, hard block, target binding, retention
 
 ### 3.1 New bundle record shape
 
@@ -439,7 +439,7 @@ function pruneReports(root, relative, acceptedHash) {
 
 ---
 
-## 4. P3 — Briefs: roles, warning, coverage
+## 4. P3: Briefs: roles, warning, coverage
 
 ### 4.1 Add the warning and role constants
 
@@ -513,7 +513,7 @@ Measure the real byte counts after applying the patch; do not guess. The budget 
 
 ---
 
-## 5. P4 — Dispatch: integrity target and deliverable
+## 5. P4: Dispatch: integrity target and deliverable
 
 In `defaultAdversarialSquad`, replace the current `expectedDeliverable` and instructions:
 
@@ -550,7 +550,7 @@ In `resolveFlatAdversarialSpecialist`, apply the same role and deliverable. In `
 
 ---
 
-## 6. P5 — CLI: one-shot dispatch and retention flag
+## 6. P5: CLI: one-shot dispatch and retention flag
 
 ### 6.1 `bin/agy-squad.mjs` dispatch command
 
@@ -613,7 +613,7 @@ Usage: fingerprint <file...> | inspect <record.json> | bundle <record.json> [--k
 
 ---
 
-## 7. P6 — Tests
+## 7. P6: Tests
 
 ### 7.1 New `tests/test-verdicts.mjs`
 
@@ -670,16 +670,16 @@ Add `node tests/test-verdicts.mjs` to the `test` script. Add a CLI dispatch test
 
 ---
 
-## 8. P7 — Documentation, skills, ledger, PR body
+## 8. P7: Documentation, skills, ledger, PR body
 
 ### 8.1 `docs/core-workflows.md`
 
 Replace the Stage 2/3 block with:
 
 ~~~markdown
-- **Stage 1 — Working Cohort (content).** The working lead is the reviewer and parent of its leaf agents. It writes a provisional `Content Verdict` after patrol. A content PASS is not final.
-- **Stage 2 — Independent Integrity Audit.** An independent integrity auditor (layered for layered cohorts, flat for flat) returns `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION` and records `Target Squad`, coverage, and evidence. The auditor does not approve content. `INTEGRITY VIOLATION` is a hard block and cannot be downgraded to an advisory.
-- **Stage 3 — Post-Audit Lead Re-Review and Acceptance.** After `CLEAN`, the working lead re-reviews the final artifacts, records `Post-Audit Re-Review: PASS <integrity-sha256>`, and issues the final `Content Verdict: PASS`. `bundleReports` requires both verdicts and the binding.
+- **Stage 1 (Working Cohort / content).** The working lead is the reviewer and parent of its leaf agents. It writes a provisional `Content Verdict` after patrol. A content PASS is not final.
+- **Stage 2 (Independent Integrity Audit).** An independent integrity auditor (layered for layered cohorts, flat for flat) returns `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION` and records `Target Squad`, coverage, and evidence. The auditor does not approve content. `INTEGRITY VIOLATION` is a hard block and cannot be downgraded to an advisory.
+- **Stage 3 (Post-Audit Lead Re-Review and Acceptance).** After `CLEAN`, the working lead re-reviews the final artifacts, records `Post-Audit Re-Review: PASS <integrity-sha256>`, and issues the final `Content Verdict: PASS`. `bundleReports` requires both verdicts and the binding.
 ~~~
 
 Remove the “adversarial `PASS` gate” language. Document the exact enums and the `Target Squad` field.
@@ -715,7 +715,7 @@ Update the PR #3 body to link this document and the review addendum; remove “0
 
 ---
 
-## 9. P8 — Host-boundary work not covered by these patches
+## 9. P8: Host-boundary work not covered by these patches
 
 These are real findings, but they cannot be closed by editing `mcp/` alone. Track them explicitly; do not claim them fixed.
 

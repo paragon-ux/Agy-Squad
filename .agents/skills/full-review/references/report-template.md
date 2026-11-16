@@ -2,7 +2,7 @@
 
 Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>` placeholder. Delete no mandatory section; use Not applicable with a reason where a section does not apply, and None identified within reviewed scope or Not assessed inside each triage bucket as the standard requires.
 
-**Formatting & Readability:** Keep reports scannable in plain prose and Markdown tables. Reserve backticks strictly for exact code identifiers, file paths, CLI flags, and commands—never wrap plain numbers, statuses (Closed, Open, PASS), or quoted sentences inside inline backticks or fenced code blocks inside table cells.
+**Formatting & Readability:** Keep reports scannable in plain prose and Markdown tables. Reserve backticks strictly for exact code identifiers, file paths, CLI flags, and commands; never wrap plain numbers, statuses (Closed, Open, PASS), or quoted sentences inside inline backticks or fenced code blocks inside table cells.
 
 ---
 
@@ -79,15 +79,15 @@ Narrative: `<what the trace establishes and what it does not>`
 
 ## 4. Category reviews
 
-### 4.1 `ARCH` — Architecture and contracts
+### 4.1 `ARCH`: Architecture and contracts
 
 - **Scope:** `<changed and unchanged artifacts examined>`
 - **Coverage:** `<Complete / Partial / Not reviewed; what remains>`
-- **P1 — high priority:** `<finding IDs or None identified within reviewed scope / Not assessed>`
-- **P2 — medium priority:** `<finding IDs or ...>`
-- **P3 — low priority:** `<finding IDs or ...>`
+- **P1 (high priority):** `<finding IDs or None identified within reviewed scope / Not assessed>`
+- **P2 (medium priority):** `<finding IDs or ...>`
+- **P3 (low priority):** `<finding IDs or ...>`
 - **Verification:** `<tests inspected/executed, CI, missing proof>`
-- **Verdict:** `<Changes required / No findings within reviewed scope / Incomplete / Not applicable>`
+- **Category Verdict:** `<Changes required / No findings within reviewed scope / Incomplete / Not applicable>`
 
 Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, and `DEP`.
 
@@ -100,13 +100,13 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 - **Findings:** `<IDs or None identified within reviewed scope / Not assessed>`
 - **Lead re-review after CLEAN:** `<who re-reviewed the final artifacts and the resulting content verdict>`
 - **Enforcement:** `<violation block, rejection/re-run, penalty or ledger record>`
-- **Verdict:** `<CLEAN / INTEGRITY VIOLATION / Not applicable>`
+- **Audit Outcome:** `<CLEAN / INTEGRITY VIOLATION / Not applicable>`
 
 ## 5. Findings
 
 ### 5.1 P0/P1/P2 finding records
 
-#### `<ID>` — `<title>` (`P1`, `Open (Pre-Remediation)`)
+#### `<ID>`: `<title>` (`P1`, `Open (Pre-Remediation)`)
 
 1. **Title, priority, status:** `<...>`
 2. **Contract provenance:** `<exact invariant / decision / contract / external norm>`
@@ -127,7 +127,7 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 
 ## 6. Cross-category root causes and remediation order
 
-- **Root cause 1:** `<description>` — `<categories and IDs>`
+- **Root cause 1:** `<description>` (`<categories and IDs>`)
 - **Remediation order:** `<ordered steps with dependencies and rationale>`
 
 ## 7. Overall disposition, Direction decision, and finding closure
@@ -143,8 +143,8 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 
 - **Decision question:** `<one sentence>`
 - **Role separation:** `<content owner / integrity auditor / lead re-review after CLEAN, or Not applicable>`
-- **Hard constraints:** `<constraint>` — `<citation>`
-- **Preferences:** `<preference>` — `<citation>`
+- **Hard constraints:** `<constraint>` (`<citation>`)
+- **Preferences:** `<preference>` (`<citation>`)
 
 | Option | Preserves | Costs / risks | Dependencies | Reversibility | Evidence for | Evidence against |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -188,13 +188,13 @@ Include only when cohorts were dispatched.
 | --- | --- | --- | --- | --- |
 | `<ID>` | `<cat>` | `<P#>` | `<status>` | `<evidence>` |
 
-## Appendix A — Verification record
+## Appendix A: Verification record
 
 | Check | Revision | Environment | Result | Evidence |
 | --- | --- | --- | --- | --- |
 | `<command>` | `<sha>` | `<OS/runtime>` | `<pass/fail/blocked>` | `<output/link>` |
 
-## Appendix B — Quoted evidence
+## Appendix B: Quoted evidence
 
 | EID / locator | Quote | Class | What it establishes |
 | --- | --- | --- | --- |

@@ -5,6 +5,17 @@ All notable changes to `Agy-Squad` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`/swarm` Slot Collection & Bundle Record Pre-Fill (`L44`, `bin/agy-squad.mjs`, `mcp/handoffs.mjs`)**: Added `agy-squad collect` (`collectReportSlots`) for deterministic `/swarm` `share`/`branch` report slot recovery and `agy-squad bundle-init` (`buildBundleRecordInit`) for `<bundle-record.json>` bundle record scaffolding and coordinator provenance substitution.
+- **Cross-Platform Installer, Lifecycle & Parity Hardening (`L46`, `L49`, `install.ps1`, `bin/agy-squad.mjs`, `plugin.json`, `scripts/install-register.mjs`, `mcp/dispatch.mjs`, `mcp/handoffs.mjs`, `mcp/planner.mjs`)**: Added dynamic `node.exe`/`pwsh` lookup in `install.ps1`, POSIX `command -v node` + quote-escaped shim fallback, dynamic `resolveProfilePaths()` (`AGY_TEST_PROFILE_DIR`), `MIN_AGY_CONTEXT_VERSION = "2.0.1"`, 4-skill completeness checks, non-fatal `agy-squad status` companion probes, strict CLI/`--help`/`--version` validation across `bin/agy-squad.mjs` and `scripts/install-register.mjs`, `plugin.json` metadata (`displayName`, `homepage`, `suggestedPrompts`; retaining `SQ-DEP-PLUGIN-LOGO` as an explicit non-blocking advisory per `antislop` R-23), safe descriptor opens (`O_NOFOLLOW`/`O_NONBLOCK`/`fstatSync`), and Windows/macOS path/case-insensitive `realpath` parity.
+- **Ecosystem Modifier & Governance Docs (`L47`, `L48`, `L50`, `.agents/skills/`, `docs/`, `scripts/release-preflight.mjs`)**: Added `swarm-governance/references/ecosystem-and-modifiers.md` (including `permissioned-github` non-blocking `gh` CI check guidance), synced docs, skills, briefs, and architecture SVGs (`collect`, `bundle-init`, `verdict`, `agy-context transcript list --parent <id> --lineage`, `query --id <id> --summary`, `export --parent <id> --sanitized`), expanded `release-preflight.mjs` (`plugin.json` `L49` fields, `pkg.bin` `./` strip, skill refs), and scoped `.github/workflows/{ci,docs}.yml` `push.branches` to `main`.
+
+### Fixed
+- **Verdict Section/Synthesis Guard (`mcp/verdicts.mjs`, `mcp/handoffs.mjs`)**: Excluded PR Review Standard Section 4 category-level `Verdict` lines (`Changes required`, `No findings within reviewed scope`, `Incomplete`, `Not applicable`) from strict top-level verdict parsing unless `PASS`/`FAIL`/`BLOCKED` is present, and reused `hasContentVerdictAttempt` in `buildBundleRecordInit` so conflicting/invalid Markdown-formatted verdicts fail closed instead of defaulting to `PASS`.
+- **CLI & Overlap Hardening (`bin/agy-squad.mjs`, `mcp/handoffs.mjs`, `mcp/planner.mjs`)**: Added `readRegularJsonFileSafe` (`O_NOFOLLOW`/`O_NONBLOCK`/`/proc/self/fd`) and pre-`isAbsolute` path trimming in `readJsonInput`, rejected `collect --record --squad` conflicts and `bundle-init --out` Windows drive-relative/bare `.json` stems, and normalized `./` prefixes in `scopesOverlap` for non-existent targets.
+
 ## [0.1.1] - 2026-11-15
 
 ### Fixed
