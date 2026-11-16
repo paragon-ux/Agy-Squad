@@ -478,17 +478,20 @@ try {
   );
 
   // SVC-004: partial prune failure reports removed/remaining cleanly and retry finishes removal
-  const spec2Dir = path.dirname(path.join(root, regSpec2));
-  fs.chmodSync(spec2Dir, 0o555);
+  const spec2FullPath = path.join(root, regSpec2);
+  const spec2Dir = path.dirname(spec2FullPath);
+  const isWin32 = process.platform === "win32";
+  // On POSIX, read-only directory blocks unlink (EACCES); on Windows NTFS, read-only file attribute blocks unlink (EPERM).
+  fs.chmodSync(isWin32 ? spec2FullPath : spec2Dir, isWin32 ? 0o444 : 0o555);
   let partialErr;
   try {
     pruneReports(root, regBundle, regBundled2.sha256);
   } catch (err) {
     partialErr = err;
   } finally {
-    fs.chmodSync(spec2Dir, 0o755);
+    fs.chmodSync(isWin32 ? spec2FullPath : spec2Dir, isWin32 ? 0o666 : 0o755);
   }
-  assert.ok(partialErr, "Expected partial prune permission error when specialist 2 directory is read-only");
+  assert.ok(partialErr, "Expected partial prune permission error when specialist 2 report cannot be unlinked");
   assert.deepEqual(partialErr.removed, [regSpec1]);
   assert.deepEqual(partialErr.remaining, [regSpec2]);
   const retryPruned = pruneReports(root, regBundle, regBundled2.sha256);
