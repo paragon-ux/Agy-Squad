@@ -481,10 +481,18 @@ try {
   const spec2FullPath = path.join(root, regSpec2);
   const spec2Dir = path.dirname(spec2FullPath);
   const isWin32 = process.platform === "win32";
-  // On POSIX, read-only directory blocks unlink (EACCES). On Windows NTFS, libuv strips file-level READONLY before unlink, so deny DELETE ACL via icacls instead.
+  // On POSIX, read-only directory blocks unlink (EACCES). On Windows NTFS, libuv clears READONLY on unlink and ACL denies affect open/stat differently, so simulate EPERM on target unlink cleanly.
+  let origUnlinkSync = null;
   if (isWin32) {
-    const denyRes = spawnSync("icacls", [spec2FullPath, "/deny", "*S-1-1-0:(D)"], { encoding: "utf8" });
-    assert.equal(denyRes.status, 0, denyRes.stderr || denyRes.stdout);
+    origUnlinkSync = fs.unlinkSync;
+    fs.unlinkSync = (targetPath, ...rest) => {
+      if (path.resolve(String(targetPath)) === path.resolve(spec2FullPath)) {
+        const err = new Error(`EPERM: operation not permitted, unlink '${targetPath}'`);
+        err.code = "EPERM";
+        throw err;
+      }
+      return origUnlinkSync.call(fs, targetPath, ...rest);
+    };
   } else {
     fs.chmodSync(spec2Dir, 0o555);
   }
@@ -495,7 +503,7 @@ try {
     partialErr = err;
   } finally {
     if (isWin32) {
-      spawnSync("icacls", [spec2FullPath, "/remove:d", "*S-1-1-0"], { encoding: "utf8" });
+      fs.unlinkSync = origUnlinkSync;
     } else {
       fs.chmodSync(spec2Dir, 0o755);
     }
