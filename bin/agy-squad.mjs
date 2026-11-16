@@ -275,11 +275,21 @@ function parseSubcommandArgs(rest, usageLine, options = {}) {
 }
 
 async function main(args) {
-  if (!args.length || args[0] === "--help" || args[0] === "-h") {
+  if (!args.length) {
+    console.log(usage);
+    return 0;
+  }
+  if (args[0] === "--help" || args[0] === "-h") {
+    if (args.length > 1) {
+      throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
+    }
     console.log(usage);
     return 0;
   }
   if (args[0] === "--version" || args[0] === "-v") {
+    if (args.length > 1) {
+      throw new Error("Conflicting flags: --version cannot be combined with operational flags or arguments.");
+    }
     console.log(pkgVersion);
     return 0;
   }

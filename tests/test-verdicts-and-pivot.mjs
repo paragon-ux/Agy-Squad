@@ -335,10 +335,15 @@ try {
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
     assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);
   }
-  // SQ-DEP-007: --help combined with operational flags/args must fail closed
-  for (const badHelp of [["setup", "--check", "--help"], ["plan", "--help", "--manifest", "m.json"]]) {
+  // SQ-DEP-007: --help and --version combined with operational flags/args must fail closed
+  for (const badHelp of [
+    ["--help", "--bogus"],
+    ["--version", "--bogus"],
+    ["setup", "--check", "--help"],
+    ["plan", "--help", "--manifest", "m.json"]
+  ]) {
     const helpConflict = runCliFail(badHelp);
-    assert.notEqual(helpConflict.status, 0, `Expected conflicting --help failure for ${badHelp.join(" ")}`);
+    assert.notEqual(helpConflict.status, 0, `Expected conflicting --help/--version failure for ${badHelp.join(" ")}`);
     assert.match(helpConflict.stderr, /Conflicting flags/);
   }
 
