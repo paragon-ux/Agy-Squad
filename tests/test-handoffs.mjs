@@ -481,15 +481,24 @@ try {
   const spec2FullPath = path.join(root, regSpec2);
   const spec2Dir = path.dirname(spec2FullPath);
   const isWin32 = process.platform === "win32";
-  // On POSIX, read-only directory blocks unlink (EACCES); on Windows NTFS, read-only file attribute blocks unlink (EPERM).
-  fs.chmodSync(isWin32 ? spec2FullPath : spec2Dir, isWin32 ? 0o444 : 0o555);
+  // On POSIX, read-only directory blocks unlink (EACCES). On Windows NTFS, libuv strips file-level READONLY before unlink, so deny DELETE ACL via icacls instead.
+  if (isWin32) {
+    const denyRes = spawnSync("icacls", [spec2FullPath, "/deny", "*S-1-1-0:(D)"], { encoding: "utf8" });
+    assert.equal(denyRes.status, 0, denyRes.stderr || denyRes.stdout);
+  } else {
+    fs.chmodSync(spec2Dir, 0o555);
+  }
   let partialErr;
   try {
     pruneReports(root, regBundle, regBundled2.sha256);
   } catch (err) {
     partialErr = err;
   } finally {
-    fs.chmodSync(isWin32 ? spec2FullPath : spec2Dir, isWin32 ? 0o666 : 0o755);
+    if (isWin32) {
+      spawnSync("icacls", [spec2FullPath, "/remove:d", "*S-1-1-0"], { encoding: "utf8" });
+    } else {
+      fs.chmodSync(spec2Dir, 0o755);
+    }
   }
   assert.ok(partialErr, "Expected partial prune permission error when specialist 2 report cannot be unlinked");
   assert.deepEqual(partialErr.removed, [regSpec1]);
