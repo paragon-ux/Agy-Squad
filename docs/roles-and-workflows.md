@@ -84,10 +84,10 @@ Running `node bin/agy-squad.mjs bundle` and `verify` confirms **file integrity (
 3. **`manage_task(Action='list')`:** Confirm `No background tasks are currently running.` (catches any lingering `schedule` daemon cron or timer).
 4. **Child commands ([Stopping agents](stopping-agents.md)):** Confirm any dev servers, builds, or watchers started by agents exited cleanly.
 
-### Why checklist now vs. hook enforcement after Spike `S5`
+### Current hook boundary vs. Spike `S5`
 
-- **Current hook coverage (`V-02` in [native-enforcement-ledger.md](plans/native-enforcement-ledger.md)):** `~/.gemini/config/hooks.json` registers `PreToolUse` on file and shell tools (`run_command`, `view_file`, `manage_task`, `schedule`, etc.), not on `swarm`, `post_message`, or agent exit events. Workspace-local `.agents/hooks.json` discovery is unverified (`Spike S5`).
-- **Planned graduation path (`V-07`, `S5`, `NE-04`):** Antigravity SDK `V-07` exposes Python SDK callbacks (`StopHook`, `PostToolCallHook`, `PreTurnHook`) for SDK-driven runs (`Plane A`), whereas Desktop IDE hook JSON (`Plane B`: `.agents/hooks.json` or plugin hooks using `PreToolUse` / `PostToolUse` naming) remains unverified (`Spike S5`). Until `Spike S5` verifies Desktop IDE hook firing on non-shell tools, do not conflate Python SDK `StopHook`/`PostToolCallHook` APIs with live IDE enforcement; if `Spike S5` succeeds, those planes may graduate the 4-check closure gate out of advisory prompt checklists.
+- **Current live hook coverage (`V-02`, `V-11` in [native-enforcement-ledger.md](plans/native-enforcement-ledger.md)):** Global `~/.gemini/config/hooks.json` currently limits its `PreToolUse` matcher to file, shell, and task tools (`run_command`, `view_file`, `read_file`, `manage_task`, `schedule`, etc.), so live `swarm`, `post_message`, and agent exit events remain governed by the active closure checklist above.
+- **Spike `S5` findings (`agy 1.5.9` CLI, 2026-11-16):** Controlled probes on `agy 1.5.9` CLI (`"matcher": "*"`) confirmed that workspace `.agents/hooks.json` and global `~/.gemini/config/hooks.json` propagate `SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`, and `Stop` to both `invoke_subagent` children and `/swarm` workers (with `PreToolUse` `deny` blocking `invoke_subagent` and worker `post_message`), whereas plugin `hooks.json` does **not** fire inside `/swarm` workers. Reusable `Agy-Squad` `.agents/hooks.json` enforcement gates and Desktop IDE verification remain pending before removing the advisory closure checklist.
 
 ## 4. Scaling swarms, custom role configurations, and limits
 

@@ -428,7 +428,7 @@ function computeEvidenceDigest(root, record) {
   validateSquadId(squadId);
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs);
+  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
   const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(
@@ -485,7 +485,7 @@ function ensureDirectory(root, relative, created = [], verifiedDirs) {
   return directory;
 }
 
-function inspectReports(root, record, verifiedDirs = new Set()) {
+function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnNoReport = false } = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
@@ -495,7 +495,12 @@ function inspectReports(root, record, verifiedDirs = new Set()) {
   const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
-    const bytes = status === "READY" || status === "PARTIAL" ? readEvidence(root, report, verifiedDirs) : undefined;
+    let bytes;
+    if (status === "READY" || status === "PARTIAL") {
+      bytes = readEvidence(root, report, verifiedDirs);
+    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(root, report, verifiedDirs)) {
+      throw new Error(`Unexpected loose file present at NO_REPORT slot: ${report}`);
+    }
     return { conversationId, report, status, bytes };
   });
 }
@@ -556,7 +561,7 @@ function bundleReports(root, record) {
   }
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs);
+  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
   const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(

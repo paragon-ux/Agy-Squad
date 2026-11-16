@@ -16,7 +16,7 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 
 ## 1. Install via NPX (Recommended — zero clone required)
 
-Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/mcp_config.json`, and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
+Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/plugins/agy-squad/mcp_config.json` (sweeping any duplicate global entry in `~/.gemini/config/mcp_config.json`), and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
 
 ```bash
 npx --package=agy-squad agy-squad setup

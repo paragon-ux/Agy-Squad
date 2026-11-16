@@ -573,6 +573,51 @@ try {
   write(failBundled.path, JSON.stringify(failBundleJson, null, 2) + "\n");
   assert.throws(() => verifyBundle(root, failBundled.path), /PASS verdict/);
 
+  // Digesting or bundling NO_REPORT with an unexpected loose file on disk must fail upfront before verifyBundle
+  write(failSpec2, "# Unexpected stale file\nShould not exist at NO_REPORT slot.\n");
+  assert.deepEqual(inspectHandoffs(root, failRecord).map(({ status }) => status), ["PARTIAL", "NO_REPORT"]);
+  assert.throws(() => bundleReports(root, { ...failRecord, integrityReport: failAudit, allowNonPassing: true, allowPartial: true }), /Unexpected loose file present at NO_REPORT slot/);
+  const staleDigestCli = spawnSync(process.execPath, [agySquadCli, "digest", "fail-record.json", "--allow-non-passing", "--allow-partial"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.notEqual(staleDigestCli.status, 0);
+  assert.match(staleDigestCli.stderr, /Unexpected loose file present at NO_REPORT slot/);
+  fs.rmSync(path.join(root, failSpec2), { force: true });
+
+  // BLOCKED verdict + PARTIAL specialist with --allow-non-passing --allow-partial roundtrips cleanly
+  const blockedRoot = "scratch/agy-squad-blocked";
+  const blkSpec1 = reportPath("blk_squad", 1, blockedRoot);
+  const blkLead = reportPath("blk_squad", undefined, blockedRoot);
+  const blkAudit = reportPath("integrity_auditor-blk_squad", 1, blockedRoot);
+  write(blkSpec1, "# Partial Blk\nUpstream auth outage.\n");
+  write(blkLead, "Content Verdict: BLOCKED\nMissing required credentials.\n");
+  const blockedRecord = {
+    workspace: root,
+    reportRoot: blockedRoot,
+    squadId: "blk_squad",
+    verdict: "BLOCKED",
+    verifiedFiles: regBaseRecord.verifiedFiles,
+    assignments: [{ conversationId: "b-1", report: blkSpec1 }],
+    handoffs: [{ sender: "b-1", message: `PARTIAL ${blkSpec1} — Blocked on missing creds.` }]
+  };
+  write("blocked-record.json", JSON.stringify(blockedRecord));
+  const blkDigestCli = spawnSync(process.execPath, [agySquadCli, "digest", "blocked-record.json", "--allow-non-passing", "--allow-partial"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.equal(blkDigestCli.status, 0, blkDigestCli.stderr);
+  const blkDigest = JSON.parse(blkDigestCli.stdout).evidenceDigest;
+  write(blkAudit, `Target Squad: blk_squad\nEvidence Digest: ${blkDigest}\nIntegrity Verdict: CLEAN\nVerified blocked bundle.\n`);
+  const blkBundleCli = spawnSync(process.execPath, [agySquadCli, "bundle", "blocked-record.json", "--allow-non-passing", "--allow-partial"], {
+    cwd: root,
+    encoding: "utf8"
+  });
+  assert.equal(blkBundleCli.status, 0, blkBundleCli.stderr);
+  const blkBundled = JSON.parse(blkBundleCli.stdout);
+  const blkVerifiedCli = spawnSync(process.execPath, [agySquadCli, "verify", blkBundled.path], { cwd: root, encoding: "utf8" });
+  assert.equal(blkVerifiedCli.status, 0, blkVerifiedCli.stderr);
+
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

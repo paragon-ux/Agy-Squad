@@ -486,6 +486,64 @@ console.log("Agy-Squad MCP server tests\n");
     ]);
     assert.equal(multiRootAmbiguous[1].result.isError, true);
     assert.match(multiRootAmbiguous[1].result.content[0].text, /Ambiguous multi-root workspace/);
+
+    // SQ-MCP-001 defaultManifests parity: omitted manifestPath matches swarm-manifest.json on secondary root & rejects ambiguity
+    const swarmDefaultManifest = {
+      squads: {
+        alpha: {
+          lead: { role: "Lead", objective: "Synthesize", scopeFiles: ["a"] },
+          specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["a"] }]
+        }
+      }
+    };
+    fs.writeFileSync(path.join(dupManifestRoot, "swarm-manifest.json"), JSON.stringify(swarmDefaultManifest));
+    const omittedDefaultHit = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(emptySecondary).href, name: "empty" },
+            { uri: pathToFileURL(dupManifestRoot).href, name: "swarm-default" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "dispatch_squad", arguments: { squadId: "all_l1" } }
+      }
+    ]);
+    assert.equal(Boolean(omittedDefaultHit[1].result.isError), false, omittedDefaultHit[1].result.content[0].text);
+    const compiledDefault = JSON.parse(omittedDefaultHit[1].result.content[0].text);
+    assert.equal(compiledDefault.Subagents[0].Role, "Lead");
+
+    fs.writeFileSync(path.join(emptySecondary, "task-01-manifest.json"), JSON.stringify(swarmDefaultManifest));
+    const omittedDefaultDup = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(emptySecondary).href, name: "first-default" },
+            { uri: pathToFileURL(dupManifestRoot).href, name: "second-default" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "dispatch_squad", arguments: { squadId: "all_l1" } }
+      }
+    ]);
+    assert.equal(omittedDefaultDup[1].result.isError, true);
+    assert.match(omittedDefaultDup[1].result.content[0].text, /Ambiguous multi-root workspace/);
   } finally {
     fs.rmSync(emptySecondary, { recursive: true, force: true });
     fs.rmSync(dupManifestRoot, { recursive: true, force: true });

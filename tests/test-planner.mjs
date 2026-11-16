@@ -665,6 +665,23 @@ try {
     // SQ-MCP-002: Subagent provenance and integrity briefs must not mention retired read_transcript / query_transcript
     const subProvPlan = planSquadCohort({ task: "Check provenance", executionMode: "subagent" }, root);
     assert.doesNotMatch(JSON.stringify(subProvPlan), /query_transcript|read_transcript/);
+
+    // SQ-RUN-007: Planner preserves resolveIntegrityAuditor warning when custom integrity_auditor defines a lead alongside specialists
+    const customAuditWarnPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          work: { specialists: [{ role: "Worker", objective: "Audit", scopeFiles: ["a"] }] },
+          integrity_auditor: {
+            lead: { role: "Ignored Audit Lead", objective: "Lead", scopeFiles: ["a"] },
+            specialists: [{ role: "Audit Spec", objective: "Audit traces", scopeFiles: ["a"] }]
+          }
+        }
+      }
+    }, root);
+    assert.ok(
+      customAuditWarnPlan.warnings.some(w => /Custom 'integrity_auditor' lead is ignored/.test(w)),
+      `Expected SQ-RUN-007 integrity_auditor lead warning, got: ${JSON.stringify(customAuditWarnPlan.warnings)}`
+    );
   } finally {
     fs.rmSync(linkRoot, { recursive: true, force: true });
     fs.rmSync(altDir, { recursive: true, force: true });

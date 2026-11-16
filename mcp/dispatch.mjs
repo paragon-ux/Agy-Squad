@@ -336,6 +336,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
 
 export {
   assertWithinWorkspace,
+  defaultManifests,
   formatNotFoundError,
   handleDispatchSquad,
   loadSquads,

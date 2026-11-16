@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleDispatchSquad } from "./dispatch.mjs";
+import { defaultManifests, handleDispatchSquad } from "./dispatch.mjs";
 import { handleSquadPlanner } from "./planner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -73,13 +73,17 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
     }
   }
   if (sessionWorkspaces.length > 1 && args?.manifestPath === undefined && args?.manifest === undefined && args?.task === undefined) {
-    const defaultCandidates = [".agents/squads.json", ".agents/squad-manifest.json"];
     const matching = sessionWorkspaces.filter((root) =>
-      defaultCandidates.some((rel) => {
+      defaultManifests.some((rel) => {
         try { return fs.existsSync(path.join(root, rel)); } catch { return false; }
       })
     );
     if (matching.length === 1) return matching[0];
+    if (matching.length > 1) {
+      throw new Error(
+        `Ambiguous multi-root workspace: default manifest found in multiple roots (${matching.join(", ")}). Pass 'workspace' or 'manifestPath' explicitly.`
+      );
+    }
   }
   return sessionWorkspaces[0] || envWorkspace || process.cwd();
 }

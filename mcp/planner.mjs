@@ -566,11 +566,13 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
     };
   }
 
+  const auditWarnings = [];
   const integrityAuditPlan = includeIntegrityAuditor
     ? targetWorkingIds.flatMap(id => {
         const auditSpecs = resolveIntegrityAuditor(
           loadedSquads,
-          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined
+          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined,
+          auditWarnings
         );
         const compiledAudits = auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
@@ -633,7 +635,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
   }
 
   const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root);
-  const warnings = [];
+  const warnings = [...new Set(auditWarnings)];
   if (scopeOverlaps.length > 0 && workspaceIsolation === "inherit") {
     warnings.push(
       `Detected ${scopeOverlaps.length} writable sibling scopeFiles overlap(s) with workspaceIsolation='inherit'; split scopeFiles across workers or use executionMode='swarm' with workspaceIsolation='share'.`

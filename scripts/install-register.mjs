@@ -5,7 +5,7 @@
  * Zero-clone cross-platform installer for Google Antigravity:
  * - Links or installs native plugin into ~/.gemini/config/plugins/agy-squad
  * - Links plugin skills (skills -> .agents/skills) for Antigravity discovery
- * - Registers agy-squad MCP server in ~/.gemini/config/mcp_config.json (preserving foreign servers)
+ * - Registers agy-squad MCP server in ~/.gemini/config/plugins/agy-squad/mcp_config.json and sweeps duplicate global ~/.gemini/config/mcp_config.json entries
  * - Enables agy-squad plugin in ~/.gemini/config/config.json
  * - Provisions executable agy-squad CLI shims in ~/.gemini/antigravity/bin/
  */
@@ -138,7 +138,7 @@ export function detectExistingInstallation() {
   try {
     if (fs.existsSync(antigravityMcpRootDir)) {
       for (const entry of fs.readdirSync(antigravityMcpRootDir)) {
-        if (entry === PLUGIN_KEY) {
+        if (entry === PLUGIN_KEY || entry.startsWith(`${PLUGIN_KEY}_`)) {
           details.mcp.globalDuplicate = true;
           details.mcp.staleSchemaCount += 1;
         }
@@ -262,10 +262,10 @@ export function formatWindowsCmdShim(targetRoot) {
     "@echo off",
     "setlocal",
     "where node >nul 2>nul",
-    "if %errorlevel% equ 0 (",
-    `  node "${winTarget}" %*`,
-    "  exit /b %errorlevel%",
-    ")",
+    "if errorlevel 1 goto :fallback",
+    `node "${winTarget}" %*`,
+    "exit /b %errorlevel%",
+    ":fallback",
     `"${process.execPath}" "${winTarget}" %*`,
     "exit /b %errorlevel%",
     ""

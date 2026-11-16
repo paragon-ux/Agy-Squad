@@ -129,12 +129,41 @@ try {
   assert.match(disabledStatus.stdout, /DISABLED/);
   fs.writeFileSync(cfgPath, JSON.stringify(installedCfg, null, 2) + "\n");
 
-  // SQ-DEP-004: Copy fallback replaces prior install cleanly & Windows .cmd shim propagates errorlevel
-  const { runInstall: runAgySquadInstall, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  // SQ-DEP-004: Copy fallback replaces prior install cleanly & Windows .cmd shim propagates errorlevel without cmd parse-time bugs
+  const { runInstall: runAgySquadInstall, detectExistingInstallation, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  const staleSchemaSubdir = path.join(mcpRootDir, "agy-squad_dup_probe");
+  fs.mkdirSync(staleSchemaSubdir, { recursive: true });
+  try {
+    const staleDetected = detectExistingInstallation();
+    assert.equal(staleDetected.details.mcp.globalDuplicate, true, "detectExistingInstallation must flag agy-squad_* schema directories");
+    assert.ok(staleDetected.details.mcp.staleSchemaCount >= 1);
+  } finally {
+    fs.rmSync(staleSchemaSubdir, { recursive: true, force: true });
+  }
+
   const cmdShimText = formatWindowsCmdShim(pluginDir);
   assert.match(cmdShimText, /setlocal/);
   assert.match(cmdShimText, /where node/);
+  assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
+  assert.match(cmdShimText, /:fallback/);
   assert.match(cmdShimText, /exit \/b %errorlevel%/);
+  assert.doesNotMatch(cmdShimText, /if %errorlevel% equ 0 \(/i);
+
+  if (os.platform() === "win32") {
+    const winShimRoot = path.join(tmpProfile, "win-shim-exec");
+    fs.mkdirSync(path.join(winShimRoot, "bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(winShimRoot, "bin", "agy-squad.mjs"),
+      "process.exit(Number(process.argv[2] || 0));\n"
+    );
+    const winShimPath = path.join(tmpProfile, "agy-squad-test.cmd");
+    fs.writeFileSync(winShimPath, formatWindowsCmdShim(winShimRoot));
+    const okRun = spawnSync("cmd.exe", ["/d", "/c", winShimPath, "0"], { encoding: "utf8" });
+    assert.equal(okRun.status, 0, okRun.stderr || okRun.stdout);
+    const errRun = spawnSync("cmd.exe", ["/d", "/c", winShimPath, "7"], { encoding: "utf8" });
+    assert.equal(errRun.status, 7, `Expected Windows .cmd shim to propagate exit code 7, got ${errRun.status}`);
+  }
+
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
   fs.writeFileSync(path.join(pluginDir, "stale-old-file.txt"), "stale");
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
