@@ -64,11 +64,11 @@ For each category include:
 
 1. **Scope:** changed files and relevant unchanged dependencies examined.
 2. **Coverage:** complete, partial, or not reviewed; specify what remains.
-3. **P1 — high priority:** independently triaged blocking findings, or an explicit empty/unassessed statement.
-4. **P2 — medium priority:** independently triaged actionable findings, or an explicit empty/unassessed statement.
-5. **P3 — low priority:** independently triaged advisory findings, or an explicit empty/unassessed statement.
+3. **P1 (high priority):** independently triaged blocking findings, or an explicit empty/unassessed statement.
+4. **P2 (medium priority):** independently triaged actionable findings, or an explicit empty/unassessed statement.
+5. **P3 (low priority):** independently triaged advisory findings, or an explicit empty/unassessed statement.
 6. **Verification:** tests inspected, tests executed, CI evidence inspected, and missing proof.
-7. **Verdict:** changes required, no findings within reviewed scope, incomplete, or not applicable with a reason.
+7. **Category Verdict:** changes required, no findings within reviewed scope, incomplete, or not applicable with a reason.
 
 Every category must contain all three triage headings, even when a bucket is empty. For reviewed scope, write "None identified within reviewed scope"; for unreviewed scope, write "Not assessed." Do not equate an empty bucket with complete coverage. Order findings by severity within their owning category. Classify each finding from its impact and trigger; do not copy priority from a previous review automatically.
 
@@ -80,9 +80,9 @@ A category with findings and partial coverage records both facts. "Not applicabl
 
 Enforce a strict **`1 ID = 1 Row / Record`** and **zero lead/bundle compression or silent omission** rule: assign one stable ID per independently remediable problem (e.g., `MCP-001`) and preserve IDs across revisions. Because `node bin/agy-squad.mjs prune` (via `mcp/handoffs.mjs`) removes specialist reports and `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-<id>/lead/report.md` (`L41`), the `docs/reviews/` report is the sole surviving record; compressing findings into multi-defect umbrella IDs (`R5-HARDEN-P3-1`, `R5-OPT-P3-1`), range-compressed IDs (`TEST-2..4`), or multi-ID combined rows (`A & B`), or silently omitting deferred/residual items, is prohibited because it prevents distinguishing solved defects from hidden ones. Only duplicate reports of the exact same underlying defect are merged into one canonical ID (cross-referencing the duplicate report alias in parentheses per Section 3).
 
-**Report readability & backtick discipline:** Keep review reports scannable in plain prose and Markdown tables. Reserve inline backticks strictly for exact code identifiers, file paths (`path#L10-L20`), CLI flags, and commands—never wrap plain numbers (`0`, `1`, `42`), English statuses/disposition labels (Closed, Open, Changes required, PASS), or multi-sentence quotations inside inline backticks or fenced code blocks inside prose or table cells. Use fenced code blocks sparingly for multi-line command invocations or exact diff hunks only.
+**Report readability & backtick discipline:** Keep review reports scannable in plain prose and Markdown tables. Reserve inline backticks strictly for exact code identifiers, file paths (`path#L10-L20`), CLI flags, and commands; never wrap plain numbers (`0`, `1`, `42`), English statuses/disposition labels (Closed, Open, Changes required, PASS), or multi-sentence quotations inside inline backticks or fenced code blocks inside prose or table cells. Use fenced code blocks sparingly for multi-line command invocations or exact diff hunks only.
 
-Every surfaced `P0`–`P3` item must carry one explicit canonical status: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` (with `Informational` permitted for non-defect observations in Section 8). Section 8 is the mandatory sink for all `Residual (Open)` / `Closed (Post-Remediation)`, `Deferred / Won't Fix`, and `Closed (By Design)` / `Informational` items—never bury them inside a `Closed` row's prose or omit them.
+Every surfaced `P0`–`P3` item must carry one explicit canonical status: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` (with `Informational` permitted for non-defect observations in Section 8). Section 8 is the mandatory sink for all `Residual (Open)` / `Closed (Post-Remediation)`, `Deferred / Won't Fix`, and `Closed (By Design)` / `Informational` items; never bury them inside a `Closed` row's prose or omit them.
 
 Tiered record density (instead of row compression):
 
@@ -147,7 +147,7 @@ Re-review each fix in its primary category and all affected categories. A fix co
 5. Cross-category root causes and rationale for remediation order.
 6. Verification record and remaining gaps.
 7. Overall disposition and finding closure table.
-8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): atomic 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`) recording every advisory surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), `Deferred / Won't Fix` item, and `Closed (By Design)` / `Informational` item—never buried inside a `Closed` row's prose cell. Record `None (0 open residuals, 0 deferred items)` when empty.
+8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): atomic 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`) recording every advisory surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), `Deferred / Won't Fix` item, and `Closed (By Design)` / `Informational` item; never buried inside a `Closed` row's prose cell. Record `None (0 open residuals, 0 deferred items)` when empty.
 9. **`/self-diagnosis` Cohort & Bundle Ledger** (mandatory whenever `/self-diagnosis` cohorts are dispatched against the target branch/PR): one canonical **Cohort Provenance** table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) plus one atomic 1-ID-per-row **Wave Finding Ledger**, keeping `docs/reviews/` to one clean file per PR review cycle rather than bespoke per-wave sections or proliferating files.
 
 Keep local review reports under `docs/reviews/`. Cite the reviewed base and head, category coverage, findings, evidence and verdict in the PR. Identify the previous review when recording a follow-up.

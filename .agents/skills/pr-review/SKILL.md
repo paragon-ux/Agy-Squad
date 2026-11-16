@@ -1,7 +1,7 @@
 ---
 name: pr-review
 description: >-
-  [Task Spec — PR/branch diff & CI review; pair with swarm-governance on /swarm]
+  [Task Spec: PR/branch diff & CI review; pair with swarm-governance on /swarm]
   Use this skill when the user asks to perform, update, or verify a pull request
   or branch review in Agy-Squad. Enforces the Agy-Squad PR Review Standard
   (v1.4.0) with commit-pinned and session-pinned metadata, architecture-before-runtime
@@ -27,7 +27,7 @@ Conduct pull request and branch diff/CI reviews in `Agy-Squad`. For broad non-di
    - *Pointer-Over-Wire & Bundling:* `<= 500` UTF-8 byte single-line `READY`/`PARTIAL`/`NO_REPORT` grammar, custom `reportRoot` containment, atomic `publish()`, strict single-line verdicts (`mcp/verdicts.mjs`), default `requireIntegrityAudit: true` binding, and `bundle`/`verify`/`prune` SHA-256 verification.
    - *External MCP & CLI:* real stdio subprocesses and `node bin/agy-squad.mjs` (`plan|dispatch|collect|bundle-init|fingerprint|inspect|digest|bundle|verify|prune|verdict`) vs in-process calls.
 4. **Strict Content vs. Integrity Gate:** Never conflate content acceptance (`Approve` / `Request Changes` or `Content Verdict: PASS | FAIL | BLOCKED`) with the flat Integrity Auditor gate (`audit-<id>` in `/swarm` or `integrity_auditor[:<id>]` in `invoke_subagent`: `Integrity Verdict: CLEAN | INTEGRITY VIOLATION`; `adversarial_*` was retired in Phase 2). Only finalize `Approve` after `CLEAN` and post-remediation re-verification at the fixed revision.
-5. **1 ID = 1 Row Durability & Plain-Text Readability:** Assign one stable ID per independently remediable problem and one of the 6 canonical statuses (`Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`; `Informational` in Section 8 only). Zero compression or omission: `docs/reviews/<slug>.md` is the surviving durable ledger once `prune` / `--teardown` removes `scratch/`. Reserve inline backticks strictly for identifiers, file paths, flags, and commands—never wrap plain numbers, English statuses, or multi-sentence quotes in inline backticks or fenced code blocks inside prose or table cells.
+5. **1 ID = 1 Row Durability & Plain-Text Readability:** Assign one stable ID per independently remediable problem and one of the 6 canonical statuses (`Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`; `Informational` in Section 8 only). Zero compression or omission: `docs/reviews/<slug>.md` is the surviving durable ledger once `prune` / `--teardown` removes `scratch/`. Reserve inline backticks strictly for identifiers, file paths, flags, and commands; never wrap plain numbers, English statuses, or multi-sentence quotes in inline backticks or fenced code blocks inside prose or table cells.
 
 ---
 
@@ -41,8 +41,8 @@ If topology, workspace isolation, model, or retention options are unspecified, a
    - `Single-Agent Audit`: Direct trace by one reviewer.
    - On `/swarm`, confirm `workspaceIsolation` (`inherit` vs `share` vs `branch`) and model (coordinator default unless the user specifies otherwise).
 2. **Evidence Retention (`Scope 2` vs `Scope 3`):**
-   - `Scope 2 — Swarm bundle prune`: Pass `--keep-reports` to `node bin/agy-squad.mjs prune` to retain loose specialist reports in `scratch/agy-squad/squad-<id>/`, or omit to delete loose specialist files after SHA-256 bundling.
-   - `Scope 3 — Self-diagnosis teardown (L41)`: Delete completed `/self-diagnosis` directories (`diagnose.mjs --teardown`) once `docs/reviews/<slug>.md` is updated, or defer cleanup during active multi-wave triage.
+   - `Scope 2 (Swarm bundle prune)`: Pass `--keep-reports` to `node bin/agy-squad.mjs prune` to retain loose specialist reports in `scratch/agy-squad/squad-<id>/`, or omit to delete loose specialist files after SHA-256 bundling.
+   - `Scope 3 (Self-diagnosis teardown, L41)`: Delete completed `/self-diagnosis` directories (`diagnose.mjs --teardown`) once `docs/reviews/<slug>.md` is updated, or defer cleanup during active multi-wave triage.
 3. **Integrity Gate:** Confirm `Mandatory Flat Integrity Auditor Gate` (`audit-<id>` on `/swarm` or `integrity_auditor[:<id>]` on `invoke_subagent`).
 
 ### Step 1: Pin Review & Session Provenance

@@ -1,7 +1,7 @@
 ---
 name: self-diagnosis
 description: >-
-  [Task Spec — Agy-Squad self-audit & optimization; pair with swarm-governance on
+  [Task Spec: Agy-Squad self-audit & optimization; pair with swarm-governance on
   /swarm] Use when the user asks to self-diagnose, troubleshoot, audit, or
   optimize Agy-Squad or its workspace skills (.agents/skills/). Uses
   diagnose.mjs, squad_planner (or dispatch_squad for invoke_subagent), the

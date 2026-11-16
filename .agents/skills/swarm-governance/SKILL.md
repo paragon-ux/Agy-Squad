@@ -1,7 +1,7 @@
 ---
 name: swarm-governance
 description: >-
-  [Execution Modifier — pairs with /pr-review, /full-review, or /self-diagnosis on /swarm]
+  [Execution Modifier: pairs with /pr-review, /full-review, or /self-diagnosis on /swarm]
   Apply Agy-Squad governance, role separation, Pointer-Over-Wire reporting, and
   SHA-256 proof bundling on top of Antigravity native /swarm execution.
 ---

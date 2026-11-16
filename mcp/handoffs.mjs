@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -1054,6 +1054,9 @@ function collectReportSlots(root, options = {}) {
       throw new Error("Provide a valid bundle or handoff record.");
     }
     validateSquadId(record.squadId);
+    if (squadId !== undefined && squadId !== record.squadId) {
+      throw new Error(`Conflicting squad '${squadId}' for record squad '${record.squadId}'.`);
+    }
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix));
     for (const a of record.assignments ?? []) {
@@ -1324,7 +1327,7 @@ function buildBundleRecordInit(root, options = {}) {
         try {
           resolvedVerdict = parseContentVerdict(leadText);
         } catch (error) {
-          if (/(?:^|\n)\s*(?:Content\s+)?Verdict\s*:/im.test(leadText) || /^(?:PASS|FAIL|BLOCKED)\b/m.test(leadText)) {
+          if (hasContentVerdictAttempt(leadText)) {
             throw new Error(`Existing synthesis report '${leadSlot}' contains an invalid or conflicting verdict: ${error.message}`);
           }
         }

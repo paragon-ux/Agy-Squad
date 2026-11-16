@@ -53,6 +53,17 @@ function stripCode(markdown) {
     .replace(/(`+)([^\r\n]*?)\1/g, " ");
 }
 
+const CATEGORY_VERDICT_RE = /^(?:changes required|no findings within reviewed scope|incomplete|not applicable)\b/i;
+
+function isCategoryVerdictLine(line) {
+  const bareVerdictPrefix = /^\s*(?:(?:\d+[.)]|[-*+])(?:\s+|$)|#+\s+)?(?:[*_]{1,3})?\s*Verdict\s*(?:[*_]{1,3})?\s*:(.*)$/i;
+  const match = bareVerdictPrefix.exec(line);
+  if (!match) return false;
+  const rawVal = match[1].replace(/[*_]{1,3}/g, "").trim();
+  if (!CATEGORY_VERDICT_RE.test(rawVal)) return false;
+  return !/\b(?:PASS|FAIL|BLOCKED)\b/i.test(rawVal);
+}
+
 /**
  * Parse strict single-line verdict declarations of the form
  * `<Label>: <ALLOWED_TOKEN>` (with optional list/heading prefix, Markdown
@@ -72,9 +83,11 @@ function parseStrictLines(markdown, labels, allowed) {
     "i"
   );
   const found = new Set();
+  const allowCategoryBypass = labels.includes("Verdict");
 
   for (const line of clean.split(/\r?\n/)) {
     if (!labelRe.test(line)) continue;
+    if (allowCategoryBypass && isCategoryVerdictLine(line)) continue;
     const match = line.match(exactRe);
     if (!match) {
       throw new Error(`Malformed or hedged verdict line: "${line.trim()}"`);
@@ -86,6 +99,21 @@ function parseStrictLines(markdown, labels, allowed) {
     found.add(normalized);
   }
   return found;
+}
+
+/**
+ * Returns true if markdown outside fenced/inline code attempts to declare or reference
+ * a content verdict (matching prefix/emphasis syntax supported by `parseContentVerdict`).
+ * @param {string} markdown
+ * @returns {boolean}
+ */
+function hasContentVerdictAttempt(markdown) {
+  const clean = stripCode(markdown);
+  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
+  const verdictLabelRe = new RegExp(`^\\s*${prefix}\\s*(?:Content\\s+)?Verdict\\s*(?:[*_]{1,3})?\\s*:`, "im");
+  if (verdictLabelRe.test(clean)) return true;
+  if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)\b/m.test(clean)) return true;
+  return /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*(?:[:—–-]|\bis\b)\s*(?:[*_]{1,3})?\s*(?:PASS|FAIL|BLOCKED)(?![-\w])/i.test(clean);
 }
 
 /**
@@ -236,6 +264,7 @@ export {
   INTEGRITY_VERDICTS,
   RESERVED_OBJECT_KEYS,
   SQUAD_ID_RE,
+  hasContentVerdictAttempt,
   parseContentVerdict,
   parseEvidenceDigest,
   parseIntegrityVerdict,

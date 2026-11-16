@@ -30,18 +30,33 @@ const PACKAGE_VERSION = (() => {
 })();
 
 const PLUGIN_KEY = "agy-squad";
-const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
-const geminiConfigDir = path.join(homeDir, ".gemini", "config");
-const pluginsDir = path.join(geminiConfigDir, "plugins");
-const pluginDest = path.join(pluginsDir, PLUGIN_KEY);
-const configJsonPath = path.join(geminiConfigDir, "config.json");
-const configBakPath = path.join(geminiConfigDir, "config.json.bak");
-const mcpJsonPath = path.join(geminiConfigDir, "mcp_config.json");
-const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
-const antigravityMcpRootDir = path.join(homeDir, ".gemini", "antigravity", "mcp");
-const antigravityBinDir = path.join(homeDir, ".gemini", "antigravity", "bin");
 const MIN_AGY_CONTEXT_VERSION = "2.0.1";
 const MIN_RTK_VERSION = "1.1.0";
+
+function resolveProfilePaths() {
+  const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
+  const geminiConfigDir = path.join(homeDir, ".gemini", "config");
+  const pluginsDir = path.join(geminiConfigDir, "plugins");
+  const pluginDest = path.join(pluginsDir, PLUGIN_KEY);
+  const configJsonPath = path.join(geminiConfigDir, "config.json");
+  const configBakPath = path.join(geminiConfigDir, "config.json.bak");
+  const mcpJsonPath = path.join(geminiConfigDir, "mcp_config.json");
+  const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
+  const antigravityMcpRootDir = path.join(homeDir, ".gemini", "antigravity", "mcp");
+  const antigravityBinDir = path.join(homeDir, ".gemini", "antigravity", "bin");
+  return {
+    homeDir,
+    geminiConfigDir,
+    pluginsDir,
+    pluginDest,
+    configJsonPath,
+    configBakPath,
+    mcpJsonPath,
+    mcpBakPath,
+    antigravityMcpRootDir,
+    antigravityBinDir
+  };
+}
 
 function parseSemver(versionStr) {
   if (!versionStr || typeof versionStr !== "string") return null;
@@ -102,9 +117,7 @@ function probeBinaryVersion(target, args = ["--version"]) {
 
 export function detectCompanionDependencies() {
   const isWin = os.platform() === "win32";
-  const activeHome = process.env.AGY_TEST_PROFILE_DIR || homeDir;
-  const activeBinDir = path.join(activeHome, ".gemini", "antigravity", "bin");
-  const activePluginsDir = path.join(activeHome, ".gemini", "config", "plugins");
+  const { antigravityBinDir: activeBinDir, pluginsDir: activePluginsDir } = resolveProfilePaths();
 
   const agyContextCandidates = isWin
     ? [
@@ -243,6 +256,13 @@ function readAndValidateJsonFile(filePath, label) {
 }
 
 export function detectExistingInstallation(options = {}) {
+  const {
+    pluginDest,
+    configJsonPath,
+    mcpJsonPath,
+    antigravityMcpRootDir,
+    antigravityBinDir
+  } = resolveProfilePaths();
   const includeCompanions = options.includeCompanions !== false;
   const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
@@ -454,6 +474,7 @@ export function formatPosixShim(targetRoot, execPath = process.execPath) {
 }
 
 async function installCliShims({ targetRoot, log }) {
+  const { antigravityBinDir } = resolveProfilePaths();
   await fsPromises.mkdir(antigravityBinDir, { recursive: true });
   const posixShimPath = path.join(antigravityBinDir, "agy-squad");
   const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
@@ -471,6 +492,7 @@ async function installCliShims({ targetRoot, log }) {
 }
 
 export async function runCheckOnly(options = {}) {
+  const { mcpJsonPath, configJsonPath } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
   log("Running Agy-Squad read-only preflight check (--check)...");
 
@@ -499,6 +521,16 @@ export async function runCheckOnly(options = {}) {
 }
 
 export async function runInstall(options = {}) {
+  const {
+    pluginsDir,
+    pluginDest,
+    configJsonPath,
+    configBakPath,
+    mcpJsonPath,
+    mcpBakPath,
+    antigravityMcpRootDir,
+    antigravityBinDir
+  } = resolveProfilePaths();
   const startTime = performance.now();
   const log = options.silent ? () => {} : console.log;
   const warn = options.silent ? () => {} : console.warn;
@@ -607,6 +639,7 @@ export async function runInstall(options = {}) {
 }
 
 export async function runRestoreBackups(options = {}) {
+  const { configJsonPath, configBakPath, mcpJsonPath, mcpBakPath } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
   let restoredCount = 0;
   for (const [bakPath, targetPath] of [
@@ -627,6 +660,13 @@ export async function runRestoreBackups(options = {}) {
 }
 
 export async function runUninstall(options = {}) {
+  const {
+    pluginDest,
+    configJsonPath,
+    mcpJsonPath,
+    antigravityMcpRootDir,
+    antigravityBinDir
+  } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
   log("Uninstalling Agy-Squad...");
 

@@ -165,44 +165,67 @@ function resolveWorkspaceRoot(workspaceArg, fallbackRoot) {
   return real;
 }
 
+function readRegularJsonFileSafe(resolvedPath, displayPath, label) {
+  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+  const fd = fs.openSync(resolvedPath, openFlags);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error(`${label} path must be a regular non-symlink file: ${displayPath}`);
+    }
+    if (process.platform === "linux") {
+      let fdTarget;
+      try {
+        fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
+      } catch {}
+      if (fdTarget && fdTarget !== fs.realpathSync(resolvedPath)) {
+        throw new Error(`${label} path changed during open: ${displayPath}`);
+      }
+    }
+    const chunks = [];
+    const buf = Buffer.allocUnsafe(65536);
+    while (true) {
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, null);
+      if (bytesRead <= 0) break;
+      chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
+    }
+    return decodeUtf8(Buffer.concat(chunks), displayPath);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function readJsonInput(targetRoot, pathOrDash, label) {
   if (typeof pathOrDash !== "string" || !pathOrDash.trim()) {
     throw new Error(`${label} path must be nonempty.`);
   }
+  const trimmedInput = pathOrDash.trim();
   let raw;
-  if (pathOrDash === "-") {
+  if (trimmedInput === "-") {
     raw = await readStreamText(process.stdin);
   } else {
-    const normalized = pathOrDash.trim().replace(/\\/g, "/");
+    const normalized = trimmedInput.replace(/\\/g, "/");
     const stripped = normalized.replace(/^(?:\.\/)+/, "");
-    if (!path.isAbsolute(pathOrDash) && stripped && !stripped.split("/").includes("..")) {
+    if (!path.isAbsolute(trimmedInput) && stripped && !stripped.split("/").includes("..")) {
       try {
         raw = decodeUtf8(readFile(targetRoot, stripped), stripped);
       } catch (err) {
-        const cwdResolved = path.resolve(pathOrDash);
+        const cwdResolved = path.resolve(trimmedInput);
         if (err.code === "ENOENT" && path.dirname(cwdResolved) !== targetRoot && fs.existsSync(cwdResolved)) {
-          const lstat = fs.lstatSync(cwdResolved);
-          if (lstat.isSymbolicLink() || !lstat.isFile()) {
-            throw new Error(`${label} path must be a regular non-symlink file: ${pathOrDash}`);
-          }
-          raw = decodeUtf8(fs.readFileSync(cwdResolved), pathOrDash);
+          raw = readRegularJsonFileSafe(cwdResolved, trimmedInput, label);
         } else {
           throw err;
         }
       }
     } else {
-      const resolved = path.resolve(pathOrDash);
-      const lstat = fs.lstatSync(resolved);
-      if (lstat.isSymbolicLink() || !lstat.isFile()) {
-        throw new Error(`${label} path must be a regular non-symlink file: ${pathOrDash}`);
-      }
-      raw = decodeUtf8(fs.readFileSync(resolved), pathOrDash);
+      const resolved = path.resolve(trimmedInput);
+      raw = readRegularJsonFileSafe(resolved, trimmedInput, label);
     }
   }
   try {
     return JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Invalid JSON in ${label} (${pathOrDash}): ${error.message}`);
+    throw new Error(`Invalid JSON in ${label} (${trimmedInput}): ${error.message}`);
   }
 }
 
@@ -268,6 +291,9 @@ async function main(args) {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
   if (rest.includes("--help") || rest.includes("-h")) {
+    if (rest.length > 1) {
+      throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
+    }
     console.log(usage);
     return 0;
   }
@@ -356,6 +382,9 @@ async function main(args) {
     if (values.plan !== undefined && values.record !== undefined) {
       throw new Error("Pass either --plan or --record to 'agy-squad collect', not both.");
     }
+    if (values.record !== undefined && values.squad !== undefined) {
+      throw new Error("Pass either --record or --squad to 'agy-squad collect', not both.");
+    }
     const targetRoot = resolveWorkspaceRoot(values.workspace, root);
     const sources = [...(values.from ?? []), ...positionals];
     if (!sources.length) {
@@ -436,11 +465,16 @@ async function main(args) {
       allowPartial: values["allow-partial"]
     });
     if (values.out !== undefined) {
-      if (typeof values.out !== "string" || !values.out.trim() || values.out.includes("\\") || path.isAbsolute(values.out)) {
+      const trimmedOut = typeof values.out === "string" ? values.out.trim() : "";
+      if (!trimmedOut || trimmedOut.includes("\\") || path.isAbsolute(trimmedOut) || /^[a-zA-Z]:/.test(trimmedOut)) {
         throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
       }
-      const outRel = values.out.trim().replace(/^(?:\.\/)+/, "");
-      if (outRel.split("/").some(p => !p || p === "." || p === "..") || !outRel.toLowerCase().endsWith(".json")) {
+      const outRel = trimmedOut.replace(/^(?:\.\/)+/, "");
+      if (
+        outRel.split("/").some(p => !p || p === "." || p === "..") ||
+        !outRel.toLowerCase().endsWith(".json") ||
+        path.posix.basename(outRel).toLowerCase() === ".json"
+      ) {
         throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
       }
       const parentDir = path.posix.dirname(outRel);

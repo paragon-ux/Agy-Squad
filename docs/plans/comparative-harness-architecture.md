@@ -7,14 +7,14 @@
 **Author:** Harness Comparative Architecture Lead  
 **Evaluation Standard:** Agy-Squad PR Review Standard `v1.3.0` & Architectural Decision Ledger (`L1`–`L41`)  
 **Target Systems Audited:**
-1. **MetaGPT** (ICLR 2024 Oral — SOP-Driven Pub/Sub Bus)
+1. **MetaGPT** (ICLR 2024 Oral: SOP-Driven Pub/Sub Bus)
 2. **CrewAI** (Role-Playing Conversational Teams)
 3. **AutoGen / Swarm** (Conversational Broadcast & State Handoffs)
 4. **LangGraph** (Statechart Directed Acyclic Graphs / Pregel Architecture)
-5. **Devin / Sol** (Cognition AI — Autonomous Sandboxed Cloud Workspace)
-6. **Claude Code** (Anthropic CLI — Interactive Command Execution)
-7. **SWE-agent** (Princeton NLP — Agent-Computer Interface / ACI)
-8. **Google Antigravity Native `/teamwork`** (Google DeepMind — Native Multi-Agent Fleet)
+5. **Devin / Sol** (Cognition AI: Autonomous Sandboxed Cloud Workspace)
+6. **Claude Code** (Anthropic CLI: Interactive Command Execution)
+7. **SWE-agent** (Princeton NLP: Agent-Computer Interface / ACI)
+8. **Google Antigravity Native `/teamwork`** (Google DeepMind: Native Multi-Agent Fleet)
 9. **Agy-Squad + Agy-Context-Saver 1.8.1 (`rtk 0.51.0`)** (Governed Host-Sandboxed Reference Baseline)
 
 ---

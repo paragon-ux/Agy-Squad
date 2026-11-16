@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { bundleReports, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -982,6 +982,83 @@ try {
     );
     assert.notEqual(hedgedInit.status, 0, "bundle-init must reject hedged lead verdict instead of defaulting to PASS");
     assert.match(hedgedInit.stderr, /invalid or conflicting verdict/i);
+
+    // SQ-RUN-001: Markdown-formatted conflicting or invalid lead verdicts must also fail bundle-init
+    for (const badMdVerdict of [
+      "## **Content Verdict:** PASS\nStatus: FAIL\n",
+      "- **Content Verdict**: MAYBE\n"
+    ]) {
+      const badMdDir = path.join(svcRoot, "coord-bad-md");
+      fs.rmSync(badMdDir, { recursive: true, force: true });
+      fs.cpSync(svcCoord, badMdDir, { recursive: true });
+      writeAt(badMdDir, leadSlot, badMdVerdict);
+      const badMdInit = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "./scratch/plan.json", "src/core.mjs"],
+        { cwd: badMdDir, encoding: "utf8" }
+      );
+      assert.notEqual(badMdInit.status, 0, `bundle-init must reject: ${badMdVerdict}`);
+      assert.match(badMdInit.stderr, /invalid or conflicting verdict/i);
+    }
+
+    // SQ-RUN-003: Reject Windows drive-relative prefix and bare .json in bundle-init --out
+    for (const badOut of ["C:bundle.json", ".json"]) {
+      const badOutRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "./scratch/plan.json", "--out", badOut, "src/core.mjs"],
+        { cwd: svcCoord, encoding: "utf8" }
+      );
+      assert.notEqual(badOutRes.status, 0, `bundle-init must reject invalid --out '${badOut}'`);
+    }
+
+    // SQ-RUN-002: Whitespace around relative --plan path trims cleanly, while symlinked --plan is rejected via O_NOFOLLOW
+    const trimmedPlanRes = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "  ./scratch/plan.json  ", "src/core.mjs"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(trimmedPlanRes.status, 0, trimmedPlanRes.stderr);
+    const symlinkPlanPath = path.join(svcCoord, "scratch", "plan-link.json");
+    let createdPlanLink = false;
+    try {
+      fs.symlinkSync("plan.json", symlinkPlanPath);
+      createdPlanLink = true;
+    } catch {}
+    if (createdPlanLink) {
+      const symPlanRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "./scratch/plan-link.json", "src/core.mjs"],
+        { cwd: svcCoord, encoding: "utf8" }
+      );
+      assert.notEqual(symPlanRes.status, 0);
+      assert.match(symPlanRes.stderr, /ELOOP|symlink/i);
+    }
+
+    // SQ-SVC-002: collect --record combined with --squad must reject, and collectReportSlots checks squadId mismatch
+    writeAt(svcCoord, "scratch/collect-rec.json", trimmedPlanRes.stdout);
+    const conflictCollect = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--record", "scratch/collect-rec.json", "--squad", "other_squad", "--from", svcWt1],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(conflictCollect.status, 0);
+    assert.match(conflictCollect.stderr, /--record.*--squad|Conflicting/i);
+    assert.throws(
+      () => collectReportSlots(svcCoord, { record: JSON.parse(trimmedPlanRes.stdout), squadId: "other_squad", sources: [svcWt1] }),
+      /Conflicting squad/i
+    );
+
+    // PR Review Standard Section 4 category Verdict lines must coexist cleanly with Content Verdict: PASS in bundle-init
+    const catVerdictDir = path.join(svcRoot, "coord-cat-verdict");
+    fs.cpSync(svcCoord, catVerdictDir, { recursive: true });
+    writeAt(catVerdictDir, leadSlot, "Content Verdict: PASS\n- **Verdict:** Changes required (`SQ-001`)\n");
+    const catVerdictInit = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "./scratch/plan.json", "src/core.mjs"],
+      { cwd: catVerdictDir, encoding: "utf8" }
+    );
+    assert.equal(catVerdictInit.status, 0, catVerdictInit.stderr);
+    assert.equal(JSON.parse(catVerdictInit.stdout).verdict, "PASS");
 
     const badIdMap = spawnSync(
       process.execPath,

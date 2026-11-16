@@ -125,8 +125,9 @@ function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overri
 }
 
 function normalizeScopePath(scopeEntry, root) {
-  const trimmed = scopeEntry.trim().replace(/\/+$/, "");
-  if (trimmed === ".") return "";
+  let trimmed = scopeEntry.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  if (trimmed === ".") trimmed = "";
+  if (trimmed === "") return "";
   if (root) {
     try {
       let canonicalRoot = root;

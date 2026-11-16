@@ -49,7 +49,7 @@ Run all commands from the shared workspace root via `node bin/agy-squad.mjs` (`r
 node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...   # only when workspaceIsolation != inherit
 node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
 node bin/agy-squad.mjs fingerprint <verified-file-1> <verified-file-2>
-node bin/agy-squad.mjs bundle-init --plan <plan.json> <verified-file-1> <verified-file-2> --out <bundle-record.json>
+node bin/agy-squad.mjs bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> ... | --handoffs <file.json>] [--id-map <worker=id>] <verified-file-1> <verified-file-2> --out <bundle-record.json>
 node bin/agy-squad.mjs inspect <bundle-record.json>
 node bin/agy-squad.mjs digest <bundle-record.json>
 node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
@@ -60,7 +60,7 @@ node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.js
 
 ### `<bundle-record.json>` Schema & Concrete Wire-Format Example
 
-Start from `agy-squad bundle-init --plan <plan.json>` (or `squad_planner`'s `bundleRecordTemplates.<squadId>`), which pre-populates `verifiedFiles`, `assignments`, and any resolved IDs/handoffs:
+Start from `agy-squad bundle-init --plan <plan.json> [--squad <id>]` (or `squad_planner`'s `bundleRecordTemplates.<squadId>`), which pre-populates `verifiedFiles`, `assignments`, and resolved `subagent` IDs (while `handoffs` is populated only when `--handoff` or `--handoffs` is supplied before running `inspect` and `digest`):
 
 ```json
 {

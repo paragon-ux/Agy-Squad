@@ -52,6 +52,29 @@ try {
     assert.notEqual(negPreflight.status, 0);
     assert.match(negPreflight.stderr, /mcp\/dispatch\.mjs/);
     assert.doesNotMatch(negPreflight.stderr, /mcp\/planner\.mjs/);
+
+    // SQ-SCRIPT-001: ./ prefix in pkg.bin is normalized cleanly
+    const binPreflightPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    binPreflightPkg.bin = { "agy-squad": "./bin/agy-squad.mjs" };
+    fs.writeFileSync(negPkgPath, JSON.stringify(binPreflightPkg, null, 2) + "\n");
+    const binPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.equal(binPreflight.status, 0, binPreflight.stderr || binPreflight.stdout);
+
+    // SQ7-DEP-002: plugin.json missing/mismatched L49 fields must fail preflight
+    const negPluginPath = path.join(negRoot, "plugin.json");
+    const negPlugin = JSON.parse(fs.readFileSync(negPluginPath, "utf8"));
+    delete negPlugin.suggestedPrompts;
+    negPlugin.homepage = "https://example.invalid/wrong";
+    fs.writeFileSync(negPluginPath, JSON.stringify(negPlugin, null, 2) + "\n");
+    const pluginNegPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.notEqual(pluginNegPreflight.status, 0);
+    assert.match(pluginNegPreflight.stderr, /plugin\.json/);
   } finally {
     fs.rmSync(negRoot, { recursive: true, force: true });
   }
@@ -434,6 +457,21 @@ try {
   assert.equal(restoreRes.status, 0, restoreRes.stderr || restoreRes.stdout);
   const restoredMcp = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   assert.deepEqual(restoredMcp.mcpServers["agy-squad"], { command: "node", args: ["stale.js"] });
+
+  // SQ-DEP-006: detectExistingInstallation resolves AGY_TEST_PROFILE_DIR dynamically
+  const installerMod = await import(new URL("../scripts/install-register.mjs", import.meta.url));
+  const emptyDynProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-dyn-prof-")));
+  try {
+    process.env.AGY_TEST_PROFILE_DIR = emptyDynProfile;
+    const dynEmpty = installerMod.detectExistingInstallation();
+    assert.equal(dynEmpty.isInstalled, false);
+    assert.equal(dynEmpty.details.plugin.exists, false);
+    assert.equal(dynEmpty.details.mcp.registered, false);
+    assert.equal(dynEmpty.details.plugin.path.startsWith(emptyDynProfile), true);
+  } finally {
+    process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
+    fs.rmSync(emptyDynProfile, { recursive: true, force: true });
+  }
 
   console.log("Lifecycle installer, --check, and rollback tests passed");
 } finally {

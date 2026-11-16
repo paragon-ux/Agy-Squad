@@ -56,6 +56,21 @@ if (pkg) {
       if (pluginManifest.version !== pkg.version) {
         errors.push(`plugin.json version ${JSON.stringify(pluginManifest.version)} does not match package.json version ${JSON.stringify(pkg.version)}.`);
       }
+      if (typeof pluginManifest.displayName !== "string" || !pluginManifest.displayName.trim()) {
+        errors.push('plugin.json must define a non-empty "displayName".');
+      }
+      if (typeof pluginManifest.homepage !== "string" || !pluginManifest.homepage.trim()) {
+        errors.push('plugin.json must define a non-empty "homepage".');
+      } else if (pkg.homepage && pluginManifest.homepage !== pkg.homepage) {
+        errors.push(`plugin.json homepage ${JSON.stringify(pluginManifest.homepage)} does not match package.json homepage ${JSON.stringify(pkg.homepage)}.`);
+      }
+      if (
+        !Array.isArray(pluginManifest.suggestedPrompts) ||
+        pluginManifest.suggestedPrompts.length === 0 ||
+        pluginManifest.suggestedPrompts.some((p) => typeof p !== "string" || !p.trim())
+      ) {
+        errors.push('plugin.json must define a non-empty string array "suggestedPrompts".');
+      }
     } catch (error) {
       errors.push(`plugin.json is not valid JSON: ${error.message}`);
     }
@@ -154,12 +169,13 @@ if (pkg) {
     errors.push("package.json has no bin entry.");
   }
   for (const binPath of binEntries) {
-    if (!exists(binPath)) {
+    const normalizedBin = binPath.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!exists(normalizedBin)) {
       errors.push(`package.json bin target does not exist: ${binPath}`);
     }
     const coveredByFiles =
-      positiveEntries.some((entry) => matchesPackageEntry(binPath, entry.normalized)) &&
-      !negativeEntries.some((entry) => matchesPackageEntry(binPath, entry.normalized));
+      positiveEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized)) &&
+      !negativeEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized));
     if (!coveredByFiles) {
       errors.push(`package.json "files" does not clearly include bin target: ${binPath}`);
     }

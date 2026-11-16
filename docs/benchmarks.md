@@ -5,7 +5,7 @@ This page records two head-to-head sequential evaluations on the two-domain even
 1. **November 15, 2026 Matched-`High` Retest (current Phase 2 path):** Native `/swarm` + `Agy-Context-Saver 2.0.1` (`rtk 1.1.0`) vs. Antigravity `/teamwork [skip-interview]`, pinned to `Gemini 4 Hydrogen (High)` on all parents and child workers.
 2. **November 8, 2026 Historical Baseline (retired Phase 1 path):** `agy-squad run --launch` + `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) vs. Antigravity `/teamwork [skip-interview]`.
 
-## Matched-`High` Retest (November 15, 2026 — Native `/swarm` + `Agy-Context-Saver 2.0.1`)
+## Matched-`High` Retest (November 15, 2026: Native `/swarm` + `Agy-Context-Saver 2.0.1`)
 
 Both arms caught all six planted defect categories (`6 / 6`). Counting **all sessions end-to-end (`parent + workers`)**, Agy-Squad finished in **`6m 30s` (`390s`) vs. `22m 41s` (`1,361s`, `3.49x` faster)**, used **`4` vs. `9` total sessions** (`3` vs. `8` spawned child workers), executed **`178` vs. `655` transcript steps** (`72.8%` reduction; `90` vs. `636` child-only steps), generated **`336.8 KB` vs. `801.8 KB` of raw transcripts** (`58.0%` smaller overall; `183.6 KB` vs. `773.7 KB`, `76.3%` smaller child-only), and sent **`1,629 B` vs. `18,322 B` into the parent inbox** (`91.1%` fewer wakeup bytes).
 

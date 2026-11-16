@@ -73,6 +73,12 @@ try {
     "FAIL",
     "Historical comparison column PASS must not trigger false conflict against Content Verdict: FAIL (SQ-RUN-002)"
   );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (`SQ-001`)\n7. **Verdict:** No findings within reviewed scope\n"),
+    "PASS",
+    "PR Review Standard Section 4 category Verdict lines must not collide with strict Content Verdict parsing"
+  );
+  assert.throws(() => parseContentVerdict("- **Verdict:** Changes required\n"));
 
   assert.equal(parseIntegrityVerdict("Target Squad: alpha\nIntegrity Verdict: CLEAN\n"), "CLEAN");
   assert.equal(
@@ -320,10 +326,20 @@ try {
   assert.notEqual(badAuditCli.status, 0);
   assert.match(badAuditCli.stderr, /requireIntegrityAudit must be a boolean/);
 
-  for (const sub of ["plan", "dispatch", "fingerprint", "inspect", "digest", "bundle", "verify", "prune", "verdict"]) {
+  for (const sub of [
+    "plan", "dispatch", "collect", "bundle-init", "fingerprint", "inspect",
+    "digest", "bundle", "verify", "prune", "verdict",
+    "setup", "status", "uninstall", "restore-backups"
+  ]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
     assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);
+  }
+  // SQ-DEP-007: --help combined with operational flags/args must fail closed
+  for (const badHelp of [["setup", "--check", "--help"], ["plan", "--help", "--manifest", "m.json"]]) {
+    const helpConflict = runCliFail(badHelp);
+    assert.notEqual(helpConflict.status, 0, `Expected conflicting --help failure for ${badHelp.join(" ")}`);
+    assert.match(helpConflict.stderr, /Conflicting flags/);
   }
 
   // RUN-011 & RUN-012: ordered list verdict prefix supported and invalid UTF-8 rejected by verdict CLI

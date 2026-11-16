@@ -110,7 +110,7 @@ Full documentation is hosted at [paragon-ux.github.io/Agy-Squad](https://paragon
 - [Manifest and tool contract](docs/tools.md)
 - [Stopping agents and child processes](docs/stopping-agents.md)
 - [Benchmarks vs. Antigravity Teamwork](docs/benchmarks.md)
-- [WSL CLI verification and live trial](docs/plans/wsl-cli-verification.md)
+- [Cross-Platform & WSL Verification](docs/plans/wsl-cli-verification.md)
 - [Architecture decision ledger](docs/plans/LEDGER.md)
 - [Native enforcement ledger](docs/plans/native-enforcement-ledger.md)
 
