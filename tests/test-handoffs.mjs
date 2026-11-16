@@ -638,7 +638,235 @@ try {
   const blkVerifiedCli = spawnSync(process.execPath, [agySquadCli, "verify", blkBundled.path], { cwd: root, encoding: "utf8" });
   assert.equal(blkVerifiedCli.status, 0, blkVerifiedCli.stderr);
 
-  console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, and SQ-RUN/SQ-ARCH-001 regressions");
+  // SQ-SVC-001: agy-squad collect + bundle-init end-to-end & edge cases
+  const svcRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-svc-001-")));
+  try {
+    const svcCoord = path.join(svcRoot, "coord");
+    const svcWt1 = path.join(svcRoot, "wt1");
+    const svcWt2 = path.join(svcRoot, "wt2");
+    fs.mkdirSync(svcCoord, { recursive: true });
+    fs.mkdirSync(svcWt1, { recursive: true });
+    fs.mkdirSync(svcWt2, { recursive: true });
+
+    const writeAt = (base, rel, val) => {
+      const dest = path.join(base, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, val);
+    };
+
+    writeAt(svcCoord, "src/core.mjs", "export const ok = true;\n");
+    writeAt(svcCoord, "svc-manifest.json", JSON.stringify({
+      squads: {
+        alpha: {
+          lead: { role: "Alpha Lead", objective: "Synthesize alpha", scopeFiles: ["src/core.mjs"] },
+          specialists: [
+            { role: "Spec One", objective: "Check part 1", scopeFiles: ["src/core.mjs"] },
+            { role: "Spec Two", objective: "Check part 2", scopeFiles: ["src/core.mjs"] }
+          ]
+        }
+      }
+    }));
+
+    const svcPlanCli = spawnSync(
+      process.execPath,
+      [agySquadCli, "plan", "--manifest", "svc-manifest.json", "--workspace-isolation", "share"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(svcPlanCli.status, 0, svcPlanCli.stderr);
+    writeAt(svcCoord, "scratch/plan.json", svcPlanCli.stdout);
+    const svcPlan = JSON.parse(svcPlanCli.stdout);
+    const s1Slot = svcPlan.workers[0].specialists[0].reportSlot;
+    const s2Slot = svcPlan.workers[0].specialists[1].reportSlot;
+    const leadSlot = svcPlan.workers[0].lead.reportSlot;
+    const auditSlot = svcPlan.integrityAuditPlan[0].reportSlot;
+    const s1Worker = svcPlan.workers[0].specialists[0].workerName;
+    const s2Worker = svcPlan.workers[0].specialists[1].workerName;
+
+    // Pre-create empty placeholder in wt1 for s2Slot while real content lives in wt2
+    writeAt(svcWt1, s1Slot, "# Specialist 1\nVerified src/core.mjs:1.\n");
+    writeAt(svcWt1, s2Slot, "   \n");
+    writeAt(svcWt2, s2Slot, "# Specialist 2\nVerified exports.\n");
+    writeAt(svcWt1, leadSlot, "Content Verdict: PASS\nVerified alpha cohort cleanly.\n");
+
+    // --dry-run must preview without writing
+    const dryCollect = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2, "--dry-run"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(dryCollect.status, 0, dryCollect.stderr);
+    const dryJson = JSON.parse(dryCollect.stdout);
+    assert.equal(dryJson.dryRun, true);
+    assert.equal(dryJson.collected.length, 3);
+    assert.equal(fs.existsSync(path.join(svcCoord, s1Slot)), false);
+
+    // --strict fails when integrityAudit slot is missing from worktrees
+    const strictMissing = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2, "--strict"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(strictMissing.status, 0);
+    assert.match(strictMissing.stderr, /Missing expected report slot/);
+    assert.equal(fs.existsSync(path.join(svcCoord, s1Slot)), false, "--strict failure must be atomic with zero partial writes");
+
+    // Real collect copies slots atomically and is idempotent on repeat
+    const realCollect = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--squad", "alpha", "--from", svcWt1, "--from", svcWt2],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(realCollect.status, 0, realCollect.stderr);
+    const realCollectJson = JSON.parse(realCollect.stdout);
+    assert.equal(realCollectJson.collected.length, 3);
+    assert.equal(fs.readFileSync(path.join(svcCoord, s2Slot), "utf8"), "# Specialist 2\nVerified exports.\n");
+
+    const repeatCollect = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(repeatCollect.status, 0, repeatCollect.stderr);
+    assert.equal(JSON.parse(repeatCollect.stdout).unchanged.length, 3);
+
+    // Destination conflict fails without --overwrite and succeeds with --overwrite
+    writeAt(svcWt2, s1Slot, "# Specialist 1\nUpdated wt2 report.\n");
+    // Inter-worktree conflict (wt1 vs wt2 both have differing non-empty s1Slot) must always fail
+    const interConflict = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2, "--overwrite"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(interConflict.status, 0);
+    assert.match(interConflict.stderr, /Conflict collecting/);
+
+    // Single updated worktree against differing coordinator slot requires --overwrite
+    const destConflict = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--squad", "alpha", "--from", svcWt2],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(destConflict.status, 0);
+    assert.match(destConflict.stderr, /Conflict at destination/);
+    const destOverwrite = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--squad", "alpha", "--from", svcWt2, "--overwrite"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(destOverwrite.status, 0, destOverwrite.stderr);
+
+    // Symlink inside source worktree must be rejected fail-closed
+    const svcWtSym = path.join(svcRoot, "wt-sym");
+    fs.mkdirSync(svcWtSym, { recursive: true });
+    const secretFile = path.join(svcRoot, "outside-secret.md");
+    fs.writeFileSync(secretFile, "SECRET");
+    const symTargetDir = path.join(svcWtSym, path.dirname(s1Slot));
+    fs.mkdirSync(symTargetDir, { recursive: true });
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(secretFile, path.join(svcWtSym, s1Slot));
+      symlinkCreated = true;
+    } catch {}
+    if (symlinkCreated) {
+      const symCollect = spawnSync(
+        process.execPath,
+        [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWtSym, "--overwrite"],
+        { cwd: svcCoord, encoding: "utf8" }
+      );
+      assert.notEqual(symCollect.status, 0);
+      assert.match(symCollect.stderr, /ELOOP|symlink/i);
+    }
+
+    // bundle-init produces pre-filled record with fingerprint digests & provenanceScaffold/id-map integration
+    const initCli = spawnSync(
+      process.execPath,
+      [
+        agySquadCli,
+        "bundle-init",
+        "--plan",
+        "scratch/plan.json",
+        "--handoff",
+        `${s1Worker}=READY ${s1Slot} — Verified part 1.`,
+        "--handoff",
+        `${s2Worker}=READY ${s2Slot} — Verified part 2.`,
+        "--out",
+        "scratch/bundle-record.json",
+        "src/core.mjs"
+      ],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(initCli.status, 0, initCli.stderr);
+    const initOut = JSON.parse(initCli.stdout);
+    assert.equal(initOut.path, "scratch/bundle-record.json");
+    assert.equal(initOut.record.verdict, "PASS");
+    assert.equal(initOut.record.verifiedFiles["src/core.mjs"], fingerprint(svcCoord, ["src/core.mjs"])["src/core.mjs"]);
+    assert.equal(initOut.record.assignments.length, 2);
+    assert.equal(initOut.record.handoffs.length, 2);
+
+    // Overwriting existing --out rejects without --replace, succeeds with --replace
+    const initDup = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--out", "scratch/bundle-record.json", "src/core.mjs"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(initDup.status, 0);
+    const initReplace = spawnSync(
+      process.execPath,
+      [
+        agySquadCli,
+        "bundle-init",
+        "--plan",
+        "scratch/plan.json",
+        "--handoff",
+        `${s1Worker}=READY ${s1Slot} — Verified part 1.`,
+        "--handoff",
+        `${s2Worker}=READY ${s2Slot} — Verified part 2.`,
+        "--out",
+        "scratch/bundle-record.json",
+        "--replace",
+        "src/core.mjs"
+      ],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(initReplace.status, 0, initReplace.stderr);
+
+    // Full downstream pipeline: inspect -> digest -> audit -> bundle -> verify
+    const svcInspect = spawnSync(process.execPath, [agySquadCli, "inspect", "scratch/bundle-record.json"], { cwd: svcCoord, encoding: "utf8" });
+    assert.equal(svcInspect.status, 0, svcInspect.stderr);
+    const svcDigest = spawnSync(process.execPath, [agySquadCli, "digest", "scratch/bundle-record.json"], { cwd: svcCoord, encoding: "utf8" });
+    assert.equal(svcDigest.status, 0, svcDigest.stderr);
+    const evDigest = JSON.parse(svcDigest.stdout).evidenceDigest;
+    writeAt(svcCoord, auditSlot, `Target Squad: alpha\nEvidence Digest: ${evDigest}\nIntegrity Verdict: CLEAN\nVerified collected slots.\n`);
+    const svcBundle = spawnSync(process.execPath, [agySquadCli, "bundle", "scratch/bundle-record.json"], { cwd: svcCoord, encoding: "utf8" });
+    assert.equal(svcBundle.status, 0, svcBundle.stderr);
+    const svcVerify = spawnSync(process.execPath, [agySquadCli, "verify", JSON.parse(svcBundle.stdout).path], { cwd: svcCoord, encoding: "utf8" });
+    assert.equal(svcVerify.status, 0, svcVerify.stderr);
+
+    // Subagent-mode provenanceScaffold conversationId substitution in bundle-init
+    const subPlan = spawnSync(
+      process.execPath,
+      [agySquadCli, "plan", "--manifest", "svc-manifest.json", "--mode", "subagent"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(subPlan.status, 0, subPlan.stderr);
+    const subPlanObj = JSON.parse(subPlan.stdout);
+    subPlanObj.provenanceScaffold.entries[0].conversationId = "uuid-spec-1";
+    subPlanObj.provenanceScaffold.entries[1].conversationId = "uuid-spec-2";
+    writeAt(svcCoord, "scratch/sub-plan.json", JSON.stringify(subPlanObj));
+    const subInit = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "scratch/sub-plan.json", "--id-map", `${subPlanObj.workers[0].specialists[1].workerName}=uuid-override-2`, "src/core.mjs"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(subInit.status, 0, subInit.stderr);
+    const subInitObj = JSON.parse(subInit.stdout);
+    assert.equal(subInitObj.assignments[0].conversationId, "uuid-spec-1");
+    assert.equal(subInitObj.assignments[1].conversationId, "uuid-override-2");
+  } finally {
+    fs.rmSync(svcRoot, { recursive: true, force: true });
+  }
+
+  console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

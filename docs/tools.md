@@ -90,8 +90,11 @@ Run `node bin/agy-squad.mjs` from the shared workspace root. (`mcp/handoffs.mjs`
 
 | Command | Purpose and inputs |
 | --- | --- |
+| `status [--json]` | Checks live plugin link, skills, docs, canonical plugin MCP registration, CLI shim, and non-fatal companion `agy-context (>= 2.0.0)` / `rtk (>= 1.1.0)` availability. |
 | `dispatch (--squad <id> \| <id>) [--manifest <path>]` | Exposes `dispatch_squad` (`mcp/dispatch.mjs`) for `invoke_subagent` cohorts (`all_l1`, `<squadId>`, or `integrity_auditor[:<target>]`). |
 | `plan (--manifest <path> \| "<task>") [options]` | Exposes `squad_planner` (`mcp/planner.mjs`) from the CLI. In `swarm` mode, bundle templates use each swarm member name as `assignments[].conversationId` and `handoffs[].sender`. |
+| `collect (--plan <plan.json> \| --record <record.json> \| --squad <id>) --from <worktree-dir>...` | Safely collects non-empty specialist/lead/auditor report slots from `/swarm` `share` or `branch` worktrees into the coordinator workspace before `bundle` and `kill`, rejecting symlink escapes and inter-worktree conflicts (`--overwrite`, `--dry-run`, `--strict`, `--allow-empty`). |
+| `bundle-init --plan <plan.json> [options] [<verified-file>...]` | Generates a pre-filled `bundle-record.json` from `squad_planner` output and `provenanceScaffold` (substituting `idMap`/recorded IDs, computing `verifiedFiles` SHA-256 digests, and reading `lead/report.md` verdict when present; supports `--out <record.json> [--replace]`). |
 | `verdict [--integrity] <report.md>` | Calls `mcp/verdicts.mjs` (`parseContentVerdict` or `parseIntegrityVerdict`) to parse a strict single-line `Content Verdict: PASS\|FAIL\|BLOCKED` (legacy alias `Verdict: ...`), or `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` with `--integrity`, rejecting hedged or conflicting lines. |
 | `fingerprint <file...>` | Maps workspace-relative file paths to SHA-256 digests for `verifiedFiles`. Capture hashes before and after checks on final work inputs. |
 | `inspect <record.json>` | Checks the recorded cohort against native messages and readable reports (`workspace`, ordered `assignments` with `conversationId` and `report`, and `handoffs` with native `sender` and exact `message`). |

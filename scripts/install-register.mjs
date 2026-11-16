@@ -10,6 +10,7 @@
  * - Provisions executable agy-squad CLI shims in ~/.gemini/antigravity/bin/
  */
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +40,146 @@ const mcpJsonPath = path.join(geminiConfigDir, "mcp_config.json");
 const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
 const antigravityMcpRootDir = path.join(homeDir, ".gemini", "antigravity", "mcp");
 const antigravityBinDir = path.join(homeDir, ".gemini", "antigravity", "bin");
+const MIN_AGY_CONTEXT_VERSION = "2.0.0";
+const MIN_RTK_VERSION = "1.1.0";
+
+function parseSemver(versionStr) {
+  if (!versionStr || typeof versionStr !== "string") return null;
+  const match = versionStr.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+    version: `${match[1]}.${match[2]}.${match[3]}`
+  };
+}
+
+function isVersionAtLeast(semver, minMajor, minMinor, minPatch = 0) {
+  if (!semver) return false;
+  if (semver.major !== minMajor) return semver.major > minMajor;
+  if (semver.minor !== minMinor) return semver.minor > minMinor;
+  return semver.patch >= minPatch;
+}
+
+function probeBinaryVersion(target, args = ["--version"]) {
+  const isWin = os.platform() === "win32";
+  const isBareCommand = !target.includes("/") && !target.includes("\\");
+  const useCmdShell = isWin && (isBareCommand || /\.(?:cmd|bat)$/i.test(target));
+  try {
+    const res = useCmdShell
+      ? spawnSync("cmd.exe", ["/d", "/c", target, ...args], {
+          encoding: "utf8",
+          timeout: 3000,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"]
+        })
+      : spawnSync(target, args, {
+          encoding: "utf8",
+          timeout: 3000,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"]
+        });
+    if (res.error || res.status !== 0) return null;
+    const raw = (res.stdout || "").trim() || (res.stderr || "").trim();
+    const semver = parseSemver(raw);
+    if (!semver) return null;
+    return { raw, semver };
+  } catch {
+    return null;
+  }
+}
+
+export function detectCompanionDependencies() {
+  const isWin = os.platform() === "win32";
+  const activeHome = process.env.AGY_TEST_PROFILE_DIR || homeDir;
+  const activeBinDir = path.join(activeHome, ".gemini", "antigravity", "bin");
+  const activePluginsDir = path.join(activeHome, ".gemini", "config", "plugins");
+
+  const agyContextCandidates = isWin
+    ? [
+        path.join(activeBinDir, "agy-context.cmd"),
+        path.join(activeBinDir, "agy-context.exe"),
+        "agy-context"
+      ]
+    : [path.join(activeBinDir, "agy-context"), "agy-context"];
+
+  let agyContext = {
+    available: false,
+    installed: false,
+    compatible: false,
+    version: null,
+    rawVersion: null,
+    path: null,
+    minVersion: MIN_AGY_CONTEXT_VERSION
+  };
+  for (const candidate of agyContextCandidates) {
+    const isBare = !candidate.includes("/") && !candidate.includes("\\");
+    if (!isBare && !fs.existsSync(candidate)) continue;
+    const probed = probeBinaryVersion(candidate);
+    if (!probed) continue;
+    const compatible = isVersionAtLeast(probed.semver, 2, 0, 0);
+    const entry = {
+      available: compatible,
+      installed: true,
+      compatible,
+      version: probed.semver.version,
+      rawVersion: probed.raw,
+      path: candidate,
+      minVersion: MIN_AGY_CONTEXT_VERSION
+    };
+    if (compatible) {
+      agyContext = entry;
+      break;
+    }
+    if (!agyContext.installed) agyContext = entry;
+  }
+
+  const rtkCandidates = isWin
+    ? [
+        "rtk",
+        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk.exe"),
+        path.join(activeBinDir, "rtk.exe")
+      ]
+    : [
+        "rtk",
+        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk"),
+        path.join(activeBinDir, "rtk")
+      ];
+
+  let rtk = {
+    available: false,
+    installed: false,
+    compatible: false,
+    version: null,
+    rawVersion: null,
+    path: null,
+    minVersion: MIN_RTK_VERSION
+  };
+  for (const candidate of rtkCandidates) {
+    const isBare = !candidate.includes("/") && !candidate.includes("\\");
+    if (!isBare && !fs.existsSync(candidate)) continue;
+    const probed = probeBinaryVersion(candidate);
+    if (!probed) continue;
+    const compatible = isVersionAtLeast(probed.semver, 1, 1, 0);
+    const entry = {
+      available: compatible,
+      installed: true,
+      compatible,
+      version: probed.semver.version,
+      rawVersion: probed.raw,
+      path: candidate,
+      minVersion: MIN_RTK_VERSION
+    };
+    if (compatible) {
+      rtk = entry;
+      break;
+    }
+    if (!rtk.installed) rtk = entry;
+  }
+
+  return { agyContext, rtk };
+}
 
 function normalizeSlash(p) {
   return p.replace(/\\/g, "/");
@@ -89,7 +230,8 @@ function readAndValidateJsonFile(filePath, label) {
   return parsed;
 }
 
-export function detectExistingInstallation() {
+export function detectExistingInstallation(options = {}) {
+  const includeCompanions = options.includeCompanions !== false;
   const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
     plugin: { exists: false, skillsReady: false, docsReady: false, path: pluginDest },
@@ -102,7 +244,8 @@ export function detectExistingInstallation() {
       globalPath: mcpJsonPath
     },
     cliShim: { exists: false, path: antigravityBinDir },
-    config: { enabled: false, path: configJsonPath }
+    config: { enabled: false, path: configJsonPath },
+    companions: null
   };
 
   try {
@@ -178,6 +321,10 @@ export function detectExistingInstallation() {
       details.config.enabled = pluginDefaultEnabled;
     }
   } catch {}
+
+  if (includeCompanions) {
+    details.companions = detectCompanionDependencies();
+  }
 
   const isInstalled =
     details.plugin.exists &&
@@ -304,7 +451,7 @@ export async function runCheckOnly(options = {}) {
   readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   readAndValidateJsonFile(configJsonPath, "config.json");
 
-  const status = detectExistingInstallation();
+  const status = detectExistingInstallation({ includeCompanions: false });
   log(`[OK] Read-only check passed (currently installed: ${status.isInstalled ? "YES" : "NO"}).`);
   return status;
 }
@@ -316,7 +463,7 @@ export async function runInstall(options = {}) {
 
   const validatedMcp = readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   const validatedConfig = readAndValidateJsonFile(configJsonPath, "config.json");
-  const existing = detectExistingInstallation();
+  const existing = detectExistingInstallation({ includeCompanions: false });
 
   if (existing.isInstalled) {
     log("Existing Agy-Squad installation detected:");
@@ -414,7 +561,7 @@ export async function runInstall(options = {}) {
 
   const elapsed = (performance.now() - startTime).toFixed(1);
   log(`\nAgy-Squad installation ${existing.isInstalled ? "synchronized & up-to-date" : "completed"} in ${elapsed}ms!\n`);
-  return { ...detectExistingInstallation(), isInstalled: true, elapsedMs: elapsed };
+  return { ...detectExistingInstallation({ includeCompanions: false }), isInstalled: true, elapsedMs: elapsed };
 }
 
 export async function runRestoreBackups(options = {}) {
@@ -504,24 +651,35 @@ export async function runUninstall(options = {}) {
   }
 
   log("\nAgy-Squad uninstallation complete.");
-  return detectExistingInstallation();
+  return detectExistingInstallation({ includeCompanions: false });
 }
 
-export function printStatus() {
-  const status = detectExistingInstallation();
-  console.log("Checking Agy-Squad installation status...\n");
-  console.log(
+function formatCompanionLine(label, info, note) {
+  if (info?.available) {
+    return `- ${label}: AVAILABLE (${info.rawVersion || info.version} at ${info.path})`;
+  }
+  if (info?.installed && !info?.compatible) {
+    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal — ${note})`;
+  }
+  return `- ${label}: MISSING (non-fatal — ${note})`;
+}
+
+export function printStatus(options = {}) {
+  const log = options.silent ? () => {} : console.log;
+  const status = detectExistingInstallation({ includeCompanions: true });
+  log("Checking Agy-Squad installation status...\n");
+  log(
     `- Native Plugin Link: ${status.details.plugin.exists ? "ACTIVE" : "MISSING"} (${status.details.plugin.path})`
   );
-  console.log(
+  log(
     `- Governance Skills (pr-review, full-review, self-diagnosis, swarm-governance): ${
       status.details.plugin.skillsReady ? "READY" : "MISSING"
     }`
   );
-  console.log(
+  log(
     `- Plugin Docs & Links: ${status.details.plugin.docsReady ? "READY" : "MISSING"} (${path.join(status.details.plugin.path, "docs")})`
   );
-  console.log(
+  log(
     `- MCP Server (${PLUGIN_KEY}): ${
       status.details.mcp.registered
         ? "REGISTERED (plugin mcp_config.json only)"
@@ -530,18 +688,24 @@ export function printStatus() {
           : "MISSING"
     } (${status.details.mcp.path})`
   );
-  console.log(
+  log(
     `- CLI Shim (agy-squad): ${status.details.cliShim.exists ? "INSTALLED" : "MISSING"} (${status.details.cliShim.path})`
   );
-  console.log(
+  log(
     `- Plugin Enabled (config.json / plugin.json): ${status.details.config.enabled ? "ENABLED" : "DISABLED"}`
   );
+  const { agyContext, rtk } = status.details.companions || {};
+  log(formatCompanionLine("Companion CLI (agy-context >= 2.0.0)", agyContext, "needed for integrity trace audits"));
+  log(formatCompanionLine("Companion Optimizer (rtk >= 1.1.0)", rtk, "needed by Agy-Context-Saver hooks"));
+  if (!agyContext?.available || !rtk?.available) {
+    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.0) + RTK (>= 1.1.0) for full live integrity audits.");
+  }
   const overallLabel = status.isInstalled
     ? "HEALTHY & ACTIVE"
     : !status.details.config.enabled
       ? "DISABLED"
       : "NOT INSTALLED";
-  console.log(`\nOverall Status: ${overallLabel}`);
+  log(`\nOverall Status: ${overallLabel}`);
   return status;
 }
 
@@ -553,7 +717,7 @@ Usage:
   node scripts/install-register.mjs [command/option]
 
 Commands & Options:
-  --status, status             Check live integration status (plugin, skills, MCP server, CLI shim)
+  --status, status [--json]    Check live integration status (plugin, skills, MCP server, CLI shim, companions)
   --check, -c                  Run read-only pre-flight validation check without writing changes
   --uninstall, uninstall       Remove plugin link, MCP entry, CLI shims, and schema caches
   --restore-backups            Restore original configuration backup files (*.bak)
@@ -569,6 +733,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const isStatus = args.includes("--status") || args.includes("status");
   const isCheck = args.includes("--check") || args.includes("-c");
   const isRestoreBackups = args.includes("--restore-backups") || args.includes("restore-backups");
+  const isJson = args.includes("--json");
 
   if (isHelp) {
     printCliHelp();
@@ -581,7 +746,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   try {
     if (isStatus) {
-      const st = printStatus();
+      const st = printStatus({ silent: isJson });
+      if (isJson) {
+        console.log(JSON.stringify(st, null, 2));
+      }
       process.exit(st.isInstalled ? 0 : 1);
     } else if (isCheck) {
       await runCheckOnly();

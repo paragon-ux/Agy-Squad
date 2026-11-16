@@ -102,6 +102,63 @@ try {
   assert.equal(statusRes.status, 0, statusRes.stderr || statusRes.stdout);
   assert.match(statusRes.stdout, /Overall Status: HEALTHY & ACTIVE/);
   assert.match(statusRes.stdout, /Plugin Docs & Links: READY/);
+  assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.0\):/);
+  assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
+
+  // SQ-DEP-005: Non-fatal companion checks report MISSING, OUTDATED, and AVAILABLE cleanly across isolated profiles
+  const emptyBinDir = path.join(tmpProfile, "empty-path-bin");
+  fs.mkdirSync(emptyBinDir, { recursive: true });
+  const missingCompanionStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+    cwd: repoRoot,
+    env: { ...testEnv, PATH: emptyBinDir },
+    encoding: "utf8"
+  });
+  assert.equal(missingCompanionStatus.status, 0, "Missing companions must be non-fatal when Agy-Squad is installed (SQ-DEP-005)");
+  const missingCompanionJson = JSON.parse(missingCompanionStatus.stdout);
+  assert.equal(missingCompanionJson.isInstalled, true);
+  assert.equal(missingCompanionJson.details.companions.agyContext.available, false);
+  assert.equal(missingCompanionJson.details.companions.rtk.available, false);
+
+  const companionBinDir = path.join(tmpProfile, ".gemini", "antigravity", "bin");
+  const fakePathBinDir = path.join(tmpProfile, "fake-path-bin");
+  fs.mkdirSync(companionBinDir, { recursive: true });
+  fs.mkdirSync(fakePathBinDir, { recursive: true });
+  const writeFakeVersionBinary = (dir, baseName, versionText) => {
+    if (os.platform() === "win32") {
+      const p = path.join(dir, `${baseName}.cmd`);
+      fs.writeFileSync(p, `@echo off\r\necho ${versionText}\r\n`);
+      return p;
+    }
+    const p = path.join(dir, baseName);
+    fs.writeFileSync(p, `#!/bin/sh\necho "${versionText}"\n`, { mode: 0o755 });
+    return p;
+  };
+  const fakeAgyCtxPath = writeFakeVersionBinary(companionBinDir, "agy-context", "1.8.0");
+  const fakeRtkPath = writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 0.9.5");
+  const outdatedCompanionStatus = spawnSync(process.execPath, [cli, "status"], {
+    cwd: repoRoot,
+    env: { ...testEnv, PATH: fakePathBinDir },
+    encoding: "utf8"
+  });
+  assert.equal(outdatedCompanionStatus.status, 0, "Outdated companions must remain non-fatal");
+  assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.0\): OUTDATED/);
+  assert.match(outdatedCompanionStatus.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\): OUTDATED/);
+
+  writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.1");
+  writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 1.1.0");
+  const availCompanionStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+    cwd: repoRoot,
+    env: { ...testEnv, PATH: fakePathBinDir },
+    encoding: "utf8"
+  });
+  assert.equal(availCompanionStatus.status, 0, availCompanionStatus.stderr);
+  const availCompanionJson = JSON.parse(availCompanionStatus.stdout);
+  assert.equal(availCompanionJson.details.companions.agyContext.available, true);
+  assert.equal(availCompanionJson.details.companions.agyContext.version, "2.0.1");
+  assert.equal(availCompanionJson.details.companions.rtk.available, true);
+  assert.equal(availCompanionJson.details.companions.rtk.version, "1.1.0");
+  fs.rmSync(fakeAgyCtxPath, { force: true });
+  fs.rmSync(fakeRtkPath, { force: true });
 
   // SQ-DEP-001: Plugin mcp_config.json is canonical; duplicate global entry & stale caches stripped while foreign kept
   const pluginDir = path.join(configDir, "plugins", "agy-squad");
