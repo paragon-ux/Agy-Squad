@@ -290,11 +290,17 @@ try {
   write(malformedVerdict, "Looks fine without verdict token.\n");
   write(malformedIntegrity, "Integrity Verdict: CLEAN\nIntegrity Verdict: INTEGRITY VIOLATION\n");
   const symlinkReport = "scratch/agy-squad/symlink-report.md";
-  fs.symlinkSync(outsideFile, path.join(root, symlinkReport));
+  let symlinkReportCreated = false;
+  try {
+    fs.symlinkSync(outsideFile, path.join(root, symlinkReport), "file");
+    symlinkReportCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
   for (const [badArgs, expectedStderr] of [
     [["verdict", `../${path.basename(outsideFile)}`], /workspace-relative/],
     [["verdict", outsideFile], /workspace-relative/],
-    [["verdict", symlinkReport], /Unsupported|symlink|ELOOP/i],
+    ...(symlinkReportCreated ? [[["verdict", symlinkReport], /Unsupported|symlink|ELOOP/i]] : []),
     [["bundle", outsideFile], /workspace-relative/],
     [["verdict", lead, "--integrity"], /Integrity Verdict:/],
     [["verdict", malformedVerdict], /Content Verdict:/],

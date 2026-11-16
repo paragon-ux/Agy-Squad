@@ -163,10 +163,18 @@ try {
   assert.throws(() => pruneReports(root, bundle, accepted.sha256), /report changed/);
   assert.ok(exists(first) && exists(second));
   fs.unlinkSync(path.join(root, second));
-  fs.symlinkSync(path.join(root, "fixture.txt"), path.join(root, second));
-  assert.throws(() => pruneReports(root, bundle, accepted.sha256), /ELOOP/);
-  assert.ok(exists(first) && exists(second));
-  fs.unlinkSync(path.join(root, second));
+  let reportSymlinkCreated = false;
+  try {
+    fs.symlinkSync(path.join(root, "fixture.txt"), path.join(root, second), "file");
+    reportSymlinkCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (reportSymlinkCreated) {
+    assert.throws(() => pruneReports(root, bundle, accepted.sha256), /ELOOP/);
+    assert.ok(exists(first) && exists(second));
+    fs.unlinkSync(path.join(root, second));
+  }
   write(second, secondEvidence);
 
   // Simulate interruption after the first unlink, then retry the accepted cleanup.
@@ -196,11 +204,19 @@ try {
   assert.equal(cliVerify.status, 0, cliVerify.stderr);
   assert.deepEqual(JSON.parse(cliVerify.stdout), accepted);
   const symlinkCli = path.join(root, "agy-squad-link.mjs");
-  fs.symlinkSync(agySquadCli, symlinkCli);
-  const cliViaSymlink = spawnSync(process.execPath, [symlinkCli, "verify", bundle], { cwd: root, encoding: "utf8" });
-  assert.equal(cliViaSymlink.status, 0, cliViaSymlink.stderr);
-  assert.deepEqual(JSON.parse(cliViaSymlink.stdout), accepted);
-  fs.unlinkSync(symlinkCli);
+  let cliSymlinkCreated = false;
+  try {
+    fs.symlinkSync(agySquadCli, symlinkCli, "file");
+    cliSymlinkCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (cliSymlinkCreated) {
+    const cliViaSymlink = spawnSync(process.execPath, [symlinkCli, "verify", bundle], { cwd: root, encoding: "utf8" });
+    assert.equal(cliViaSymlink.status, 0, cliViaSymlink.stderr);
+    assert.deepEqual(JSON.parse(cliViaSymlink.stdout), accepted);
+    fs.unlinkSync(symlinkCli);
+  }
   assert.throws(() => verifyBundle(root, "scratch\\agy-squad\\bundle.json"), /workspace-relative/);
 
   // Verify custom reportRoot slot bundling (F-02), CLI fingerprint/inspect/bundle/prune, and multiline handoff rejection.
@@ -679,15 +695,17 @@ try {
   const rootSymlinkAlias = path.join(path.dirname(root), `alias-${path.basename(root)}`);
   let aliasCreated = false;
   try {
-    fs.symlinkSync(root, rootSymlinkAlias, "dir");
+    fs.symlinkSync(root, rootSymlinkAlias, os.platform() === "win32" ? "junction" : "dir");
     aliasCreated = true;
-  } catch {}
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
   if (aliasCreated) {
     try {
       assert.deepEqual(fingerprint(rootSymlinkAlias, ["reg-input.txt"]), regBaseRecord.verifiedFiles);
       assert.deepEqual(inspectHandoffs(rootSymlinkAlias, blockedRecord).map(s => s.status), ["PARTIAL"]);
     } finally {
-      fs.rmSync(rootSymlinkAlias, { force: true });
+      fs.rmSync(rootSymlinkAlias, { recursive: true, force: true });
     }
   }
 
@@ -817,9 +835,11 @@ try {
     fs.mkdirSync(symTargetDir, { recursive: true });
     let symlinkCreated = false;
     try {
-      fs.symlinkSync(secretFile, path.join(svcWtSym, s1Slot));
+      fs.symlinkSync(secretFile, path.join(svcWtSym, s1Slot), "file");
       symlinkCreated = true;
-    } catch {}
+    } catch (err) {
+      if (err?.code !== "EPERM") throw err;
+    }
     if (symlinkCreated) {
       const symCollect = spawnSync(
         process.execPath,
@@ -926,12 +946,22 @@ try {
     assert.equal(wave2Collect.status, 0, wave2Collect.stderr);
     assert.equal(fs.existsSync(path.join(svcCoord, "scratch/wave2/squad-alpha/lead/report.md")), true);
 
-    if (symlinkCreated) {
-      const symSlotDirWt = path.join(svcRoot, "wt-sym-slotdir");
-      const outsideSlotDir = path.join(svcRoot, "outside-slot-dir");
-      writeAt(outsideSlotDir, "report.md", "LEAKED");
-      writeAt(symSlotDirWt, leadSlot, "Content Verdict: PASS\nLead ok.\n");
-      fs.symlinkSync(outsideSlotDir, path.join(symSlotDirWt, "scratch/agy-squad/squad-alpha/specialist-1"));
+    const symSlotDirWt = path.join(svcRoot, "wt-sym-slotdir");
+    const outsideSlotDir = path.join(svcRoot, "outside-slot-dir");
+    writeAt(outsideSlotDir, "report.md", "LEAKED");
+    writeAt(symSlotDirWt, leadSlot, "Content Verdict: PASS\nLead ok.\n");
+    let slotDirLinkCreated = false;
+    try {
+      fs.symlinkSync(
+        outsideSlotDir,
+        path.join(symSlotDirWt, "scratch/agy-squad/squad-alpha/specialist-1"),
+        os.platform() === "win32" ? "junction" : "dir"
+      );
+      slotDirLinkCreated = true;
+    } catch (err) {
+      if (err?.code !== "EPERM") throw err;
+    }
+    if (slotDirLinkCreated) {
       const symSlotRes = spawnSync(
         process.execPath,
         [agySquadCli, "collect", "--squad", "alpha", "--from", symSlotDirWt, "--overwrite"],

@@ -105,6 +105,23 @@ try {
     assert.match(linkCheck.stdout, /Read-only check passed/);
   }
 
+  for (const badDirectArgs of [
+    ["--bogus-flag"],
+    ["bogus-arg"],
+    ["--status", "--uninstall"],
+    ["--check", "--status"],
+    ["--json"],
+    ["--help", "--check"]
+  ]) {
+    const badDirect = spawnSync(process.execPath, [path.join(repoRoot, "scripts", "install-register.mjs"), ...badDirectArgs], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.notEqual(badDirect.status, 0, `Expected direct install-register.mjs '${badDirectArgs.join(" ")}' to fail`);
+    assert.equal(fs.existsSync(path.join(tmpProfile, ".gemini")), false, "Rejected direct flags must not mutate profile");
+  }
+
   // 3. Seed legacy duplicate global MCP registration, stale schema caches & foreign configs, then run setup
   const configDir = path.join(tmpProfile, ".gemini", "config");
   const mcpRootDir = path.join(tmpProfile, ".gemini", "antigravity", "mcp");
@@ -147,6 +164,7 @@ try {
   assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
 
   const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
+  assert.ok(posixShimBody.startsWith("#!/bin/sh\n"), "POSIX shim must use #!/bin/sh so fallback works when PATH lacks sh");
   assert.match(posixShimBody, /command -v node/);
   const expectedExecPath = process.execPath.replace(/\\/g, "/").replace(/(["\\$`])/g, "\\$1");
   const expectedCliTarget = path
@@ -194,16 +212,38 @@ try {
   const specialShimBody = fs.readFileSync(specialShimPath, "utf8");
   assert.ok(
     specialShimBody.includes("space \\$dollar/.gemini/config/plugins/agy-squad/bin/agy-squad.mjs"),
-    "POSIX shim must escape $, quotes, backticks, and backslashes in cliTarget"
+    "POSIX shim must escape space and $ in cliTarget"
   );
   if (os.platform() !== "win32") {
-    const posixFallbackRun = spawnSync("/bin/sh", [specialShimPath, "--version"], {
+    const posixFallbackRun = spawnSync(specialShimPath, ["--version"], {
       cwd: repoRoot,
       env: withEnvPath(emptyBinDir, testEnv),
       encoding: "utf8"
     });
     assert.equal(posixFallbackRun.status, 0, posixFallbackRun.stderr || posixFallbackRun.stdout);
     assert.match(posixFallbackRun.stdout.trim(), /^\d+\.\d+\.\d+/);
+
+    const quotedProfile = path.join(tmpProfile, 'quote "q" `bt` $var');
+    fs.mkdirSync(quotedProfile, { recursive: true });
+    const quotedSetup = spawnSync(process.execPath, [cli, "setup"], {
+      cwd: repoRoot,
+      env: { ...testEnv, AGY_TEST_PROFILE_DIR: quotedProfile },
+      encoding: "utf8"
+    });
+    assert.equal(quotedSetup.status, 0, quotedSetup.stderr || quotedSetup.stdout);
+    const quotedShimPath = path.join(quotedProfile, ".gemini", "antigravity", "bin", "agy-squad");
+    const quotedShimBody = fs.readFileSync(quotedShimPath, "utf8");
+    assert.ok(
+      quotedShimBody.includes('quote \\"q\\" \\`bt\\` \\$var/.gemini/config/plugins/agy-squad/bin/agy-squad.mjs'),
+      "POSIX shim must escape quotes, backticks, and $ in cliTarget"
+    );
+    const quotedFallbackRun = spawnSync(quotedShimPath, ["--version"], {
+      cwd: repoRoot,
+      env: withEnvPath(emptyBinDir, testEnv),
+      encoding: "utf8"
+    });
+    assert.equal(quotedFallbackRun.status, 0, quotedFallbackRun.stderr || quotedFallbackRun.stdout);
+    assert.match(quotedFallbackRun.stdout.trim(), /^\d+\.\d+\.\d+/);
   }
 
   const companionBinDir = path.join(tmpProfile, ".gemini", "antigravity", "bin");
@@ -274,7 +314,16 @@ try {
   fs.writeFileSync(cfgPath, JSON.stringify(installedCfg, null, 2) + "\n");
 
   // SQ-DEP-004: Copy fallback replaces prior install cleanly & Windows .cmd shim propagates errorlevel without cmd parse-time bugs
-  const { runInstall: runAgySquadInstall, detectExistingInstallation, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  const { runInstall: runAgySquadInstall, detectExistingInstallation, formatPosixShim, formatWindowsCmdShim } = await import("../scripts/install-register.mjs");
+  const formattedPosix = formatPosixShim(
+    'C:\\Program Files\\Agy $Squad\\"root"`1`',
+    'C:\\Program Files\\node "24" `bt` $v\\node.exe'
+  );
+  assert.ok(formattedPosix.startsWith("#!/bin/sh\n"));
+  assert.ok(
+    formattedPosix.includes('exec "C:/Program Files/node \\"24\\" \\`bt\\` \\$v/node.exe" "C:/Program Files/Agy \\$Squad/\\"root\\"\\`1\\`/bin/agy-squad.mjs" "$@"'),
+    "formatPosixShim must normalize backslashes to slashes and escape quotes, backticks, and $ in both execPath and targetRoot"
+  );
   const staleSchemaSubdir = path.join(mcpRootDir, "agy-squad_dup_probe");
   fs.mkdirSync(staleSchemaSubdir, { recursive: true });
   try {
@@ -329,6 +378,14 @@ try {
   assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, false);
   fs.writeFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), savedSwarmSkill);
   assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, true);
+
+  if (os.platform() !== "win32") {
+    const installedPosixShim = path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad");
+    fs.chmodSync(installedPosixShim, 0o644);
+    assert.equal(detectExistingInstallation({ includeCompanions: false }).details.cliShim.exists, false);
+    fs.chmodSync(installedPosixShim, 0o755);
+    assert.equal(detectExistingInstallation({ includeCompanions: false }).details.cliShim.exists, true);
+  }
 
   for (const badArgs of [
     ["setup", "--bogus-flag"],

@@ -308,7 +308,14 @@ export function detectExistingInstallation(options = {}) {
   try {
     const isWin = os.platform() === "win32";
     const shimPath = path.join(antigravityBinDir, isWin ? "agy-squad.cmd" : "agy-squad");
-    details.cliShim.exists = fs.existsSync(shimPath);
+    if (fs.existsSync(shimPath)) {
+      if (isWin) {
+        details.cliShim.exists = true;
+      } else {
+        fs.accessSync(shimPath, fs.constants.X_OK);
+        details.cliShim.exists = true;
+      }
+    }
   } catch {}
 
   let pluginDefaultEnabled = true;
@@ -433,21 +440,25 @@ export function formatWindowsCmdShim(targetRoot) {
   ].join("\r\n");
 }
 
-async function installCliShims({ targetRoot, log }) {
-  await fsPromises.mkdir(antigravityBinDir, { recursive: true });
+export function formatPosixShim(targetRoot, execPath = process.execPath) {
   const cliTarget = normalizeSlash(path.join(targetRoot, "bin", "agy-squad.mjs")).replace(/(["\\$`])/g, "\\$1");
-  const posixShimPath = path.join(antigravityBinDir, "agy-squad");
-  const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
-
-  const escapedExecPath = normalizeSlash(process.execPath).replace(/(["\\$`])/g, "\\$1");
-  const posixContent = [
-    "#!/usr/bin/env sh",
+  const escapedExecPath = normalizeSlash(execPath).replace(/(["\\$`])/g, "\\$1");
+  return [
+    "#!/bin/sh",
     "if command -v node >/dev/null 2>&1; then",
     `  exec node "${cliTarget}" "$@"`,
     "fi",
     `exec "${escapedExecPath}" "${cliTarget}" "$@"`,
     ""
   ].join("\n");
+}
+
+async function installCliShims({ targetRoot, log }) {
+  await fsPromises.mkdir(antigravityBinDir, { recursive: true });
+  const posixShimPath = path.join(antigravityBinDir, "agy-squad");
+  const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
+
+  const posixContent = formatPosixShim(targetRoot);
   const cmdContent = formatWindowsCmdShim(targetRoot);
 
   const posixChanged = await safeWriteFileIfChanged(posixShimPath, posixContent, 0o755);
@@ -777,6 +788,20 @@ function isDirectExecution() {
 
 if (isDirectExecution()) {
   const args = process.argv.slice(2);
+  const knownFlags = new Set(["--help", "-h", "--uninstall", "--status", "--check", "-c", "--restore-backups", "--json"]);
+  const knownPositionals = new Set(["help", "uninstall", "status", "restore-backups"]);
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      if (!knownFlags.has(arg)) {
+        console.error(`Unknown option '${arg}'. Run 'node scripts/install-register.mjs --help' for usage.`);
+        process.exit(1);
+      }
+    } else if (!knownPositionals.has(arg)) {
+      console.error(`Unknown argument '${arg}'. Run 'node scripts/install-register.mjs --help' for usage.`);
+      process.exit(1);
+    }
+  }
+
   const isHelp = args.includes("--help") || args.includes("-h") || args.includes("help");
   const isUninstall = args.includes("--uninstall") || args.includes("uninstall");
   const isStatus = args.includes("--status") || args.includes("status");
@@ -785,11 +810,23 @@ if (isDirectExecution()) {
   const isJson = args.includes("--json");
 
   if (isHelp) {
+    if (isUninstall || isStatus || isCheck || isRestoreBackups || isJson) {
+      console.error("Conflicting flags: --help cannot be combined with operational flags.");
+      process.exit(1);
+    }
     printCliHelp();
     process.exit(0);
   }
-  if (isCheck && (isUninstall || isRestoreBackups)) {
-    console.error("Conflicting flags: --check is read-only and cannot be combined with --uninstall or --restore-backups.");
+  if ((isCheck || isStatus) && (isUninstall || isRestoreBackups)) {
+    console.error("Conflicting flags: read-only flags (--check, --status) cannot be combined with --uninstall or --restore-backups.");
+    process.exit(1);
+  }
+  if (isCheck && isStatus) {
+    console.error("Conflicting flags: specify either --check or --status, not both.");
+    process.exit(1);
+  }
+  if (isJson && !isStatus) {
+    console.error("Invalid flag: --json is only supported with --status.");
     process.exit(1);
   }
 
