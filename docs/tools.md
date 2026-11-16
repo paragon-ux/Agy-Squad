@@ -118,11 +118,11 @@ Run `node bin/agy-squad.mjs` from the shared workspace root. (`mcp/handoffs.mjs`
 | `--scope <path>` | `plan` | Repeatable. Workspace-relative scope paths for task-based planning. |
 | `--role <title>` | `plan` | Repeatable. Specialist role titles for task-based planning. |
 | `--no-integrity` | `plan` | Omit the `integrity_auditor` plan stage and set `requireIntegrityAudit: false` in `bundleRecordTemplates`. |
-| `--report-root <path>` | `plan` | Custom workspace-relative root for report slots instead of `scratch/agy-squad`. |
+| `--report-root <path>` | `plan`, `collect`, `bundle-init` | Custom workspace-relative root for report slots instead of `scratch/agy-squad`. |
 | `--integrity` | `verdict` | Parse `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` instead of a content verdict. |
-| `--allow-unaudited` | `bundle` | Opt out of the default `requireIntegrityAudit: true` gate. |
-| `--allow-non-passing` | `digest`, `bundle` | Allow Archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
-| `--allow-partial` | `digest`, `bundle` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
-| `--replace` | `bundle` | Allow overwriting an existing `lead/report.sources.json` bundle from a prior run. |
+| `--allow-unaudited` | `bundle`, `bundle-init` | Opt out of the default `requireIntegrityAudit: true` gate. |
+| `--allow-non-passing` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
+| `--allow-partial` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
+| `--replace` | `bundle`, `bundle-init` | Allow overwriting an existing `lead/report.sources.json` bundle or `--out` record file. |
 | `--predecessor <sha256>` | `bundle` | Require the existing `lead/report.sources.json` bundle's SHA-256 to match `<sha256>` before overwriting. |
 | `--keep-reports` | `prune` | Retain loose `specialist-<N>/report.md` files after `bundle` and `verify` succeed. |

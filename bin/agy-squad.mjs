@@ -173,9 +173,23 @@ async function readJsonInput(targetRoot, pathOrDash, label) {
   if (pathOrDash === "-") {
     raw = await readStreamText(process.stdin);
   } else {
-    const normalized = pathOrDash.replace(/\\/g, "/");
-    if (!path.isAbsolute(pathOrDash) && !normalized.split("/").includes("..")) {
-      raw = decodeUtf8(readFile(targetRoot, normalized), normalized);
+    const normalized = pathOrDash.trim().replace(/\\/g, "/");
+    const stripped = normalized.replace(/^(?:\.\/)+/, "");
+    if (!path.isAbsolute(pathOrDash) && stripped && !stripped.split("/").includes("..")) {
+      try {
+        raw = decodeUtf8(readFile(targetRoot, stripped), stripped);
+      } catch (err) {
+        const cwdResolved = path.resolve(pathOrDash);
+        if (err.code === "ENOENT" && path.dirname(cwdResolved) !== targetRoot && fs.existsSync(cwdResolved)) {
+          const lstat = fs.lstatSync(cwdResolved);
+          if (lstat.isSymbolicLink() || !lstat.isFile()) {
+            throw new Error(`${label} path must be a regular non-symlink file: ${pathOrDash}`);
+          }
+          raw = decodeUtf8(fs.readFileSync(cwdResolved), pathOrDash);
+        } else {
+          throw err;
+        }
+      }
     } else {
       const resolved = path.resolve(pathOrDash);
       const lstat = fs.lstatSync(resolved);
@@ -404,7 +418,7 @@ async function main(args) {
       if (typeof values.out !== "string" || !values.out.trim() || values.out.includes("\\") || path.isAbsolute(values.out)) {
         throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
       }
-      const outRel = values.out.trim();
+      const outRel = values.out.trim().replace(/^(?:\.\/)+/, "");
       if (outRel.split("/").some(p => !p || p === "." || p === "..") || !outRel.toLowerCase().endsWith(".json")) {
         throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
       }

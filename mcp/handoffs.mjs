@@ -381,29 +381,51 @@ function canonicalSnapshotDigest(squadId, synthesisSha, verifiedFiles, reports) 
 
 function listCohortSlotsIfPresent(root, cohortRelDir) {
   const fullDir = path.join(root, cohortRelDir);
-  if (!fs.existsSync(fullDir)) return [];
+  let dirLstat;
+  try {
+    dirLstat = fs.lstatSync(fullDir);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  if (dirLstat.isSymbolicLink()) {
+    const err = new Error(`ELOOP: symlinked audit directory is unsupported: ${cohortRelDir}`);
+    err.code = "ELOOP";
+    throw err;
+  }
   const realDir = fs.realpathSync(fullDir);
   if (realDir !== fullDir) {
     throw new Error(`Symlinked audit directory is unsupported: ${cohortRelDir}`);
   }
-  if (!fs.lstatSync(fullDir).isDirectory()) {
+  if (!dirLstat.isDirectory()) {
     throw new Error(`Expected directory for audit cohort: ${cohortRelDir}`);
   }
   const entries = fs.readdirSync(fullDir, { withFileTypes: true });
   const slots = [];
   const specialistEntries = [];
   for (const entry of entries) {
-    if (entry.name === "lead" && entry.isDirectory()) {
-      const rel = `${cohortRelDir}/lead/report.md`;
-      if (fs.existsSync(path.join(root, rel))) slots.push(rel);
+    const isLead = entry.name === "lead";
+    const m = isLead ? null : /^specialist-([1-9]\d*)$/.exec(entry.name);
+    if (!isLead && !m) continue;
+    if (entry.isSymbolicLink()) {
+      const err = new Error(`ELOOP: symlinked slot directory is unsupported: ${cohortRelDir}/${entry.name}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+    if (!entry.isDirectory()) continue;
+    const rel = `${cohortRelDir}/${entry.name}/report.md`;
+    let slotExists = false;
+    try {
+      fs.lstatSync(path.join(root, rel));
+      slotExists = true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (!slotExists) continue;
+    if (isLead) {
+      slots.push(rel);
     } else {
-      const m = /^specialist-([1-9]\d*)$/.exec(entry.name);
-      if (m && entry.isDirectory()) {
-        const rel = `${cohortRelDir}/${entry.name}/report.md`;
-        if (fs.existsSync(path.join(root, rel))) {
-          specialistEntries.push({ num: Number(m[1]), rel });
-        }
-      }
+      specialistEntries.push({ num: Number(m[1]), rel });
     }
   }
   specialistEntries.sort((a, b) => a.num - b.num);
@@ -877,6 +899,36 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
   return { removed };
 }
 
+function rebaseSlotReportRoot(slotPath, targetReportRoot) {
+  if (typeof slotPath !== "string" || !targetReportRoot) return slotPath;
+  const match = /^.+\/(squad-[^/\s]+\/(?:lead\/report\.md|specialist-[1-9]\d*\/report\.md))$/.exec(slotPath);
+  if (!match) return slotPath;
+  const rebased = `${targetReportRoot}/${match[1]}`;
+  if (Buffer.byteLength(`READY ${rebased} — `) + SWARM_MENTION_RESERVE_BYTES >= messageLimit) {
+    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including /swarm @mention headroom): ${rebased}`);
+  }
+  return rebased;
+}
+
+function discoverSingleSquadAuditSlotsIfMatching(sources, squadId, rootPrefix) {
+  const flatAuditDir = `${rootPrefix}/squad-integrity_auditor`;
+  const matching = [];
+  for (const { real } of sources) {
+    for (const rel of listCohortSlotsIfPresent(real, flatAuditDir)) {
+      const opened = readIfPresentWithStat(real, rel, new Set());
+      if (opened) {
+        const text = decodeUtf8(opened.bytes, rel);
+        if (text.trim()) {
+          const declaredTarget = parseTargetSquad(text);
+          if (declaredTarget && declaredTarget !== squadId) continue;
+        }
+      }
+      matching.push(rel);
+    }
+  }
+  return matching;
+}
+
 function collectReportSlots(root, options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new Error("Provide valid collect options.");
@@ -899,6 +951,7 @@ function collectReportSlots(root, options = {}) {
   if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
     throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
   }
+  const overrideRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
   const resolvedSources = [];
   const seenRealSources = new Set();
@@ -925,6 +978,10 @@ function collectReportSlots(root, options = {}) {
   }
 
   const targetSlotSet = new Set();
+  const addSlot = (slot) => {
+    if (typeof slot !== "string") return;
+    targetSlotSet.add(overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -935,19 +992,19 @@ function collectReportSlots(root, options = {}) {
     for (const w of plan.workers ?? []) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof w?.lead?.reportSlot === "string") targetSlotSet.add(w.lead.reportSlot);
+      if (typeof w?.lead?.reportSlot === "string") addSlot(w.lead.reportSlot);
       for (const s of w?.specialists ?? []) {
-        if (typeof s?.reportSlot === "string") targetSlotSet.add(s.reportSlot);
+        if (typeof s?.reportSlot === "string") addSlot(s.reportSlot);
       }
     }
     for (const entry of plan.provenanceScaffold?.entries ?? []) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof entry?.reportSlot === "string") targetSlotSet.add(entry.reportSlot);
+      if (typeof entry?.reportSlot === "string") addSlot(entry.reportSlot);
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
-      if (typeof audit?.reportSlot === "string") targetSlotSet.add(audit.reportSlot);
+      if (typeof audit?.reportSlot === "string") addSlot(audit.reportSlot);
     }
     if (squadId !== undefined && !matchedPlanSquad) {
       throw new Error(`Squad '${squadId}' was not found in the supplied plan.`);
@@ -958,28 +1015,55 @@ function collectReportSlots(root, options = {}) {
       throw new Error("Provide a valid bundle or handoff record.");
     }
     validateSquadId(record.squadId);
-    const rootPrefix = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : resolveReportRoot(record);
-    targetSlotSet.add(reportPath(record.squadId, undefined, rootPrefix));
+    const rootPrefix = overrideRoot ?? resolveReportRoot(record);
+    addSlot(reportPath(record.squadId, undefined, rootPrefix));
     for (const a of record.assignments ?? []) {
-      if (typeof a?.report === "string") targetSlotSet.add(a.report);
+      if (typeof a?.report === "string") addSlot(a.report);
     }
+    let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
-      if (typeof slot === "string") targetSlotSet.add(slot);
+      if (typeof slot === "string") {
+        addSlot(slot);
+        hasExplicitAuditSlot = true;
+      }
     }
     if (typeof record.integrityReport === "string") {
-      targetSlotSet.add(record.integrityReport);
+      addSlot(record.integrityReport);
+      hasExplicitAuditSlot = true;
+    }
+    if (!hasExplicitAuditSlot && record.requireIntegrityAudit !== false) {
+      const scopedAuditDir = `${rootPrefix}/squad-${encodeURIComponent(`integrity_auditor-${record.squadId}`)}`;
+      let foundScoped = false;
+      for (const { real } of resolvedSources) {
+        for (const rel of listCohortSlotsIfPresent(real, scopedAuditDir)) {
+          targetSlotSet.add(rel);
+          foundScoped = true;
+        }
+      }
+      if (!foundScoped) {
+        for (const rel of discoverSingleSquadAuditSlotsIfMatching(resolvedSources, record.squadId, rootPrefix)) {
+          targetSlotSet.add(rel);
+        }
+      }
     }
     explicitExpectations = true;
   } else if (squadId !== undefined) {
     validateSquadId(squadId);
-    const rootPrefix = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : defaultReportRoot();
+    const rootPrefix = overrideRoot ?? defaultReportRoot();
     const workingCohortDir = `${rootPrefix}/squad-${encodeURIComponent(squadId)}`;
     const auditCohortDir = `${rootPrefix}/squad-${encodeURIComponent(`integrity_auditor-${squadId}`)}`;
+    let foundScopedAudit = false;
     for (const { real } of resolvedSources) {
       for (const rel of listCohortSlotsIfPresent(real, workingCohortDir)) {
         targetSlotSet.add(rel);
       }
       for (const rel of listCohortSlotsIfPresent(real, auditCohortDir)) {
+        targetSlotSet.add(rel);
+        foundScopedAudit = true;
+      }
+    }
+    if (!foundScopedAudit) {
+      for (const rel of discoverSingleSquadAuditSlotsIfMatching(resolvedSources, squadId, rootPrefix)) {
         targetSlotSet.add(rel);
       }
     }
@@ -1134,11 +1218,19 @@ function buildBundleRecordInit(root, options = {}) {
     if (typeof entry.workerName === "string") byWorker.set(entry.workerName, entry);
   }
 
+  const matchedIdMapKeys = new Set();
   const assignments = (Array.isArray(template.assignments) ? template.assignments : []).map((item, idx) => {
     const slotPath =
       reportRoot !== undefined ? reportPath(selectedSquadId, idx + 1, resolvedReportRoot) : item.report;
-    const entry = bySlot.get(item.report) || byWorker.get(item.conversationId);
-    const mappedId = (entry && idMap[entry.workerName]) ?? idMap[item.conversationId];
+    const entry = bySlot.get(slotPath) || bySlot.get(item.report) || byWorker.get(item.conversationId);
+    let mappedId;
+    if (entry && Object.hasOwn(idMap, entry.workerName)) {
+      mappedId = idMap[entry.workerName];
+      matchedIdMapKeys.add(entry.workerName);
+    } else if (Object.hasOwn(idMap, item.conversationId)) {
+      mappedId = idMap[item.conversationId];
+      matchedIdMapKeys.add(item.conversationId);
+    }
     let nextId = item.conversationId;
     if (typeof mappedId === "string" && mappedId.trim()) {
       nextId = mappedId.trim();
@@ -1155,6 +1247,11 @@ function buildBundleRecordInit(root, options = {}) {
       report: slotPath
     };
   });
+  for (const key of Object.keys(idMap ?? {})) {
+    if (!matchedIdMapKeys.has(key)) {
+      throw new Error(`--id-map key '${key}' did not match any worker or assignment in squad '${selectedSquadId}'.`);
+    }
+  }
 
   if (!Array.isArray(files) || files.some(f => typeof f !== "string" || !f.trim())) {
     throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
@@ -1186,7 +1283,11 @@ function buildBundleRecordInit(root, options = {}) {
       if (leadText.trim()) {
         try {
           resolvedVerdict = parseContentVerdict(leadText);
-        } catch {}
+        } catch (error) {
+          if (/(?:^|\n)\s*(?:Content\s+)?Verdict\s*:/im.test(leadText) || /^(?:PASS|FAIL|BLOCKED)\b/m.test(leadText)) {
+            throw new Error(`Existing synthesis report '${leadSlot}' contains an invalid or conflicting verdict: ${error.message}`);
+          }
+        }
       }
     }
   }
@@ -1198,14 +1299,8 @@ function buildBundleRecordInit(root, options = {}) {
       auditSlots = [...template.integrityAuditSlots];
     } else if (Array.isArray(plan.integrityAuditPlan) && plan.integrityAuditPlan.length > 0) {
       const matchingAudits = plan.integrityAuditPlan.filter(a => a && a.targetSquad === selectedSquadId);
-      auditSlots = matchingAudits.map((a, idx) =>
-        reportRoot !== undefined
-          ? reportPath(
-              Object.keys(templates).length > 1 ? `integrity_auditor-${selectedSquadId}` : "integrity_auditor",
-              idx + 1,
-              resolvedReportRoot
-            )
-          : a.reportSlot
+      auditSlots = matchingAudits.map(a =>
+        reportRoot !== undefined ? rebaseSlotReportRoot(a.reportSlot, resolvedReportRoot) : a.reportSlot
       );
     }
   }

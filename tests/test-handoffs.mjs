@@ -842,6 +842,72 @@ try {
     const svcVerify = spawnSync(process.execPath, [agySquadCli, "verify", JSON.parse(svcBundle.stdout).path], { cwd: svcCoord, encoding: "utf8" });
     assert.equal(svcVerify.status, 0, svcVerify.stderr);
 
+    // Leading './' path inputs, single-squad integrity_auditor collection, --report-root rebase, symlinked slot dir rejection, and strict bundle-init checks
+    writeAt(svcWt1, auditSlot, `Target Squad: alpha\nIntegrity Verdict: CLEAN\nVerified in wt1.\n`);
+    const dotPlanDry = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "./scratch/plan.json", "--from", svcWt1, "--overwrite", "--dry-run"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(dotPlanDry.status, 0, dotPlanDry.stderr);
+
+    const squadCollectWithAudit = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--squad", "alpha", "--from", svcWt1, "--overwrite", "--dry-run"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(squadCollectWithAudit.status, 0, squadCollectWithAudit.stderr);
+    assert.ok(
+      JSON.parse(squadCollectWithAudit.stdout).collected.some(c => c.slot === auditSlot),
+      "collect --squad <id> must discover single-squad integrity_auditor slot"
+    );
+
+    const wave2Wt = path.join(svcRoot, "wt-wave2");
+    writeAt(wave2Wt, "scratch/wave2/squad-alpha/specialist-1/report.md", "# Wave 2 S1\nOk.\n");
+    writeAt(wave2Wt, "scratch/wave2/squad-alpha/lead/report.md", "Content Verdict: PASS\nWave 2 lead.\n");
+    const wave2Collect = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "./scratch/plan.json", "--report-root", "scratch/wave2", "--from", wave2Wt],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(wave2Collect.status, 0, wave2Collect.stderr);
+    assert.equal(fs.existsSync(path.join(svcCoord, "scratch/wave2/squad-alpha/lead/report.md")), true);
+
+    if (symlinkCreated) {
+      const symSlotDirWt = path.join(svcRoot, "wt-sym-slotdir");
+      const outsideSlotDir = path.join(svcRoot, "outside-slot-dir");
+      writeAt(outsideSlotDir, "report.md", "LEAKED");
+      writeAt(symSlotDirWt, leadSlot, "Content Verdict: PASS\nLead ok.\n");
+      fs.symlinkSync(outsideSlotDir, path.join(symSlotDirWt, "scratch/agy-squad/squad-alpha/specialist-1"));
+      const symSlotRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "collect", "--squad", "alpha", "--from", symSlotDirWt, "--overwrite"],
+        { cwd: svcCoord, encoding: "utf8" }
+      );
+      assert.notEqual(symSlotRes.status, 0);
+      assert.match(symSlotRes.stderr, /ELOOP|symlink/i);
+    }
+
+    // Hedged lead/report.md verdict must fail bundle-init instead of defaulting to PASS
+    const hedgedLeadDir = path.join(svcRoot, "coord-hedged");
+    fs.cpSync(svcCoord, hedgedLeadDir, { recursive: true });
+    writeAt(hedgedLeadDir, leadSlot, "Content Verdict: PASS with Advisories\n");
+    const hedgedInit = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "./scratch/plan.json", "src/core.mjs"],
+      { cwd: hedgedLeadDir, encoding: "utf8" }
+    );
+    assert.notEqual(hedgedInit.status, 0, "bundle-init must reject hedged lead verdict instead of defaulting to PASS");
+    assert.match(hedgedInit.stderr, /invalid or conflicting verdict/i);
+
+    const badIdMap = spawnSync(
+      process.execPath,
+      [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--id-map", "no_such_worker=uuid-99", "src/core.mjs"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.notEqual(badIdMap.status, 0, "bundle-init must reject unmatched --id-map keys");
+    assert.match(badIdMap.stderr, /--id-map key/);
+
     // Subagent-mode provenanceScaffold conversationId substitution in bundle-init
     const subPlan = spawnSync(
       process.execPath,

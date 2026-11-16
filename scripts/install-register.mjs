@@ -67,19 +67,25 @@ function probeBinaryVersion(target, args = ["--version"]) {
   const isBareCommand = !target.includes("/") && !target.includes("\\");
   const useCmdShell = isWin && (isBareCommand || /\.(?:cmd|bat)$/i.test(target));
   try {
-    const res = useCmdShell
-      ? spawnSync("cmd.exe", ["/d", "/c", target, ...args], {
-          encoding: "utf8",
-          timeout: 3000,
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"]
-        })
-      : spawnSync(target, args, {
-          encoding: "utf8",
-          timeout: 3000,
-          windowsHide: true,
-          stdio: ["ignore", "pipe", "pipe"]
-        });
+    let res;
+    if (useCmdShell) {
+      if (/["&|<>^%\r\n]/.test(target)) return null;
+      const cmdLine = `"${target}" ${args.join(" ")}`;
+      res = spawnSync("cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
+        encoding: "utf8",
+        timeout: 3000,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    } else {
+      res = spawnSync(target, args, {
+        encoding: "utf8",
+        timeout: 3000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    }
     if (res.error || res.status !== 0) return null;
     const raw = (res.stdout || "").trim() || (res.stderr || "").trim();
     const semver = parseSemver(raw);
@@ -139,7 +145,9 @@ export function detectCompanionDependencies() {
     ? [
         "rtk",
         path.join(activePluginsDir, "agy-context-saver", "bin", "rtk.exe"),
-        path.join(activeBinDir, "rtk.exe")
+        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk.cmd"),
+        path.join(activeBinDir, "rtk.exe"),
+        path.join(activeBinDir, "rtk.cmd")
       ]
     : [
         "rtk",
