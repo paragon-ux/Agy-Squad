@@ -151,6 +151,25 @@ function decodeUtf8(bytes, relative) {
   }
 }
 
+function isExpectedRealPath(expected, actual) {
+  if (actual === expected) return true;
+  if (process.platform === "win32" || process.platform === "darwin") {
+    return actual.toLowerCase() === expected.toLowerCase();
+  }
+  return false;
+}
+
+function resolveCanonicalRoot(root) {
+  if (typeof root !== "string" || !root.trim()) {
+    throw new Error("Expected a valid workspace directory path.");
+  }
+  const realRoot = fs.realpathSync(root);
+  if (!fs.lstatSync(realRoot).isDirectory()) {
+    throw new Error(`Expected workspace root to be a directory: ${root}`);
+  }
+  return realRoot;
+}
+
 function workspacePath(root, relative, verifiedDirs) {
   if (
     typeof relative !== "string" ||
@@ -165,7 +184,7 @@ function workspacePath(root, relative, verifiedDirs) {
   const file = path.join(root, relative);
   const dir = path.dirname(file);
   if (!verifiedDirs?.has(dir)) {
-    if (fs.realpathSync(dir) !== dir) {
+    if (!isExpectedRealPath(dir, fs.realpathSync(dir))) {
       throw new Error(`Symlinked directories are unsupported: ${relative}`);
     }
     verifiedDirs?.add(dir);
@@ -186,7 +205,7 @@ function readOpenedFileWithStat(file, relative) {
     if (
       !stat.isFile() ||
       (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file) ||
-      fs.realpathSync(file) !== file
+      !isExpectedRealPath(file, fs.realpathSync(file))
     ) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
@@ -201,7 +220,8 @@ function readOpenedFile(file, relative) {
 }
 
 function readFile(root, relative, verifiedDirs) {
-  return readOpenedFile(workspacePath(root, relative, verifiedDirs), relative);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
 function readIfPresentWithStat(root, relative, verifiedDirs) {
@@ -218,11 +238,12 @@ function readIfPresent(root, relative, verifiedDirs) {
 }
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!Array.isArray(files) || !files.length) {
     throw new Error("Specify the final files used for independent verification.");
   }
   const unique = [...new Set(files)];
-  const hashes = new Map(unique.map(file => [file, sha256(readFile(root, file, verifiedDirs))]));
+  const hashes = new Map(unique.map(file => [file, sha256(readFile(canonicalRoot, file, verifiedDirs))]));
   return Object.fromEntries(files.map(file => [file, hashes.get(file)]));
 }
 
@@ -241,7 +262,8 @@ function bundlePath(squadId, reportRoot = defaultReportRoot()) {
 }
 
 function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256) {
-  const destination = workspacePath(root, relative, verifiedDirs);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  const destination = workspacePath(canonicalRoot, relative, verifiedDirs);
   let existingBytes;
   try {
     existingBytes = readOpenedFile(destination, relative);
@@ -394,7 +416,7 @@ function listCohortSlotsIfPresent(root, cohortRelDir) {
     throw err;
   }
   const realDir = fs.realpathSync(fullDir);
-  if (realDir !== fullDir) {
+  if (!isExpectedRealPath(fullDir, realDir)) {
     throw new Error(`Symlinked audit directory is unsupported: ${cohortRelDir}`);
   }
   if (!dirLstat.isDirectory()) {
@@ -441,6 +463,7 @@ function discoverAuditSlots(root, squadId, rootPrefix) {
 }
 
 function computeEvidenceDigest(root, record) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle or handoff record.");
   }
@@ -450,7 +473,7 @@ function computeEvidenceDigest(root, record) {
   validateSquadId(squadId);
   const verifiedDirs = new Set();
   const rootPrefix = resolveReportRoot(record);
-  const assignments = inspectReports(root, record, verifiedDirs, { rejectLooseOnNoReport: true });
+  const assignments = inspectReports(canonicalRoot, record, verifiedDirs, { rejectLooseOnNoReport: true });
   const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
   if (
     assignments.some(
@@ -472,8 +495,8 @@ function computeEvidenceDigest(root, record) {
   ) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
-  verifyFiles(root, verifiedFiles, verifiedDirs);
-  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs, { allowNonPassing });
+  verifyFiles(canonicalRoot, verifiedFiles, verifiedDirs);
+  const synthesisCheck = readSynthesis(canonicalRoot, synthesisSlot, verifiedDirs, { allowNonPassing });
   const synthesis = sha256(synthesisCheck.bytes);
   const reports = assignments.map(({ report, status, bytes }) => ({
     path: report,
@@ -485,10 +508,11 @@ function computeEvidenceDigest(root, record) {
 }
 
 function ensureDirectory(root, relative, created = [], verifiedDirs) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (typeof relative !== "string" || CONTROL_CHAR_RE.test(relative) || relative.includes("\\")) {
     throw new Error(`Invalid workspace directory: ${relative}`);
   }
-  let directory = root;
+  let directory = canonicalRoot;
   for (const part of relative.split("/")) {
     if (!part || part === "." || part === "..") throw new Error(`Invalid workspace directory: ${relative}`);
     directory = path.join(directory, part);
@@ -508,19 +532,28 @@ function ensureDirectory(root, relative, created = [], verifiedDirs) {
 }
 
 function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnNoReport = false } = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
   const { workspace, assignments, handoffs } = record;
-  if (workspace !== root) throw new Error("The cohort must use the current shared workspace.");
+  let canonicalWorkspace;
+  try {
+    canonicalWorkspace = typeof workspace === "string" && workspace.trim() ? fs.realpathSync(workspace) : undefined;
+  } catch {
+    canonicalWorkspace = undefined;
+  }
+  if (!canonicalWorkspace || !isExpectedRealPath(canonicalRoot, canonicalWorkspace)) {
+    throw new Error("The cohort must use the current shared workspace.");
+  }
   const resolvedRoot = resolveReportRoot(record);
   const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     let bytes;
     if (status === "READY" || status === "PARTIAL") {
-      bytes = readEvidence(root, report, verifiedDirs);
-    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(root, report, verifiedDirs)) {
+      bytes = readEvidence(canonicalRoot, report, verifiedDirs);
+    } else if (rejectLooseOnNoReport && status === "NO_REPORT" && readIfPresentWithStat(canonicalRoot, report, verifiedDirs)) {
       throw new Error(`Unexpected loose file present at NO_REPORT slot: ${report}`);
     }
     return { conversationId, report, status, bytes };
@@ -528,7 +561,8 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
 }
 
 function inspectHandoffs(root, record) {
-  return inspectReports(root, record).map(({ conversationId, report, status }) => ({
+  const canonicalRoot = resolveCanonicalRoot(root);
+  return inspectReports(canonicalRoot, record).map(({ conversationId, report, status }) => ({
     conversationId,
     report,
     status
@@ -536,6 +570,7 @@ function inspectHandoffs(root, record) {
 }
 
 function bundleReports(root, record) {
+  root = resolveCanonicalRoot(root);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle record.");
   }
@@ -848,13 +883,15 @@ function verifyBundleInternal(root, relative, acceptedHash) {
 }
 
 function verifyBundle(root, relative, acceptedHash) {
-  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(root, relative, acceptedHash);
+  const canonicalRoot = resolveCanonicalRoot(root);
+  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
   return { path: p, sha256: s, auditPolicy, reports };
 }
 
 function pruneReports(root, relative, acceptedHash, options = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
   if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(root, relative, acceptedHash);
+  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
   if (options.keepReports || retainReports) {
     return { removed: [], retained: loosePresent };
   }
@@ -864,7 +901,7 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
     const snap = looseSnapshots[i];
     const remaining = looseSnapshots.slice(i).map(item => item.path);
     try {
-      const targetPath = workspacePath(root, snap.path, verifiedDirs);
+      const targetPath = workspacePath(canonicalRoot, snap.path, verifiedDirs);
       const { bytes, stat } = readOpenedFileWithStat(targetPath, snap.path);
       if (
         stat.dev !== snap.dev ||
@@ -930,6 +967,7 @@ function discoverSingleSquadAuditSlotsIfMatching(sources, squadId, rootPrefix) {
 }
 
 function collectReportSlots(root, options = {}) {
+  root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new Error("Provide valid collect options.");
   }
@@ -968,7 +1006,7 @@ function collectReportSlots(root, options = {}) {
     if (!fs.lstatSync(realSrc).isDirectory()) {
       throw new Error(`Worktree path is not a directory: ${src}`);
     }
-    if (realSrc === root) {
+    if (isExpectedRealPath(root, realSrc)) {
       throw new Error(`Worktree source '${src}' resolves to the coordinator workspace itself.`);
     }
     if (!seenRealSources.has(realSrc)) {
@@ -1159,6 +1197,7 @@ function collectReportSlots(root, options = {}) {
 }
 
 function buildBundleRecordInit(root, options = {}) {
+  root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     throw new Error("Provide valid bundle-init options.");
   }

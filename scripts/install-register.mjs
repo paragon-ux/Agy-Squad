@@ -40,7 +40,7 @@ const mcpJsonPath = path.join(geminiConfigDir, "mcp_config.json");
 const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
 const antigravityMcpRootDir = path.join(homeDir, ".gemini", "antigravity", "mcp");
 const antigravityBinDir = path.join(homeDir, ".gemini", "antigravity", "bin");
-const MIN_AGY_CONTEXT_VERSION = "2.0.0";
+const MIN_AGY_CONTEXT_VERSION = "2.0.1";
 const MIN_RTK_VERSION = "1.1.0";
 
 function parseSemver(versionStr) {
@@ -124,7 +124,7 @@ export function detectCompanionDependencies() {
     if (!isBare && !fs.existsSync(candidate)) continue;
     const probed = probeBinaryVersion(candidate);
     if (!probed) continue;
-    const compatible = isVersionAtLeast(probed.semver, 2, 0, 0);
+    const compatible = isVersionAtLeast(probed.semver, 2, 0, 1);
     const entry = {
       available: compatible,
       installed: true,
@@ -260,8 +260,10 @@ export function detectExistingInstallation(options = {}) {
     if (fs.existsSync(pluginDest)) {
       details.plugin.exists = true;
       const skillsPath = path.join(pluginDest, "skills");
-      const prReviewSkill = path.join(skillsPath, "pr-review", "SKILL.md");
-      details.plugin.skillsReady = fs.existsSync(prReviewSkill);
+      const requiredSkills = ["pr-review", "full-review", "self-diagnosis", "swarm-governance"];
+      details.plugin.skillsReady = requiredSkills.every((skillName) =>
+        fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
+      );
       details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
     }
   } catch {}
@@ -433,7 +435,15 @@ async function installCliShims({ targetRoot, log }) {
   const posixShimPath = path.join(antigravityBinDir, "agy-squad");
   const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
 
-  const posixContent = `#!/usr/bin/env sh\nexec node "${cliTarget}" "$@"\n`;
+  const escapedExecPath = process.execPath.replace(/(["\\$`])/g, "\\$1");
+  const posixContent = [
+    "#!/usr/bin/env sh",
+    "if command -v node >/dev/null 2>&1; then",
+    `  exec node "${cliTarget}" "$@"`,
+    "fi",
+    `exec "${escapedExecPath}" "${cliTarget}" "$@"`,
+    ""
+  ].join("\n");
   const cmdContent = formatWindowsCmdShim(targetRoot);
 
   const posixChanged = await safeWriteFileIfChanged(posixShimPath, posixContent, 0o755);
@@ -449,7 +459,16 @@ export async function runCheckOnly(options = {}) {
   const log = options.silent ? () => {} : console.log;
   log("Running Agy-Squad read-only preflight check (--check)...");
 
-  for (const requiredRel of ["package.json", "plugin.json", "bin/agy-squad.mjs", "mcp/index.js", ".agents/skills/pr-review/SKILL.md"]) {
+  for (const requiredRel of [
+    "package.json",
+    "plugin.json",
+    "bin/agy-squad.mjs",
+    "mcp/index.js",
+    ".agents/skills/pr-review/SKILL.md",
+    ".agents/skills/full-review/SKILL.md",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/swarm-governance/SKILL.md"
+  ]) {
     const abs = path.join(repoRoot, requiredRel);
     if (!fs.existsSync(abs)) {
       throw new Error(`Required repository file missing: ${requiredRel}`);
@@ -703,10 +722,10 @@ export function printStatus(options = {}) {
     `- Plugin Enabled (config.json / plugin.json): ${status.details.config.enabled ? "ENABLED" : "DISABLED"}`
   );
   const { agyContext, rtk } = status.details.companions || {};
-  log(formatCompanionLine("Companion CLI (agy-context >= 2.0.0)", agyContext, "needed for integrity trace audits"));
+  log(formatCompanionLine("Companion CLI (agy-context >= 2.0.1)", agyContext, "needed for integrity trace audits"));
   log(formatCompanionLine("Companion Optimizer (rtk >= 1.1.0)", rtk, "needed by Agy-Context-Saver hooks"));
   if (!agyContext?.available || !rtk?.available) {
-    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.0) + RTK (>= 1.1.0) for full live integrity audits.");
+    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1) + RTK (>= 1.1.0) for full live integrity audits.");
   }
   const overallLabel = status.isInstalled
     ? "HEALTHY & ACTIVE"

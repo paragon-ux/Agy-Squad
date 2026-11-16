@@ -14,14 +14,14 @@ Map every diagnosed defect or optimization opportunity to **one primary category
 
 | Category | Self-Diagnosis & Optimization Focus |
 | --- | --- |
-| `ARCH` | `L1`–`L43` ledger alignment, host-enforced vs. receipt-verified boundaries, workspace containment, and cohort topology. |
+| `ARCH` | `L1`–`L50` ledger alignment (`L17` retired; `L35–L40` WSL/overlap note), host-enforced vs. receipt-verified boundaries, workspace containment, and cohort topology. |
 | `DOC` | `README.md`, `docs/tools.md`, `docs/plans/LEDGER.md`, and `docs/reviews/` parity with runtime behavior and benchmark/trial evidence. |
 | `SKILL` | `.agents/skills/*/SKILL.md` frontmatter (`name`, `description`), relative link integrity, progressive disclosure ratio (`SKILL.md` vs. `references/` and `scripts/`), and accuracy of referenced tools/flags. |
 | `MCP` | `mcp/index.js` JSON-RPC 2.0 compliance, positive integer `AGY_MAX_STDIO_PAYLOAD_BYTES` limits, and `dispatch_squad` / `squad_planner` schema compactness. |
 | `RUN` | `mcp/dispatch.mjs`, `mcp/briefs.mjs`, and `mcp/planner.mjs` symlink/fd checks, `TypeName: "self"` + rejected built-ins (`research`, `browser`, `image-generator`), `modelProvenance`, and scope overlap checks. |
 | `SVC` | `mcp/handoffs.mjs`, `mcp/verdicts.mjs`, and `bin/agy-squad.mjs` receipt reconciliation, custom `reportRoot` handling, `readSynthesis` PASS verdict, `integrityAudit` binding, atomic bundle replacement, and `--teardown`. |
 | `DB` | Verify absence of unreviewed database state (file-backed atomic bundle persistence is audited under `SVC`). |
-| `SCRIPT` | `bin/agy-squad.mjs` (`plan`, `dispatch`, `fingerprint`, `inspect`, `bundle`, `verify`, `prune`, `verdict`) and `.agents/skills/self-diagnosis/scripts/diagnose.mjs` deterministic exit codes and argument validation (`mcp/handoffs.mjs` is the internal library module, not a CLI). |
+| `SCRIPT` | `bin/agy-squad.mjs` (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`) and `.agents/skills/self-diagnosis/scripts/diagnose.mjs` deterministic exit codes and argument validation (`mcp/handoffs.mjs` is the internal library module, not a CLI). |
 | `TEST` | `tests/test-*.mjs` assertion strength, adversarial coverage, two-process concurrency, and supervised live subagent verification. |
 | `DEP` | `package.json`, `zensical.toml`, `.gitignore`, and `.github/workflows/*.yml` coherence. |
 
@@ -39,7 +39,7 @@ Map every diagnosed defect or optimization opportunity to **one primary category
 | **MCP `tools/list` Schema Response** | $\le 3,072$ UTF-8 bytes (`dispatch_squad` + `squad_planner`) | $> 4,096$ UTF-8 bytes (`MCP-BUDGET-SCHEMA`) | `P3` Advisory (`MCP`) — tighten schema descriptions in `mcp/index.js`. |
 | **Pointer-Over-Wire Receipt Headroom** | `READY <slot> — ` prefix $\le 150$ UTF-8 bytes, leaving $\ge 350$ bytes of the `500`-byte `messageLimit` for the observation | Prefix $> 160$ UTF-8 bytes | `P2` (`SVC` / `RUN`) — shorten `squadId` or slot path encoding. |
 | **Sibling Specialist `scopeFiles` Overlap** | $0\%$ overlapping files across specialists in the same squad | $> 25\%$ overlapping `scopeFiles` within one squad | `P2` (for concurrent writers) or `P3` Advisory (for readers) — partition `scopeFiles` cleanly across specialists or use `/swarm` `workspace: "share"`. |
-| **Stage Compilation & Planner Latency (`handleDispatchSquad` / `planSquadCohort`)** | $< 10\text{ ms}$ per call on local SSD/WSL | $> 25\text{ ms}$ per call | `P3` Advisory (`RUN`) — inspect redundant `realpathSync` / manifest re-reads. |
+| **Stage Compilation & Planner Latency (`handleDispatchSquad` / `planSquadCohort`)** | $< 10\text{ ms}$ per call on local SSD (Linux, macOS, or Windows) | $> 25\text{ ms}$ per call | `P3` Advisory (`RUN`) — inspect redundant `realpathSync` / manifest re-reads. |
 | **Handoff & Bundle Pipeline Latency (`inspect` + `bundle` + `verify` + `prune`)** | $< 20\text{ ms}$ for a 2-specialist cohort | $> 50\text{ ms}$ for a 2-specialist cohort | `P3` Advisory (`SVC`) — inspect redundant file opens in `verifyFiles` / `verifyBundle`. |
 
 ---

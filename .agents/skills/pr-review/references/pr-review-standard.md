@@ -20,7 +20,7 @@ Record:
 - Append-only **Session Provenance** table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`) so parent, resumed, and branched review or `/self-diagnosis` sessions and their exact `HEAD` state are distinguishable at the top of the report.
 - Exact commit or tree executed by each cited CI run. Distinguish a PR head from GitHub's generated merge commit.
 - Changed-file inventory from the base/head comparison, plus unchanged dependencies examined.
-- Evidence actually available: repository sources, normative design records (`docs/plans/LEDGER.md`, `docs/plans/wsl-cli-verification.md`, base commit `ee10ebc`), prior review, transcript, local reproduction, and CI logs. State when an attachment or environment was unavailable.
+- Evidence actually available: repository sources, normative design records (`docs/plans/LEDGER.md`, historical `docs/plans/wsl-cli-verification.md`, base commit `ee10ebc`), prior review, transcript, local reproduction, and cross-platform CI logs (`ubuntu-latest`, `macos-latest`, `windows-latest`). State when an attachment or environment was unavailable.
 - Scope and exclusions. Fetching a file is not the same as reviewing it.
 
 A new head invalidates claims about changed behavior until the delta and affected categories are re-reviewed. Retain the previous review and record which findings carry forward.
@@ -31,7 +31,7 @@ For every behavior change, trace:
 
 design thesis / invariant -> current architecture decision -> public contract -> implementation -> verification.
 
-Read the normative design records (`docs/plans/LEDGER.md`, `docs/plans/wsl-cli-verification.md`, and historical commit `ee10ebc`) when assessing preservation or modification of project invariants. Separate historical design records, normative current contracts, as-built descriptions, and external evidence. Existing implementation does not automatically override a higher-priority contract.
+Read the normative design records (`docs/plans/LEDGER.md`, historical `docs/plans/wsl-cli-verification.md`, and historical commit `ee10ebc`) when assessing preservation or modification of project invariants. Separate historical design records, normative current contracts, as-built descriptions, and external evidence. Existing implementation does not automatically override a higher-priority contract.
 
 When modernization relies on a current ecosystem norm, cite a primary source, its version or date, the exact capability, the demonstrated gap, and why closing that gap benefits Agy-Squad. Unsupported generalizations such as "modern agents expect this" are not evidence.
 
@@ -120,10 +120,10 @@ A verification gap alone is not proof of a production defect. Label it as a gap.
 Agy-Squad-specific verification:
 
 - **Schema & Stdio Framing:** exercise documented omitted/null/valid/invalid values through `request.jsonrpc === "2.0"` validation, actual `tools/list` schemas (`mcp/index.js`), and the `dispatch_squad` (`mcp/dispatch.mjs`) and `squad_planner` (`mcp/planner.mjs`) runtime boundaries, including positive-integer `AGY_MAX_STDIO_PAYLOAD_BYTES` and the 10MB stdio frame limit.
-- **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW`, `O_NONBLOCK`, and `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`; strict symlink rejection (`O_NOFOLLOW`, `O_NONBLOCK`, symlink directory rejection, and `/proc/self/fd/${fd}` verification) for reports and bundles in `mcp/handoffs.mjs`.
+- **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, and Linux `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`; canonical root resolution + strict symlink rejection (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, symlink directory rejection, Linux `/proc/self/fd/${fd}` check, and macOS/Windows case-insensitive realpath parity) for reports and bundles in `mcp/handoffs.mjs`.
 - **Subagent Capability, Model Provenance & Input Guards:** verify built-in `TypeName` rejection (`research`, `browser`, `image-generator`; default `"self"`), manifest `workspace === "inherit"` in `invoke_subagent` and `squad_planner` (with `/swarm` copy isolation via top-level `workspaceIsolation`), honest `modelProvenance` disclosure vs. `/swarm` pinning, `scopeFiles` path normalization and writable overlap warnings, and camelCase/PascalCase conflict rejection (`mcp/briefs.mjs`, `mcp/planner.mjs`).
-- **Pointer-Over-Wire Handoffs & Bundling:** verify single-line `<= 500` UTF-8 byte `READY`/`PARTIAL`/`NO_REPORT` receipt grammar, custom `reportRoot` alignment in `inspectReports`/`bundleReports`, atomic `publish()` link/rename semantics, strict single-line verdicts (`mcp/verdicts.mjs`), `integrityAudit` binding, and `bundle`/`verify`/`prune` SHA-256 verification (`mcp/handoffs.mjs`).
-- **External MCP & Governance CLI:** distinguish an in-process adapter call from a real stdio subprocess and CLI execution (`node bin/agy-squad.mjs plan|dispatch|fingerprint|inspect|bundle|verify|prune|verdict`).
+- **Pointer-Over-Wire Handoffs & Bundling:** verify single-line `<= 500` UTF-8 byte `READY`/`PARTIAL`/`NO_REPORT` receipt grammar, custom `reportRoot` alignment in `inspectReports`/`bundleReports`, atomic `publish()` link/rename semantics, strict single-line verdicts (`mcp/verdicts.mjs`), `integrityAudit` binding, and `collect`/`bundle-init`/`bundle`/`verify`/`prune` SHA-256 verification (`mcp/handoffs.mjs`).
+- **External MCP & Governance CLI:** distinguish an in-process adapter call from a real stdio subprocess and CLI execution (`node bin/agy-squad.mjs plan|dispatch|collect|bundle-init|fingerprint|inspect|digest|bundle|verify|prune|verdict`).
 
 Run checks appropriate to the change. A documentation-only review-standard change does not require rerunning the product suite.
 

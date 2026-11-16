@@ -1,10 +1,12 @@
 {
   "name": "agy-squad",
+  "displayName": "Agy-Squad",
   "version": "0.1.1",
   "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "author": {
     "name": "paragon-ux"
   },
+  "homepage": "https://paragon-ux.github.io/Agy-Squad/",
   "repository": "https://github.com/paragon-ux/Agy-Squad",
   "license": "MIT",
   "keywords": [
@@ -14,5 +16,10 @@
     "governance",
     "pr-review",
     "mcp"
+  ],
+  "suggestedPrompts": [
+    "Plan a multi-agent cohort via squad_planner with flat or layered swarm governance",
+    "Run a PR review against main using /pr-review with independent verification",
+    "Audit a cohort's SHA-256 handoff bundle with agy-squad verify and integrity_auditor"
   ]
 }

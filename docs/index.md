@@ -1,6 +1,6 @@
 # Agy-Squad
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux and WSL2**.
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows**.
 
 `squad_planner` and `dispatch_squad` assign scoped tasks to specialist or lead cohorts, cap `Pointer-Over-Wire` receipts at `500` UTF-8 bytes, and pair with `node bin/agy-squad.mjs` (`mcp/handoffs.mjs`) to verify SHA-256 input and report digests. During live Desktop IDE runs, `Agy-Context-Saver` (`2.0.1+`) rewrites shell commands through `rtk >= 1.1.0` (`rtk hook antigravity`), enforces 5-tier transcript access governance, and applies Reactive Wakeup backoff.
 
@@ -8,10 +8,10 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 
 ## Start here
 
-- **[Getting started (Desktop IDE & CLI on POSIX / WSL2)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Desktop IDE MCP registration, and CLI commands (`dispatch`, `plan`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`).
+- **[Getting started (Linux, macOS & Windows)](getting-started.md):** Host and companion compatibility matrix, clone-and-verify preflight, Desktop IDE MCP registration, and CLI commands (`setup`, `status`, `plan`, `dispatch`, `collect`, `bundle-init`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`).
 - **[Core workflows](core-workflows.md):** Task-proportional delegation, recursive [`self-diagnosis`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md), the ten-category [`pr-review` Standard v1.4.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), and the 3-scope evidence-retention and teardown contract.
 - **[Roles, skill workflows, and runtime closure](roles-and-workflows.md):** Single canonical definition of every role, Task-Spec vs. Execution-Modifier skill composition (`swarm-governance`, `pr-review`, `full-review`, `self-diagnosis`), and the 4-check runtime closure checklist.
-- **[Concepts and terminology](concepts.md):** Definitions for stages (`all_l1` vs. `<squadId>` vs. `integrity_auditor` / `audit-<id>`), `squad_planner`, report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L43`).
+- **[Concepts and terminology](concepts.md):** Definitions for stages (`all_l1` vs. `<squadId>` vs. `integrity_auditor` / `audit-<id>`), `squad_planner`, report slots, `Pointer-Over-Wire` receipts, SHA-256 bundles, Reactive Wakeup, `RTK`, and decision ledger codes (`L1` through `L50`).
 - **[Manifest and tool contract](tools.md):** Schema and CLI flags for `squad_planner` (`plan`), `dispatch_squad` (`dispatch`), `node bin/agy-squad.mjs`, and `mcp/handoffs.mjs` (library module).
 - **[Native enforcement ledger](plans/native-enforcement-ledger.md):** Host hook boundary (`PreToolUse`, `StopHook`), `/swarm` channel limits, and Spike status.
 - **[Benchmarks](benchmarks.md):** Canonical metric tables, per-agent telemetry, and reproduction guide for the November 15, 2026 matched-`High` `/swarm` retest and November 8, 2026 Phase 1 baseline against Antigravity `/teamwork`.
@@ -31,8 +31,8 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 | --- | --- | --- |
 | 1. Cohort planning and compilation | `Agy-Squad` | `squad_planner` and `dispatch_squad` assign scoped briefs, report slots (`scratch/agy-squad/...`), and `<= 500` B `Pointer-Over-Wire` receipts (`TypeName: "self"`, `Workspace: "inherit"` for `invoke_subagent`; explicit `model` pinning and `share`/`branch` isolation for `/swarm`). |
 | 2. Subagent execution governance | `Agy-Context-Saver` (`2.0.1+`) | Inside Desktop IDE sessions, `Agy-Context-Saver`'s `PreToolUse` hook delegates child `run_command` rewrites to `rtk >= 1.1.0` (`rtk hook antigravity`), bounds workspace `read_file` slices (`<= 150` lines), and applies backoff on `manage_task` and `schedule`. |
-| 3. Cryptographic bundling and pruning | `Agy-Squad` | `node bin/agy-squad.mjs` (`dispatch -> plan -> verdict -> fingerprint -> inspect -> digest -> bundle -> verify -> prune [--keep-reports]`) validates single-line verdicts, binds `integrityAudit` digests (`CLEAN` + `Target Squad`), writes `report.sources.json`, and optionally removes loose reports (`L1`, `L2`, `L42`, `L43`). |
-| 4. Session and transcript forensics | `Agy-Context-Saver` (`2.0.1+`) | The `agy-context` CLI (`agy-context status`, `agy-context setup`, `agy-context transcript read|query|step|health|list|access`) inspects parent or child `conversationId` records without reading `.system_generated/` directly (`L6`), enforcing `[agy-transcript-access: allow|deny]` directives per worker. |
+| 3. Cryptographic bundling and pruning | `Agy-Squad` | `node bin/agy-squad.mjs` (`plan -> dispatch -> collect -> bundle-init -> verdict -> fingerprint -> inspect -> digest -> verdict --integrity -> bundle -> verify -> prune [--keep-reports]`) validates single-line verdicts, binds `integrityAudit` digests (`CLEAN` + `Target Squad`), writes `report.sources.json`, and optionally removes loose reports (`L1`, `L2`, `L42`, `L43`, `L44`). |
+| 4. Session and transcript forensics | `Agy-Context-Saver` (`2.0.1+`) | The `agy-context` CLI (`agy-context status`, `agy-context setup`, `agy-context transcript read|query|step|health|list|export|access`) inspects parent or child `conversationId` records without reading `.system_generated/` directly (`L6`), enforcing `[agy-transcript-access: allow|deny]` directives per worker. |
 
 Run `agy-context setup` once on a new host so the `rtk >= 1.1.0` binary and `agy-context` CLI shim are active before launching live workers.
 

@@ -102,8 +102,12 @@ try {
   assert.equal(statusRes.status, 0, statusRes.stderr || statusRes.stdout);
   assert.match(statusRes.stdout, /Overall Status: HEALTHY & ACTIVE/);
   assert.match(statusRes.stdout, /Plugin Docs & Links: READY/);
-  assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.0\):/);
+  assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.1\):/);
   assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
+
+  const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
+  assert.match(posixShimBody, /command -v node/);
+  assert.ok(posixShimBody.includes(process.execPath), "POSIX shim must include process.execPath fallback");
 
   // SQ-DEP-005: Non-fatal companion checks report MISSING, OUTDATED, and AVAILABLE cleanly across isolated profiles
   const emptyBinDir = path.join(tmpProfile, "empty-path-bin");
@@ -133,7 +137,7 @@ try {
     fs.writeFileSync(p, `#!/bin/sh\necho "${versionText}"\n`, { mode: 0o755 });
     return p;
   };
-  const fakeAgyCtxPath = writeFakeVersionBinary(companionBinDir, "agy-context", "1.8.0");
+  const fakeAgyCtxPath = writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.0");
   const fakeRtkPath = writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 0.9.5");
   const outdatedCompanionStatus = spawnSync(process.execPath, [cli, "status"], {
     cwd: repoRoot,
@@ -141,7 +145,7 @@ try {
     encoding: "utf8"
   });
   assert.equal(outdatedCompanionStatus.status, 0, "Outdated companions must remain non-fatal");
-  assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.0\): OUTDATED/);
+  assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.1\): OUTDATED/);
   assert.match(outdatedCompanionStatus.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\): OUTDATED/);
 
   writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.1");
@@ -226,6 +230,29 @@ try {
   await runAgySquadInstall({ silent: true, forceCopyFallback: true });
   assert.equal(fs.existsSync(path.join(pluginDir, "stale-old-file.txt")), false, "forceCopyFallback must prune stale non-symlink files (SQ-DEP-004)");
   assert.equal(fs.lstatSync(pluginDir).isSymbolicLink(), false);
+
+  // L49: skillsReady must require all 4 skills (including swarm-governance) and lifecycle subcommands enforce strict args
+  const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
+  fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, false);
+  fs.writeFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), savedSwarmSkill);
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, true);
+
+  for (const badArgs of [
+    ["setup", "--bogus-flag"],
+    ["setup", "extra-arg"],
+    ["uninstall", "--bogus-flag"],
+    ["uninstall", "restore-backups"],
+    ["restore-backups", "--bogus-flag"],
+    ["restore-backups", "extra-arg"]
+  ]) {
+    const badRes = spawnSync(process.execPath, [cli, ...badArgs], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.notEqual(badRes.status, 0, `Expected '${badArgs.join(" ")}' to fail strict arg parsing`);
+  }
 
   // 4. Malformed config preservation (fails closed without mutating)
   fs.writeFileSync(mcpPath, "{ malformed json");

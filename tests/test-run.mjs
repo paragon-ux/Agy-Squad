@@ -666,6 +666,12 @@ try {
       false,
       "Compiled self-diagnosis briefs must not contain 'never call read_file'"
     );
+
+    // L46: install.ps1 resolves node dynamically across Windows PowerShell 5.1 & PowerShell 7+
+    const installPs1 = fs.readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+    assert.match(installPs1, /Get-Command node/);
+    assert.match(installPs1, /\$PSCommandPath/);
+    assert.match(installPs1, /\$LASTEXITCODE/);
   } finally {
     fs.rmSync(svcRepo, { recursive: true, force: true });
   }

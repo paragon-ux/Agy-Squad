@@ -32,11 +32,13 @@ When running all three squads in Layered mode (or any multi-squad plan), each wo
 
 ```bash
 # Per working squad (<id> = skill_and_pr_review_audit | runtime_and_contract_diagnosis | token_and_execution_optimization, or self_diagnosis in flat mode):
+node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...   # only when workspaceIsolation != inherit
 node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
 node bin/agy-squad.mjs fingerprint <verified-file...>
+node bin/agy-squad.mjs bundle-init --plan <plan.json> <verified-file...> --out <bundle-record-<id>.json>
+node bin/agy-squad.mjs inspect <bundle-record-<id>.json>
 node bin/agy-squad.mjs digest <bundle-record-<id>.json>
 node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-node bin/agy-squad.mjs inspect <bundle-record-<id>.json>
 node bin/agy-squad.mjs bundle <bundle-record-<id>.json>
 node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json
 node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <accepted-sha256> [--keep-reports]

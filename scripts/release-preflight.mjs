@@ -90,11 +90,22 @@ if (pkg) {
     "scripts/install-register.mjs",
     "scripts/release-preflight.mjs",
     ".agents/skills/pr-review/SKILL.md",
+    ".agents/skills/pr-review/references/pr-review-standard.md",
     ".agents/skills/full-review/SKILL.md",
+    ".agents/skills/full-review/references/evidence-intake.md",
+    ".agents/skills/full-review/references/report-template.md",
+    ".agents/skills/full-review/references/review-roles.md",
     ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
+    ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
     ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+    ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
     ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
     ".agents/skills/swarm-governance/SKILL.md",
+    ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
+    ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
+    ".agents/skills/swarm-governance/references/intake-and-planning.md",
+    ".agents/skills/swarm-governance/references/large-swarms.md",
     "plugin.json",
     "install.sh",
     "install.ps1",
@@ -138,6 +149,22 @@ if (pkg) {
     }
   }
 
+  const binEntries = Object.values(pkg.bin ?? {});
+  if (binEntries.length === 0) {
+    errors.push("package.json has no bin entry.");
+  }
+  for (const binPath of binEntries) {
+    if (!exists(binPath)) {
+      errors.push(`package.json bin target does not exist: ${binPath}`);
+    }
+    const coveredByFiles =
+      positiveEntries.some((entry) => matchesPackageEntry(binPath, entry.normalized)) &&
+      !negativeEntries.some((entry) => matchesPackageEntry(binPath, entry.normalized));
+    if (!coveredByFiles) {
+      errors.push(`package.json "files" does not clearly include bin target: ${binPath}`);
+    }
+  }
+
   for (const relativePath of ["SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"]) {
     if (!exists(relativePath)) {
       errors.push(`Add ${relativePath} before the public release.`);
@@ -153,6 +180,30 @@ if (pkg) {
     !pkg.scripts?.["verify:package"]
   ) {
     errors.push("Expected npm scripts setup, status, uninstall, preflight, test, and verify:package to be present.");
+  } else {
+    const suitePaths = [
+      ...pkg.scripts.test.matchAll(/(?:^|&&\s*)node\s+((?:tests|benchmarks)\/[\w./-]+\.mjs)/g)
+    ].map((match) => match[1]);
+    if (suitePaths.length === 0) {
+      errors.push("Could not find test entrypoints in package.json scripts.test.");
+    }
+    for (const suitePath of suitePaths) {
+      if (!exists(suitePath)) {
+        errors.push(`npm test references a missing test file: ${suitePath}`);
+      }
+    }
+    const readmeText = readText("README.md");
+    const countMatch = readmeText.match(/Runs all\s+(\d+)\s+test suites?/i);
+    if (!countMatch) {
+      errors.push('README.md must state the exact suite count using a phrase such as "Runs all 10 test suites".');
+    } else if (Number(countMatch[1]) !== suitePaths.length) {
+      errors.push(`README.md says ${countMatch[1]} test suites, but package.json scripts.test runs ${suitePaths.length}.`);
+    }
+    for (const suitePath of suitePaths) {
+      if (!readmeText.includes(suitePath)) {
+        errors.push(`README.md does not list the test entrypoint that npm test runs: ${suitePath}`);
+      }
+    }
   }
 
   if (Object.keys(pkg.dependencies ?? {}).length > 0) {

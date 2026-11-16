@@ -638,6 +638,59 @@ try {
   const blkVerifiedCli = spawnSync(process.execPath, [agySquadCli, "verify", blkBundled.path], { cwd: root, encoding: "utf8" });
   assert.equal(blkVerifiedCli.status, 0, blkVerifiedCli.stderr);
 
+  // SQ-TEST-001-P3-1: Explicit pruneReports regression on allowNonPassing + allowPartial (PARTIAL + NO_REPORT) bundle
+  const prunePartialRoot = "scratch/agy-squad-prune-partial";
+  const ppSpec1 = reportPath("prune_partial", 1, prunePartialRoot);
+  const ppSpec2 = reportPath("prune_partial", 2, prunePartialRoot);
+  const ppLead = reportPath("prune_partial", undefined, prunePartialRoot);
+  const ppAudit = reportPath("integrity_auditor-prune_partial", 1, prunePartialRoot);
+  write(ppSpec1, "# Partial Spec 1\nVerified partial proof before upstream outage.\n");
+  write(ppLead, "Content Verdict: FAIL\nIncomplete run; spec-2 unavailable.\n");
+  const ppRecord = {
+    workspace: root,
+    reportRoot: prunePartialRoot,
+    squadId: "prune_partial",
+    verdict: "FAIL",
+    allowNonPassing: true,
+    allowPartial: true,
+    verifiedFiles: regBaseRecord.verifiedFiles,
+    assignments: [
+      { conversationId: "pp-1", report: ppSpec1 },
+      { conversationId: "pp-2", report: ppSpec2 }
+    ],
+    handoffs: [
+      { sender: "pp-1", message: `PARTIAL ${ppSpec1} — Partial check recorded.` },
+      { sender: "pp-2", message: "NO_REPORT — Timed out before output." }
+    ]
+  };
+  const ppDigest = computeEvidenceDigest(root, ppRecord).evidenceDigest;
+  write(ppAudit, `Target Squad: prune_partial\nEvidence Digest: ${ppDigest}\nIntegrity Verdict: CLEAN\nVerified partial prune fixture.\n`);
+  const ppBundled = bundleReports(root, { ...ppRecord, integrityReport: ppAudit });
+  const ppPruned = pruneReports(root, ppBundled.path, ppBundled.sha256);
+  assert.deepEqual(ppPruned, { removed: [ppSpec1] }, "pruneReports must remove PARTIAL loose report and skip absent NO_REPORT cleanly");
+  assert.equal(exists(ppSpec1), false);
+  assert.equal(exists(ppSpec2), false);
+  assert.equal(verifyBundle(root, ppBundled.path, ppBundled.sha256).sha256, ppBundled.sha256);
+
+  // L46: Direct handoffs.mjs API calls canonicalize un-canonicalized root (relative '.' or symlinked parent)
+  const relViaDotRoot = path.join(root, ".", "scratch", "..");
+  assert.deepEqual(fingerprint(relViaDotRoot, ["reg-input.txt"]), regBaseRecord.verifiedFiles);
+  assert.deepEqual(inspectHandoffs(relViaDotRoot, { ...blockedRecord, workspace: relViaDotRoot }).map(s => s.status), ["PARTIAL"]);
+  const rootSymlinkAlias = path.join(path.dirname(root), `alias-${path.basename(root)}`);
+  let aliasCreated = false;
+  try {
+    fs.symlinkSync(root, rootSymlinkAlias, "dir");
+    aliasCreated = true;
+  } catch {}
+  if (aliasCreated) {
+    try {
+      assert.deepEqual(fingerprint(rootSymlinkAlias, ["reg-input.txt"]), regBaseRecord.verifiedFiles);
+      assert.deepEqual(inspectHandoffs(rootSymlinkAlias, blockedRecord).map(s => s.status), ["PARTIAL"]);
+    } finally {
+      fs.rmSync(rootSymlinkAlias, { force: true });
+    }
+  }
+
   // SQ-SVC-001: agy-squad collect + bundle-init end-to-end & edge cases
   const svcRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-svc-001-")));
   try {

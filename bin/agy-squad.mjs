@@ -273,13 +273,23 @@ async function main(args) {
   }
 
   if (command === "setup" || command === "install") {
-    const isCheck = rest.includes("--check") || rest.includes("-c");
-    const isRestore = rest.includes("--restore-backups") || rest.includes("restore-backups");
-    const isUninstall = rest.includes("--uninstall") || rest.includes("uninstall");
-    if (isCheck && (isRestore || isUninstall)) {
+    const usageLine = "Usage: agy-squad setup [--check]";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      check: { type: "boolean", short: "c", default: false },
+      "restore-backups": { type: "boolean", default: false },
+      uninstall: { type: "boolean", default: false }
+    });
+    const isRestorePos = positionals.includes("restore-backups");
+    const isUninstallPos = positionals.includes("uninstall");
+    if (values.check && (values["restore-backups"] || values.uninstall || isRestorePos || isUninstallPos)) {
       throw new Error("Conflicting flags: --check is read-only and cannot be combined with --uninstall or --restore-backups.");
     }
-    if (isCheck) {
+    if (values["restore-backups"] || values.uninstall || positionals.length > 0) {
+      throw new Error(
+        `Unexpected option or argument for '${command}'. Use 'agy-squad uninstall [--restore-backups]' or 'agy-squad restore-backups'.\n${usageLine}`
+      );
+    }
+    if (values.check) {
       await runCheckOnly();
       return 0;
     }
@@ -299,11 +309,22 @@ async function main(args) {
     return st.isInstalled ? 0 : 1;
   }
   if (command === "uninstall") {
-    const isRestore = rest.includes("--restore-backups") || rest.includes("restore-backups");
-    await runUninstall({ restoreBackups: isRestore });
+    const usageLine = "Usage: agy-squad uninstall [--restore-backups]";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      "restore-backups": { type: "boolean", default: false }
+    });
+    if (positionals.length > 0) {
+      throw new Error(`Unexpected positional argument '${positionals[0]}'.\n${usageLine}`);
+    }
+    await runUninstall({ restoreBackups: values["restore-backups"] });
     return 0;
   }
   if (command === "restore-backups") {
+    const usageLine = "Usage: agy-squad restore-backups";
+    const { positionals } = parseSubcommandArgs(rest, usageLine, {});
+    if (positionals.length > 0) {
+      throw new Error(`Unexpected positional argument '${positionals[0]}'.\n${usageLine}`);
+    }
     await runRestoreBackups();
     return 0;
   }

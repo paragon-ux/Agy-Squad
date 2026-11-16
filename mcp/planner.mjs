@@ -585,7 +585,7 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
             overriddenSubagentModels
           );
           const targetScopeNote = executionMode === "swarm"
-            ? `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>'). Use a coordinator-extracted sanitized transcript index in scratch/ when transcript tools are restricted (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable).`
+            ? `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>'). Use a coordinator-extracted sanitized transcript index in scratch/ ('agy-context transcript export --parent <id> --sanitized --out scratch/...') when transcript tools are restricted (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable).`
             : `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>') against coordinator-recorded conversationIds.`;
           const compiledAudit = buildSubagentSpec(
             {
@@ -742,9 +742,14 @@ function planSquadCohort(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?
     integrityAuditPlan,
     bundleRecordTemplates,
     verificationPipeline: [
+      ...(workspaceIsolation !== "inherit"
+        ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
+        : []),
       "agy-squad fingerprint <changed-or-verified-files...>",
+      "agy-squad bundle-init --plan <plan.json> <verified-files...>",
       "agy-squad inspect <bundle-record.json>",
       "agy-squad digest <bundle-record.json>",
+      "agy-squad verdict --integrity <integrity-report.md>",
       "agy-squad bundle <bundle-record.json>",
       "agy-squad verify <report.sources.json>",
       "agy-squad prune <report.sources.json> <accepted-sha256>"
