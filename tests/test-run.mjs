@@ -628,10 +628,15 @@ try {
     const unpackDir = path.join(temporary, "unpack-pkg");
     fs.mkdirSync(packDir, { recursive: true });
     fs.mkdirSync(unpackDir, { recursive: true });
-    const packRes = spawnSync("npm", ["pack", "--pack-destination", packDir], { cwd: repoRoot, encoding: "utf8" });
+    const packRes = spawnSync(
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["pack", "--pack-destination", packDir],
+      { cwd: repoRoot, encoding: "utf8", shell: process.platform === "win32" }
+    );
     assert.equal(packRes.status, 0, packRes.stderr);
     const tgzName = packRes.stdout.trim().split(/\r?\n/).pop();
-    const untarRes = spawnSync("tar", ["-xzf", path.join(packDir, tgzName), "-C", unpackDir], { encoding: "utf8" });
+    const relUnpack = path.relative(packDir, unpackDir).replace(/\\/g, "/");
+    const untarRes = spawnSync("tar", ["-xzf", tgzName, "-C", relUnpack], { cwd: packDir, encoding: "utf8" });
     assert.equal(untarRes.status, 0, untarRes.stderr);
     const pkgRoot = path.join(unpackDir, "package");
     const pkgDiagRes = spawnSync(
