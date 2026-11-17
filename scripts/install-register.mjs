@@ -679,13 +679,13 @@ export function formatWindowsCmdShim(targetRoot) {
     "@echo off",
     "chcp 65001 >nul",
     "setlocal",
-    "where node >nul 2>nul",
+    "where node.exe >nul 2>nul",
     "if errorlevel 1 goto :fallback",
-    `node "${winTarget}" %*`,
-    "exit /b %errorlevel%",
+    // A label-less GOTO ends the batch context. The queued executable can
+    // delete this shim (and any managed node.cmd) and return its own status.
+    `(goto) 2>nul & node.exe "${winTarget}" %*`,
     ":fallback",
-    `"${process.execPath}" "${winTarget}" %*`,
-    "exit /b %errorlevel%",
+    `(goto) 2>nul & "${process.execPath}" "${winTarget}" %*`,
     ""
   ].join("\r\n");
 }
@@ -806,13 +806,26 @@ export async function runInstall(options = {}) {
 
   let pluginLst = null;
   try {
-    pluginLst = fs.lstatSync(pluginDest);
-  } catch {}
-  if (pluginLst) {
-    await fsPromises.rm(pluginDest, { recursive: true, force: true });
+    pluginLst = fs.lstatSync(pluginDest, { bigint: true });
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  const sourceStat = fs.statSync(repoRoot, { bigint: true });
+  // A shim installed from an npm tarball runs directly from the plugin copy.
+  const installedSource = pluginLst?.isDirectory() &&
+    pluginLst.dev === sourceStat.dev && pluginLst.ino === sourceStat.ino;
+  if (pluginLst && !installedSource) {
+    if (pluginLst.isSymbolicLink()) {
+      await fsPromises.unlink(pluginDest);
+    } else {
+      await fsPromises.rm(pluginDest, { recursive: true, force: true });
+    }
   }
 
-  if (isTempOrNpx || options.forceCopyFallback) {
+  if (installedSource) {
+    await ensurePluginSkillsAndMcpManifest(pluginDest);
+    log(`[OK] Native Antigravity Plugin verified: ${pluginDest}`);
+  } else if (isTempOrNpx || options.forceCopyFallback) {
     await fsPromises.cp(repoRoot, pluginDest, { recursive: true, filter: copyFilter });
     await ensurePluginSkillsAndMcpManifest(pluginDest);
     log(`[OK] Native Antigravity Plugin installed to: ${pluginDest}`);

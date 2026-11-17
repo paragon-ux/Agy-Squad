@@ -370,7 +370,7 @@ try {
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
   assert.match(cmdShimText, /:fallback/);
-  assert.match(cmdShimText, /exit \/b %errorlevel%/);
+  assert.match(cmdShimText, /\(goto\) 2>nul & node\.exe /);
   assert.doesNotMatch(cmdShimText, /if %errorlevel% equ 0 \(/i);
 
   if (os.platform() === "win32") {
@@ -723,6 +723,74 @@ try {
     assert.equal(fs.existsSync(cLegacyBak), true, "Legacy fallback must stay read-only without deleting shared .bak");
   } finally {
     fs.rmSync(coexistProf, { recursive: true, force: true });
+  }
+
+  // Exercise the persistent copy made by the real npm tarball and invoke its registered shims.
+  {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-tarball-"));
+    const profile = path.join(testRoot, "profile");
+    const cfg = path.join(profile, ".gemini", "config");
+    const mcp = path.join(cfg, "mcp_config.json");
+    const installed = path.join(cfg, "plugins", "agy-squad");
+    const win = process.platform === "win32";
+    const shell = process.env.ComSpec || process.env.COMSPEC || "cmd.exe";
+    const env = { ...process.env, AGY_TEST_PROFILE_DIR: profile, npm_config_cache: path.join(testRoot, "npm-cache") };
+    const foreign = { mcpServers: { "foreign-server": { command: "node", args: ["foreign.js"] } } };
+    const npmCli = process.env.npm_execpath;
+    const npm = (args) => npmCli
+      ? spawnSync(process.execPath, [npmCli, ...args], { env, encoding: "utf8" })
+      : spawnSync(win ? "npm.cmd" : "npm", args, { env, encoding: "utf8", shell: win });
+    const ok = (res) => assert.equal(res.status, 0, res.stderr || res.stdout || res.error?.message);
+    function shim(command, ...args) {
+      const launcher = win ? `${command}.cmd` : command;
+      return win
+        ? spawnSync(shell, ["/d", "/s", "/c", `""${launcher}" ${args.join(" ")}"`], { env, encoding: "utf8", windowsVerbatimArguments: true })
+        : spawnSync(launcher, args, { env, encoding: "utf8" });
+    }
+
+    try {
+      fs.mkdirSync(cfg, { recursive: true });
+      fs.writeFileSync(mcp, JSON.stringify(foreign));
+      const pack = npm(["pack", "--json", "--pack-destination", testRoot]);
+      ok(pack);
+      const tarball = path.join(testRoot, JSON.parse(pack.stdout)[0].filename);
+      const prefix = path.join(testRoot, "npm-install");
+      ok(npm(["install", "--offline", "--no-audit", "--no-fund", "--prefix", prefix, tarball]));
+      const pkgShim = path.join(prefix, "node_modules", ".bin", "agy-squad");
+      const installedShim = path.join(profile, ".gemini", "antigravity", "bin", "agy-squad");
+      ok(shim(pkgShim, "setup"));
+      assert.ok(fs.lstatSync(installed).isDirectory(), "npm setup must make a persistent plugin copy");
+      const marker = path.join(installed, "preserve-on-repeat.txt");
+      fs.writeFileSync(marker, "installed source");
+      const registration = path.join(installed, "mcp_config.json");
+      fs.unlinkSync(registration);
+      ok(shim(installedShim, "setup"));
+      ok(shim(installedShim, "setup"));
+      assert.equal(fs.readFileSync(marker, "utf8"), "installed source");
+      assert.ok(fs.existsSync(registration), "repeat setup should repair its registration");
+      const status = shim(installedShim, "status", "--json");
+      ok(status);
+      assert.equal(JSON.parse(status.stdout).isComplete, true);
+
+      // The shim must propagate real failures and leave the working install intact.
+      fs.writeFileSync(mcp, "{ malformed");
+      const rejected = shim(installedShim, "uninstall");
+      assert.equal(rejected.status, 1, rejected.stderr || rejected.stdout);
+      assert.equal(fs.readFileSync(mcp, "utf8"), "{ malformed");
+      assert.ok(fs.existsSync(marker));
+      fs.writeFileSync(mcp, JSON.stringify(foreign));
+
+      ok(shim(installedShim, "uninstall"));
+      assert.equal(fs.existsSync(installed), false);
+      assert.equal(fs.existsSync(registration), false);
+      assert.equal(fs.existsSync(installedShim), false);
+      if (win) assert.equal(fs.existsSync(`${installedShim}.cmd`), false);
+      assert.deepEqual(JSON.parse(fs.readFileSync(mcp, "utf8")), foreign);
+      ok(shim(pkgShim, "setup"));
+      ok(shim(installedShim, "--version"));
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
   }
 
   console.log("Lifecycle installer, --check, and rollback tests passed");
