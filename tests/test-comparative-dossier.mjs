@@ -80,14 +80,14 @@ if (!fs.existsSync(DOSSIER_PATH)) {
   process.exit(1);
 }
 
-const content = fs.readFileSync(DOSSIER_PATH, "utf8");
+const content = fs.readFileSync(DOSSIER_PATH, "utf8").replace(/\r\n/g, "\n");
 
 // Helpers for Parsing & Inspection
 function findSections(markdown) {
   const headings = [];
-  const lines = markdown.split("\n");
+  const lines = markdown.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^(#{1,4})\s+(.+)$/);
+    const match = lines[i].trimEnd().match(/^(#{1,4})\s+(.+)$/);
     if (match) {
       headings.push({ level: match[1].length, title: match[2].trim(), line: i + 1 });
     }
@@ -123,7 +123,7 @@ function splitTableRow(line) {
 
 function parseMarkdownTables(markdown) {
   const tables = [];
-  const lines = markdown.split("\n");
+  const lines = markdown.split(/\r?\n/);
   let currentTable = null;
   let inCodeBlock = false;
 
@@ -172,11 +172,12 @@ function getHeadingSemanticLevel(level, title) {
 }
 
 function getSectionContent(markdown, headingRe) {
-  const lines = markdown.split("\n");
+  const lines = markdown.split(/\r?\n/);
   let inCode = false;
   let captured = null;
   let targetLevel = 0;
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, "");
     if (line.trim().startsWith("```")) inCode = !inCode;
     if (!inCode) {
       const m = line.match(/^(#{1,4})\s+(.+)$/);
@@ -401,7 +402,7 @@ runner.run("Tier 2 (Boundary & Format)", "Format: Markdown Table Column Parity &
 });
 
 runner.run("Tier 2 (Boundary & Format)", "Format: Standard Markdown / GFM Table Pipe Escaping Integrity", () => {
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (line.startsWith("|") && line.endsWith("|")) {
@@ -557,10 +558,13 @@ runner.run("Tier 4 (Structural & Citations)", "Standard & Ledger: Architectural 
     "Dossier must cite the Architectural Decision Ledger (L1–L41 / L1–L43).");
   const ledgerPath = path.resolve(process.cwd(), "docs/plans/LEDGER.md");
   assert.ok(fs.existsSync(ledgerPath), "docs/plans/LEDGER.md must exist.");
-  const ledger = fs.readFileSync(ledgerPath, "utf8");
+  const ledger = fs.readFileSync(ledgerPath, "utf8").replace(/\r\n/g, "\n");
   assert.match(ledger, /^\|\s*L17\s*\|.*\|\s*Retired\b/im, "LEDGER.md must mark L17 retired.");
   assert.match(ledger, /^\|\s*L42\s*\|.*\|\s*Active\b/im, "LEDGER.md must list L42 Active.");
   assert.match(ledger, /^\|\s*L43\s*\|.*\|\s*Active\b/im, "LEDGER.md must list L43 Active.");
+  const crlfSection = getSectionContent("## 1. Executive Framing\r\nAlpha\r\n### 1.1 Sub\r\nBeta\r\n## 2. Next\r\n", /^##\s+1\.\s+Executive Framing/i);
+  assert.ok(crlfSection && /Alpha/.test(crlfSection) && /Beta/.test(crlfSection) && !/## 2\./.test(crlfSection),
+    "getSectionContent must normalize CRLF checkouts consistently.");
 });
 
 // Final summary and process exit
