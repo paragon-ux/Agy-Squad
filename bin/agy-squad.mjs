@@ -87,27 +87,24 @@ async function runPlanCommand(rest, root) {
 }
 
 async function runDispatchCommand(rest, root) {
+  const usageLine = "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]";
   if (!rest.length) {
-    throw new Error("Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]");
+    throw new Error(usageLine);
   }
-  const { handleDispatchSquad } = await import("../mcp/dispatch.mjs");
-  const { values, positionals } = parseArgs({
-    args: rest,
-    allowPositionals: true,
-    options: {
-      squad: { type: "string" },
-      manifest: { type: "string" }
-    }
+  const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+    squad: { type: "string" },
+    manifest: { type: "string" }
   });
+  const { handleDispatchSquad } = await import("../mcp/dispatch.mjs");
   if (values.squad !== undefined && positionals.length > 0) {
     throw new Error("Pass either --squad <id> or a positional <squadId>, not both.");
   }
   if (positionals.length > 1) {
-    throw new Error("Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]");
+    throw new Error(usageLine);
   }
   const squadId = values.squad ?? positionals[0];
   if (!squadId) {
-    throw new Error("Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]");
+    throw new Error(usageLine);
   }
   const result = handleDispatchSquad(
     {

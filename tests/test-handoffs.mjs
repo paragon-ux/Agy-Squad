@@ -1415,11 +1415,43 @@ try {
           `W2-SVC-002: template=${JSON.stringify(badTpl)} must throw plain-object error`
         );
       }
+      assert.throws(
+        () => buildBundleRecordInit(w2CliDir, {
+          plan: {
+            ...customPlan,
+            bundleRecordTemplates: {
+              alpha: { ...customPlan.bundleRecordTemplates.alpha, assignments: [null] }
+            }
+          }
+        }),
+        /assignment must be a plain object/,
+        "W2-SVC-002: non-object assignment entry must throw plain-object error instead of TypeError"
+      );
+      assert.throws(
+        () => buildBundleRecordInit(w2CliDir, {
+          plan: JSON.parse(JSON.stringify({
+            executionMode: "swarm",
+            bundleRecordTemplates: {
+              ["__proto__"]: {
+                squadId: "__proto__",
+                workspace: w2CliDir,
+                verdict: "PASS",
+                assignments: []
+              }
+            }
+          }))
+        }),
+        /Invalid reserved squad ID/,
+        "W2-SVC-002: auto-selected single template key must still validate squadId"
+      );
 
-      // S2R-SCRIPT-002: plan --unknown-flag emits Usage: agy-squad plan ... and unknown command mentions install
+      // S2R-SCRIPT-002: plan/dispatch --unknown-flag emit Usage lines and unknown command mentions install
       const badPlanFlag = spawnSync(process.execPath, [agySquadCli, "plan", "--unknown-flag", "Audit"], { cwd: w2CliDir, encoding: "utf8" });
       assert.notEqual(badPlanFlag.status, 0);
       assert.match(badPlanFlag.stderr, /Usage: agy-squad plan/, "S2R-SCRIPT-002: plan unknown flag must show usage line");
+      const badDispatchFlag = spawnSync(process.execPath, [agySquadCli, "dispatch", "--unknown-flag", "alpha"], { cwd: w2CliDir, encoding: "utf8" });
+      assert.notEqual(badDispatchFlag.status, 0);
+      assert.match(badDispatchFlag.stderr, /Usage: agy-squad dispatch/, "S2R-SCRIPT-002: dispatch unknown flag must show usage line");
       const unknownCmd = spawnSync(process.execPath, [agySquadCli, "boguscmd"], { cwd: w2CliDir, encoding: "utf8" });
       assert.notEqual(unknownCmd.status, 0);
       assert.match(unknownCmd.stderr, /\binstall\b/, "S2R-SCRIPT-002: unknown command error must include install");

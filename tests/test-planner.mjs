@@ -937,11 +937,27 @@ try {
     assert.equal(multiCustomAudit.warnings.filter(w => /Custom 'integrity_auditor' lead is ignored/.test(w)).length, 1);
 
     // Wave 2 Regressions: W2-RUN-002, W2-RUN-003, W2-SVC-001, W2-SCRIPT-001, SD2-SKILL-01..02, OPT-GAP-AUDIT-LEAD
-    // W2-RUN-002: boardSince: 0 must not emit self-contradictory '(no unfiltered/since:0/limit:50)'
+    // W2-RUN-002: boardSince: 0 must not emit self-contradictory '(no unfiltered/since:0/limit:50)' or lead ', since: 0,'
     const zeroBoardPlan = planSquadCohort({ task: "Check zero cursor", boardSince: 0 }, root);
     const zeroBrief = zeroBoardPlan.workers[0].specialists[0].swarmAdd.brief;
     assert.match(zeroBrief, /Board scope: read_board\{since:\s*0\} only/);
     assert.doesNotMatch(zeroBrief, /no unfiltered\/since:0/, "W2-RUN-002: boardSince=0 must omit since:0 from negative clause");
+    const zeroLayeredLeadPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            lead: { role: "Zero Lead", objective: "Lead", scopeFiles: ["a"] },
+            specialists: [{ role: "Zero Spec", objective: "Spec", scopeFiles: ["b"] }]
+          }
+        }
+      },
+      topology: "layered",
+      boardSince: 0
+    }, root);
+    const zeroLeadBrief = zeroLayeredLeadPlan.workers[0].lead.swarmAdd.brief;
+    assert.match(zeroLeadBrief, /Board scope: read_board\{since:\s*0\} only/);
+    assert.match(zeroLeadBrief, /\(never unfiltered read_board\(\) or limit: 50\)/, "W2-RUN-002: layered lead brief with boardSince=0 must phrase negative clause cleanly");
+    assert.doesNotMatch(zeroLeadBrief, /since:\s*0,\s*or limit:\s*50/, "W2-RUN-002: layered lead brief with boardSince=0 must not forbid since: 0");
 
     // W2-RUN-003: CONTROL_CHAR_RE rejected in single-line header fields (role, typeName, model, expectedDeliverable)
     for (const [badField, val] of [
@@ -956,6 +972,11 @@ try {
         `W2-RUN-003: control character in '${badField}' must throw`
       );
     }
+    assert.throws(
+      () => buildSubagentSpec({ role: "Spec\nEvil", objective: "Check", scopeFiles: ["/abs"] }, "alpha", "m.json", 1),
+      err => err instanceof Error && /invalid brief or payload fields/.test(err.message) && !err.message.includes("\n"),
+      "W2-RUN-003: control character in role must fail before leaking raw newline into scopeFiles error"
+    );
 
     // W2-SVC-001: topology='flat' must validate stripped lead readOnly and ReadOnly alias conflicts
     assert.throws(

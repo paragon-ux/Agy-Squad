@@ -1376,6 +1376,7 @@ function buildBundleRecordInit(root, options = {}) {
       `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id>.`
     );
   }
+  validateSquadId(selectedSquadId);
 
   const template = templates[selectedSquadId];
   if (!isPlainObject(template)) {
@@ -1402,6 +1403,9 @@ function buildBundleRecordInit(root, options = {}) {
 
   const matchedIdMapKeys = new Set();
   const assignments = (Array.isArray(template.assignments) ? template.assignments : []).map((item, idx) => {
+    if (!isPlainObject(item)) {
+      throw new Error(`Plan bundleRecordTemplates['${selectedSquadId}'] assignment must be a plain object.`);
+    }
     const slotPath =
       reportRoot !== undefined ? reportPath(selectedSquadId, idx + 1, resolvedReportRoot) : item.report;
     const entry = bySlot.get(slotPath) || bySlot.get(item.report) || byWorker.get(item.conversationId);

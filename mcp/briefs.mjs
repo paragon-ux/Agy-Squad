@@ -89,13 +89,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       throw new Error(`Agent '${role || "unnamed"}' has conflicting ${lower} and ${upper} fields.`);
     }
   }
-  const objective = pickAlias("objective", "Objective", undefined);
-  if (typeof objective !== "string" || !objective.trim()) {
-    throw new Error(`Agent '${role || "unnamed"}' requires an objective.`);
-  }
-  const scope = validateScopeFiles(pickAlias("scopeFiles", "ScopeFiles", undefined), role);
-
-  const artifact = reportPath(squadId, specialistNumber, reportRoot);
+  const safeRole = role.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim() || "unnamed";
   const instructions = pickAlias("instructions", "Instructions", undefined);
   const rawDeliverable =
     pickAlias("expectedDeliverable", "ExpectedDeliverable", "Factual findings with file and line references.");
@@ -109,9 +103,15 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ) ||
     (instructions !== undefined && typeof instructions !== "string")
   ) {
-    const safeRole = role.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim() || "unnamed";
     throw new Error(`Agent '${safeRole}' has invalid brief or payload fields.`);
   }
+  const objective = pickAlias("objective", "Objective", undefined);
+  if (typeof objective !== "string" || !objective.trim()) {
+    throw new Error(`Agent '${role || "unnamed"}' requires an objective.`);
+  }
+  const scope = validateScopeFiles(pickAlias("scopeFiles", "ScopeFiles", undefined), safeRole);
+
+  const artifact = reportPath(squadId, specialistNumber, reportRoot);
   const trimmedModel = rawModel.trim();
   const coercedSubagentModel = executionMode === "subagent" && !SUBAGENT_MODEL_ALIASES.has(trimmedModel);
   if (coercedSubagentModel && Array.isArray(options.warnings)) {
@@ -161,7 +161,11 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       : null;
 
   const integritySupervision = isSwarm ? superviseSwarmIntegrityCohort : superviseIntegrityCohort;
-  const workingSupervision = isSwarm ? superviseSwarmCohort : superviseCohort;
+  const workingSupervision = isSwarm
+    ? boardSince === 0 && !(Array.isArray(boardSeqs) && boardSeqs.length > 0)
+      ? superviseSwarmCohort.replace(", since: 0, or ", " or ")
+      : superviseSwarmCohort
+    : superviseCohort;
   const leadIntro = isSwarm
     ? "Coordinate the planned /swarm specialists on the board."
     : precompiledSpecialists
