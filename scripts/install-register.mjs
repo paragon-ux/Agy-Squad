@@ -982,18 +982,16 @@ export async function runUninstall(options = {}) {
   let pluginStat = null;
   try {
     pluginStat = fs.lstatSync(pluginDest);
-  } catch {}
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
   if (pluginStat) {
-    try {
-      if (pluginStat.isSymbolicLink()) {
-        await fsPromises.unlink(pluginDest);
-      } else {
-        await fsPromises.rm(pluginDest, { recursive: true, force: true });
-      }
-      log(`[OK] Removed plugin installation: ${pluginDest}`);
-    } catch (err) {
-      log(`[WARN] Could not remove ${pluginDest}: ${err.message}`);
+    if (pluginStat.isSymbolicLink()) {
+      await fsPromises.unlink(pluginDest);
+    } else {
+      await fsPromises.rm(pluginDest, { recursive: true, force: true });
     }
+    log(`[OK] Removed plugin installation: ${pluginDest}`);
   }
 
   const repoSkillsLink = path.join(repoRoot, "skills");
@@ -1027,10 +1025,11 @@ export async function runUninstall(options = {}) {
   for (const shimName of ["agy-squad", "agy-squad.cmd"]) {
     const shimPath = path.join(antigravityBinDir, shimName);
     try {
-      fs.lstatSync(shimPath);
       await fsPromises.unlink(shimPath);
       log(`[OK] Removed CLI shim: ${shimPath}`);
-    } catch {}
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
   }
 
   if (fs.existsSync(antigravityMcpRootDir)) {
