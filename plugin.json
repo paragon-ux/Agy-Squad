@@ -1,7 +1,7 @@
 {
   "name": "agy-squad",
   "displayName": "Agy-Squad",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "author": {
     "name": "paragon-ux"

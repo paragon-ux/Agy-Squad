@@ -730,10 +730,16 @@ try {
     }
 
     const minAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
-    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", 1).Prompt, "utf8") <= 1800);
-    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", undefined).Prompt, "utf8") <= 3300);
-    const minSwarmAudit = planSquadCohort({ task: "Do work", scopeFiles: ["a"] }, root).integrityAuditPlan[0].swarmAdd.brief;
-    assert.ok(Buffer.byteLength(minSwarmAudit, "utf8") <= 3000, `Expected swarm auditor brief <= 3000 B, got ${Buffer.byteLength(minSwarmAudit, "utf8")}`);
+    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", 1).Prompt, "utf8") <= 1600, "W4 target: subagent specialist <= 1600 B");
+    assert.ok(Buffer.byteLength(buildSubagentSpec(minAgent, "s", "m.json", undefined).Prompt, "utf8") <= 3100, "W4 target: subagent lead <= 3100 B");
+    const minSwarmCohort = planSquadCohort({
+      manifest: { squads: { s: { lead: minAgent, specialists: [minAgent] } } },
+      executionMode: "swarm"
+    }, root);
+    assert.ok(Buffer.byteLength(minSwarmCohort.workers[0].specialists[0].swarmAdd.brief, "utf8") <= 1600, "W4 target: /swarm specialist <= 1600 B");
+    assert.ok(Buffer.byteLength(minSwarmCohort.workers[0].lead.swarmAdd.brief, "utf8") <= 3100, "W4 target: /swarm lead <= 3100 B");
+    const minSwarmAudit = minSwarmCohort.integrityAuditPlan[0].swarmAdd.brief;
+    assert.ok(Buffer.byteLength(minSwarmAudit, "utf8") <= 2500, `Expected swarm auditor brief <= 2500 B, got ${Buffer.byteLength(minSwarmAudit, "utf8")}`);
 
     // SQ-RUN-003: Reserved /swarm names (all, coordinator, narrator, monitor) must never be allocated
     const reservedPlan = planSquadCohort({
@@ -781,7 +787,140 @@ try {
     fs.rmSync(altDir, { recursive: true, force: true });
   }
 
-  console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
+    // W1 Regressions (LEAD-RUN-001, SVC-005, SVC-008, SVC-009)
+    // LEAD-RUN-001: equal array scopeFiles & ScopeFiles inside canonicalizeAgentSpec must not throw conflict
+    const aliasArrayPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [{ role: "Spec", objective: "Verify", scopeFiles: ["src/a.js"], ScopeFiles: ["src/a.js"] }]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(aliasArrayPlan.workers[0].specialists.length, 1);
+
+    // SVC-005: topology='flat' must validate stripped lead blocks rather than silently passing invalid scopeFiles/typeName
+    assert.throws(
+      () => planSquadCohort({
+        manifest: {
+          squads: {
+            alpha: {
+              lead: { role: "Bad Lead", objective: "Lead", scopeFiles: ["/abs/bad"], typeName: "research" },
+              specialists: [{ role: "Spec", objective: "Ok", scopeFiles: ["src/a.js"] }]
+            }
+          }
+        },
+        topology: "flat"
+      }, root),
+      /workspace-relative|writable typeName/
+    );
+
+    // SVC-008: explicit model: "inherit" is distinguished from omitted model in modelProvenance.caveat
+    const explicitInheritPlan = planSquadCohort({ task: "Audit", model: "inherit" }, root);
+    assert.doesNotMatch(
+      explicitInheritPlan.modelProvenance.caveat,
+      /No explicit model passed/,
+      "SVC-008: explicit model='inherit' must not report 'No explicit model passed'"
+    );
+    assert.match(explicitInheritPlan.modelProvenance.caveat, /Explicit 'inherit'/);
+
+    // SVC-009: knownModels passed with executionMode='subagent' must reject rather than silently ignore
+    assert.throws(
+      () => planSquadCohort({ task: "Audit", executionMode: "subagent", knownModels: ["bogus-model"] }, root),
+      /knownModels is only supported with executionMode 'swarm'/
+    );
+
+    // W2 Regressions (SQ-SWARM-BOARD-SCOPE, SKILL-SG-01, SVC-007, SVC-004)
+    // SQ-SWARM-BOARD-SCOPE: default board scoping placeholders + explicit boardSince/boardSeqs options
+    const scopedDefaultPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          skill_and_pr_review_audit: {
+            lead: { role: "Skill Lead", objective: "Lead", scopeFiles: ["a"] },
+            specialists: [{ role: "Audit Spec", objective: "Audit", scopeFiles: ["a"] }]
+          }
+        }
+      }
+    }, root);
+    const s1Brief = scopedDefaultPlan.workers[0].specialists[0].swarmAdd.brief;
+    const leadWorker = scopedDefaultPlan.workers[0].lead.workerName;
+    assert.ok(s1Brief.includes(`@${leadWorker}`), `SKILL-SG-01: expected exact @${leadWorker} in specialist brief, got:\n${s1Brief}`);
+    assert.ok(!s1Brief.includes("@skill_and_pr_review_audit-lead") && !s1Brief.includes("@<lead>"), "SKILL-SG-01: must never emit literal @<squad>-lead or @<lead>");
+    assert.match(s1Brief, /read_board\{since:\s*<cohortBaseSeq>\}/, "SQ-SWARM-BOARD-SCOPE: specialist brief must guide read_board{since: <cohortBaseSeq>}");
+    assert.match(scopedDefaultPlan.integrityAuditPlan[0].swarmAdd.brief, /read_board\{seqs:/, "SQ-SWARM-BOARD-SCOPE: auditor brief must scope read_board via seqs");
+
+    const explicitBoardPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          a: {
+            specialists: [{ role: "Very Long Specialist Role Name Exceeding Limit", objective: "Check", scopeFiles: ["a"] }]
+          }
+        }
+      },
+      boardSince: 42,
+      boardSeqs: [43, 44]
+    }, root);
+    assert.match(explicitBoardPlan.workers[0].specialists[0].swarmAdd.brief, /read_board\{since:\s*42\}/);
+    assert.match(explicitBoardPlan.integrityAuditPlan[0].swarmAdd.brief, /read_board\{seqs:\s*\[43,\s*44\]\}/);
+    assert.ok(
+      explicitBoardPlan.warnings.some(w => /truncate at 24 characters/i.test(w)),
+      `SVC-007: expected 24-char workerName truncation warning even when squadId='a', got: ${JSON.stringify(explicitBoardPlan.warnings)}`
+    );
+    assert.throws(
+      () => planSquadCohort({ task: "Check", boardSince: -1 }, root),
+      /boardSince/
+    );
+    assert.throws(
+      () => planSquadCohort({ task: "Check", executionMode: "subagent", boardSince: 10 }, root),
+      /boardSince.*swarm/i
+    );
+
+    // SVC-004: mixed flat+layered cohort emits compiledPattern: "mixed"
+    const mixedPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          flat_sq: { specialists: [{ role: "Flat Spec", objective: "Check flat", scopeFiles: ["a"] }] },
+          layered_sq: {
+            lead: { role: "Layered Lead", objective: "Synthesize", scopeFiles: ["b"] },
+            specialists: [{ role: "Layered Spec", objective: "Check layered", scopeFiles: ["b"] }]
+          }
+        }
+      }
+    }, root);
+    assert.equal(mixedPlan.topology.compiledPattern, "mixed", "SVC-004: mixed flat+layered squads must emit compiledPattern='mixed'");
+
+    const runCli = args => spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: "utf8" });
+    fs.writeFileSync(path.join(root, "board-scope-manifest.json"), JSON.stringify({
+      squads: {
+        alpha: {
+          lead: { role: "Lead", objective: "Lead", scopeFiles: ["a"] },
+          specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["a"] }]
+        }
+      }
+    }));
+    const cliBoardPlan = runCli([
+      "plan",
+      "--manifest",
+      "board-scope-manifest.json",
+      "--board-since",
+      "42",
+      "--board-seq",
+      "44",
+      "--board-seq",
+      "47"
+    ]);
+    assert.equal(cliBoardPlan.status, 0, cliBoardPlan.stderr);
+    const cliBoardJson = JSON.parse(cliBoardPlan.stdout);
+    assert.match(cliBoardJson.workers[0].lead.swarmAdd.brief, /read_board\{since:\s*42\}/);
+    assert.match(cliBoardJson.integrityAuditPlan[0].swarmAdd.brief, /read_board\{seqs:\s*\[44,\s*47\]\}/);
+    const badBoardSince = runCli(["plan", "--board-since", "-1", "Audit"]);
+    assert.notEqual(badBoardSince.status, 0);
+    const badBoardSeq = runCli(["plan", "--board-seq", "abc", "Audit"]);
+    assert.notEqual(badBoardSeq.status, 0);
+
+    console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

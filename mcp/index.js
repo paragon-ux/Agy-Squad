@@ -22,6 +22,12 @@ function workspacesFromInitializeParams(params) {
   ];
   const resolved = [];
   const seen = new Set();
+  const normalizeKey = (localPath) => {
+    const canonical = path.resolve(localPath);
+    return process.platform === "win32" || process.platform === "darwin"
+      ? canonical.toLowerCase()
+      : canonical;
+  };
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
     const trimmed = candidate.trim();
@@ -29,20 +35,22 @@ function workspacesFromInitializeParams(params) {
     try {
       const parsedUrl = new URL(trimmed);
       if (!parsedUrl.pathname || parsedUrl.pathname === "/") continue;
-      const localPath = fileURLToPath(parsedUrl);
-      if (!seen.has(localPath)) {
-        seen.add(localPath);
-        resolved.push(localPath);
+      const canonical = path.resolve(fileURLToPath(parsedUrl));
+      const key = normalizeKey(canonical);
+      if (!seen.has(key)) {
+        seen.add(key);
+        resolved.push(canonical);
       }
     } catch {
       continue;
     }
   }
   if (typeof params.rootPath === "string" && params.rootPath.trim()) {
-    const trimmedRootPath = params.rootPath.trim();
-    if (!seen.has(trimmedRootPath)) {
-      seen.add(trimmedRootPath);
-      resolved.push(trimmedRootPath);
+    const canonicalRootPath = path.resolve(params.rootPath.trim());
+    const key = normalizeKey(canonicalRootPath);
+    if (!seen.has(key)) {
+      seen.add(key);
+      resolved.push(canonicalRootPath);
     }
   }
   return resolved;
@@ -54,10 +62,14 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
   }
   if (sessionWorkspaces.length > 1 && typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
     const rel = args.manifestPath.trim();
-    if (!path.isAbsolute(rel) && !rel.split(/[\\/]/).includes("..")) {
+    const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
+    if (!path.isAbsolute(rel) && !posixNorm.startsWith("/") && posixNorm !== "." && posixNorm !== ".." && !posixNorm.startsWith("../")) {
       const matching = sessionWorkspaces.filter((root) => {
         try {
-          return fs.existsSync(path.join(root, rel));
+          const candidate = path.resolve(root, posixNorm);
+          const relCheck = path.relative(root, candidate);
+          if (!relCheck || relCheck.startsWith("..") || path.isAbsolute(relCheck)) return false;
+          return fs.existsSync(candidate);
         } catch {
           return false;
         }
@@ -91,18 +103,18 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active repository directory path (overrides initialize roots, AGY_SQUAD_WORKSPACE, and cwd)."
+  description: "Active workspace directory."
 };
 
 const TOOLS = [
   {
     name: "dispatch_squad",
-    description: "Compile leads (all_l1), integrity_auditor[:<target>], or one squad's specialists into an invoke_subagent payload (subagent mode only; use squad_planner for /swarm).",
+    description: "Compile leads (all_l1), integrity_auditor[:<target>], or squad specialists for invoke_subagent.",
     inputSchema: {
       type: "object",
       properties: {
         squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<target>]', or squad ID." },
-        manifestPath: { type: "string", minLength: 1, description: "Workspace-relative manifest path." },
+        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
         workspace: WORKSPACE_SCHEMA
       },
       required: ["squadId"],
@@ -111,30 +123,32 @@ const TOOLS = [
   },
   {
     name: "squad_planner",
-    description: "Plan /swarm (primary) or invoke_subagent cohorts with model pinning, scope overlap checks, L6 provenance scaffold, and integrity audit slots. Neutral on flat vs layered topology.",
+    description: "Plan /swarm (primary) or subagent cohorts with pinning, overlap checks, L6 provenance, and audit slots.",
     inputSchema: {
       type: "object",
       properties: {
-        manifestPath: { type: "string", minLength: 1, description: "Manifest path (exclusive with manifest/task)." },
+        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
         manifest: {
           type: "object",
-          description: "Inline squads manifest (exclusive with manifestPath/task).",
+          description: "Inline squads manifest.",
           properties: { squads: { type: "object", minProperties: 1 } },
           required: ["squads"]
         },
-        task: { type: "string", minLength: 1, description: "Freeform task (exclusive with manifestPath/manifest)." },
+        task: { type: "string", minLength: 1, description: "Freeform task string." },
         workspace: WORKSPACE_SCHEMA,
-        squadId: { type: "string", minLength: 1, description: "Optional working squad filter (never 'all_l1')." },
-        topology: { type: "string", enum: ["flat", "layered"], description: "Force flat (no leads) or layered (require leads) topology." },
-        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Execution plane (default: swarm)." },
-        model: { type: "string", minLength: 1, description: "Target model ID (pinnable in swarm mode)." },
-        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation (default: inherit)." },
-        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Relative file/directory scopes for task planning." },
-        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Worker role titles for task planning." },
-        includeIntegrityAuditor: { type: "boolean", description: "Include flat audit-<id> / integrity_auditor (default: true)." },
-        reportRoot: { type: "string", minLength: 1, description: "Custom workspace-relative report root." },
-        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowlist of model IDs (e.g. from swarm models); rejects unlisted pins." },
-        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Existing /swarm roster names to reserve when sharing one board across calls." }
+        squadId: { type: "string", minLength: 1, description: "Target working squad ID." },
+        topology: { type: "string", enum: ["flat", "layered"], description: "Flat or layered topology." },
+        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (default: swarm)." },
+        model: { type: "string", minLength: 1, description: "Target model ID." },
+        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation." },
+        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task scopePaths." },
+        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task role titles." },
+        includeIntegrityAuditor: { type: "boolean", description: "Include integrity audit." },
+        reportRoot: { type: "string", minLength: 1, description: "Relative report root." },
+        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowed model IDs." },
+        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Reserved roster names." },
+        boardSince: { type: "integer", minimum: 0, description: "Swarm board since seq." },
+        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Swarm audit board seqs." }
       },
       oneOf: [
         { required: ["manifestPath"] },
@@ -147,7 +161,7 @@ const TOOLS = [
 ];
 
 function isValidRequestId(id) {
-  return typeof id === "string" || (typeof id === "number" && Number.isInteger(id));
+  return typeof id === "string" || (typeof id === "number" && Number.isSafeInteger(id));
 }
 
 async function handleRequest(request) {
@@ -196,7 +210,14 @@ async function handleRequest(request) {
     if (!params || typeof params !== "object" || Array.isArray(params) || typeof params.name !== "string") {
       return { jsonrpc: "2.0", id, error: { code: -32602, message: "Invalid params" } };
     }
-    const { name, arguments: args = {} } = params;
+    if (
+      params.arguments !== undefined &&
+      (params.arguments === null || typeof params.arguments !== "object" || Array.isArray(params.arguments))
+    ) {
+      return { jsonrpc: "2.0", id, error: { code: -32602, message: "Invalid params: arguments must be a JSON object" } };
+    }
+    const { name } = params;
+    const args = params.arguments ?? {};
     const envWorkspace = process.env.AGY_SQUAD_WORKSPACE?.trim();
     if (name !== "dispatch_squad" && name !== "squad_planner") {
       return { jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } };

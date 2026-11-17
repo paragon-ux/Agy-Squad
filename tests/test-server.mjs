@@ -61,6 +61,9 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(Object.values(planner.inputSchema.properties).every((p) => typeof p.description === "string" && p.description.length > 0));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
+  assert.ok(planner.inputSchema.properties.boardSince && planner.inputSchema.properties.boardSeqs, "SQ-SWARM-BOARD-SCOPE schema fields exposed");
+  const toolsListBytes = Buffer.byteLength(JSON.stringify(res), "utf8");
+  assert.ok(toolsListBytes <= 3072, `W4 target: tools/list response must stay <= 3072 B (got ${toolsListBytes})`);
   const invalidParamsRes = await handleRequest({ jsonrpc: "2.0", id: 98, method: "tools/call", params: null });
   assert.equal(invalidParamsRes.error.code, -32602);
   const arrayParamsRes = await handleRequest({ jsonrpc: "2.0", id: 99, method: "tools/call", params: [] });
@@ -548,6 +551,80 @@ console.log("Agy-Squad MCP server tests\n");
     fs.rmSync(emptySecondary, { recursive: true, force: true });
     fs.rmSync(dupManifestRoot, { recursive: true, force: true });
   }
+  // W1 Regressions (MCP-001..004): trailing-slash root dedupe, non-plain-object arguments -> -32602, unsafe id, normalized relative manifestPath
+  for (const badArgs of [null, [], "str", 42, true]) {
+    const badArgsRes = await handleRequest({
+      jsonrpc: "2.0",
+      id: 201,
+      method: "tools/call",
+      params: { name: "dispatch_squad", arguments: badArgs }
+    });
+    assert.equal(badArgsRes.error?.code, -32602, `MCP-002: non-plain-object arguments=${JSON.stringify(badArgs)} must return -32602`);
+  }
+  const unsafeIdRes = await handleRequest({ jsonrpc: "2.0", id: 1e25, method: "ping" });
+  assert.equal(unsafeIdRes.error?.code, -32600, "MCP-003: unsafe integer request id must be rejected with -32600");
+
+  const dupSlashRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-slash-root-")));
+  const secondaryWs = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rel-norm-")));
+  try {
+    fs.mkdirSync(path.join(dupSlashRoot, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(dupSlashRoot, "swarm-manifest.json"), JSON.stringify({
+      squads: { alpha: { specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["."] }] } }
+    }));
+    const slashHref = pathToFileURL(dupSlashRoot).href.replace(/\/$/, "");
+    const slashRes = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: slashHref, name: "ws1" },
+            { uri: `${slashHref}/`, name: "ws1-slash" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: "sub/../swarm-manifest.json" } }
+      }
+    ]);
+    assert.equal(Boolean(slashRes[1].result.isError), false, `MCP-001/MCP-004: trailing-slash dedupe and sub/../manifestPath must succeed: ${slashRes[1].result.content[0].text}`);
+
+    fs.mkdirSync(path.join(secondaryWs, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(secondaryWs, "target.json"), JSON.stringify({
+      squads: { beta: { specialists: [{ role: "Beta", objective: "Check", scopeFiles: ["."] }] } }
+    }));
+    const multiNormRes = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(dupSlashRoot).href, name: "first" },
+            { uri: pathToFileURL(secondaryWs).href, name: "second" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: "sub/../target.json" } }
+      }
+    ]);
+    assert.equal(Boolean(multiNormRes[1].result.isError), false, `MCP-004: multi-root sub/../target.json must match secondary root: ${multiNormRes[1].result.content[0].text}`);
+    assert.equal(JSON.parse(multiNormRes[1].result.content[0].text).bundleRecordTemplates.beta.workspace, secondaryWs);
+  } finally {
+    fs.rmSync(dupSlashRoot, { recursive: true, force: true });
+    fs.rmSync(secondaryWs, { recursive: true, force: true });
+  }
+
   console.log("✓ explicit workspace arg, initialize URIs, multi-root resolution, fallback precedence, and env isolation work cleanly");
 }
 {

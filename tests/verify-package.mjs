@@ -79,7 +79,10 @@ function validate(packages) {
   assert.deepEqual(unsafe, [], `Unsafe package paths: ${unsafe.join(", ")}`);
 
   const hasBadSubpath = (name) =>
-    name.endsWith(".tgz") || name.endsWith(".log") || /(?:^|\/)scratch(?:\/|$)/.test(name);
+    name.endsWith(".tgz") ||
+    name.endsWith(".log") ||
+    /(?:^|\/)scratch(?:\/|$)/.test(name) ||
+    name.startsWith("docs/reviews/");
   const allowed = names.filter(name =>
     !hasBadSubpath(name) &&
     (name === "package.json" || name === "plugin.json" ||
@@ -104,11 +107,12 @@ function validate(packages) {
 function selfTest() {
   const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
   assert.equal(validate(fixture(["docs/plans/pr3-option-b-fixes.md"])), REQUIRED.length + 1);
-  for (const bad of [
+  const badCases = [
     "tests/leaked.mjs",
     "benchmarks/private.json",
     "scratch/trace.log",
     "docs/scratch/leak.md",
+    "docs/reviews/pr5-reconciled-review.md",
     "docs/package.tgz",
     "mcp/debug.log",
     ".agents/teamwork/session.json",
@@ -117,7 +121,8 @@ function selfTest() {
     "bin/terminal.py",
     "mcp/run-state.mjs",
     "mcp/subagent-brief.mjs"
-  ]) {
+  ];
+  for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
       /Forbidden npm package contents|Unsafe package paths/,
       `Expected synthetic package with ${bad} to be rejected`);
@@ -125,7 +130,7 @@ function selfTest() {
   assert.throws(() => validate([{ files: REQUIRED
     .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log("Package verifier self-test passed (positive + 13 negatives)");
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 1} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

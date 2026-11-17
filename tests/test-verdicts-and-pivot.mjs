@@ -357,6 +357,72 @@ try {
   assert.notEqual(badUtf8Res.status, 0);
   assert.match(badUtf8Res.stderr, /UTF-8/);
 
+  // W1 Regressions (RUN-001..005, RUN-012, LEAD-RUN-002): prose negation, historical status, table result matrices, indented code, trailing dot
+  assert.equal(
+    parseContentVerdict("Content Verdict: BLOCKED\nPrerequisites did not pass.\n"),
+    "BLOCKED",
+    "RUN-001: 'did not pass.' must not inject synthetic FAIL into Content Verdict: BLOCKED"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nPrior baseline check did not pass.\n"),
+    "PASS",
+    "RUN-001: historical 'did not pass.' must not contradict Content Verdict: PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nCheck result is fail/pass depending on mode.\nPrior status: FAIL\n"),
+    "PASS",
+    "RUN-005: slash compounds and historical status lines must not trigger false conflict"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: BLOCKED\n| Suite | Result | Status |\n| --- | --- | --- |\n| Unit | PASS | PASS |\n| Smoke | FAIL | FAIL |\n"),
+    "BLOCKED",
+    "RUN-004: Result/Status matrix tables must not override Content Verdict: BLOCKED"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: FAIL\n| Squad | Verdict |\n| --- | --- |\n| Alpha | PASS |\n"),
+    /conflicting content verdicts/,
+    "RUN-004: Verdict table column MUST still catch conflicting verdicts"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n\n    Verdict: FAIL\n    Content Verdict: BLOCKED\n"),
+    "PASS",
+    "RUN-012: 4-space indented code blocks must be stripped by stripCode"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n\tVerdict: FAIL\n"),
+    "PASS",
+    "RUN-012: tab-indented code blocks must be stripped by stripCode"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (all tests pass).\n"),
+    "PASS",
+    "LEAD-RUN-002: lowercase 'pass' inside category Verdict line must not break bypass"
+  );
+  assert.equal(
+    parseTargetSquad("Target Squad: alpha.\nIntegrity Verdict: CLEAN\n"),
+    "alpha",
+    "RUN-002: trailing sentence period in Target Squad must be stripped cleanly"
+  );
+  // RUN-003: bundle-init pre-verdict draft containing category Verdict: Changes required must not throw
+  const draftSlot = reportPath("draft_check", 1);
+  const draftLeadSlot = reportPath("draft_check");
+  write(draftSlot, "Evidence: ok.\n");
+  write(draftLeadSlot, "# Draft Synthesis\n- **Verdict:** Changes required (`SQ-001`)\n");
+  write("draft-plan.json", JSON.stringify({
+    executionMode: "swarm",
+    workers: [{ squadId: "draft_check", specialists: [{ reportSlot: draftSlot }] }],
+    bundleRecordTemplates: {
+      draft_check: {
+        squadId: "draft_check",
+        workspace: root,
+        assignments: [{ conversationId: "w1", report: draftSlot }],
+        requireIntegrityAudit: false
+      }
+    }
+  }));
+  const draftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
+  assert.equal(draftInitOut.verdict, "PASS", "RUN-003: category Verdict line must not trigger hasContentVerdictAttempt error");
+
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

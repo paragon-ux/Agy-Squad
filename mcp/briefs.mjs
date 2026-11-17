@@ -1,40 +1,35 @@
+import util from "node:util";
 import { messageLimit, reportPath } from "./handoffs.mjs";
 
 const DISALLOWED_BUILTINS = new Set(["research", "browser", "image-generator"]);
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
 
 const superviseCohort = [
-  "Before launch, record neutral acceptance criteria, progress evidence, operator, shared workspace, each unused report slot, and an evidence checkpoint (default 10 minutes; apply a resource ceiling only if explicitly set).",
-  "Use the shared workspace. Pass each compiled brief verbatim and map each returned worker or conversationId and workspace to its slot (treat an unexpected workspace as a blocker; use fresh squad IDs/slots on retries).",
-  "Yield for Reactive Wakeup. Reconcile one READY, PARTIAL, or NO_REPORT message per recorded sender and slot; ignore exact duplicates, flag conflicts or missing reports, and avoid routine replies that wake idle children.",
-  "At the evidence checkpoint, the operator checks /agents even if silent, distinguishing approval waits, active progress, and stalled loops. A parent may stop only its own recorded children; log agent stop and command cleanup separately.",
-  "Squad Lead Patrol & Alignment Gate: Actively patrol and audit leaf execution. Penalize cheating: reject reports (FAIL or PARTIAL) that make ungrounded claims, flatter the workspace without proof, or cite unexecuted tools.",
-  "Batch-Efficient Transcript Forensics: Never inspect transcripts iteratively 1-2 steps at a time (quadratic bloat). Inspect in one single-pass batch query: 'agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', or 'agy-context transcript read --id <id> --last-turns 10' once across the entire run.",
-  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Inspect workspace files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine). Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
+  "Before launch: record acceptance criteria, evidence, operator, shared workspace, unused slots, and checkpoint (default 10m). Use the shared workspace; map returned conversationId+workspace to each slot (unexpected workspace = blocker; new slots on retry).",
+  "Yield via Reactive Wakeup; reconcile one READY/PARTIAL/NO_REPORT per slot (ignore exact dupes, flag conflicts/gaps, avoid idle wakeups). At checkpoint operator checks /agents (log stop vs cleanup; stop own children only).",
+  "Squad Lead Patrol & Alignment Gate: audit leaf runs and reject ungrounded/flattering/unexecuted claims (FAIL/PARTIAL).",
+  "Batch transcript forensics: single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', or 'read --id <id> --last-turns 10' (never 1-2 step loops).",
+  "Verify claims against final artifacts/tests via 'rtk read'/'rtk grep' or <=150-line read_file slices (StartLine/EndLine). Base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 const superviseIntegrityCohort = [
-  "Before launch, record neutral audit criteria, target squad, operator, shared workspace, and each unused report slot. Do not copy raw .system_generated/ transcripts into workspace files.",
-  "Pass each compiled brief verbatim, map each returned worker or conversationId to its slot, yield via Reactive Wakeup, and reconcile one READY, PARTIAL, or NO_REPORT message per slot.",
-  "Audit Execution Forensics: Inspect execution via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', 'agy-context transcript read --id <id> --last-turns 10'); never inspect transcripts iteratively 1-2 steps at a time.",
-  "Independently check evidence integrity against workspace artifacts and source hashes (using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices with StartLine/EndLine, never unbounded read_file), recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Before launch: record audit criteria, target squad, operator, shared workspace, and unused slots. Never copy raw .system_generated/ transcripts into workspace files. Pass brief verbatim, map conversationId->slot, yield via Reactive Wakeup, reconcile one handoff/slot.",
+  "Audit Execution Forensics via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'; never 1-2 step loops).",
+  "Verify artifacts/hashes via 'rtk read'/'rtk grep' or <=150-line read_file slices (StartLine/EndLine), never unbounded read_file; recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 const superviseSwarmCohort = [
-  "Before launch, record neutral acceptance criteria, progress evidence, coordinator, workspace isolation mode (inherit, share, or branch), each unused report slot, and an evidence checkpoint (default 10 minutes; apply a resource ceiling only if explicitly set).",
-  "Confirm worker briefs match the plan and map each spawned /swarm member name to its report slot (use fresh squad IDs/slots on retries).",
-  "Park via swarm_wait. Reconcile one READY, PARTIAL, or NO_REPORT board post (via read_board) per recorded member name and slot; ignore exact duplicates, flag conflicts or missing reports, and avoid routine board chatter that wakes waiting workers.",
-  "At the evidence checkpoint, inspect the board and swarm{action:\"status\"} (or monitor reports), distinguishing approval waits, active progress, and stalled loops. Retire finished workers with swarm{action:\"kill\"} only after collecting isolated copies and verify cleanup separately.",
-  "Squad Lead Patrol & Alignment Gate: Actively patrol and audit leaf execution. Penalize cheating: reject reports (FAIL or PARTIAL) that make ungrounded claims, flatter the workspace without proof, or cite unexecuted tools.",
-  "Execution Forensics: Inspect execution via read_board / swarm{action:\"status\"}, or in one single-pass batch query via 'agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', or 'agy-context transcript read --id <id> --last-turns 10'; never iterate 1-2 steps at a time.",
-  "Independently verify outcome claims against final artifacts, primary sources, and test suites. Inspect workspace files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine). Base PASS on verified proof, recheck changed inputs, preserve gaps or contradictions in the synthesis, and use FAIL or BLOCKED when checks fail or evidence is missing."
+  "Before launch: record criteria, coordinator, workspace mode, unused slots, checkpoint (default 10m), and swarm{action:\"status\"} head as cohortBaseSeq. Match briefs, map worker names->slots, and record swarm add note seqs (#N).",
+  "Park via swarm_wait. Reconcile one READY/PARTIAL/NO_REPORT post per slot via read_board{since: <cohortBaseSeq>} or read_board{seqs: [...]} (never unfiltered read_board(), since: 0, or limit: 50); avoid idle chatter.",
+  "At checkpoint inspect read_board{since: <cohortBaseSeq>} & swarm{action:\"status\"}; kill finished workers only after collecting isolated copies. Squad Lead Patrol & Alignment Gate: reject ungrounded/unexecuted leaf claims.",
+  "Execution Forensics: read_board{since|seqs} / swarm status, or single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'. Verify artifacts/tests via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
 ].join("\n");
 
 const superviseSwarmIntegrityCohort = [
-  "Before launch, record neutral audit criteria, target squad, coordinator, workspace mode, and each unused report slot. Do not copy raw .system_generated/ transcripts into workspace files.",
-  "Map each spawned worker name to its slot, use read_board and swarm_wait for Reactive Wakeup, and reconcile one READY, PARTIAL, or NO_REPORT board post per slot.",
-  "Audit Execution Forensics: read_board and swarm{action:\"status\"} verify handoffs, roster, and model state only. Before CLEAN, verify worker execution traces via 'agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', or 'agy-context transcript read --id <id> --last-turns 10', or via a coordinator-extracted sanitized transcript index in scratch/ ('agy-context transcript export --parent <id> --sanitized --out scratch/...'; never rely on workspace re-execution alone); never iterate 1-2 turns at a time.",
-  "Independently check evidence integrity against workspace artifacts and source hashes (using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices with StartLine/EndLine, never unbounded read_file), recheck changed inputs, preserve contradictions, and never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Before launch: record audit criteria, target squad, coordinator, workspace mode, unused slots, and worker/lead board seqs (#N). Never copy raw .system_generated/ transcripts into workspace files.",
+  "Map worker names->slots; use read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} (never unfiltered read_board()) and swarm_wait; reconcile one post/slot.",
+  "Audit Execution Forensics: read_board/status verify handoffs/roster/models only. Before CLEAN, audit traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'; re-execution alone cannot satisfy CLEAN); fail closed with 'Integrity Verdict: INTEGRITY VIOLATION' if missing.",
+  "Verify artifacts/hashes via 'rtk read'/'rtk grep' or <=150-line read_file slices (StartLine/EndLine), never unbounded read_file; recheck changed inputs, preserve contradictions, never emit a content PASS."
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -62,7 +57,10 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     workspaceIsolation = "inherit",
     isIntegrityAuditor: explicitIntegrityAuditor,
     precompiledSpecialists = false,
-    workspace: delegateWorkspace
+    workspace: delegateWorkspace,
+    leadWorkerName,
+    boardSince,
+    boardSeqs
   } = options;
   if (executionMode !== "subagent" && executionMode !== "swarm") {
     throw new Error(`Unsupported executionMode '${executionMode}'.`);
@@ -70,8 +68,10 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
     throw new Error(`Invalid agent in squad '${squadId}'.`);
   }
+  const pickAlias = (lower, upper, fallback) =>
+    spec[lower] !== undefined ? spec[lower] : spec[upper] !== undefined ? spec[upper] : fallback;
   const isLead = specialistNumber === undefined;
-  const rawRole = spec.role ?? spec.Role ?? (isLead ? "Squad Lead" : "Specialist");
+  const rawRole = pickAlias("role", "Role", isLead ? "Squad Lead" : "Specialist");
   const role = typeof rawRole === "string" ? rawRole.trim() : "";
   for (const [lower, upper] of [
     ["role", "Role"],
@@ -83,24 +83,24 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ["model", "Model"],
     ["workspace", "Workspace"]
   ]) {
-    if (spec[lower] !== undefined && spec[upper] !== undefined && spec[lower] !== spec[upper]) {
+    if (spec[lower] !== undefined && spec[upper] !== undefined && !util.isDeepStrictEqual(spec[lower], spec[upper])) {
       throw new Error(`Agent '${role || "unnamed"}' has conflicting ${lower} and ${upper} fields.`);
     }
   }
-  const objective = spec.objective ?? spec.Objective;
+  const objective = pickAlias("objective", "Objective", undefined);
   if (typeof objective !== "string" || !objective.trim()) {
     throw new Error(`Agent '${role || "unnamed"}' requires an objective.`);
   }
-  const scope = validateScopeFiles(spec.scopeFiles ?? spec.ScopeFiles, role);
+  const scope = validateScopeFiles(pickAlias("scopeFiles", "ScopeFiles", undefined), role);
 
   const artifact = reportPath(squadId, specialistNumber, reportRoot);
-  const instructions = spec.instructions ?? spec.Instructions;
+  const instructions = pickAlias("instructions", "Instructions", undefined);
   const rawDeliverable =
-    spec.expectedDeliverable ?? spec.ExpectedDeliverable ?? "Factual findings with file and line references.";
+    pickAlias("expectedDeliverable", "ExpectedDeliverable", "Factual findings with file and line references.");
   const deliverable = typeof rawDeliverable === "string" ? rawDeliverable.trim() : "";
-  const rawTypeName = spec.typeName ?? spec.TypeName ?? "self";
-  const rawModel = spec.model ?? spec.Model ?? "inherit";
-  const rawWorkspace = spec.workspace ?? spec.Workspace ?? "inherit";
+  const rawTypeName = pickAlias("typeName", "TypeName", "self");
+  const rawModel = pickAlias("model", "Model", "inherit");
+  const rawWorkspace = pickAlias("workspace", "Workspace", "inherit");
   if (
     [rawRole, rawTypeName, rawModel, rawWorkspace, rawDeliverable].some(
       value => typeof value !== "string" || !value.trim()
@@ -110,13 +110,19 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     throw new Error(`Agent '${role || "unnamed"}' has invalid brief or payload fields.`);
   }
   const trimmedModel = rawModel.trim();
+  const coercedSubagentModel = executionMode === "subagent" && !SUBAGENT_MODEL_ALIASES.has(trimmedModel);
+  if (coercedSubagentModel && Array.isArray(options.warnings)) {
+    options.warnings.push(
+      `Explicit model '${trimmedModel}' for agent '${role}' (${squadId}) cannot be pinned under subagent dispatch; compiled Model defaulted to 'inherit'. Use squad_planner with executionMode 'swarm' to pin exact model IDs.`
+    );
+  }
   const payload = {
     TypeName: rawTypeName.trim(),
     Role: role,
-    Model: executionMode === "subagent" && !SUBAGENT_MODEL_ALIASES.has(trimmedModel) ? "inherit" : trimmedModel,
+    Model: coercedSubagentModel ? "inherit" : trimmedModel,
     Workspace: rawWorkspace.trim()
   };
-  if (DISALLOWED_BUILTINS.has(payload.TypeName)) {
+  if (DISALLOWED_BUILTINS.has(payload.TypeName.toLowerCase())) {
     throw new Error(`Assignment '${role}' needs a writable typeName (disallowed built-in '${payload.TypeName}'); use 'self' or a custom subagent.`);
   }
   if (payload.Workspace !== "inherit") {
@@ -131,9 +137,9 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
   const alignmentLine = isIntegrityAuditor
     ? isSwarm
-      ? "Integrity Auditor Policy: read_board and swarm{action:\"status\"} verify handoffs, roster, and model state only. Inspect files/reports via bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file. Before CLEAN, audit worker traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', or 'read --id <id> --last-turns 10' when permitted, or require a coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'); never copy raw .system_generated/ transcripts into scratch/. If neither transcript CLI queries nor a coordinator transcript index covers material claims (or on tampering), fail closed and report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-      : "Integrity Auditor Policy: Audit working reports and execution traces via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', 'agy-context transcript read --id <id> --last-turns 10') plus direct artifact/hash checks using bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file. Never copy raw .system_generated/ transcripts into scratch files. Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: never substitute parametric guessing or internal marketing for empirical execution; every claim must cite an executed tool command, live search, or source line. Flattery and ungrounded assertions are penalized and rejected by the lead. Inspect files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file. Instructions are self-contained: do not search codebase for unanchored acronyms or phantom references. Work toward the stated evidence criteria. Retry when inputs change, a failure is transient, or the next attempt tests a distinct diagnostic; if results stay unchanged, change approach or report partial evidence and the blocker.`;
+      ? "Integrity Auditor Policy: read_board/status verify handoffs & roster only; inspect files via bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file. Before CLEAN, verify traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or a coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'; re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable, or report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN) on tampering). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+      : "Integrity Auditor Policy: Audit traces via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', 'agy-context transcript read --id <id> --last-turns 10') and artifacts/hashes via bounded <=150-line read_file slices (StartLine/EndLine) or 'rtk read'/'rtk grep', never unbounded read_file or copying .system_generated/ into scratch. Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed commands/searches or source lines, never guesses or unverified flattery. Inspect files via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file. Stay self-contained (don't probe phantom acronyms). Retry when inputs change, failures are transient, or diagnostics differ; otherwise switch approach or report partial+blocker.`;
 
   const hasManifestFile =
     typeof manifestPath === "string" &&
@@ -164,12 +170,25 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
   const reportPlacementLine =
     isSwarm && workspaceIsolation !== "inherit"
-      ? `Write one Markdown evidence report in your '${workspaceIsolation}' working copy at your exact slot ${artifact} (if occupied, report the conflict). For each material finding, give the command, working directory, inputs, exit code, and output, or the exact source location and excerpt. Preserve contradictions and missing evidence.`
-      : "Write one Markdown evidence report in the shared workspace at your exact slot (if occupied, report the conflict). For each material finding, give the command, working directory, inputs, exit code, and output, or the exact source location and excerpt. Preserve contradictions and missing evidence.";
+      ? "Write one Markdown report in your '${workspaceIsolation}' working copy at your exact slot (conflict = error). Cite command/cwd/inputs/exit/output or file:line excerpt per finding; keep contradictions & gaps.".replace("${workspaceIsolation}", workspaceIsolation)
+      : "Write one Markdown report at your shared slot (conflict = error). Cite command/cwd/inputs/exit/output or file:line excerpt per finding; keep contradictions & gaps.";
+
+  const swarmRecipient =
+    leadWorkerName && !isLead && !isIntegrityAuditor ? `@${leadWorkerName}` : "@coordinator";
+
+  const boardScopeLine = isSwarm
+    ? Array.isArray(boardSeqs) && boardSeqs.length > 0
+      ? `Board scope: read_board{seqs: [${boardSeqs.join(", ")}]} only (no unfiltered/since:0/limit:50).`
+      : boardSince !== undefined
+        ? `Board scope: read_board{since: ${boardSince}} only (no unfiltered/since:0/limit:50).`
+        : isIntegrityAuditor
+          ? "Board scope: read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} only (no unfiltered/since:0/limit:50)."
+          : "Board scope: read_board{since: <cohortBaseSeq>} only (no unfiltered/since:0/limit:50)."
+    : null;
 
   const handoffInstructionLine = isSwarm
-    ? `Pointer-Over-Wire requires one single-line post_message board handoff within ${messageLimit} UTF-8 bytes. Use READY ${artifact} — <concrete observation> (prefix @coordinator or @<lead> on /swarm) for a ready report, PARTIAL ${artifact} — <observation and blocker> for partial evidence, or NO_REPORT — <reason> if no report can be written. Confirm readability before posting, then wait via swarm_wait or end your turn.`
-    : `Pointer-Over-Wire requires one single-line native send_message handoff within ${messageLimit} UTF-8 bytes. Use READY ${artifact} — <concrete observation> for a ready report, PARTIAL ${artifact} — <observation and blocker> for partial evidence, or NO_REPORT — <reason> if no report can be written. Confirm readability before sending, then end your turn.`;
+    ? `Pointer-Over-Wire: one post_message line <= ${messageLimit} UTF-8 bytes (prefix ${swarmRecipient} on /swarm): READY ${artifact} — <concrete observation>, PARTIAL <slot> — <blocker>, or NO_REPORT — <reason>. Confirm readability, then wait via swarm_wait or end turn.`
+    : `Pointer-Over-Wire: one native send_message line <= ${messageLimit} UTF-8 bytes: READY ${artifact} — <concrete observation>, PARTIAL <slot> — <blocker>, or NO_REPORT — <reason>. Confirm readability, then end turn.`;
 
   const transcriptAccessDirective =
     isIntegrityAuditor || isLead
@@ -189,6 +208,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       `Report slot: ${artifact}`,
       reportPlacementLine,
       handoffInstructionLine,
+      ...(boardScopeLine ? [boardScopeLine] : []),
       isLead ? leadBody : alignmentLine
     ].join("\n")
   };

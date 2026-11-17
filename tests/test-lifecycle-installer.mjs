@@ -325,7 +325,8 @@ try {
   const installedMcp = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
   assert.ok(installedMcp.mcpServers["foreign-server"], "Foreign MCP server must be preserved");
   assert.equal(installedMcp.mcpServers["agy-squad"], undefined, "Duplicate global agy-squad MCP entry must be stripped (SQ-DEP-001)");
-  assert.ok(fs.existsSync(path.join(configDir, "mcp_config.json.bak")), "Backup mcp_config.json.bak must be saved when stripping global entry");
+  assert.ok(fs.existsSync(path.join(configDir, "mcp_config.json.agy-squad.bak")), "Backup mcp_config.json.agy-squad.bak must be saved when stripping global entry (S2-DEP-001)");
+  assert.equal(fs.existsSync(path.join(configDir, "mcp_config.json.bak")), false, "Installer must not clobber shared mcp_config.json.bak (S2-DEP-001)");
   assert.deepEqual(fs.readdirSync(mcpRootDir), ["foreign-server"], "Stale agy-squad* MCP schema caches must be swept");
 
   // SQ-DEP-003: Omitted config.json entry defaults enabled=true, while enabled=false disables plugin cleanly
@@ -608,9 +609,120 @@ try {
     });
     assert.equal(emptyCliStatus.status, 1);
     assert.match(emptyCliStatus.stdout, /Overall Status: NOT INSTALLED/);
+    // LEAD-SCRIPT-002: uninstalled profile must report config.enabled=false
+    assert.equal(dynEmpty.details.config.enabled, false, "LEAD-SCRIPT-002: uninstalled profile must report details.config.enabled=false");
   } finally {
     process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
     fs.rmSync(emptyDynProfile, { recursive: true, force: true });
+  }
+
+  // W6 Regressions: S2-SCRIPT-013, S2-TEST-001..003, S2-TEST-006, S2-DEP-001, S2-SCRIPT-010, S2-SCRIPT-011, LEAD-SCRIPT-001
+  // S2-SCRIPT-013: Windows probeBinaryVersion invocation safety (Program Files (x86) safe; bare parens & unsafe args/chars rejected)
+  const validX86Probe = installerMod.buildWindowsProbeInvocation("C:\\Program Files (x86)\\rtk\\rtk.cmd", ["--version"]);
+  assert.ok(validX86Probe && validX86Probe.cmdLine === '"C:\\Program Files (x86)\\rtk\\rtk.cmd" "--version"');
+  assert.equal(installerMod.buildWindowsProbeInvocation("bad(cmd)", ["--version"]), null);
+  assert.equal(installerMod.buildWindowsProbeInvocation("rtk", ["(--version)"]), null);
+  assert.equal(installerMod.buildWindowsProbeInvocation("C:\\bad&dir\\rtk.cmd", ["--version"]), null);
+  assert.equal(installerMod.buildWindowsProbeInvocation("rtk", ["--version&calc"]), null);
+
+  // S2-TEST-001 (S2-SCRIPT-003): Malformed mcp_config.json and config.json surface corrupt=true and fail status/status --json
+  await runAgySquadInstall({ silent: true });
+  fs.writeFileSync(mcpPath, "{ bad mcp json");
+  const corruptMcpStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(corruptMcpStatus.status, 1, "S2-TEST-001: malformed mcp_config.json must exit 1 on status");
+  assert.match(corruptMcpStatus.stdout, /CORRUPT/);
+  const corruptMcpJsonRes = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(corruptMcpJsonRes.status, 1);
+  const corruptMcpJson = JSON.parse(corruptMcpJsonRes.stdout);
+  assert.equal(corruptMcpJson.isComplete, false);
+  assert.equal(corruptMcpJson.details.mcp.corrupt, true);
+  assert.ok(corruptMcpJson.details.mcp.error);
+  fs.writeFileSync(mcpPath, JSON.stringify(afterMcp, null, 2) + "\n");
+
+  const savedValidCfg = fs.readFileSync(cfgPath, "utf8");
+  fs.writeFileSync(cfgPath, "[]\n");
+  const corruptCfgJsonRes = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(corruptCfgJsonRes.status, 1, "S2-TEST-001: non-object config.json must fail status --json");
+  const corruptCfgJson = JSON.parse(corruptCfgJsonRes.stdout);
+  assert.equal(corruptCfgJson.isComplete, false);
+  assert.equal(corruptCfgJson.details.config.corrupt, true);
+  assert.equal(corruptCfgJson.details.config.enabled, false);
+  fs.writeFileSync(cfgPath, savedValidCfg);
+
+  // S2-TEST-002 (S2-SCRIPT-004): Copy-fallback missing docs/tools.md fails docsReady and status exit 1
+  await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+  const copyDocsTools = path.join(pluginDir, "docs", "tools.md");
+  const savedCopyDocsTools = fs.readFileSync(copyDocsTools, "utf8");
+  fs.rmSync(copyDocsTools);
+  const missingDocsDetect = detectExistingInstallation({ includeCompanions: false });
+  assert.equal(missingDocsDetect.details.plugin.docsReady, false);
+  assert.equal(missingDocsDetect.isComplete, false, "S2-SCRIPT-004: missing docsReady must fail isComplete");
+  const missingDocsStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(missingDocsStatus.status, 1, "S2-TEST-002: missing docsReady must exit 1 on status");
+  assert.match(missingDocsStatus.stdout, /INCOMPLETE/);
+  fs.writeFileSync(copyDocsTools, savedCopyDocsTools);
+
+  // S2-SCRIPT-010 & LEAD-SCRIPT-001: plugins: [] / mcpServers: [] array guards in runInstall and runUninstall
+  fs.writeFileSync(cfgPath, JSON.stringify({ plugins: [] }, null, 2) + "\n");
+  fs.writeFileSync(mcpPath, JSON.stringify({ mcpServers: [] }, null, 2) + "\n");
+  const badPluginsSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.notEqual(badPluginsSetup.status, 0, "S2-SCRIPT-010: setup must reject non-object config.json.plugins");
+  assert.deepEqual(JSON.parse(fs.readFileSync(cfgPath, "utf8")), { plugins: [] });
+  const safeArrayUninstall = spawnSync(process.execPath, [cli, "uninstall"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+  assert.equal(safeArrayUninstall.status, 0, "LEAD-SCRIPT-001: uninstall must preserve non-object array mcpServers/plugins without crashing");
+  assert.deepEqual(JSON.parse(fs.readFileSync(cfgPath, "utf8")), { plugins: [] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(mcpPath, "utf8")), { mcpServers: [] });
+  fs.writeFileSync(cfgPath, savedValidCfg);
+  fs.writeFileSync(mcpPath, JSON.stringify(afterMcp, null, 2) + "\n");
+
+  // S2-TEST-003 (S2-SCRIPT-011): Dangling CLI shim symlink and broken subdir/repoSkills symlink removed by uninstall
+  const danglingShimPath = path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad");
+  let danglingShimCreated = false;
+  try {
+    fs.symlinkSync(path.join(tmpProfile, "nonexistent-shim-target"), danglingShimPath, "file");
+    danglingShimCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (danglingShimCreated) {
+    const danglingUninst = spawnSync(process.execPath, [cli, "uninstall"], { cwd: repoRoot, env: testEnv, encoding: "utf8" });
+    assert.equal(danglingUninst.status, 0, danglingUninst.stderr || danglingUninst.stdout);
+    assert.throws(() => fs.lstatSync(danglingShimPath), { code: "ENOENT" }, "S2-TEST-003: uninstall must unlink dangling CLI shim symlink");
+  }
+
+  // S2-TEST-006 (S2-DEP-001): Coexistence with Agy-Context-Saver .bak and read-only legacy .bak fallback
+  const coexistProf = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-coexist-")));
+  try {
+    const cCfgDir = path.join(coexistProf, ".gemini", "config");
+    fs.mkdirSync(cCfgDir, { recursive: true });
+    const cEnv = { ...testEnv, AGY_TEST_PROFILE_DIR: coexistProf };
+    const acsBak = path.join(cCfgDir, "mcp_config.json.agy-context-saver.bak");
+    const cMcpPath = path.join(cCfgDir, "mcp_config.json");
+    const cLegacyBak = path.join(cCfgDir, "mcp_config.json.bak");
+    const acsSentinel = JSON.stringify({ mcpServers: { "agy-context-saver": { command: "node", args: ["acs.js"] } } }, null, 2) + "\n";
+    fs.writeFileSync(acsBak, acsSentinel);
+    fs.writeFileSync(cMcpPath, JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["old.js"] }, "other": { command: "x" } } }, null, 2) + "\n");
+    const coexistSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: cEnv, encoding: "utf8" });
+    assert.equal(coexistSetup.status, 0, coexistSetup.stderr || coexistSetup.stdout);
+    assert.equal(fs.readFileSync(acsBak, "utf8"), acsSentinel, "S2-TEST-006: must never clobber .agy-context-saver.bak");
+    assert.ok(fs.existsSync(path.join(cCfgDir, "mcp_config.json.agy-squad.bak")));
+    assert.equal(fs.existsSync(cLegacyBak), false);
+
+    // Foreign-only legacy mcp_config.json.bak must NOT be blindly restored over mcp_config.json
+    fs.rmSync(path.join(cCfgDir, "mcp_config.json.agy-squad.bak"), { force: true });
+    fs.writeFileSync(cLegacyBak, JSON.stringify({ mcpServers: { "agy-context-saver": { command: "node", args: ["only-acs.js"] } } }) + "\n");
+    const curBeforeForeign = fs.readFileSync(cMcpPath, "utf8");
+    spawnSync(process.execPath, [cli, "restore-backups"], { cwd: repoRoot, env: cEnv, encoding: "utf8" });
+    assert.equal(fs.readFileSync(cMcpPath, "utf8"), curBeforeForeign, "S2-TEST-006: legacy .bak without agy-squad key must not overwrite mcp_config.json");
+
+    // Legacy mcp_config.json.bak WITH agy-squad restores read-only without deleting legacy file
+    fs.writeFileSync(cLegacyBak, JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["legacy.js"] } } }) + "\n");
+    const legacyRestore = spawnSync(process.execPath, [cli, "restore-backups"], { cwd: repoRoot, env: cEnv, encoding: "utf8" });
+    assert.equal(legacyRestore.status, 0, legacyRestore.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(cMcpPath, "utf8")).mcpServers["agy-squad"], { command: "node", args: ["legacy.js"] });
+    assert.equal(fs.existsSync(cLegacyBak), true, "Legacy fallback must stay read-only without deleting shared .bak");
+  } finally {
+    fs.rmSync(coexistProf, { recursive: true, force: true });
   }
 
   console.log("Lifecycle installer, --check, and rollback tests passed");

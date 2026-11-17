@@ -16,10 +16,20 @@ function validateSquadId(squadId) {
   return squadId;
 }
 
+const HISTORICAL_CONTEXT_RE =
+  /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old|initial|original|earlier)\b/i;
+const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
+const LABELED_VERDICT_RE =
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*(PASS|FAIL|BLOCKED)(?![-\w/])/i;
+
+function isHistoricalTableHeader(header) {
+  return HISTORICAL_CONTEXT_RE.test(header) && !CURRENT_CONTEXT_RE.test(header);
+}
+
 /**
  * Strip fenced code blocks line-by-line (tracking matching opening/closing
- * fence tokens) before stripping inline code spans so an inline `` ` ``` ` ``
- * cannot swallow subsequent lines.
+ * fence tokens), 4-space/tab indented Markdown code blocks, and inline code
+ * spans so code examples cannot inject or swallow verdict lines.
  * @param {string} markdown
  * @returns {string}
  */
@@ -36,6 +46,9 @@ function stripCode(markdown) {
       if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
         fenceChar = open[1][0];
         fenceLen = open[1].length;
+        continue;
+      }
+      if (/^(?: {4}|\t)/.test(line)) {
         continue;
       }
       kept.push(line);
@@ -61,7 +74,7 @@ function isCategoryVerdictLine(line) {
   if (!match) return false;
   const rawVal = match[1].replace(/[*_]{1,3}/g, "").trim();
   if (!CATEGORY_VERDICT_RE.test(rawVal)) return false;
-  return !/\b(?:PASS|FAIL|BLOCKED)\b/i.test(rawVal);
+  return !/\b(?:PASS|FAIL|BLOCKED)\b/.test(rawVal);
 }
 
 /**
@@ -110,10 +123,14 @@ function parseStrictLines(markdown, labels, allowed) {
 function hasContentVerdictAttempt(markdown) {
   const clean = stripCode(markdown);
   const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
-  const verdictLabelRe = new RegExp(`^\\s*${prefix}\\s*(?:Content\\s+)?Verdict\\s*(?:[*_]{1,3})?\\s*:`, "im");
-  if (verdictLabelRe.test(clean)) return true;
-  if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)\b/m.test(clean)) return true;
-  return /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*(?:[:—–-]|\bis\b)\s*(?:[*_]{1,3})?\s*(?:PASS|FAIL|BLOCKED)(?![-\w])/i.test(clean);
+  const verdictLabelRe = new RegExp(`^\\s*${prefix}\\s*(?:(?:Content|Overall)\\s+)?Verdict\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  for (const line of clean.split(/\r?\n/)) {
+    if (isCategoryVerdictLine(line)) continue;
+    if (verdictLabelRe.test(line)) return true;
+    if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)\b/.test(line)) return true;
+    if (LABELED_VERDICT_RE.test(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
+  }
+  return false;
 }
 
 /**
@@ -123,27 +140,30 @@ function hasContentVerdictAttempt(markdown) {
  * @returns {"PASS"|"FAIL"|"BLOCKED"}
  */
 function parseContentVerdict(markdown) {
-  const found = parseStrictLines(markdown, ["Content Verdict", "Verdict"], CONTENT_VERDICTS);
+  const found = parseStrictLines(markdown, ["Content Verdict", "Overall Verdict", "Verdict"], CONTENT_VERDICTS);
   if (found.size === 0) {
     throw new Error("Report must record an unambiguous single-line 'Content Verdict: PASS|FAIL|BLOCKED' (or 'Verdict: ...').");
   }
 
   const clean = stripCode(markdown);
   let inTable = false;
-  let headerSkipped = [];
+  let headerVerdictCol = [];
   for (const line of clean.split(/\r?\n/)) {
-    // Reject explicit negations targeting PASS (uppercase PASS, or lowercase "pass" at clause end)
+    if (isCategoryVerdictLine(line)) {
+      inTable = false;
+      headerVerdictCol = [];
+      continue;
+    }
+    // Reject explicit negations targeting PASS when report claims PASS (excluding historical prose)
     const negMatch = line.match(
       /\b(not|no|never|isn't|wasn't|didn't|doesn't|cannot|can't|did\s+not|does\s+not)\s+(pass)\b(?:\s*([.,;:!?]|$))?/i
     );
-    if (negMatch && (negMatch[2] === "PASS" || negMatch[3] !== undefined)) {
+    if (found.has("PASS") && negMatch && (negMatch[2] === "PASS" || negMatch[3] !== undefined) && !HISTORICAL_CONTEXT_RE.test(line)) {
       found.add("FAIL");
     }
-    // Reject secondary labeled verdict/status/check lines or table cells asserting conflicting verdicts
-    const labeled = line.match(
-      /(?:^|\b)(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*(?:[:—–-]|\bis\b)\s*(?:[*_]{1,3})?\s*(PASS|FAIL|BLOCKED)(?![-\w])/i
-    );
-    if (labeled) {
+    // Reject secondary labeled verdict/status/check lines asserting conflicting verdicts (excluding historical/compound tokens)
+    const labeled = line.match(LABELED_VERDICT_RE);
+    if (labeled && !HISTORICAL_CONTEXT_RE.test(line)) {
       found.add(labeled[1].toUpperCase());
     }
     const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
@@ -159,20 +179,20 @@ function parseContentVerdict(markdown) {
         const isFirstRow = !inTable;
         if (isFirstRow) {
           inTable = true;
-          headerSkipped = cells.map(h =>
-            /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old)\b/i.test(h) &&
-            !/\b(?:current|now|final|post|after)\b/i.test(h)
+          headerVerdictCol = cells.map(h =>
+            /\b(?:content\s+verdict|overall(?:\s+verdict)?|verdict)\b/i.test(h) &&
+            !isHistoricalTableHeader(h)
           );
         }
         cells.forEach((cell, colIdx) => {
-          if (!isFirstRow && headerSkipped[colIdx]) return;
+          if (!isFirstRow && !headerVerdictCol[colIdx]) return;
           const m = cell.match(/^(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?$/);
           if (m) found.add(m[1]);
         });
       }
     } else {
       inTable = false;
-      headerSkipped = [];
+      headerVerdictCol = [];
     }
   }
 
@@ -211,7 +231,7 @@ function parseTargetSquad(markdown) {
   const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
   const labelRe = new RegExp(`^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Za-z0-9_.-]+)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    `^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Za-z0-9_.-]+?)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
     "i"
   );
   const found = new Set();

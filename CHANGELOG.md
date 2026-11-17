@@ -5,6 +5,18 @@ All notable changes to `Agy-Squad` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-11-16
+
+### Added
+- **Board Scoping, Batched CLI Subcommands & Fast Diagnostic Mode (`SQ-SWARM-BOARD-SCOPE`, `OPT-RT-01`, `OPT-MCP-02`, `SD-OPT-MCP-SPAWN`, `mcp/planner.mjs`, `mcp/briefs.mjs`, `mcp/index.js`, `bin/agy-squad.mjs`, `.agents/skills/self-diagnosis/scripts/diagnose.mjs`)**: Added `boardSince` / `boardSeqs` (`--board-since`, `--board-seq`) cursor scoping on `squad_planner` and `agy-squad plan`, batched `bundle-init --digest` and `verify --prune [--keep-reports]` single-process execution, compact JSON MCP responses (`OPT-MCP-02`), compiled `@<leadWorkerName>` targeting (`SKILL-SG-01`), and `--skip-mcp-spawn` + isolated `canaryFingerprintMs`/`digestMs` telemetry + `/swarm` template budgets in `diagnose.mjs`.
+
+### Changed
+- **Progressive Disclosure & Manifest/Doc Alignment (`OPT-SKILL-01..04`, `SD-OPT-MANIFEST-LEADS`, `SKILL-PR-*`, `SKILL-SG-*`, `DOC-TOOLS-*`, `ARCH-LEDGER-*`, `S2-DEP-005`)**: Compressed paired `SKILL.md` entry context (~5.8 KB savings on `swarm-governance` + `pr-review`) and `self-diagnosis-manifest.json` lead briefs while preserving runtime closure anchors, added `comparative-research-manifest.json` and missing scope coverage in `self-diagnosis-manifest.json`, reconciled `pr-review-standard.md`/`report-template.md`/`docs/tools.md`/`docs/plans/LEDGER.md` against implemented contracts, and excluded historical `docs/reviews/**` ledgers from the published npm tarball (`54` verified files).
+
+### Fixed
+- **Verdict, MCP Framing, Planner, Handoff & CLI Hardening (`RUN-001`..`RUN-012`, `MCP-001`..`MCP-004`, `SVC-001`..`SVC-010`, `LEAD-RUN-001`..`002`, `LEAD-SVC-001`..`002`, `S2-SCRIPT-001`..`002`, `007`..`009`, `S2-DEP-003`)**: Fixed prose/table false positives and `isCategoryVerdictLine` prefix scoping in `mcp/verdicts.mjs`, canonicalized `initialize` root URIs (`MCP-001`), rejected non-object `tools/call` arguments with `-32602` (`MCP-002`) and unsafe integer IDs (`MCP-003`), aligned camelCase/PascalCase comparison via `util.isDeepStrictEqual`, tightened `DISALLOWED_BUILTINS` case handling and `PARTIAL` headroom (`RUN-009`), validated `collect --plan --strict` inherit slots and `inspectReports` slot affinity (`SVC-003`), normalized leading `./` paths across all CLI verbs, and guarded `diagnose.mjs` Section 4/bold-ID/prose-share/sort/teardown edge cases.
+- **Installer Isolation, Corruption Surfacing & Cross-Platform Parity (`S2-DEP-001`, `S2-SCRIPT-003`, `004`, `010`, `011`, `013`, `LEAD-SCRIPT-001`..`002`, `scripts/install-register.mjs`)**: Namespaced backups to `mcp_config.json.agy-squad.bak` / `config.json.agy-squad.bak` with read-only legacy `.bak` fallback, surfaced malformed `mcp_config.json` / `config.json` corruption and `docsReady` in `detectExistingInstallation` / `status`, prevented non-object array coercion in `runInstall` / `runUninstall`, removed dangling CLI shim / `skills` symlinks via `fs.lstatSync`, and added `buildWindowsProbeInvocation` quoting/validation for Windows `cmd.exe` binary probes.
+
 ## [0.1.2] - 2026-11-16
 
 ### Added

@@ -23,9 +23,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.2";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.3";
   } catch {
-    return "0.1.2";
+    return "0.1.3";
   }
 })();
 
@@ -39,9 +39,11 @@ function resolveProfilePaths() {
   const pluginsDir = path.join(geminiConfigDir, "plugins");
   const pluginDest = path.join(pluginsDir, PLUGIN_KEY);
   const configJsonPath = path.join(geminiConfigDir, "config.json");
-  const configBakPath = path.join(geminiConfigDir, "config.json.bak");
+  const configBakPath = path.join(geminiConfigDir, "config.json.agy-squad.bak");
+  const legacyConfigBakPath = path.join(geminiConfigDir, "config.json.bak");
   const mcpJsonPath = path.join(geminiConfigDir, "mcp_config.json");
-  const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
+  const mcpBakPath = path.join(geminiConfigDir, "mcp_config.json.agy-squad.bak");
+  const legacyMcpBakPath = path.join(geminiConfigDir, "mcp_config.json.bak");
   const antigravityMcpRootDir = path.join(homeDir, ".gemini", "antigravity", "mcp");
   const antigravityBinDir = path.join(homeDir, ".gemini", "antigravity", "bin");
   return {
@@ -51,8 +53,10 @@ function resolveProfilePaths() {
     pluginDest,
     configJsonPath,
     configBakPath,
+    legacyConfigBakPath,
     mcpJsonPath,
     mcpBakPath,
+    legacyMcpBakPath,
     antigravityMcpRootDir,
     antigravityBinDir
   };
@@ -77,20 +81,44 @@ function isVersionAtLeast(semver, minMajor, minMinor, minPatch = 0) {
   return semver.patch >= minPatch;
 }
 
+export function buildWindowsProbeInvocation(target, args = ["--version"]) {
+  if (typeof target !== "string" || !target.trim() || /["&|<>^%!\r\n]/.test(target)) {
+    return null;
+  }
+  const isBareCommand = !target.includes("/") && !target.includes("\\");
+  if (isBareCommand && /[()\s]/.test(target)) {
+    return null;
+  }
+  if (!Array.isArray(args)) return null;
+  const quotedArgs = [];
+  for (const arg of args) {
+    if (typeof arg !== "string" || /["&|<>^%!()\r\n]/.test(arg)) {
+      return null;
+    }
+    quotedArgs.push(`"${arg}"`);
+  }
+  const cmdLine = [`"${target}"`, ...quotedArgs].join(" ");
+  const comspec =
+    process.env.ComSpec ||
+    process.env.COMSPEC ||
+    path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "cmd.exe");
+  return {
+    comspec,
+    args: ["/d", "/s", "/c", `"${cmdLine}"`],
+    cmdLine
+  };
+}
+
 function probeBinaryVersion(target, args = ["--version"]) {
   const isWin = os.platform() === "win32";
-  const isBareCommand = !target.includes("/") && !target.includes("\\");
+  const isBareCommand = typeof target === "string" && !target.includes("/") && !target.includes("\\");
   const useCmdShell = isWin && (isBareCommand || /\.(?:cmd|bat)$/i.test(target));
   try {
     let res;
     if (useCmdShell) {
-      if (/["&|<>^%\r\n]/.test(target)) return null;
-      const cmdLine = `"${target}" ${args.join(" ")}`;
-      const comspec =
-        process.env.ComSpec ||
-        process.env.COMSPEC ||
-        path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "cmd.exe");
-      res = spawnSync(comspec, ["/d", "/s", "/c", `"${cmdLine}"`], {
+      const winInv = buildWindowsProbeInvocation(target, args);
+      if (!winInv) return null;
+      res = spawnSync(winInv.comspec, winInv.args, {
         encoding: "utf8",
         timeout: 3000,
         windowsHide: true,
@@ -283,12 +311,14 @@ export function detectExistingInstallation(options = {}) {
       registered: false,
       pluginRegistered: false,
       globalDuplicate: false,
+      corrupt: false,
+      error: null,
       staleSchemaCount: 0,
       path: pluginMcpJsonPath,
       globalPath: mcpJsonPath
     },
     cliShim: { exists: false, path: antigravityBinDir },
-    config: { enabled: false, path: configJsonPath },
+    config: { enabled: false, corrupt: false, error: null, path: configJsonPath },
     companions: null
   };
 
@@ -424,25 +454,62 @@ export function detectExistingInstallation(options = {}) {
     }
   } catch {}
 
-  try {
-    if (fs.existsSync(pluginMcpJsonPath)) {
-      const parsedPluginMcp = JSON.parse(fs.readFileSync(pluginMcpJsonPath, "utf8"));
-      const entry = parsedPluginMcp?.mcpServers?.[PLUGIN_KEY];
+  const inspectJsonObject = (filePath, label) => {
+    if (!fs.existsSync(filePath)) return { exists: false, data: null, error: null };
+    try {
+      const raw = fs.readFileSync(filePath, "utf8");
+      if (!raw.trim()) {
+        return { exists: true, data: null, error: `${label} is empty` };
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { exists: true, data: null, error: `${label} root must be a JSON object` };
+      }
+      return { exists: true, data: parsed, error: null };
+    } catch (err) {
+      return { exists: true, data: null, error: `${label} contains malformed JSON (${err.message})` };
+    }
+  };
+  const appendMcpError = (errMsg) => {
+    details.mcp.corrupt = true;
+    details.mcp.error = details.mcp.error ? `${details.mcp.error}; ${errMsg}` : errMsg;
+  };
+
+  const pluginMcpCheck = inspectJsonObject(pluginMcpJsonPath, "plugin mcp_config.json");
+  if (pluginMcpCheck.error) {
+    appendMcpError(pluginMcpCheck.error);
+  } else if (pluginMcpCheck.data) {
+    if (
+      pluginMcpCheck.data.mcpServers !== undefined &&
+      (!pluginMcpCheck.data.mcpServers ||
+        typeof pluginMcpCheck.data.mcpServers !== "object" ||
+        Array.isArray(pluginMcpCheck.data.mcpServers))
+    ) {
+      appendMcpError("plugin mcp_config.json field 'mcpServers' must be a JSON object");
+    } else {
+      const entry = pluginMcpCheck.data.mcpServers?.[PLUGIN_KEY];
       if (entry && typeof entry.command === "string" && Array.isArray(entry.args) && entry.args.length > 0) {
         details.mcp.pluginRegistered = true;
       }
     }
-  } catch {}
+  }
 
-  try {
-    if (fs.existsSync(mcpJsonPath)) {
-      const parsedGlobalMcp = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
-      if (parsedGlobalMcp?.mcpServers && typeof parsedGlobalMcp.mcpServers === "object" && PLUGIN_KEY in parsedGlobalMcp.mcpServers) {
-        details.mcp.globalDuplicate = true;
-        details.mcp.staleSchemaCount += 1;
-      }
+  const globalMcpCheck = inspectJsonObject(mcpJsonPath, "mcp_config.json");
+  if (globalMcpCheck.error) {
+    appendMcpError(globalMcpCheck.error);
+  } else if (globalMcpCheck.data) {
+    if (
+      globalMcpCheck.data.mcpServers !== undefined &&
+      (!globalMcpCheck.data.mcpServers ||
+        typeof globalMcpCheck.data.mcpServers !== "object" ||
+        Array.isArray(globalMcpCheck.data.mcpServers))
+    ) {
+      appendMcpError("mcp_config.json field 'mcpServers' must be a JSON object");
+    } else if (globalMcpCheck.data.mcpServers && PLUGIN_KEY in globalMcpCheck.data.mcpServers) {
+      details.mcp.globalDuplicate = true;
+      details.mcp.staleSchemaCount += 1;
     }
-  } catch {}
+  }
 
   try {
     if (fs.existsSync(antigravityMcpRootDir)) {
@@ -455,7 +522,7 @@ export function detectExistingInstallation(options = {}) {
     }
   } catch {}
 
-  details.mcp.registered = details.mcp.pluginRegistered && !details.mcp.globalDuplicate;
+  details.mcp.registered = details.mcp.pluginRegistered && !details.mcp.globalDuplicate && !details.mcp.corrupt;
 
   try {
     const isWin = os.platform() === "win32";
@@ -481,19 +548,36 @@ export function detectExistingInstallation(options = {}) {
     }
   } catch {}
 
-  try {
-    if (fs.existsSync(configJsonPath)) {
-      const parsed = JSON.parse(fs.readFileSync(configJsonPath, "utf8"));
-      const cfgEntry = parsed?.plugins?.[PLUGIN_KEY];
+  const hasInstalledArtifacts =
+    details.plugin.exists ||
+    Boolean(pluginLst) ||
+    details.mcp.pluginRegistered ||
+    details.cliShim.exists;
+
+  const cfgCheck = inspectJsonObject(configJsonPath, "config.json");
+  if (cfgCheck.error) {
+    details.config.corrupt = true;
+    details.config.error = cfgCheck.error;
+    details.config.enabled = false;
+  } else if (cfgCheck.data) {
+    if (
+      cfgCheck.data.plugins !== undefined &&
+      (!cfgCheck.data.plugins || typeof cfgCheck.data.plugins !== "object" || Array.isArray(cfgCheck.data.plugins))
+    ) {
+      details.config.corrupt = true;
+      details.config.error = "config.json field 'plugins' must be a JSON object";
+      details.config.enabled = false;
+    } else {
+      const cfgEntry = cfgCheck.data.plugins?.[PLUGIN_KEY];
       if (cfgEntry && typeof cfgEntry.enabled === "boolean") {
         details.config.enabled = cfgEntry.enabled;
       } else {
-        details.config.enabled = pluginDefaultEnabled;
+        details.config.enabled = hasInstalledArtifacts ? pluginDefaultEnabled : false;
       }
-    } else {
-      details.config.enabled = pluginDefaultEnabled;
     }
-  } catch {}
+  } else {
+    details.config.enabled = hasInstalledArtifacts ? pluginDefaultEnabled : false;
+  }
 
   if (includeCompanions) {
     details.companions = detectCompanionDependencies();
@@ -512,9 +596,12 @@ export function detectExistingInstallation(options = {}) {
     !details.plugin.versionMismatch &&
     details.plugin.runtimeReady &&
     details.plugin.skillsReady &&
+    details.plugin.docsReady &&
     details.mcp.registered &&
+    !details.mcp.corrupt &&
     details.cliShim.exists &&
-    details.config.enabled;
+    details.config.enabled &&
+    !details.config.corrupt;
 
   return { isInstalled, isComplete, details };
 }
@@ -770,17 +857,29 @@ export async function runInstall(options = {}) {
   }
 
   const nextConfig = validatedConfig ? { ...validatedConfig } : {};
+  if (
+    nextConfig.plugins !== undefined &&
+    (!nextConfig.plugins || typeof nextConfig.plugins !== "object" || Array.isArray(nextConfig.plugins))
+  ) {
+    throw new Error(
+      `Existing config.json (${configJsonPath}) field 'plugins' must be a JSON object; aborting to preserve user configuration.`
+    );
+  }
   const prevPluginEntry = nextConfig.plugins?.[PLUGIN_KEY];
-  if (!prevPluginEntry || prevPluginEntry.enabled !== true) {
+  if (!prevPluginEntry || typeof prevPluginEntry !== "object" || Array.isArray(prevPluginEntry) || prevPluginEntry.enabled !== true) {
     if (fs.existsSync(configJsonPath) && !fs.existsSync(configBakPath)) {
       try {
         await fsPromises.copyFile(configJsonPath, configBakPath);
       } catch {}
     }
     nextConfig.plugins = {
-      ...(nextConfig.plugins && typeof nextConfig.plugins === "object" ? nextConfig.plugins : {}),
+      ...(nextConfig.plugins && typeof nextConfig.plugins === "object" && !Array.isArray(nextConfig.plugins)
+        ? nextConfig.plugins
+        : {}),
       [PLUGIN_KEY]: {
-        ...(prevPluginEntry && typeof prevPluginEntry === "object" ? prevPluginEntry : {}),
+        ...(prevPluginEntry && typeof prevPluginEntry === "object" && !Array.isArray(prevPluginEntry)
+          ? prevPluginEntry
+          : {}),
         enabled: true
       }
     };
@@ -796,20 +895,57 @@ export async function runInstall(options = {}) {
 }
 
 export async function runRestoreBackups(options = {}) {
-  const { configJsonPath, configBakPath, mcpJsonPath, mcpBakPath } = resolveProfilePaths();
+  const {
+    configJsonPath,
+    configBakPath,
+    legacyConfigBakPath,
+    mcpJsonPath,
+    mcpBakPath,
+    legacyMcpBakPath
+  } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
   let restoredCount = 0;
-  for (const [bakPath, targetPath] of [
-    [mcpBakPath, mcpJsonPath],
-    [configBakPath, configJsonPath]
-  ]) {
-    if (fs.existsSync(bakPath)) {
-      await fsPromises.copyFile(bakPath, targetPath);
-      await fsPromises.unlink(bakPath);
-      log(`[OK] Restored backup: ${bakPath} -> ${targetPath}`);
-      restoredCount += 1;
-    }
+
+  if (fs.existsSync(mcpBakPath)) {
+    await fsPromises.copyFile(mcpBakPath, mcpJsonPath);
+    await fsPromises.unlink(mcpBakPath);
+    log(`[OK] Restored backup: ${mcpBakPath} -> ${mcpJsonPath}`);
+    restoredCount += 1;
+  } else if (fs.existsSync(legacyMcpBakPath)) {
+    try {
+      const legacyMcp = JSON.parse(fs.readFileSync(legacyMcpBakPath, "utf8"));
+      if (
+        legacyMcp &&
+        typeof legacyMcp === "object" &&
+        !Array.isArray(legacyMcp) &&
+        legacyMcp.mcpServers &&
+        typeof legacyMcp.mcpServers === "object" &&
+        !Array.isArray(legacyMcp.mcpServers) &&
+        PLUGIN_KEY in legacyMcp.mcpServers
+      ) {
+        await fsPromises.copyFile(legacyMcpBakPath, mcpJsonPath);
+        log(`[OK] Restored legacy backup (read-only fallback): ${legacyMcpBakPath} -> ${mcpJsonPath}`);
+        restoredCount += 1;
+      }
+    } catch {}
   }
+
+  if (fs.existsSync(configBakPath)) {
+    await fsPromises.copyFile(configBakPath, configJsonPath);
+    await fsPromises.unlink(configBakPath);
+    log(`[OK] Restored backup: ${configBakPath} -> ${configJsonPath}`);
+    restoredCount += 1;
+  } else if (fs.existsSync(legacyConfigBakPath)) {
+    try {
+      const legacyCfg = JSON.parse(fs.readFileSync(legacyConfigBakPath, "utf8"));
+      if (legacyCfg && typeof legacyCfg === "object" && !Array.isArray(legacyCfg)) {
+        await fsPromises.copyFile(legacyConfigBakPath, configJsonPath);
+        log(`[OK] Restored legacy backup (read-only fallback): ${legacyConfigBakPath} -> ${configJsonPath}`);
+        restoredCount += 1;
+      }
+    } catch {}
+  }
+
   if (restoredCount === 0) {
     log("[INFO] No backup files (*.bak) found to restore.");
   }
@@ -849,12 +985,12 @@ export async function runUninstall(options = {}) {
 
   const repoSkillsLink = path.join(repoRoot, "skills");
   try {
-    if (fs.existsSync(repoSkillsLink) && fs.lstatSync(repoSkillsLink).isSymbolicLink()) {
+    if (fs.lstatSync(repoSkillsLink).isSymbolicLink()) {
       await fsPromises.unlink(repoSkillsLink);
     }
   } catch {}
 
-  if (validatedMcp?.mcpServers && typeof validatedMcp.mcpServers === "object") {
+  if (validatedMcp?.mcpServers && typeof validatedMcp.mcpServers === "object" && !Array.isArray(validatedMcp.mcpServers)) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
     const nextMcp = { ...validatedMcp, mcpServers: nextServers };
@@ -862,7 +998,12 @@ export async function runUninstall(options = {}) {
     log(`[OK] Removed '${PLUGIN_KEY}' from: ${mcpJsonPath} (foreign entries preserved)`);
   }
 
-  if (validatedConfig?.plugins && typeof validatedConfig.plugins === "object" && PLUGIN_KEY in validatedConfig.plugins) {
+  if (
+    validatedConfig?.plugins &&
+    typeof validatedConfig.plugins === "object" &&
+    !Array.isArray(validatedConfig.plugins) &&
+    PLUGIN_KEY in validatedConfig.plugins
+  ) {
     const nextPlugins = { ...validatedConfig.plugins };
     delete nextPlugins[PLUGIN_KEY];
     const nextConfig = { ...validatedConfig, plugins: nextPlugins };
@@ -872,10 +1013,11 @@ export async function runUninstall(options = {}) {
 
   for (const shimName of ["agy-squad", "agy-squad.cmd"]) {
     const shimPath = path.join(antigravityBinDir, shimName);
-    if (fs.existsSync(shimPath)) {
+    try {
+      fs.lstatSync(shimPath);
       await fsPromises.unlink(shimPath);
       log(`[OK] Removed CLI shim: ${shimPath}`);
-    }
+    } catch {}
   }
 
   if (fs.existsSync(antigravityMcpRootDir)) {
@@ -918,7 +1060,7 @@ export function printStatus(options = {}) {
       ? `REDIRECTED (${plug.path} -> ${plug.target}; re-run agy-squad setup)`
       : plug.versionMismatch
         ? `STALE VERSION (${plug.version} != ${PACKAGE_VERSION} at ${plug.path}; re-run agy-squad setup)`
-        : !plug.runtimeReady
+        : !plug.runtimeReady || !plug.docsReady
           ? `INCOMPLETE (${plug.path}; re-run agy-squad setup)`
           : plug.isCopyFallback
             ? `ACTIVE COPY (${plug.path})`
@@ -935,18 +1077,26 @@ export function printStatus(options = {}) {
   );
   log(
     `- MCP Server (${PLUGIN_KEY}): ${
-      status.details.mcp.registered
-        ? "REGISTERED (plugin mcp_config.json only)"
-        : status.details.mcp.globalDuplicate
-          ? "DUPLICATE GLOBAL ENTRY (re-run agy-squad setup)"
-          : "MISSING"
+      status.details.mcp.corrupt
+        ? `CORRUPT (${status.details.mcp.error})`
+        : status.details.mcp.registered
+          ? "REGISTERED (plugin mcp_config.json only)"
+          : status.details.mcp.globalDuplicate
+            ? "DUPLICATE GLOBAL ENTRY (re-run agy-squad setup)"
+            : "MISSING"
     } (${status.details.mcp.path})`
   );
   log(
     `- CLI Shim (agy-squad): ${status.details.cliShim.exists ? "INSTALLED" : "MISSING"} (${status.details.cliShim.path})`
   );
   log(
-    `- Plugin Enabled (config.json / plugin.json): ${status.details.config.enabled ? "ENABLED" : "DISABLED"}`
+    `- Plugin Enabled (config.json / plugin.json): ${
+      status.details.config.corrupt
+        ? `CORRUPT (${status.details.config.error})`
+        : status.details.config.enabled
+          ? "ENABLED"
+          : "DISABLED"
+    }`
   );
   const { agyContext, rtk } = status.details.companions || {};
   log(formatCompanionLine("Companion CLI (agy-context >= 2.0.1)", agyContext, "needed for integrity trace audits"));
@@ -956,9 +1106,11 @@ export function printStatus(options = {}) {
   }
   const overallLabel = status.isComplete
     ? "HEALTHY & ACTIVE"
-    : status.isInstalled
-      ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
-      : "NOT INSTALLED";
+    : status.details.mcp.corrupt || status.details.config.corrupt
+      ? "CORRUPT CONFIGURATION"
+      : status.isInstalled
+        ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
+        : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
   return status;
 }

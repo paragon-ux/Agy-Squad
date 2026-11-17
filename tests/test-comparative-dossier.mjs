@@ -166,6 +166,38 @@ function parseMarkdownTables(markdown) {
   return tables;
 }
 
+function getHeadingSemanticLevel(level, title) {
+  if (/^#{3}\s+\d+\.\d+\.\d+\b/.test(title)) return 4;
+  return level;
+}
+
+function getSectionContent(markdown, headingRe) {
+  const lines = markdown.split("\n");
+  let inCode = false;
+  let captured = null;
+  let targetLevel = 0;
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) inCode = !inCode;
+    if (!inCode) {
+      const m = line.match(/^(#{1,4})\s+(.+)$/);
+      if (m) {
+        const title = line.trim();
+        const level = getHeadingSemanticLevel(m[1].length, title);
+        if (captured === null) {
+          if (headingRe.test(title)) {
+            targetLevel = level;
+            captured = [line];
+          }
+          continue;
+        }
+        if (level <= targetLevel) break;
+      }
+    }
+    if (captured !== null) captured.push(line);
+  }
+  return captured ? captured.join("\n") : null;
+}
+
 function get5AxisScoringTable(markdown) {
   const tables = parseMarkdownTables(markdown);
   for (const t of tables) {
@@ -183,52 +215,54 @@ function get5AxisScoringTable(markdown) {
 console.log("\nExecuting Tier 1: Feature Coverage & Completeness...");
 
 runner.run("Tier 1 (Feature Coverage)", "F1 / R1: Executive Framing & Systems Engineering Trilemma", () => {
-  assert.ok(/executive\s+(abstract|summary|framing)|systems\s+engineering\s+trilemma/i.test(content),
-    "Dossier must contain an Executive Abstract / Systems Engineering Trilemma section.");
-  
-  // Trilemma components
-  assert.match(content, /orchestration\s+expressiveness/i, "Must identify 'orchestration expressiveness'");
-  assert.match(content, /context\s+(window\s+)?(\/|\&|\+)?\s*token\s+(efficiency|preservation)/i, "Must identify context / token preservation");
-  assert.match(content, /verifiability|verification/i, "Must identify evidence verifiability");
-
-  // Conflation of IPC signaling wire with evidentiary storage
-  assert.match(content, /signaling\s+(channel|wire).*storage/i,
-    "Must explain the core systems flaw: conflating IPC signaling channel with storage channel.");
+  const execAbstract = getSectionContent(content, /^##\s+Executive Abstract/i);
+  const sec1 = getSectionContent(content, /^##\s+1\.\s+Executive Framing/i);
+  assert.ok(execAbstract && sec1, "Dossier must contain Executive Abstract and Section 1 Executive Framing.");
+  const combinedSec1 = `${execAbstract}\n${sec1}`;
+  assert.match(combinedSec1, /orchestration\s+expressiveness/i, "Section 1 must identify 'orchestration expressiveness'");
+  assert.match(combinedSec1, /context\s+(window\s+)?(\/|\&|\+)?\s*token\s+(efficiency|preservation)/i, "Section 1 must identify context / token preservation");
+  assert.match(combinedSec1, /verifiability|verification/i, "Section 1 must identify evidence verifiability");
+  assert.match(combinedSec1, /signaling.*storage/i,
+    "Executive Abstract / Section 1 must explain conflating IPC signaling with storage.");
 });
 
 runner.run("Tier 1 (Feature Coverage)", "F2 / R1: General Workflow & Graph Harnesses Audits", () => {
   const requiredGroup1 = [
-    { name: "MetaGPT", regex: /MetaGPT/i, concepts: [/SOP|Standard Operating Procedure/i, /Role/i, /Message Pool/i] },
-    { name: "CrewAI", regex: /CrewAI/i, concepts: [/Role-Playing/i, /Task/i, /Sequential|Hierarchical/i] },
-    { name: "AutoGen / Swarm", regex: /AutoGen.*Swarm|Swarm.*AutoGen/i, concepts: [/Conversational|Broadcast|GroupChat/i, /Speaker Selection|Hand-off/i] },
-    { name: "LangGraph", regex: /LangGraph/i, concepts: [/Statechart|Graph|DAG/i, /Checkpointer|State/i] }
+    { name: "MetaGPT", sectionRe: /^###\s+2\.1\s+MetaGPT/i, concepts: [/SOP|Standard Operating Procedure/i, /Role/i, /Message Pool/i] },
+    { name: "CrewAI", sectionRe: /^###\s+2\.2\s+CrewAI/i, concepts: [/Role-Playing/i, /Task/i, /Sequential|Hierarchical/i] },
+    { name: "AutoGen / Swarm", sectionRe: /^###\s+2\.3\s+AutoGen/i, concepts: [/Conversational|Broadcast|GroupChat/i, /Function\s+Handoffs?|stateless\s+function\s+handoffs?/i] },
+    { name: "LangGraph", sectionRe: /^###\s+2\.4\s+LangGraph/i, concepts: [/Statechart|Graph|DAG/i, /Checkpointer|State/i] }
   ];
 
   for (const h of requiredGroup1) {
-    assert.match(content, h.regex, `Group 1 audit must include ${h.name}`);
+    const sub = getSectionContent(content, h.sectionRe);
+    assert.ok(sub, `Group 1 audit must include dedicated subsection for ${h.name}`);
     for (const c of h.concepts) {
-      assert.match(content, c, `${h.name} audit must cover core concept: ${c.toString()}`);
+      assert.match(sub, c, `${h.name} subsection must cover core concept: ${c.toString()}`);
     }
   }
 });
 
 runner.run("Tier 1 (Feature Coverage)", "F3 / R1: Autonomous Coding & SWE Harnesses Audits", () => {
   const requiredGroup2 = [
-    { name: "Devin / Cognition Sol", regex: /Devin|Cognition.*Sol/i, concepts: [/MicroVM|Firecracker|KVM/i, /Snapshot|Rollback/i] },
-    { name: "Claude Code / SWE-agent", regex: /Claude Code|SWE-agent/i, concepts: [/Agent-Computer Interface|ACI/i, /Windowed|Diff/i] },
-    { name: "Google Antigravity Native /teamwork", regex: /Google Antigravity|Antigravity.*teamwork/i, concepts: [/teamwork/i, /Wakeup|Watchdog/i] },
-    { name: "Agy-Squad Reference Baseline", regex: /Agy-Squad/i, concepts: [/Pointer-Over-Wire/i, /Cryptographic Bundle|SHA-256/i, /RTK|Rust Token Killer/i, /WSL2/i] }
+    { name: "Devin / Cognition Sol", sectionRe: /^###\s+3\.1\s+Devin/i, concepts: [/MicroVM|Firecracker|KVM/i, /Snapshot|Rollback/i] },
+    { name: "Claude Code / SWE-agent", sectionRe: /^###\s+3\.2\s+Claude Code/i, concepts: [/Agent-Computer Interface|ACI/i, /Windowed|Diff/i] },
+    { name: "Google Antigravity Native /teamwork", sectionRe: /^###\s+3\.3\s+Google Antigravity/i, concepts: [/teamwork/i, /Wakeup|Watchdog/i] },
+    { name: "Agy-Squad Reference Baseline", sectionRe: /^###\s+3\.4\s+Agy-Squad/i, concepts: [/Pointer-Over-Wire/i, /Cryptographic Bundle|SHA-256/i, /RTK|Rust Token Killer/i, /WSL2/i] }
   ];
 
   for (const h of requiredGroup2) {
-    assert.match(content, h.regex, `Group 2 audit must include ${h.name}`);
+    const sub = getSectionContent(content, h.sectionRe);
+    assert.ok(sub, `Group 2 audit must include dedicated subsection for ${h.name}`);
     for (const c of h.concepts) {
-      assert.match(content, c, `${h.name} audit must cover core concept: ${c.toString()}`);
+      assert.match(sub, c, `${h.name} subsection must cover core concept: ${c.toString()}`);
     }
   }
 });
 
 runner.run("Tier 1 (Feature Coverage)", "F4 / R2: 5-Axis Quantitative Evaluation Rubric Definitions", () => {
+  const sec4_1 = getSectionContent(content, /^###\s+4\.1\s+Rubric Metric Definitions/i);
+  assert.ok(sec4_1, "Dossier must contain Section 4.1 Rubric Metric Definitions.");
   const dimensions = [
     /Token\s*(&|\+)?\s*Context\s*Preservation|TCP/i,
     /Evidence\s*Traceability\s*(&|\+)?\s*Cryptographic\s*Proof|ETC/i,
@@ -238,47 +272,39 @@ runner.run("Tier 1 (Feature Coverage)", "F4 / R2: 5-Axis Quantitative Evaluation
   ];
 
   for (const dim of dimensions) {
-    assert.match(content, dim, `Rubric must explicitly define dimension: ${dim.toString()}`);
+    assert.match(sec4_1, dim, `Section 4.1 must explicitly define dimension: ${dim.toString()}`);
   }
 
-  // Anchor levels 1.0 to 5.0
-  assert.match(content, /1\.0|1\/5/i, "Rubric must define level 1.0 anchor");
-  assert.match(content, /3\.0|3\/5/i, "Rubric must define level 3.0 anchor");
-  assert.match(content, /5\.0|5\/5/i, "Rubric must define level 5.0 anchor");
+  assert.match(sec4_1, /1\.0|1\/5/i, "Section 4.1 must define level 1.0 anchor");
+  assert.match(sec4_1, /3\.0|3\/5/i, "Section 4.1 must define level 3.0 anchor");
+  assert.match(sec4_1, /5\.0|5\/5/i, "Section 4.1 must define level 5.0 anchor");
 });
 
 runner.run("Tier 1 (Feature Coverage)", "F5 / R3: Formal Complexity Models & Empirical Protocol Tracing", () => {
-  // Complexity formulas
-  assert.match(content, /O\(.*(N\^2|M\^2|N\s*\*\s*M\^2).*\)/i, "Must formulate O(N^2) or O(N*M^2) conversational broadcast bloat");
-  assert.match(content, /O\(.*(N\s*\*\s*\|?S\|?|M\s*\*\s*\|?S\|?|M\s*\*\s*L).*\)/i, "Must formulate structured state dictionary or SOP complexity");
-  assert.match(content, /O\(.*(N|M\s*\*\s*P).*\)/i, "Must formulate O(N) or O(M*P) Pointer-Over-Wire complexity");
+  const sec5 = getSectionContent(content, /^##\s+5\.\s+Empirical Evidence/i);
+  assert.ok(sec5, "Dossier must contain Section 5 Empirical Evidence & Protocol Tracing.");
+  assert.match(sec5, /O\(.*(N\^2|M\^2|N\s*\*\s*M\^2).*\)/i, "Section 5 must formulate O(N^2) or O(N*M^2) conversational broadcast bloat");
+  assert.match(sec5, /O\(.*(N\s*\*\s*\|?S\|?|M\s*\*\s*\|?S\|?|M\s*\*\s*L).*\)/i, "Section 5 must formulate structured state dictionary or SOP complexity");
+  assert.match(sec5, /O\(.*(N|M\s*\*\s*P).*\)/i, "Section 5 must formulate O(N) or O(M*P) Pointer-Over-Wire complexity");
 
-  // Formal communication telemetry concepts
-  assert.match(content, /Wire\s+(Overhead|Payload|Representation)/i, "Must discuss wire payload/overhead");
-  assert.match(content, /bloat/i, "Must address token/context bloat");
-  assert.match(content, /Transcript\s+(Volume|Size|Chatter)|Injected\s+Context\s+Bytes/i, "Must track transcript volume/bytes");
-  assert.match(content, /Prompt\s+Cache/i, "Must address prompt cache hit rates/eviction");
-
-  // Pointer-Over-Wire receipt ceiling <= 500 B
-  assert.match(content, /(500\s*(B|bytes|UTF-8\s*bytes)|<=\s*500)/i, "Must specify <= 500 B receipt ceiling");
+  assert.match(sec5, /Wire\s+(Overhead|Payload|Representation)/i, "Section 5 must discuss wire payload/overhead");
+  assert.match(sec5, /bloat/i, "Section 5 must address token/context bloat");
+  assert.match(sec5, /Transcript\s+(Volume|Size|Chatter)|Injected\s+Context\s+Bytes/i, "Section 5 must track transcript volume/bytes");
+  assert.match(sec5, /Prompt\s+Cache/i, "Section 5 must address prompt cache hit rates/eviction");
+  assert.match(sec5, /(500\s*(B|bytes|UTF-8\s*bytes)|<=\s*500)/i, "Section 5 must specify <= 500 B receipt ceiling");
 });
 
 runner.run("Tier 1 (Feature Coverage)", "F6 / R4: Synthesized Architectural Matrix & Trade-Offs", () => {
-  // Section existence
-  assert.match(content, /Synthesized\s+Architectural\s+Matrix|Comparative\s+Trade-Off\s+Matrix/i,
-    "Must include a Synthesized Architectural Matrix section.");
-  
-  // Pareto frontier and yield points
-  assert.match(content, /Pareto\s+Frontier/i, "Must articulate the Pareto frontier.");
-  assert.match(content, /yield(s)?\*?\*?\s+to|Yield\s+Point/i, "Must explicitly articulate where Agy-Squad yields to alternative paradigms.");
-
-  // Specific yield points across narrative
-  assert.ok(/yield.*(Devin|microVM|virtualization)/is.test(content),
-    "Must articulate yield point to Devin on hardware/microVM isolation.");
-  assert.ok(/yield.*(LangGraph|cyclic|statechart|checkpoint)/is.test(content),
-    "Must articulate yield point to LangGraph on arbitrary cyclic statecharts / HITL.");
-  assert.ok(/yield.*(zero-config|onboarding|ad-hoc|Claude Code)/is.test(content),
-    "Must articulate yield point to Claude Code / SWE-agent on zero-config onboarding / ad-hoc ergonomics.");
+  const sec6 = getSectionContent(content, /^##\s+6\.\s+Synthesized Architectural Matrix/i);
+  assert.ok(sec6, "Must include Section 6 Synthesized Architectural Matrix.");
+  assert.match(sec6, /Pareto\s+Frontier/i, "Section 6 must articulate the Pareto frontier.");
+  assert.match(sec6, /yield(s)?\*?\*?\s+to|Yield\s+Point/i, "Section 6 must articulate yield points.");
+  assert.ok(/yield.*(Devin|microVM|virtualization)/is.test(sec6),
+    "Section 6 must articulate yield point to Devin on hardware/microVM isolation.");
+  assert.ok(/yield.*(LangGraph|cyclic|statechart|checkpoint)/is.test(sec6),
+    "Section 6 must articulate yield point to LangGraph on arbitrary cyclic statecharts / HITL.");
+  assert.ok(/yield.*(zero-config|onboarding|ad-hoc|Claude Code)/is.test(sec6),
+    "Section 6 must articulate yield point to Claude Code / SWE-agent on zero-config onboarding / ad-hoc ergonomics.");
 
   // Section 6.3 Yield Points verification (microVM, cyclic statecharts, zero-config onboarding)
   const section6_3Match = content.match(/###\s*6\.3[^\n]*\n([\s\S]*?)(?=---\s*\n|###\s*6\.4|\n##\s*7)/i);
@@ -454,27 +480,28 @@ runner.run("Tier 3 (Cross-Feature Consistency)", "Arithmetic: Composite Score Su
 });
 
 runner.run("Tier 3 (Cross-Feature Consistency)", "Coherence: Rubric Anchor Consistency & Justification Backing", () => {
-  // Agy-Squad's score of 5.0 in Evidence Traceability must be backed by SHA-256 bundling in narrative
-  assert.ok(/Agy-Squad.*(5\.0|5\/5).*SHA-256|SHA-256.*(5\.0|5\/5)/is.test(content) ||
-            /Evidence Traceability.*5\.0.*(cryptographic|SHA-256|digest)/is.test(content) ||
-            /ETC\s*\(5\.0\).*SHA-256/is.test(content),
-    "Agy-Squad's 5.0 score in Evidence Traceability must cite cryptographic SHA-256 bundling.");
+  const sec4_3 = getSectionContent(content, /^###\s+4\.3\s+Detailed Architectural Justifications/i);
+  assert.ok(sec4_3, "Dossier must contain Section 4.3 Detailed Architectural Justifications.");
+  assert.ok(/Agy-Squad.*(5\.0|5\/5).*SHA-256|SHA-256.*(5\.0|5\/5)/is.test(sec4_3) ||
+            /Evidence Traceability.*5\.0.*(cryptographic|SHA-256|digest)/is.test(sec4_3) ||
+            /ETC\s*\(5\.0\).*SHA-256/is.test(sec4_3),
+    "Section 4.3 Agy-Squad 5.0 Evidence Traceability score must cite cryptographic SHA-256 bundling.");
 
-  // Devin's score of 5.0 in Execution Safety must be backed by MicroVM/Firecracker/KVM
-  assert.ok(/Devin.*(5\.0|5\/5).*(microVM|Firecracker|KVM)/is.test(content) ||
-            /Execution Safety.*5\.0.*(microVM|Firecracker|KVM)/is.test(content) ||
-            /OES\s*\(5\.0\).*(microVM|Firecracker|KVM)/is.test(content),
-    "Devin's 5.0 score in OS Safety must cite microVM / Firecracker isolation.");
+  assert.ok(/Devin.*(5\.0|5\/5).*(microVM|Firecracker|KVM)/is.test(sec4_3) ||
+            /Execution Safety.*5\.0.*(microVM|Firecracker|KVM)/is.test(sec4_3) ||
+            /OES\s*\(5\.0\).*(microVM|Firecracker|KVM)/is.test(sec4_3),
+    "Section 4.3 Devin 5.0 OS Safety score must cite microVM / Firecracker isolation.");
 });
 
 runner.run("Tier 3 (Cross-Feature Consistency)", "Coherence: Architectural Yield Points Alignment", () => {
-  // Check that the yield points in synthesized matrix align with deep dive limitations
-  assert.ok(/yield.*(Devin|microVM|virtualization)/is.test(content),
-    "Synthesis matrix must align with deep dive regarding microVM isolation yield point.");
-  assert.ok(/yield.*(LangGraph|cyclic|statechart|checkpoint)/is.test(content),
-    "Synthesis matrix must align with deep dive regarding LangGraph cyclic statechart yield point.");
-  assert.ok(/yield.*(zero-config|onboarding|ad-hoc|Claude Code)/is.test(content),
-    "Synthesis matrix must align with deep dive regarding zero-config onboarding / ad-hoc ergonomics yield point.");
+  const sec6_3 = getSectionContent(content, /^###\s+6\.3\b/i);
+  assert.ok(sec6_3, "Section 6.3 must exist for yield point alignment.");
+  assert.ok(/yield.*(Devin|microVM|virtualization)/is.test(sec6_3),
+    "Section 6.3 must align on microVM isolation yield point.");
+  assert.ok(/yield.*(LangGraph|cyclic|statechart|checkpoint)/is.test(sec6_3),
+    "Section 6.3 must align on LangGraph cyclic statechart yield point.");
+  assert.ok(/yield.*(zero-config|onboarding|ad-hoc|Claude Code)/is.test(sec6_3),
+    "Section 6.3 must align on zero-config onboarding / ad-hoc ergonomics yield point.");
 });
 
 // ============================================================================
@@ -483,7 +510,8 @@ runner.run("Tier 3 (Cross-Feature Consistency)", "Coherence: Architectural Yield
 console.log("\nExecuting Tier 4: Structural Citation & Dossier Coverage Validation (Pattern & File Presence)...");
 
 runner.run("Tier 4 (Structural & Citations)", "Citation Coverage: November 8, 2026 Empirical Benchmark Metrics", () => {
-  // Key data points from the benchmark on 6-defect event-relay fixture
+  const sec5_2 = getSectionContent(content, /^###\s+5\.2\s+Empirical Protocol Telemetry/i);
+  assert.ok(sec5_2, "Dossier must contain Section 5.2 Empirical Protocol Telemetry.");
   const requiredDataPoints = [
     { label: "Wall clock time (26m 19s vs 6m 15s or 1579s vs 375s)", regex: /26m\s*19s.*6m\s*15s|1,?579.*375/s },
     { label: "Subagents count (8 vs 3)", regex: /8\s+(agents|subagents).*3\s+(agents|subagents)|8.*vs.*3/i },
@@ -496,14 +524,16 @@ runner.run("Tier 4 (Structural & Citations)", "Citation Coverage: November 8, 20
   ];
 
   for (const dp of requiredDataPoints) {
-    assert.match(content, dp.regex, `Empirical benchmark table must ground metric: ${dp.label}`);
+    assert.match(sec5_2, dp.regex, `Section 5.2 empirical benchmark table must ground metric: ${dp.label}`);
   }
 });
 
 runner.run("Tier 4 (Structural & Citations)", "Fixture Reference: Event-Relay Fixture (gateway/ and worker/)", () => {
-  assert.match(content, /gateway/i, "Must cite event-relay fixture component: gateway/");
-  assert.match(content, /worker/i, "Must cite event-relay fixture component: worker/");
-  assert.match(content, /6-defect|six-defect/i, "Must cite the 6-defect benchmark fixture");
+  const sec5_2 = getSectionContent(content, /^###\s+5\.2\s+Empirical Protocol Telemetry/i);
+  assert.ok(sec5_2, "Section 5.2 must exist.");
+  assert.match(sec5_2, /gateway/i, "Section 5.2 must cite event-relay fixture component: gateway/");
+  assert.match(sec5_2, /worker/i, "Section 5.2 must cite event-relay fixture component: worker/");
+  assert.match(sec5_2, /6-defect|six-defect/i, "Section 5.2 must cite the 6-defect benchmark fixture");
 });
 
 runner.run("Tier 4 (Structural & Citations)", "Codebase Verification: Referenced Core Implementation Files Physically Exist", () => {

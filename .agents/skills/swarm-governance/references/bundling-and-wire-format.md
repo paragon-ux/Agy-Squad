@@ -6,12 +6,13 @@ Reference details for [`.agents/skills/swarm-governance/SKILL.md`](../SKILL.md).
 
 Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiting worker to ingest them on subsequent turns, causing quadratic token bloat.
 
-1. **Write workspace report slots:** Instruct each `/swarm` worker to write its full Markdown report to its workspace-relative scratch slot (for example, `scratch/agy-squad/squad-<id>/specialist-N/report.md`, or inside its `share`/`branch` copy before coordinator collection).
-2. **Post a single-line pointer (`<= 500` UTF-8 bytes):** Have the worker post one single-line pointer to the board (no embedded newlines; leaves headroom for `@<24-char-name> ` prefix; address `@coordinator` in Flat mode or `@<squad>-lead` in Layered mode):
+1. **Write workspace report slots:** Instruct each `/swarm` worker to write its full Markdown report to its workspace-relative scratch slot (for example, `scratch/agy-squad/squad-<id>/specialist-N/report.md`, or inside its `share`/`branch` copy before coordinator collection; ad-hoc `tasks`/`n` shards without pre-declared manifest slots are rejected by `bundleReports`).
+2. **Post a single-line pointer (`<= 500` UTF-8 bytes):** Have the worker post one single-line pointer to the board (no embedded newlines; leaves headroom for `@<24-char-name> ` prefix; address `@coordinator` in Flat mode or compiled `@<leadWorkerName>` in Layered mode):
    - `@<target> READY <report-path> — <1-line concrete observation>`
    - `@<target> PARTIAL <report-path> — <observation and blocker>`
    - `@<target> NO_REPORT — <reason>`
-3. **Record raw posts verbatim in `<bundle-record.json>`:** When populating `handoffs[].message` for `inspectHandoffs` (`node bin/agy-squad.mjs inspect <record.json>`), copy the exact raw board post verbatim (including any leading `@coordinator` or `@<squad>-lead` mention prefix; `mcp/handoffs.mjs` parses leading `@mention` tokens natively while rejecting mismatches against the sender's assigned slot).
+3. **Record raw posts verbatim in `<bundle-record.json>`:** When populating `handoffs[].message` for `inspectHandoffs` (`node bin/agy-squad.mjs inspect <record.json>`), copy the exact raw board post verbatim (including any leading `@coordinator` or compiled `@<leadWorkerName>` mention prefix; `mcp/handoffs.mjs` parses leading `@mention` tokens natively while rejecting mismatches against the sender's assigned slot).
+4. **Scope board reads (`SQ-SWARM-BOARD-SCOPE`):** Always pass `since: <cohortBaseSeq>` (recorded before `swarm add` or via `boardSince` / `cohortBaseSeq`) or exact `seqs: [...]` (`boardSeqs`) to `read_board`; never call unfiltered `read_board()` across multi-wave conversations.
 
 > [!NOTE]
 > Pointer-Over-Wire on the `/swarm` board is a governance convention, not runtime-enforced by the board tool itself: workers can post arbitrary text, and `agy-squad inspect` detects deviations after the fact rather than blocking them at send time.
@@ -49,12 +50,12 @@ Run all commands from the shared workspace root via `node bin/agy-squad.mjs` (`r
 node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...   # only when workspaceIsolation != inherit
 node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
 node bin/agy-squad.mjs fingerprint <verified-file-1> <verified-file-2>
-node bin/agy-squad.mjs bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> ... | --handoffs <file.json>] [--id-map <worker=id>] <verified-file-1> <verified-file-2> --out <bundle-record.json>
+node bin/agy-squad.mjs bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> ... | --handoffs <file.json>] [--id-map <worker=id>] <verified-file-1> <verified-file-2> --out <bundle-record.json> [--digest]
 node bin/agy-squad.mjs inspect <bundle-record.json>
-node bin/agy-squad.mjs digest <bundle-record.json>
+node bin/agy-squad.mjs digest <bundle-record.json>   # or pass --digest to bundle-init above
 node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
 node bin/agy-squad.mjs bundle <bundle-record.json>
-node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json
+node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json [--prune [--keep-reports]]   # or run standalone prune:
 node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <accepted-sha256> [--keep-reports]
 ```
 

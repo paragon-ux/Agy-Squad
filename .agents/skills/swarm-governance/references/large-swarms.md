@@ -20,7 +20,8 @@ Standalone reference for running larger `/swarm` cohorts (`8+` workers, concurre
 
 Antigravity attaches one persistent append-only board (`board: "local"`) per conversation and omits `channel` partitioning when the host `swarm` schema exposes only `status`, `models`, `add`, `model`, `kill`, and `title`. Above `~8` workers, mid-flight status updates (`"still checking X"`) or coordinator acknowledgments are replicated into every active member's context on subsequent wakeups (`O(N^2)` token growth):
 
-- Instruct every worker explicitly in its brief/assignment to post **zero mid-flight status chatter** on the board and emit **only one final `<= 500` UTF-8 byte Pointer-Over-Wire line** (`@coordinator` in flat mode or `@<squad>-lead` in layered mode: `READY <path> — <observation>`, `PARTIAL <path> — <observation and blocker>`, or `NO_REPORT — <reason>`).
+- Instruct every worker explicitly in its brief/assignment to post **zero mid-flight status chatter** on the board and emit **only one final `<= 500` UTF-8 byte Pointer-Over-Wire line** (`@coordinator` in flat mode or compiled `@<leadWorkerName>` in layered mode: `READY <path> — <observation>`, `PARTIAL <path> — <observation and blocker>`, or `NO_REPORT — <reason>`).
+- Scope coordinator and lead board checks with `read_board{since: <cohortBaseSeq>}` or exact `read_board{seqs: [...]}` (passed via `boardSince` / `boardSeqs` to `squad_planner`); avoid bare `read_board()` so prior waves never flood new contexts.
 - Keep coordinator acknowledgments off the board unless waking a worker for clarification or a follow-up cycle.
 - Start a **fresh Antigravity conversation** between major waves if the persistent board accumulates enough retired workers or messages to slow down the Swarm UI pane.
 

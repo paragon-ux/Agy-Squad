@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import util from "node:util";
 import { SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
@@ -29,7 +30,9 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "reportRoot",
   "knownModels",
   "occupiedWorkerNames",
-  "topology"
+  "topology",
+  "boardSince",
+  "boardSeqs"
 ]);
 
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
@@ -63,14 +66,27 @@ function slugifyName(value, fallback) {
   return fallbackSlug || "worker";
 }
 
-function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
+function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracker) {
+  const cleanRawSlug = String(rawValue ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   const rawBase = slugifyName(rawValue, fallback);
   const base = RESERVED_SWARM_NAMES.has(rawBase)
     ? `w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH).replace(/-+$/, "")
     : rawBase;
+  const recordIfTruncated = (candidate) => {
+    if (
+      Array.isArray(truncatedTracker) &&
+      (candidate.length >= MAX_SWARM_NAME_LENGTH || cleanRawSlug.length > MAX_SWARM_NAME_LENGTH)
+    ) {
+      truncatedTracker.push(candidate);
+    }
+    return candidate;
+  };
   if (!usedWorkerNames.has(base) && !RESERVED_SWARM_NAMES.has(base)) {
     usedWorkerNames.add(base);
-    return base;
+    return recordIfTruncated(base);
   }
   const safeFallback = slugifyName(fallback, "worker");
   for (let counter = 2; ; counter++) {
@@ -83,7 +99,7 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback) {
     const candidate = `${prefix}${suffix}`;
     if (!usedWorkerNames.has(candidate) && !RESERVED_SWARM_NAMES.has(candidate)) {
       usedWorkerNames.add(candidate);
-      return candidate;
+      return recordIfTruncated(candidate);
     }
   }
 }
@@ -148,51 +164,74 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
     .replace(/\/+$/, "");
   if (trimmed === ".") trimmed = "";
   if (trimmed === "") return "";
+  if (safeOptions.normCache?.has(trimmed)) {
+    return safeOptions.normCache.get(trimmed);
+  }
+  let result = applyCase(trimmed);
   if (resolvedRoot) {
     try {
-      let canonicalRoot = path.resolve(resolvedRoot);
-      try {
-        canonicalRoot = fs.realpathSync(canonicalRoot);
-      } catch {}
+      let canonicalRoot = safeOptions.canonicalRoot;
+      if (!canonicalRoot) {
+        canonicalRoot = path.resolve(resolvedRoot);
+        try {
+          canonicalRoot = fs.realpathSync.native(canonicalRoot);
+        } catch {}
+      }
       const candidate = path.resolve(canonicalRoot, trimmed);
       const lexRel = path.relative(canonicalRoot, candidate).split(path.sep).join("/");
-      if (lexRel === "") return "";
-      if (lexRel !== ".." && !lexRel.startsWith("../") && !path.isAbsolute(lexRel)) {
-        let probe = candidate;
-        const suffixParts = [];
-        let resolvedBase = null;
-        while (true) {
-          try {
-            resolvedBase = fs.realpathSync(probe);
-            break;
-          } catch (err) {
-            if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") {
-              break;
+      if (lexRel === "") {
+        result = "";
+      } else if (lexRel !== ".." && !lexRel.startsWith("../") && !path.isAbsolute(lexRel)) {
+        const segmentCache = safeOptions.segmentCache;
+        const parts = lexRel.split("/");
+        let curPath = canonicalRoot;
+        let curReal = canonicalRoot;
+        let remainingStart = 0;
+        let resolvedBase = canonicalRoot;
+        for (let i = 0; i < parts.length; i++) {
+          curPath = path.join(curPath, parts[i]);
+          let cached = segmentCache?.get(curPath);
+          if (cached === undefined) {
+            try {
+              const st = fs.lstatSync(curPath);
+              if (st.isSymbolicLink()) {
+                const real = fs.realpathSync.native(curPath);
+                cached = { exists: true, real };
+              } else {
+                const real = path.join(curReal, parts[i]);
+                cached = { exists: true, real };
+              }
+            } catch (err) {
+              if (err?.code === "ENOENT" || err?.code === "ENOTDIR") {
+                cached = { exists: false };
+              } else {
+                cached = { error: true };
+              }
             }
-            if (probe === canonicalRoot) {
-              break;
-            }
-            const parent = path.dirname(probe);
-            if (parent === probe) break;
-            suffixParts.unshift(path.basename(probe));
-            probe = parent;
+            segmentCache?.set(curPath, cached);
           }
+          if (!cached.exists) break;
+          curReal = cached.real;
+          resolvedBase = curReal;
+          remainingStart = i + 1;
         }
-        if (resolvedBase !== null) {
-          const resolvedTarget = suffixParts.length ? path.join(resolvedBase, ...suffixParts) : resolvedBase;
-          const rel = path.relative(canonicalRoot, resolvedTarget).split(path.sep).join("/");
-          if (rel === "") return "";
-          if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
-            return applyCase(rel);
-          }
+        const suffixParts = parts.slice(remainingStart);
+        const resolvedTarget = suffixParts.length ? path.join(resolvedBase, ...suffixParts) : resolvedBase;
+        const rel = path.relative(canonicalRoot, resolvedTarget).split(path.sep).join("/");
+        if (rel === "") {
+          result = "";
+        } else if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
+          result = applyCase(rel);
+        } else {
+          result = applyCase(lexRel);
         }
-        return applyCase(lexRel);
       }
     } catch {
       // Planned path may not exist on disk yet; keep normalized lexical form.
     }
   }
-  return applyCase(trimmed);
+  safeOptions.normCache?.set(trimmed, result);
+  return result;
 }
 
 function scopesOverlap(a, b, root, options = {}) {
@@ -215,10 +254,31 @@ function findScopeOverlaps(entries, root, options = {}) {
     resolvedOptions = root;
     resolvedRoot = undefined;
   }
-  const normalizedEntries = entries.map(entry => ({
-    label: entry.label,
-    scopes: entry.scopeFiles.map(raw => ({ raw, norm: normalizeScopePath(raw, resolvedRoot, resolvedOptions) }))
-  }));
+  let canonicalRoot;
+  if (resolvedRoot) {
+    canonicalRoot = path.resolve(resolvedRoot);
+    try {
+      canonicalRoot = fs.realpathSync.native(canonicalRoot);
+    } catch {}
+  }
+  const scopedOptions = {
+    ...(resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {}),
+    canonicalRoot,
+    normCache: new Map(),
+    segmentCache: new Map()
+  };
+  const normalizedEntries = entries.map(entry => {
+    const deduped = [];
+    const seenNorm = new Set();
+    for (const raw of entry.scopeFiles) {
+      const norm = normalizeScopePath(raw, resolvedRoot, scopedOptions);
+      if (!seenNorm.has(norm)) {
+        seenNorm.add(norm);
+        deduped.push({ raw, norm });
+      }
+    }
+    return { label: entry.label, scopes: deduped };
+  });
   const overlaps = [];
   for (let i = 0; i < normalizedEntries.length; i++) {
     for (let j = i + 1; j < normalizedEntries.length; j++) {
@@ -262,7 +322,7 @@ function canonicalizeAgentSpec(spec, fallbackLabel) {
   for (const [lower, upper] of AGENT_ALIAS_PAIRS) {
     const hasLower = canonical[lower] !== undefined;
     const hasUpper = canonical[upper] !== undefined;
-    if (hasLower && hasUpper && canonical[lower] !== canonical[upper]) {
+    if (hasLower && hasUpper && !util.isDeepStrictEqual(canonical[lower], canonical[upper])) {
       throw new Error(`Agent '${agentLabel}' has conflicting ${lower} and ${upper} fields.`);
     }
     if (!hasLower && hasUpper) {
@@ -336,7 +396,9 @@ function planSquadCohort(
     reportRoot,
     knownModels,
     occupiedWorkerNames,
-    topology
+    topology,
+    boardSince,
+    boardSeqs
   } = args;
 
   if (topology !== undefined && topology !== "flat" && topology !== "layered") {
@@ -371,6 +433,25 @@ function planSquadCohort(
   }
   if (executionMode === "subagent" && workspaceIsolation !== "inherit") {
     throw new Error("workspaceIsolation 'share' or 'branch' requires executionMode 'swarm'; subagent mode requires 'inherit'.");
+  }
+  if (knownModels !== undefined && executionMode === "subagent") {
+    throw new Error("knownModels is only supported with executionMode 'swarm' (subagent mode only supports 'inherit', 'flash_lite', 'flash', 'pro').");
+  }
+  if (boardSince !== undefined) {
+    if (executionMode !== "swarm") {
+      throw new Error("boardSince is only supported with executionMode 'swarm'.");
+    }
+    if (typeof boardSince !== "number" || !Number.isSafeInteger(boardSince) || boardSince < 0) {
+      throw new Error("boardSince must be a non-negative integer sequence number.");
+    }
+  }
+  if (boardSeqs !== undefined) {
+    if (executionMode !== "swarm") {
+      throw new Error("boardSeqs is only supported with executionMode 'swarm'.");
+    }
+    if (!Array.isArray(boardSeqs) || boardSeqs.length === 0 || boardSeqs.some(n => typeof n !== "number" || !Number.isSafeInteger(n) || n < 0)) {
+      throw new Error("boardSeqs must be a non-empty array of non-negative integer sequence numbers.");
+    }
   }
   if (model !== undefined && (typeof model !== "string" || !model.trim())) {
     throw new Error("model must be a non-empty string when provided.");
@@ -429,6 +510,7 @@ function planSquadCohort(
     throw new Error("Manifest must define at least one non-audit working squad.");
   }
 
+  const explicitInheritRequested = typeof model === "string" && model.trim() === "inherit";
   const requestedModel = normalizeExplicitModel(model);
   const effectiveSubagentModel = requestedModel && SUBAGENT_MODEL_ALIASES.has(requestedModel)
     ? requestedModel
@@ -436,13 +518,15 @@ function planSquadCohort(
   const modelProvenance = executionMode === "swarm"
     ? {
         executionMode: "swarm",
-        requestedModel: requestedModel ?? "inherit (coordinator default)",
+        requestedModel: requestedModel ?? (explicitInheritRequested ? "inherit" : "inherit (coordinator default)"),
         pinningSupported: true,
         perWorkerModelExposed: true,
         verificationMethod: "Call swarm{action: \"status\"} after spawning workers to verify actual running model IDs.",
         caveat: requestedModel
           ? "Each swarm add pins the requested model; monitor/coordinator model remains whatever session hosts the coordinator."
-          : "No explicit model passed; workers default to the coordinator's active model."
+          : explicitInheritRequested
+            ? "Explicit 'inherit' requested; workers use the coordinator's active model."
+            : "No explicit model passed; workers default to the coordinator's active model."
       }
     : {
         executionMode: "subagent",
@@ -473,14 +557,21 @@ function planSquadCohort(
     usedWorkerNames.add(slugifyName(trimmed, trimmed));
   }
   const overriddenSubagentModels = [];
+  const strippedFlatLeads = [];
+  const truncatedWorkerNames = [];
   let totalSpecialists = 0;
 
   for (const id of targetWorkingIds) {
     const squad = loadedSquads[id];
-    const leadSpec =
-      topology === "flat"
-        ? undefined
-        : resolveSquadLead(squad, id, topology === "layered");
+    const resolvedLeadSpec = resolveSquadLead(squad, id, topology === "layered");
+    if (topology === "flat" && resolvedLeadSpec) {
+      buildSubagentSpec(resolvedLeadSpec, id, manifestPathForBrief, undefined, normalizedReportRoot, {
+        executionMode,
+        workspaceIsolation: "inherit"
+      });
+      strippedFlatLeads.push(id);
+    }
+    const leadSpec = topology === "flat" ? undefined : resolvedLeadSpec;
     const specs = specialistAssignments(loadedSquads, id);
     totalSpecialists += specs.length;
 
@@ -489,6 +580,7 @@ function planSquadCohort(
     let leadModel;
     let leadWorkerName;
     if (leadSpec) {
+      leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`, truncatedWorkerNames);
       const { canonical: rawLead, readOnly: leadReadOnly } = canonicalizeAgentSpec(leadSpec, `${id}-lead`);
       const leadScope = validateScopeFiles(rawLead.scopeFiles, rawLead.role);
       if (leadReadOnly !== true) {
@@ -513,9 +605,15 @@ function planSquadCohort(
         manifestPathForBrief,
         undefined,
         normalizedReportRoot,
-        { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: false, precompiledSpecialists: true }
+        {
+          executionMode,
+          workspaceIsolation: "inherit",
+          isIntegrityAuditor: false,
+          precompiledSpecialists: true,
+          leadWorkerName,
+          boardSince
+        }
       );
-      leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`);
     }
 
     const compiledSpecialists = [];
@@ -545,13 +643,20 @@ function planSquadCohort(
         manifestPathForBrief,
         number,
         normalizedReportRoot,
-        { executionMode, workspaceIsolation, isIntegrityAuditor: false }
+        {
+          executionMode,
+          workspaceIsolation,
+          isIntegrityAuditor: false,
+          leadWorkerName,
+          boardSince
+        }
       );
       const slot = reportPath(id, number, normalizedReportRoot);
       const workerName = allocateWorkerName(
         usedWorkerNames,
         `${id}-${rawSpec.role ?? number}`,
-        `${id}-worker-${number}`
+        `${id}-worker-${number}`,
+        truncatedWorkerNames
       );
       compiledSpecialists.push({ slot, workerName, specModel, compiled });
       assignmentsTemplate.push({
@@ -637,11 +742,10 @@ function planSquadCohort(
   const auditWarnings = [];
   const integrityAuditPlan = includeIntegrityAuditor
     ? targetWorkingIds.flatMap(id => {
-        const auditSpecs = resolveIntegrityAuditor(
-          loadedSquads,
-          allWorkingIds.length > 1 || targetWorkingIds.length > 1 ? id : undefined,
-          auditWarnings
-        );
+        const hasTargetOverride = Object.hasOwn(loadedSquads, `integrity_auditor-${id}`);
+        const auditTargetArg =
+          allWorkingIds.length > 1 || targetWorkingIds.length > 1 || hasTargetOverride ? id : undefined;
+        const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings);
         const compiledAudits = auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
           const auditSlot = reportPath(auditSquadId, auditItem.number, normalizedReportRoot);
@@ -653,8 +757,8 @@ function planSquadCohort(
             overriddenSubagentModels
           );
           const targetScopeNote = executionMode === "swarm"
-            ? `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>'). Use a coordinator-extracted sanitized transcript index in scratch/ ('agy-context transcript export --parent <id> --sanitized --out scratch/...') when transcript tools are restricted (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable).`
-            : `Audit provenanceScaffold entries for squad '${id}', verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>') against coordinator-recorded conversationIds.`;
+            ? `Audit '${id}' provenance, verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>').`
+            : `Audit '${id}' provenance, verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>') vs recorded conversationIds.`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -665,16 +769,16 @@ function planSquadCohort(
             manifestPathForBrief,
             auditItem.number,
             normalizedReportRoot,
-            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true }
+            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs }
           );
           const rawAuditName =
             auditSpecs.length > 1
               ? `audit-${id}-${rawAudit.role ?? auditItem.number}`
               : `audit-${id}`;
-          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "audit");
+          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "audit", truncatedWorkerNames);
           return {
             targetSquad: id,
-            dispatchSquadId: allWorkingIds.length > 1 ? `integrity_auditor:${id}` : "integrity_auditor",
+            dispatchSquadId: allWorkingIds.length > 1 || hasTargetOverride ? `integrity_auditor:${id}` : "integrity_auditor",
             reportSlot: auditSlot,
             workerName: auditWorkerName,
             ...(executionMode === "swarm"
@@ -703,19 +807,20 @@ function planSquadCohort(
   }
 
   const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root, options);
-  const warnings = [...new Set(auditWarnings)];
+  const warnings = [
+    ...new Set(auditWarnings),
+    ...(strippedFlatLeads.length > 0
+      ? [`Squad(s) ${strippedFlatLeads.join(", ")} define lead blocks that were validated and stripped under topology='flat'.`]
+      : [])
+  ];
   if (scopeOverlaps.length > 0 && workspaceIsolation === "inherit") {
     warnings.push(
       `Detected ${scopeOverlaps.length} writable sibling scopeFiles overlap(s) with workspaceIsolation='inherit'; split scopeFiles across workers or use executionMode='swarm' with workspaceIsolation='share'.`
     );
   }
-  if (
-    executionMode === "swarm" &&
-    occupiedWorkerNames === undefined &&
-    targetWorkingIds.some(id => id.length > 18)
-  ) {
+  if (executionMode === "swarm" && truncatedWorkerNames.length > 0) {
     warnings.push(
-      "Swarm worker names truncate at 24 characters; if reusing an active /swarm board across separate plan calls, pass occupiedWorkerNames to prevent cross-plan name collisions."
+      `Swarm worker names truncate at 24 characters (${truncatedWorkerNames.join(", ")}); if reusing an active /swarm board across separate plan calls, pass occupiedWorkerNames to prevent cross-plan name collisions.`
     );
   }
   if (executionMode === "swarm" && workspaceIsolation !== "inherit") {
@@ -762,8 +867,15 @@ function planSquadCohort(
     }
   }
 
+  const hasLead = workers.some(w => Boolean(w.lead));
+  const hasFlat = workers.some(w => !w.lead);
+  const compiledPattern = hasLead && hasFlat ? "mixed" : hasLead ? "layered" : "flat";
   const notes = [];
-  if (executionMode === "swarm" && workers.some(w => w.lead)) {
+  if (executionMode === "swarm" && compiledPattern === "mixed") {
+    notes.push(
+      "Mixed plan: cohort combines layered squads (with per-squad leads) and flat squads (specialists reporting directly to the coordinator). Neither topology is forced as default; ask the user which topology they want if unspecified."
+    );
+  } else if (executionMode === "swarm" && compiledPattern === "layered") {
     notes.push(
       "Layered plan: working squad(s) define a squad lead on top of the swarm coordinator. Compared with flat plans (specialists reporting directly to the coordinator), layered plans isolate multi-domain syntheses at higher coordination token cost. Neither topology is forced as default; ask the user which topology they want if unspecified."
     );
@@ -784,7 +896,7 @@ function planSquadCohort(
     executionMode,
     workspaceIsolation,
     topology: {
-      compiledPattern: workers.some(w => w.lead) ? "layered" : "flat",
+      compiledPattern,
       defaultBias: "none (ask user if unspecified)",
       workingSquads: targetWorkingIds.length,
       totalSpecialists,
@@ -829,7 +941,7 @@ function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPA
   try {
     const plan = planSquadCohort(args, workspace);
     return {
-      content: [{ type: "text", text: JSON.stringify(plan, null, 2) }]
+      content: [{ type: "text", text: JSON.stringify(plan) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;

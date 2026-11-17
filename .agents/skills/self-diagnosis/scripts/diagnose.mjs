@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../../../../mcp/dispatch.mjs";
+import { TOOLS } from "../../../../mcp/index.js";
 import {
   bundleReports,
   computeEvidenceDigest,
@@ -108,9 +109,15 @@ function resolveTargetReviewLedger(ledgerArg) {
     if (stat.isFile()) {
       const revMatch = /-r(\d+)\.md$/i.exec(entry.name);
       const revision = revMatch ? Number.parseInt(revMatch[1], 10) : 1;
+      const verMatch = /^v(\d+)\.(\d+)\.(\d+)\b/i.exec(entry.name);
+      const semver = verMatch
+        ? [Number.parseInt(verMatch[1], 10), Number.parseInt(verMatch[2], 10), Number.parseInt(verMatch[3], 10)]
+        : [0, 0, 0];
       const prMatch = /^pr(\d+)-/i.exec(entry.name);
       const prNumber = prMatch ? Number.parseInt(prMatch[1], 10) : 0;
       const isReconciled = /-reconciled(?:-review)?(?:-r\d+)?\.md$/i.test(entry.name);
+      const isRemediation = /(?:remediation|fix-p[0-9]|self-diagnosis-review)/i.test(entry.name);
+      const ledgerTier = verMatch ? 3 : isRemediation && !prMatch ? 2 : prMatch ? 1 : 0;
       const family = entry.name.replace(/-r\d+(?=\.md$)/i, "").toLowerCase();
       candidates.push({
         relative: `docs/reviews/${entry.name}`,
@@ -118,6 +125,8 @@ function resolveTargetReviewLedger(ledgerArg) {
         stat,
         family,
         revision,
+        semver,
+        ledgerTier,
         prNumber,
         isReconciled
       });
@@ -134,6 +143,14 @@ function resolveTargetReviewLedger(ledgerArg) {
   activeCandidates.sort((a, b) => {
     if (Math.abs(b.stat.mtimeMs - a.stat.mtimeMs) > 2000) {
       return b.stat.mtimeMs - a.stat.mtimeMs;
+    }
+    if (b.ledgerTier !== a.ledgerTier) {
+      return b.ledgerTier - a.ledgerTier;
+    }
+    for (let idx = 0; idx < 3; idx += 1) {
+      if (b.semver[idx] !== a.semver[idx]) {
+        return b.semver[idx] - a.semver[idx];
+      }
     }
     if (b.prNumber !== a.prNumber) {
       return b.prNumber - a.prNumber;
@@ -232,7 +249,19 @@ const NON_FINDING_HYPHEN_TOKENS = new Set([
   "STEP-BY-STEP",
   "LINE-BY-LINE",
   "MULTI-BYTE",
-  "SUB-AGENT"
+  "SUB-AGENT",
+  "SELF-DIAGNOSIS",
+  "CLI-FLAGS",
+  "L1-L50",
+  "PR-REVIEW",
+  "POST-REMEDIATION",
+  "PRE-REMEDIATION",
+  "SWARM-GOVERNANCE",
+  "AGY-SQUAD",
+  "AGY-CONTEXT",
+  "AGY-CONTEXT-SAVER",
+  "CROSS-CUTTING",
+  "POINTER-OVER-WIRE"
 ]);
 
 function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = false } = {}) {
@@ -240,7 +269,7 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
   if (typeof markdown !== "string" || !markdown.trim()) return ids;
   const idPattern = /^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})$/;
   const addCandidate = raw => {
-    const clean = raw.replace(/\([^)]*\)/g, "").replace(/`/g, "").replace(/\*/g, "").trim();
+    const clean = raw.replace(/\([^)]*\)/g, "").replace(/[`*]/g, "").trim();
     if (idPattern.test(clean) && !NON_FINDING_HYPHEN_TOKENS.has(clean.toUpperCase())) {
       ids.add(clean);
     }
@@ -259,13 +288,13 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
   if (includeProseHeadingsAndBullets) {
     // Plain, numbered, or styled headings (e.g., "### SD-TEST-01 — ...", "#### **SD-TEST-01:** ...", "### 2.1 SD-HEAD-02: ...")
     const headingRe =
-      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*(?=$|\s*(?:[:—–(-]|[*`]))/gm;
+      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?=$|\s*(?:[:—–`*,.)\]]|\(|-\s))/gm;
     for (const match of stripped.matchAll(headingRe)) {
       addCandidate(match[1]);
     }
     // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **SD-TEST-01:** ...", "- **[P2] `SD-TEST-01` (`SVC`):** ...")
     const bulletRe =
-      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*\s*(?:\([^)]*\)\s*)?[*`]*\s*(?:[:—–-]|[*`]+\s*[:—–-]|$)/gm;
+      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?:\s*\([^)]*\))?[*`]*(?=$|\s*(?:[:—–`*,.)\]]|-\s))/gm;
     for (const match of stripped.matchAll(bulletRe)) {
       addCandidate(match[1]);
     }
@@ -341,7 +370,10 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
         continue;
       }
       const rawId = row[idIdx];
-      const primaryId = rawId.replace(/\([^)]*\)/g, "").replace(/`/g, "").trim();
+      const primaryId = rawId.replace(/\([^)]*\)/g, "").replace(/[`*]/g, "").trim();
+      for (const aliasMatch of rawId.matchAll(/\(\s*(?:alias(?:es)?(?:\s+of)?|merged\s+(?:with|into)|superseded\s+by)?\s*`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`?\s*\)/gi)) {
+        recordedFindingIds.add(aliasMatch[1].trim());
+      }
       if (
         !primaryId ||
         /\.\.|[&+,/]/.test(primaryId) ||
@@ -378,7 +410,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   };
 
-  for (const secNum of [5, 6, 7]) {
+  for (const secNum of [4, 5, 6, 7]) {
     const sec = extractTopLevelSection(markdown, secNum);
     if (!sec) continue;
     // Track subsections so tables under "### 5.4 P3" inherit P3 rather than P2
@@ -685,13 +717,13 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
     if (hasAudit) validatedDirs.push({ absDir: auditAbsDir, relDir: auditRelDir });
   }
 
-  // Preflight flat unscoped squad-integrity_auditor and canary directories BEFORE deleting anything (SVC-002, SVC-006)
-  if ((squadId === "all" || squadId === "self_diagnosis") && fs.existsSync(scratchSquadRoot)) {
+  // Preflight flat unscoped squad-integrity_auditor and canary directories BEFORE deleting anything (SVC-002, SVC-006, SD-SCRIPT-FLAT-AUDIT-TD)
+  if (fs.existsSync(scratchSquadRoot)) {
     assertSafeDeleteTarget(scratchSquadRel); // REVIEW: don't enumerate external symlink trees.
     const flatAuditRel = `${scratchSquadRel}/squad-integrity_auditor`;
     const flatAuditAbs = path.join(repoRoot, flatAuditRel);
     const hasSelfDiagBundleMatch = [...accountedAuditFiles].some(f => f.startsWith(`${flatAuditRel}/`));
-    if (fs.existsSync(flatAuditAbs) && (squadId === "all" || hasSelfDiagBundleMatch)) {
+    if (fs.existsSync(flatAuditAbs) && (squadId === "all" || squadId === "self_diagnosis" || hasSelfDiagBundleMatch)) {
       assertSafeDeleteTarget(flatAuditRel);
       const flatAuditArtifacts = listArtifacts(flatAuditAbs);
       const unbundledFlatAudit = flatAuditArtifacts.filter(file => !accountedAuditFiles.has(file));
@@ -753,15 +785,37 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
 }
 
 function parseFrontmatter(markdown) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(markdown);
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(markdown);
   if (!match) return null;
   const raw = match[1];
   let name = /^name:\s*(.+)$/m.exec(raw)?.[1]?.trim();
   if (name && ((name.startsWith('"') && name.endsWith('"')) || (name.startsWith("'") && name.endsWith("'")))) {
     name = name.slice(1, -1).trim();
   }
-  const descMatch = /^description:\s*(?:[>|][-+]?\s*\r?\n)?([\s\S]*)$/m.exec(raw);
-  const descBody = descMatch ? descMatch[1].replace(/\r?\n[a-zA-Z0-9_-]+:[\s\S]*$/, "").trim() : "";
+  const fmLines = raw.split(/\r?\n/);
+  let descBody = "";
+  for (let i = 0; i < fmLines.length; i += 1) {
+    const m = /^description:\s*(.*)$/.exec(fmLines[i]);
+    if (!m) continue;
+    const inlineVal = m[1].trim();
+    if (/^[>|][-+]?$/.test(inlineVal)) {
+      const blockLines = [];
+      for (let j = i + 1; j < fmLines.length; j += 1) {
+        const nextLine = fmLines[j];
+        if (/^\s*$/.test(nextLine)) continue;
+        if (!/^\s+/.test(nextLine)) break;
+        blockLines.push(nextLine.trim());
+      }
+      descBody = blockLines.join(" ").trim();
+    } else {
+      let unquoted = inlineVal;
+      if ((unquoted.startsWith('"') && unquoted.endsWith('"')) || (unquoted.startsWith("'") && unquoted.endsWith("'"))) {
+        unquoted = unquoted.slice(1, -1).trim();
+      }
+      descBody = unquoted;
+    }
+    break;
+  }
   const hasDescription = descBody.length > 0;
   return { name, hasDescription };
 }
@@ -906,16 +960,31 @@ function auditSkills(ledgerArg) {
   const findings = [];
   const targetLedger = resolveTargetReviewLedger(ledgerArg);
 
+  const isPackagedDistribution =
+    !fs.existsSync(path.join(repoRoot, ".git")) &&
+    !fs.existsSync(path.join(repoRoot, "tests")) &&
+    !fs.existsSync(path.join(repoRoot, ".github"));
+
   let ledgerDisposition = "CLEAN";
   let openLedgerBlockers = [];
   if (!targetLedger) {
-    ledgerDisposition = "MISSING";
-    findings.push({
-      id: "DOC-LEDGER-MISSING",
-      category: "DOC",
-      priority: "P1",
-      summary: "No durable target PR review ledger found under docs/reviews/ (required pre-remediation and pre-teardown target)."
-    });
+    if (isPackagedDistribution && !ledgerArg) {
+      ledgerDisposition = "PACKAGED_OMITTED";
+      findings.push({
+        id: "DOC-PACKAGED-LEDGER-OMITTED",
+        category: "DOC",
+        priority: "P3",
+        summary: "Running inside packaged distribution without git checkout; historical docs/reviews/*.md ledgers are omitted by package.json files allowlist."
+      });
+    } else {
+      ledgerDisposition = "MISSING";
+      findings.push({
+        id: "DOC-LEDGER-MISSING",
+        category: "DOC",
+        priority: "P1",
+        summary: "No durable target PR review ledger found under docs/reviews/ (required pre-remediation and pre-teardown target)."
+      });
+    }
   } else {
     const ledgerCheck = validateTargetReviewLedger(targetLedger);
     if (ledgerCheck.errors.length > 0) {
@@ -1036,12 +1105,12 @@ function auditSkills(ledgerArg) {
         summary: `.agents/skills/${entry.name}/SKILL.md exceeds progressive-disclosure target (${lines} lines, ${bytes} bytes; target <= 250 lines / <= 10,240 bytes).`
       });
     }
-    if (entryShare > 0.7 && totalBytes > 8192) {
+    if (proseShare > 0.7 && markdownBytes > 8192) {
       findings.push({
         id: `SKILL-SHARE-${entry.name}`,
         category: "SKILL",
         priority: "P3",
-        summary: `.agents/skills/${entry.name}/SKILL.md entry share is ${Math.round(entryShare * 100)}% of ${totalBytes} B total skill bytes (target <= 70% when skill > 8 KB).`
+        summary: `.agents/skills/${entry.name}/SKILL.md prose share is ${Math.round(proseShare * 100)}% of ${markdownBytes} B Markdown bytes (${Math.round(entryShare * 100)}% of ${totalBytes} B total; target <= 70% prose share when skill Markdown > 8 KB).`
       });
     }
 
@@ -1154,10 +1223,9 @@ function auditSkills(ledgerArg) {
     const assetsDir = path.join(docsRoot, "assets");
     if (fs.existsSync(assetsDir)) {
       const reviewsPrefix = path.join(docsRoot, "reviews") + path.sep;
-      const allDocsMarkdown = walkFiles(docsRoot)
+      const docsMarkdownContents = walkFiles(docsRoot)
         .filter(f => f.endsWith(".md") && !f.startsWith(reviewsPrefix))
-        .map(f => fs.readFileSync(f, "utf8"))
-        .join("\n");
+        .map(f => fs.readFileSync(f, "utf8"));
       for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
         const svgPath = path.join(assetsDir, entry.name);
@@ -1172,7 +1240,7 @@ function auditSkills(ledgerArg) {
             summary: `docs/assets/${entry.name} failed SVG XML sanity check (root <svg> envelope or unescaped '&').`
           });
         }
-        if (!allDocsMarkdown.includes(entry.name)) {
+        if (!docsMarkdownContents.some(text => text.includes(entry.name))) {
           findings.push({
             id: `DOC-SVG-ORPHAN-${entry.name.replace(/\.svg$/, "")}`,
             category: "DOC",
@@ -1220,7 +1288,7 @@ function auditSkills(ledgerArg) {
   };
 }
 
-function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
+function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn = false } = {}) {
   const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
   const squadIds = Object.keys(manifest.squads);
   const findings = [];
@@ -1338,11 +1406,10 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     const specialists = squad.specialists ?? squad.children ?? [];
     const seen = new Set();
     const overlaps = new Set();
-    let totalFiles = 0;
+    let writableTotalFiles = 0;
     const writableScopes = [];
     for (const sp of specialists) {
       for (const file of sp.scopeFiles) {
-        totalFiles += 1;
         seen.add(file);
         if (!fs.existsSync(path.join(repoRoot, file))) {
           if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
@@ -1358,6 +1425,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
         }
       }
       if (sp.readOnly !== true) {
+        writableTotalFiles += sp.scopeFiles.length;
         writableScopes.push(sp.scopeFiles);
       }
     }
@@ -1365,12 +1433,12 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       for (let j = i + 1; j < writableScopes.length; j += 1) {
         for (const a of writableScopes[i]) {
           for (const b of writableScopes[j]) {
-            if (scopesOverlap(a, b)) overlaps.add(`${a} <-> ${b}`);
+            if (scopesOverlap(a, b, repoRoot)) overlaps.add(`${a} <-> ${b}`);
           }
         }
       }
     }
-    const overlapRatio = totalFiles > 0 ? Number((overlaps.size / totalFiles).toFixed(2)) : 0;
+    const overlapRatio = writableTotalFiles > 0 ? Number((overlaps.size / writableTotalFiles).toFixed(2)) : 0;
     if (overlapRatio > 0.25) {
       findings.push({
         id: `ARCH-OVERLAP-${id}`,
@@ -1396,7 +1464,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     });
   }
 
-  // 3. Measure prompt overhead budgets (mcp/briefs.mjs)
+  // 3. Measure prompt overhead budgets (subagent + minimal /swarm + auditor + precompiled templates)
   const minimalAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
   const specialistTemplateBytes = Buffer.byteLength(
     buildSubagentSpec(minimalAgent, "s", "m.json", 1).Prompt,
@@ -1406,17 +1474,42 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     buildSubagentSpec(minimalAgent, "s", "m.json", undefined).Prompt,
     "utf8"
   );
+  const precompiledLeadTemplateBytes = Buffer.byteLength(
+    buildSubagentSpec(minimalAgent, "s", "m.json", undefined, undefined, { precompiledSpecialists: true }).Prompt,
+    "utf8"
+  );
+  const minSwarmPlan = planSquadCohort(
+    {
+      manifest: { squads: { s: { lead: minimalAgent, specialists: [minimalAgent] } } },
+      executionMode: "swarm"
+    },
+    repoRoot
+  );
+  const swarmSpecialistTemplateBytes = Buffer.byteLength(
+    minSwarmPlan.workers[0].specialists[0].swarmAdd.brief,
+    "utf8"
+  );
+  const swarmLeadTemplateBytes = Buffer.byteLength(
+    minSwarmPlan.workers[0].lead.swarmAdd.brief,
+    "utf8"
+  );
+  const swarmAuditorTemplateBytes = Buffer.byteLength(
+    minSwarmPlan.integrityAuditPlan[0].swarmAdd.brief,
+    "utf8"
+  );
 
   for (const [budgetId, actual, limit, label] of [
-    ["RUN-BUDGET-SPEC", specialistTemplateBytes, 1800, "Specialist brief template"],
-    ["RUN-BUDGET-LEAD", leadTemplateBytes, 3300, "Lead brief template"]
+    ["RUN-BUDGET-SPEC", specialistTemplateBytes, 1800, "Subagent specialist brief template"],
+    ["RUN-BUDGET-LEAD", leadTemplateBytes, 3300, "Subagent lead brief template"],
+    ["RUN-BUDGET-SWARM-SPEC", swarmSpecialistTemplateBytes, 1800, "/swarm specialist brief template"],
+    ["RUN-BUDGET-SWARM-LEAD", swarmLeadTemplateBytes, 3300, "/swarm lead brief template"]
   ]) {
     if (actual > limit) {
       findings.push({
         id: budgetId,
         category: "RUN",
         priority: "P3",
-        summary: `${label} is ${actual} UTF-8 bytes (exceeds ${limit} B rubric budget).`
+        summary: `${label} is ${actual} UTF-8 bytes (exceeds ${limit} B warn budget; rubric target ${limit - 200} B).`
       });
     }
   }
@@ -1460,10 +1553,13 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       }
     }
 
-    const tHandoff = performance.now();
+    const tFingerprint = performance.now();
     const verifiedFiles = fingerprint(canaryDir, ["target.txt"]);
+    timings.canaryFingerprintMs = Number((performance.now() - tFingerprint).toFixed(2));
     const leadAssignments = [];
     const leadHandoffs = [];
+    const squadRecords = [];
+    let digestAccumMs = 0;
 
     for (const id of squadIds) {
       const s1 = reportPath(id, 1);
@@ -1484,28 +1580,19 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
           { sender: `${id}-child-2`, message: `READY ${s2} — Specialist 2 verified ${id}.` }
         ]
       };
+      const tDig = performance.now();
       const { evidenceDigest } = computeEvidenceDigest(canaryDir, record);
+      digestAccumMs += performance.now() - tDig;
       const auditFull = path.join(canaryDir, auditSlot);
       fs.mkdirSync(path.dirname(auditFull), { recursive: true });
       fs.writeFileSync(
         auditFull,
         `# ${id} Integrity Audit\nTarget Squad: ${id}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${evidenceDigest}\n`
       );
-      inspectHandoffs(canaryDir, record);
-      const bundled = bundleReports(canaryDir, record);
-      const verified = verifyBundle(canaryDir, bundled.path, bundled.sha256);
-      const pruned = pruneReports(canaryDir, bundled.path, verified.sha256);
-      if (pruned.removed.length !== 2) {
-        throw new Error(`Expected 2 pruned reports in self-diagnosis canary for '${id}', got ${pruned.removed.length}`);
-      }
-      leadAssignments.push({ conversationId: `${id}-lead`, report: leadSlot });
-      leadHandoffs.push({
-        sender: `${id}-lead`,
-        message: `READY ${leadSlot} — Lead synthesized and bundled ${id} (${verified.sha256.slice(0, 12)}).`
-      });
+      squadRecords.push({ id, leadSlot, record });
     }
 
-    // Verify custom reportRoot handoff/bundle/verify/prune pipeline
+    // Prepare custom reportRoot canary fixtures and digest BEFORE starting handoff latency timer
     const customId = squadIds[0];
     const customRoot = "scratch/agy-squad/custom-cohort";
     const cs1 = reportPath(customId, 1, customRoot);
@@ -1536,13 +1623,33 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
         { sender: `${customId}-c2`, message: `READY ${cs2} — Custom 2 verified.` }
       ]
     };
+    const tCustomDig = performance.now();
     const { evidenceDigest: customDigest } = computeEvidenceDigest(canaryDir, customRecord);
+    digestAccumMs += performance.now() - tCustomDig;
     const cAuditFull = path.join(canaryDir, cAudit);
     fs.mkdirSync(path.dirname(cAuditFull), { recursive: true });
     fs.writeFileSync(
       cAuditFull,
       `# ${customId} Custom Integrity Audit\nTarget Squad: ${customId}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${customDigest}\n`
     );
+    timings.digestMs = Number(digestAccumMs.toFixed(2));
+
+    const tHandoff = performance.now();
+    for (const { id, leadSlot, record } of squadRecords) {
+      inspectHandoffs(canaryDir, record);
+      const bundled = bundleReports(canaryDir, record);
+      const verified = verifyBundle(canaryDir, bundled.path, bundled.sha256);
+      const pruned = pruneReports(canaryDir, bundled.path, verified.sha256);
+      if (pruned.removed.length !== 2) {
+        throw new Error(`Expected 2 pruned reports in self-diagnosis canary for '${id}', got ${pruned.removed.length}`);
+      }
+      leadAssignments.push({ conversationId: `${id}-lead`, report: leadSlot });
+      leadHandoffs.push({
+        sender: `${id}-lead`,
+        message: `READY ${leadSlot} — Lead synthesized and bundled ${id} (${verified.sha256.slice(0, 12)}).`
+      });
+    }
+
     inspectHandoffs(canaryDir, customRecord);
     const customBundled = bundleReports(canaryDir, customRecord);
     const customVerified = verifyBundle(canaryDir, customBundled.path, customBundled.sha256);
@@ -1576,22 +1683,32 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
     cleanupCanary();
   }
 
-  // 5. Measure MCP tools/list schema payload size via stdio
+  // 5. Measure MCP tools/list schema payload size (real child stdio default; --skip-mcp-spawn uses in-process TOOLS)
   const tMcp = performance.now();
-  const serverRes = spawnSync(process.execPath, [path.join(repoRoot, "mcp/index.js")], {
-    cwd: repoRoot,
-    input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
-    encoding: "utf8"
-  });
-  timings.mcpSpawnMs = Number((performance.now() - tMcp).toFixed(2));
-  if (serverRes.status !== 0) {
-    throw new Error(`MCP server tools/list check failed: ${serverRes.stderr}`);
-  }
   let toolsPayload;
-  try {
-    toolsPayload = JSON.parse(serverRes.stdout.trim());
-  } catch (error) {
-    throw new Error(`MCP server tools/list returned invalid JSON: ${error.message}`);
+  let schemaBytes;
+  timings.mcpSpawnSkipped = Boolean(skipMcpSpawn);
+  if (skipMcpSpawn) {
+    const rawResp = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } });
+    timings.mcpSpawnMs = Number((performance.now() - tMcp).toFixed(2));
+    toolsPayload = JSON.parse(rawResp);
+    schemaBytes = Buffer.byteLength(rawResp, "utf8");
+  } else {
+    const serverRes = spawnSync(process.execPath, [path.join(repoRoot, "mcp/index.js")], {
+      cwd: repoRoot,
+      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
+      encoding: "utf8"
+    });
+    timings.mcpSpawnMs = Number((performance.now() - tMcp).toFixed(2));
+    if (serverRes.status !== 0) {
+      throw new Error(`MCP server tools/list check failed: ${serverRes.stderr}`);
+    }
+    try {
+      toolsPayload = JSON.parse(serverRes.stdout.trim());
+    } catch (error) {
+      throw new Error(`MCP server tools/list returned invalid JSON: ${error.message}`);
+    }
+    schemaBytes = Buffer.byteLength(serverRes.stdout.trim(), "utf8");
   }
   const advertisedTools = Array.isArray(toolsPayload?.result?.tools)
     ? toolsPayload.result.tools.map(tool => tool?.name)
@@ -1601,14 +1718,39 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       throw new Error(`MCP server tools/list is missing required tool '${requiredTool}'.`);
     }
   }
-  const schemaBytes = Buffer.byteLength(serverRes.stdout.trim(), "utf8");
   if (schemaBytes > 4096) {
     findings.push({
       id: "MCP-BUDGET-SCHEMA",
       category: "MCP",
       priority: "P3",
-      summary: `MCP tools/list response is ${schemaBytes} UTF-8 bytes (exceeds 4,096 B rubric budget).`
+      summary: `MCP tools/list response is ${schemaBytes} UTF-8 bytes (exceeds 4,096 B warn budget; rubric target 3,072 B).`
     });
+  }
+
+  const SWARM_MENTION_RESERVE_BYTES = 26;
+  const checkHeadroom = (slot, id, label) => {
+    const prefixBytes = Buffer.byteLength(`PARTIAL ${slot} — `, "utf8") + SWARM_MENTION_RESERVE_BYTES;
+    const receiptHeadroomBytes = messageLimit - prefixBytes;
+    if (receiptHeadroomBytes < 312) {
+      findings.push({
+        id,
+        category: "SVC",
+        priority: "P2",
+        summary: `${label} has only ${receiptHeadroomBytes} B receipt headroom (PARTIAL + @24-char prefix ${prefixBytes} B > 188 B limit).`
+      });
+    }
+    return receiptHeadroomBytes;
+  };
+
+  for (let i = 0; i < leads.length; i += 1) {
+    const slot = leads[i].Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
+    if (slot) checkHeadroom(slot, `SVC-HEADROOM-LEAD-${i + 1}`, `Lead ${leads[i].Role}`);
+  }
+  for (let i = 0; i < (planned.integrityAuditPlan ?? []).length; i += 1) {
+    const audit = planned.integrityAuditPlan[i];
+    if (audit?.reportSlot) {
+      checkHeadroom(audit.reportSlot, `SVC-HEADROOM-AUDIT-${audit.targetSquad}-${i + 1}`, `Auditor '${audit.workerName}'`);
+    }
   }
 
   const compiledSquads = Object.fromEntries(
@@ -1616,16 +1758,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       id,
       agents.map((a, idx) => {
         const slot = a.Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
-        const prefixBytes = Buffer.byteLength(`READY ${slot} — `, "utf8");
-        const receiptHeadroomBytes = messageLimit - prefixBytes;
-        if (receiptHeadroomBytes < 340) {
-          findings.push({
-            id: `SVC-HEADROOM-${id}-${idx + 1}`,
-            category: "SVC",
-            priority: "P2",
-            summary: `Specialist ${idx + 1} in '${id}' has only ${receiptHeadroomBytes} B receipt headroom (prefix ${prefixBytes} B > 160 B limit).`
-          });
-        }
+        const receiptHeadroomBytes = checkHeadroom(slot, `SVC-HEADROOM-${id}-${idx + 1}`, `Specialist ${idx + 1} in '${id}'`);
         return {
           Role: a.Role,
           TypeName: a.TypeName,
@@ -1648,8 +1781,14 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false } = {}) {
       specialistEstimatedTokens: estimateTokens(specialistTemplateBytes),
       leadTemplateBytes,
       leadEstimatedTokens: estimateTokens(leadTemplateBytes),
+      precompiledLeadTemplateBytes,
+      swarmSpecialistTemplateBytes,
+      swarmLeadTemplateBytes,
+      swarmAuditorTemplateBytes,
       mcpToolsListResponseBytes: schemaBytes,
-      mcpToolsListEstimatedTokens: estimateTokens(schemaBytes)
+      mcpToolsListEstimatedTokens: estimateTokens(schemaBytes),
+      budgetTargets: { specialist: 1600, lead: 3100, mcpToolsList: 3072 },
+      budgetWarns: { specialist: 1800, lead: 3300, mcpToolsList: 4096 }
     },
     topology,
     timings,
@@ -1687,6 +1826,8 @@ function parseCliArgs(argv) {
   let squadId = "all_l1";
   let planSquadId;
   let topology;
+  let sawTopologyFlag = false;
+  let sawFlatFlag = false;
   let executionMode = "swarm";
   let workspaceIsolation = "inherit";
   let teardownTarget = "all";
@@ -1695,7 +1836,9 @@ function parseCliArgs(argv) {
   let ledgerPath;
   let force = false;
   let allowActiveCohort = false;
+  let skipMcpSpawn = false;
   let help = false;
+  const positionalArgs = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -1705,11 +1848,13 @@ function parseCliArgs(argv) {
       markdown = true;
     } else if (arg === "--allow-active-cohort") {
       allowActiveCohort = true;
+    } else if (arg === "--skip-mcp-spawn") {
+      skipMcpSpawn = true;
     } else if (arg === "--print-plan") {
       printPlan = true;
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        planSquadId = next;
+        positionalArgs.push(next);
         i += 1;
       }
     } else if (arg === "--topology") {
@@ -1717,9 +1862,20 @@ function parseCliArgs(argv) {
       if (next !== "flat" && next !== "layered") {
         throw new Error("Flag '--topology' requires 'flat' or 'layered'.");
       }
+      if (sawFlatFlag || (sawTopologyFlag && topology !== next)) {
+        throw new Error("Conflicting topology flags: use either '--topology flat|layered' or '--flat', not both.");
+      }
+      sawTopologyFlag = true;
       topology = next;
       i += 1;
     } else if (arg === "--flat") {
+      if (sawTopologyFlag && topology !== "flat") {
+        throw new Error("Conflicting topology flags: '--topology' cannot be combined with '--flat'.");
+      }
+      if (sawTopologyFlag) {
+        throw new Error("Conflicting topology flags: specify either '--topology flat' or '--flat', not both.");
+      }
+      sawFlatFlag = true;
       topology = "flat";
     } else if (arg === "--mode") {
       const next = argv[i + 1];
@@ -1739,7 +1895,7 @@ function parseCliArgs(argv) {
       printDispatch = true;
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        squadId = next;
+        positionalArgs.push(next);
         i += 1;
       }
     } else if (arg === "--parent-id") {
@@ -1753,7 +1909,7 @@ function parseCliArgs(argv) {
       teardown = true;
       const next = argv[i + 1];
       if (next && !next.startsWith("-")) {
-        teardownTarget = next;
+        positionalArgs.push(next);
         i += 1;
       }
     } else if (arg === "--accept") {
@@ -1772,14 +1928,26 @@ function parseCliArgs(argv) {
       i += 1;
     } else if (arg === "--force") {
       force = true;
+    } else if (!arg.startsWith("-")) {
+      positionalArgs.push(arg);
     } else {
       throw new Error(
-        `Unknown argument '${arg}'. Usage: diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]]`
+        `Unknown argument '${arg}'. Usage: diagnose.mjs [--markdown] [--allow-active-cohort] [--skip-mcp-spawn] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]]`
       );
     }
   }
   if ([markdown, printPlan, printDispatch, teardown].filter(Boolean).length > 1) {
     throw new Error("Flags '--markdown', '--print-plan', '--print-dispatch', and '--teardown' are mutually exclusive.");
+  }
+  if (positionalArgs.length > 0) {
+    if (positionalArgs.length > 1 || (!printPlan && !printDispatch && !teardown)) {
+      throw new Error(
+        `Unexpected positional argument '${positionalArgs[0]}'. Positional squadId/target is only accepted with '--print-plan', '--print-dispatch', or '--teardown'.`
+      );
+    }
+    if (printPlan) planSquadId = positionalArgs[0];
+    else if (printDispatch) squadId = positionalArgs[0];
+    else if (teardown) teardownTarget = positionalArgs[0];
   }
   if (parentId && !printDispatch) {
     throw new Error("Flag '--parent-id' is only valid with '--print-dispatch'.");
@@ -1793,8 +1961,8 @@ function parseCliArgs(argv) {
   if (ledgerPath && (printPlan || printDispatch)) {
     throw new Error("Flag '--ledger' is not valid with '--print-plan' or '--print-dispatch'.");
   }
-  if (allowActiveCohort && (printPlan || printDispatch || teardown)) {
-    throw new Error("Flag '--allow-active-cohort' is only valid in audit mode.");
+  if ((allowActiveCohort || skipMcpSpawn) && (printPlan || printDispatch || teardown)) {
+    throw new Error("Flags '--allow-active-cohort' and '--skip-mcp-spawn' are only valid in audit mode.");
   }
   if ((acceptedHash || force) && !teardown) {
     throw new Error("Flags '--accept' and '--force' are only valid with '--teardown'.");
@@ -1818,12 +1986,13 @@ function parseCliArgs(argv) {
     ledgerPath,
     force,
     allowActiveCohort,
+    skipMcpSpawn,
     help
   };
 }
 
 const USAGE =
-  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
+  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--skip-mcp-spawn] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
 
 let cli;
 try {
@@ -1919,8 +2088,18 @@ if (cli.printDispatch) {
   process.exit(0);
 }
 
-const skillAudit = auditSkills(cli.ledgerPath);
-const squadAudit = runSquadCanaryAndOptimization({ allowActiveCohort: cli.allowActiveCohort });
+let skillAudit;
+let squadAudit;
+try {
+  skillAudit = auditSkills(cli.ledgerPath);
+  squadAudit = runSquadCanaryAndOptimization({
+    allowActiveCohort: cli.allowActiveCohort,
+    skipMcpSpawn: cli.skipMcpSpawn
+  });
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 const findings = [...skillAudit.findings, ...squadAudit.findings];
 const prReviewMatrix = buildPrReviewCategoryMatrix(findings);
 const blockingCount = findings.filter(f => f.priority === "P1" || f.priority === "P2").length;
@@ -1956,7 +2135,7 @@ if (cli.markdown) {
     "",
     `- **Status:** \`${report.status}\` (Profiler: \`${report.profilerHealth}\`, Ledger: \`${report.ledgerDisposition}\`, PR Review Standard \`v${report.standardVersion}\`)`,
     `- **Self-Diagnosis Manifest:** \`${report.manifestPath}\``,
-    `- **Target PR Review Ledger:** \`${report.targetReviewLedger ?? "MISSING"}\``,
+    `- **Target PR Review Ledger:** \`${report.targetReviewLedger ?? (report.ledgerDisposition === "PACKAGED_OMITTED" ? "OMITTED (PACKAGED)" : "MISSING")}\``,
     `- **Timings:** dispatch \`${report.timings.dispatchCompilePerCallMs} ms/call\` (\`${report.timings.dispatchCompileMs} ms\` total), squad_planner \`${report.timings.squadPlannerMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
     "",
     "## 1. Workspace Skills Progressive Disclosure & Token Audit",

@@ -86,7 +86,7 @@ Every surfaced `P0`–`P3` item must carry one explicit canonical status: `Open 
 
 Tiered record density (instead of row compression):
 
-- **`P0` / `P1` / `P2` defects** require all 10 fields below, written as concise 1-line entries without repeating multi-paragraph prose across sections:
+- **`P0` / `P1` / `P2` defects** require all 10 fields below, written as concise 1-line entries without repeating multi-paragraph prose across sections (pipe-delimited headings ``#### `<ID>` — <Title> | <Priority> | <Status>`` are parsed directly by `diagnose.mjs` alongside Markdown finding tables):
   - **Title, priority, status.**
   - **Contract provenance:** exact invariant, architecture decision (`docs/plans/LEDGER.md`), public contract, or evidenced external norm.
   - **Source evidence:** immutable commit-pinned file links and relevant line ranges, plus the affected symbol.
@@ -119,7 +119,7 @@ A verification gap alone is not proof of a production defect. Label it as a gap.
 
 Agy-Squad-specific verification:
 
-- **Schema & Stdio Framing:** exercise documented omitted/null/valid/invalid values through `request.jsonrpc === "2.0"` validation, actual `tools/list` schemas (`mcp/index.js`), and the `dispatch_squad` (`mcp/dispatch.mjs`) and `squad_planner` (`mcp/planner.mjs`) runtime boundaries, including positive-integer `AGY_MAX_STDIO_PAYLOAD_BYTES` and the 10MB stdio frame limit.
+- **Schema & Stdio Framing:** exercise documented omitted/null/valid/invalid values through `request.jsonrpc === "2.0"` validation (`Number.isSafeInteger`), actual `tools/list` schemas (`mcp/index.js`), and the `dispatch_squad` (`mcp/dispatch.mjs`) and `squad_planner` (`mcp/planner.mjs`) runtime boundaries, including positive-integer `AGY_MAX_STDIO_PAYLOAD_BYTES` and the `10 MiB` stdio frame limit.
 - **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, and Linux `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`; canonical root resolution + strict symlink rejection (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, symlink directory rejection, Linux `/proc/self/fd/${fd}` check, and macOS/Windows case-insensitive realpath parity) for reports and bundles in `mcp/handoffs.mjs`.
 - **Subagent Capability, Model Provenance & Input Guards:** verify built-in `TypeName` rejection (`research`, `browser`, `image-generator`; default `"self"`), manifest `workspace === "inherit"` in `invoke_subagent` and `squad_planner` (with `/swarm` copy isolation via top-level `workspaceIsolation`), honest `modelProvenance` disclosure vs. `/swarm` pinning, `scopeFiles` path normalization and writable overlap warnings, and camelCase/PascalCase conflict rejection (`mcp/briefs.mjs`, `mcp/planner.mjs`).
 - **Pointer-Over-Wire Handoffs & Bundling:** verify single-line `<= 500` UTF-8 byte `READY`/`PARTIAL`/`NO_REPORT` receipt grammar, custom `reportRoot` alignment in `inspectReports`/`bundleReports`, atomic `publish()` link/rename semantics, strict single-line verdicts (`mcp/verdicts.mjs`), `integrityAudit` binding, and `collect`/`bundle-init`/`bundle`/`verify`/`prune` SHA-256 verification (`mcp/handoffs.mjs`).
@@ -143,10 +143,10 @@ Re-review each fix in its primary category and all affected categories. A fix co
 1. Review metadata, Session Provenance table, and evidence limits.
 2. File-to-category inventory and coverage matrix.
 3. Architecture-to-implementation trace.
-4. Ten category sections, each with separate P1, P2, and P3 finding lists, verification gaps, and its own verdict.
-5. Cross-category root causes and rationale for remediation order.
-6. Verification record and remaining gaps.
-7. Overall disposition and finding closure table.
+4. Ten category sections (`ARCH`..`DEP`), each with separate P1, P2, and P3 triage, verification status, and verdict.
+5. Atomic P0–P3 findings (whether embedded in category tables/pipe-delimited headings in Section 4 or consolidated in Section 5 ahead of cross-category root causes in Section 6; `diagnose.mjs` validates Sections 4–7 uniformly).
+6. Cross-category root causes, verification record, and remaining gaps.
+7. Overall disposition, Direction decision (when requested), and finding closure table.
 8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): atomic 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`) recording every advisory surfaced during re-verification (`Residual (Open)` -> `Closed (Post-Remediation)`), `Deferred / Won't Fix` item, and `Closed (By Design)` / `Informational` item; never buried inside a `Closed` row's prose cell. Record `None (0 open residuals, 0 deferred items)` when empty.
 9. **`/self-diagnosis` Cohort & Bundle Ledger** (mandatory whenever `/self-diagnosis` cohorts are dispatched against the target branch/PR): one canonical **Cohort Provenance** table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) plus one atomic 1-ID-per-row **Wave Finding Ledger**, keeping `docs/reviews/` to one clean file per PR review cycle rather than bespoke per-wave sections or proliferating files.
 

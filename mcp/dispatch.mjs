@@ -71,17 +71,38 @@ function manifestSquads(manifest) {
     if (RETIRED_ADVERSARIAL_RE.test(id)) {
       throw new Error(`Squad ID '${id}' was retired in Phase 2; migrate to 'integrity_auditor' (or 'integrity_auditor:<targetSquad>').`);
     }
+    if (
+      (/^integrity_auditor/i.test(id) && id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")) ||
+      id === "integrity_auditor-"
+    ) {
+      throw new Error(
+        `Squad ID '${id}' uses a reserved integrity_auditor prefix; use exact 'integrity_auditor' or 'integrity_auditor-<targetSquad>'.`
+      );
+    }
     validateSquadId(id);
   }
   return squads;
 }
 
 function appendTargetInstruction(spec, targetLine) {
-  if (!spec || typeof spec !== "object") return spec;
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return spec;
+  if (spec.instructions !== undefined && spec.Instructions !== undefined && spec.instructions !== spec.Instructions) {
+    throw new Error(`Agent '${spec.role ?? spec.Role ?? "unnamed"}' has conflicting instructions and Instructions fields.`);
+  }
   const usesPascal = spec.Instructions !== undefined;
   const key = usesPascal ? "Instructions" : "instructions";
-  const existing = typeof spec[key] === "string" && spec[key].trim() ? `${spec[key].trim()}\n` : "";
-  return { ...spec, [key]: `${existing}${targetLine}` };
+  const rawExisting = spec.Instructions ?? spec.instructions;
+  if (rawExisting !== undefined && typeof rawExisting !== "string") {
+    return spec;
+  }
+  const existing = typeof rawExisting === "string" && rawExisting.trim() ? `${rawExisting.trim()}\n` : "";
+  const next = { ...spec, [key]: `${existing}${targetLine}` };
+  if (usesPascal) {
+    delete next.instructions;
+  } else {
+    delete next.Instructions;
+  }
+  return next;
 }
 
 function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
@@ -97,24 +118,27 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
     );
   }
   const resolvedTarget = targetIds[0] ?? "all";
-  if (squads.integrity_auditor !== undefined) {
-    if (!squads.integrity_auditor || typeof squads.integrity_auditor !== "object" || Array.isArray(squads.integrity_auditor)) {
-      throw new Error("Squad 'integrity_auditor' must be an object.");
+  const overrideKey = targetSquad ? `integrity_auditor-${targetSquad}` : null;
+  const auditKey = overrideKey && Object.hasOwn(squads, overrideKey) ? overrideKey : "integrity_auditor";
+  const auditSquad = squads[auditKey];
+  if (auditSquad !== undefined) {
+    if (!auditSquad || typeof auditSquad !== "object" || Array.isArray(auditSquad)) {
+      throw new Error(`Squad '${auditKey}' must be an object.`);
     }
-    if (!squads.integrity_auditor._synthesized) {
-      if (squads.integrity_auditor.children !== undefined && squads.integrity_auditor.specialists !== undefined) {
-        throw new Error("Squad 'integrity_auditor' cannot define both 'children' and 'specialists'.");
+    if (!auditSquad._synthesized) {
+      if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
+        throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
       }
-      const customSpecs = squads.integrity_auditor.children ?? squads.integrity_auditor.specialists;
-      const customLead = resolveSquadLead(squads.integrity_auditor, "integrity_auditor", false);
+      const customSpecs = auditSquad.children ?? auditSquad.specialists;
+      const customLead = resolveSquadLead(auditSquad, auditKey, false);
       if (customSpecs !== undefined) {
         if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
-          throw new Error("Custom 'integrity_auditor' children or specialists must be a non-empty array.");
+          throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
         }
         if (customLead) {
           buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true });
           if (Array.isArray(warnings)) {
-            warnings.push("Custom 'integrity_auditor' lead is ignored in flat integrity_auditor execution; only its specialists run.");
+            warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
           }
         }
         return customSpecs.map((spec, index) => ({
@@ -125,7 +149,7 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
       }
       if (customLead) {
         throw new Error(
-          "Custom 'integrity_auditor' defines a lead without specialists or children; add specialists/children or omit the lead."
+          `Custom '${auditKey}' defines a lead without specialists or children; add specialists/children or omit the lead.`
         );
       }
     }
@@ -295,18 +319,28 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       throw new Error(`Unknown targetSquad '${flatTarget}'.`);
     }
 
+    if (!isIntegrityAuditor && (squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-"))) {
+      const colonTarget =
+        squadId === "integrity_auditor" ? "integrity_auditor" : `integrity_auditor:${squadId.slice("integrity_auditor-".length)}`;
+      throw new Error(`Squad ID '${squadId}' is reserved for integrity audit overrides; dispatch it via '${colonTarget}'.`);
+    }
+
     const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
-    const build = ({ spec, id, number }) =>
+    const warnings = [];
+    const build = ({ spec, id, number }, emitWarnings = false) =>
       buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
         isIntegrityAuditor,
-        workspace: delegateWorkspace
+        workspace: delegateWorkspace,
+        ...(emitWarnings ? { warnings } : {})
       });
     let assignments;
-    const warnings = [];
     if (squadId === "all_l1") {
       const workingSquads = Object.entries(squads).filter(
         ([id]) => id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
       );
+      if (workingSquads.length === 0) {
+        throw new Error("Manifest must define at least one non-audit working squad.");
+      }
       assignments = workingSquads.map(([id, squad]) => ({
         spec: resolveSquadLead(squad, id, true),
         id
@@ -316,17 +350,18 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
-    const Subagents = assignments.map(build);
+    const Subagents = assignments.map(item => build(item, true));
     if (squadId === "all_l1") {
       const children = assignments.flatMap(({ id }) => specialistAssignments(squads, id));
-      for (const child of children) build(child);
+      for (const child of children) build(child, false);
     } else if (!isIntegrityAuditor) {
       // Validate only the target squad's own lead (when present) without rebuilding unrelated sibling squads (S2-OPT2).
       const leadSpec = resolveSquadLead(squads[squadId], squadId, false);
-      if (leadSpec) build({ spec: leadSpec, id: squadId });
+      if (leadSpec) build({ spec: leadSpec, id: squadId }, false);
     }
+    const uniqueWarnings = [...new Set(warnings)];
     return {
-      content: [{ type: "text", text: JSON.stringify({ Subagents, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2) }]
+      content: [{ type: "text", text: JSON.stringify({ Subagents, ...(uniqueWarnings.length > 0 ? { warnings: uniqueWarnings } : {}) }) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;
