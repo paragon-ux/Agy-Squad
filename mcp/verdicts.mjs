@@ -16,11 +16,16 @@ function validateSquadId(squadId) {
   return squadId;
 }
 
+const LINE_ITEM_PREFIX = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]+\\s*)?";
+const POST_LABEL_EMPH = "(?:\\s*[*_]+)?";
+const POST_COLON_EMPH = "(?:[*_]+\\s+)?[*_]*";
+const TRAILING_DOT_AND_EMPH = "(?:\\s*(?:\\.(?:\\s*[*_]+)?|[*_]+(?:\\s*\\.)?))?";
+
 const HISTORICAL_CONTEXT_RE =
   /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old|initial|original|earlier)\b/i;
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
 const LABELED_VERDICT_PREFIX_RE =
-  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*(?:[*_]{1,3})?\s*/i;
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]*[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?[*_]*\s+){0,2}[*_]*(?:verdict|status|result|check|disposition|outcome)(?:\s*[*_]+)?(?:\s*[:—–]|\s+-(?=\s|$))\s*(?:[*_]+\s+)?[*_]*/i;
 const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/;
 
 function matchLabeledVerdict(line) {
@@ -76,10 +81,10 @@ function stripCode(markdown) {
 const CATEGORY_VERDICT_RE = /^(?:changes required|no findings within reviewed scope|incomplete|not applicable)\b/i;
 
 function isCategoryVerdictLine(line) {
-  const bareVerdictPrefix = /^\s*(?:(?:\d+[.)]|[-*+])(?:\s+|$)|#+\s+)?(?:[*_]{1,3})?\s*Verdict\s*(?:[*_]{1,3})?\s*:(.*)$/i;
+  const bareVerdictPrefix = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Verdict${POST_LABEL_EMPH}\\s*:(.*)$`, "i");
   const match = bareVerdictPrefix.exec(line);
   if (!match) return false;
-  const rawVal = match[1].replace(/[*_]{1,3}/g, "").trim();
+  const rawVal = match[1].replace(/[*_]+/g, "").trim();
   if (!CATEGORY_VERDICT_RE.test(rawVal)) return false;
   return !/\b(?:PASS|FAIL|BLOCKED)\b/.test(rawVal);
 }
@@ -96,10 +101,9 @@ function isCategoryVerdictLine(line) {
 function parseStrictLines(markdown, labels, allowed) {
   const clean = stripCode(markdown);
   const labelPattern = labels.join("|");
-  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
-  const labelRe = new RegExp(`^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}(?:${labelPattern})${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*${prefix}\\s*(?:${labelPattern})\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Z][A-Z ]*?)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    `^\\s*${LINE_ITEM_PREFIX}(?:${labelPattern})${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}([A-Z](?:[A-Z ]*[A-Z])?)${TRAILING_DOT_AND_EMPH}\\s*$`,
     "i"
   );
   const found = new Set();
@@ -129,12 +133,11 @@ function parseStrictLines(markdown, labels, allowed) {
  */
 function hasContentVerdictAttempt(markdown) {
   const clean = stripCode(markdown);
-  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
-  const verdictLabelRe = new RegExp(`^\\s*${prefix}\\s*(?:(?:Content|Overall)\\s+)?Verdict\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const verdictLabelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}(?:(?:Content|Overall)\\s+)?Verdict${POST_LABEL_EMPH}\\s*:`, "i");
   for (const line of clean.split(/\r?\n/)) {
     if (isCategoryVerdictLine(line)) continue;
     if (verdictLabelRe.test(line)) return true;
-    if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/.test(line)) return true;
+    if (/^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(?:PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/.test(line)) return true;
     if (matchLabeledVerdict(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
   }
   return false;
@@ -173,7 +176,9 @@ function parseContentVerdict(markdown) {
     if (labeled && !HISTORICAL_CONTEXT_RE.test(line)) {
       found.add(labeled[1]);
     }
-    const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
+    const leading = line.match(
+      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(PASS|FAIL|BLOCKED)[*_]*(?:\s*[:—–]|\s+-(?=\s|$))/
+    );
     if (leading) {
       found.add(leading[1]);
     }
@@ -193,7 +198,7 @@ function parseContentVerdict(markdown) {
         }
         cells.forEach((cell, colIdx) => {
           if (!isFirstRow && !headerVerdictCol[colIdx]) return;
-          const m = cell.match(/^(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?$/);
+          const m = cell.match(/^[*_]*(PASS|FAIL|BLOCKED)[*_]*$/);
           if (m) found.add(m[1]);
         });
       }
@@ -235,10 +240,9 @@ function parseIntegrityVerdict(markdown) {
  */
 function parseTargetSquad(markdown) {
   const clean = stripCode(markdown);
-  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
-  const labelRe = new RegExp(`^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Target Squad${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*${prefix}\\s*Target Squad\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([A-Za-z0-9_.-]+?)\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    `^\\s*${LINE_ITEM_PREFIX}Target Squad${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}([A-Za-z0-9_.-]+?)${TRAILING_DOT_AND_EMPH}\\s*$`,
     "i"
   );
   const found = new Set();
@@ -264,10 +268,9 @@ function parseTargetSquad(markdown) {
  */
 function parseEvidenceDigest(markdown) {
   const clean = stripCode(markdown);
-  const prefix = "(?:(?:\\d+[.)]|[-*+])\\s+|#+\\s+)?(?:[*_]{1,3})?";
-  const labelRe = new RegExp(`^\\s*${prefix}\\s*Evidence Digest\\s*(?:[*_]{1,3})?\\s*:`, "i");
+  const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*${prefix}\\s*Evidence Digest\\s*(?:[*_]{1,3})?\\s*:\\s*(?:[*_]{1,3})?\\s*(?:[*_]{1,3})?\\s*([0-9a-f]{64})\\s*\\.?\\s*(?:[*_]{1,3})?\\s*$`,
+    `^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}([0-9a-f]{64})${TRAILING_DOT_AND_EMPH}\\s*$`,
     "i"
   );
   const found = new Set();

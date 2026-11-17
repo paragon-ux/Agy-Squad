@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { hasContentVerdictAttempt, parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -506,6 +506,76 @@ try {
     ),
     "PASS",
     "W2-RUN-004: hyphenated/snake_case/suffixed compounds and historical emphasized lines must not false-trigger"
+  );
+
+  // Additional W2-RUN-004 edge-case regressions: leading/label hyphenated compounds, 4+ char emphasis, split-word emphasis, outer periods
+  for (const [doc, expected] of [
+    ["Content Verdict: PASS\n- **FAIL-fast** mode enabled\n- __FAIL__-mode enabled\n- FAIL-safe behavior\n", "PASS"],
+    ["Content Verdict: FAIL\n- PASS-through mode enabled\n", "FAIL"],
+    ["Content Verdict: PASS\n- check-FAIL path tested\n- status-PASS flag ignored\n", "PASS"],
+    ["- **Content Verdict:** **PASS**.\n", "PASS"],
+    ["**__Content Verdict:__** **__PASS__**\n", "PASS"],
+    ["**__Content Verdict:__** **__FAIL__**\n", "FAIL"],
+    ["Content Verdict: PASS\n- **__Verdict:__** Changes required (`SQ-001`)\n", "PASS"]
+  ]) {
+    assert.equal(
+      parseContentVerdict(doc),
+      expected,
+      `W2-RUN-004: parseContentVerdict must return ${expected} for ${JSON.stringify(doc)}`
+    );
+  }
+  for (const draftLine of [
+    "- **FAIL-fast** mode enabled",
+    "- __FAIL__-mode enabled",
+    "- FAIL-safe behavior",
+    "- PASS-through mode enabled",
+    "- check-FAIL path tested"
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${draftLine}\n`),
+      false,
+      `W2-RUN-004: hasContentVerdictAttempt must not false-trigger on '${draftLine}'`
+    );
+  }
+  for (const attemptLine of [
+    "- **Status:** **__FAIL__**",
+    "- **__Status:__** **__FAIL__**",
+    "- **Final** **Status:** **FAIL**",
+    "- Final **Status:** **FAIL**",
+    "- **Check** - **FAIL**",
+    "- **__FAIL__**: reason",
+    "- **__FAIL__:** reason",
+    "- **FAIL** - reason",
+    "**__Content Verdict:__** **__FAIL__**"
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${attemptLine}\n`),
+      true,
+      `W2-RUN-004: hasContentVerdictAttempt must detect '${attemptLine}'`
+    );
+  }
+  for (const conflictLine of [
+    "- **Status:** **__FAIL__**",
+    "- **__Status:__** **__FAIL__**",
+    "- **Final** **Status:** **FAIL**",
+    "- Final **Status:** **FAIL**",
+    "- **Check** - **FAIL**",
+    "- **__FAIL__**: reason",
+    "- **__FAIL__:** reason",
+    "- **FAIL** - reason",
+    "| Squad | Verdict |\n| --- | --- |\n| Alpha | **__FAIL__** |"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: PASS\n${conflictLine}\n`),
+      /conflicting content verdicts/,
+      `W2-RUN-004: conflicting line '${conflictLine}' must throw against PASS`
+    );
+  }
+  assert.equal(parseIntegrityVerdict("**Integrity Verdict:** **CLEAN**.\n"), "CLEAN");
+  assert.equal(parseTargetSquad("**__Target Squad:__** **__alpha__**.\n"), "alpha");
+  assert.equal(
+    parseEvidenceDigest(`**__Evidence Digest:__** **__${"a".repeat(64)}__**.\n`),
+    "a".repeat(64)
   );
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
