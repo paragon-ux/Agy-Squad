@@ -453,6 +453,61 @@ try {
   const w2DraftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
   assert.equal(w2DraftInitOut.verdict, "PASS", "W2-RUN-001: bundle-init must not crash on draft containing lowercase 'check: fail ...'");
 
+  // Wave 2 Regressions (W2-RUN-004): bolded label-with-inner-colon paired with emphasized verdict tokens
+  for (const [boldLine, expectedAttempt] of [
+    ["- **Status:** **FAIL**", true],
+    ["- **Final Status:** **PASS**", true],
+    ["**Final check:** **BLOCKED**", true],
+    ["- ***Status:*** ***FAIL***", true],
+    ["- __Status:__ __FAIL__", true],
+    ["- _Status:_ _FAIL_", true],
+    ["- *__Status:__* *__FAIL__*", true],
+    ["- __FAIL__: reason", true]
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${boldLine}\n`),
+      expectedAttempt,
+      `W2-RUN-004: hasContentVerdictAttempt must detect '${boldLine}'`
+    );
+  }
+  for (const [primary, conflictLine] of [
+    ["PASS", "- **Status:** **FAIL**"],
+    ["FAIL", "- **Final Status:** **PASS**"],
+    ["PASS", "**Final check:** **BLOCKED**"],
+    ["PASS", "- ***Status:*** ***FAIL***"],
+    ["PASS", "- __Status:__ __FAIL__"],
+    ["PASS", "- _Status:_ _FAIL_"],
+    ["PASS", "- *__Status:__* *__FAIL__*"]
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: ${primary}\n${conflictLine}\n`),
+      /conflicting content verdicts/,
+      `W2-RUN-004: conflicting emphasized line '${conflictLine}' must throw against ${primary}`
+    );
+  }
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Final Status:** **PASS**\n"),
+    "PASS",
+    "W2-RUN-004: matching emphasized secondary status must agree cleanly"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Status:** **pass** all checks\n"),
+    "PASS",
+    "W2-RUN-004: lowercase emphasized '- **Status:** **pass** all checks' must not false-trigger"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- **Status:** **pass** all checks\n"),
+    false,
+    "W2-RUN-004: lowercase emphasized '- **Status:** **pass** all checks' must not trip hasContentVerdictAttempt"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\n- **Status:** **FAIL-fast** mode\n- **Status:** FAIL_FAST\n- **Status:** __FAIL__-mode\n- **Status:** **FAIL**ed\n- **Prior Status:** **FAIL**\n"
+    ),
+    "PASS",
+    "W2-RUN-004: hyphenated/snake_case/suffixed compounds and historical emphasized lines must not false-trigger"
+  );
+
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

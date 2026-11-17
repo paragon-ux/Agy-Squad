@@ -20,8 +20,8 @@ const HISTORICAL_CONTEXT_RE =
   /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old|initial|original|earlier)\b/i;
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
 const LABELED_VERDICT_PREFIX_RE =
-  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*/i;
-const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![-\w/])/;
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*(?:[*_]{1,3})?\s*/i;
+const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/;
 
 function matchLabeledVerdict(line) {
   const prefixMatch = LABELED_VERDICT_PREFIX_RE.exec(line);
@@ -134,7 +134,7 @@ function hasContentVerdictAttempt(markdown) {
   for (const line of clean.split(/\r?\n/)) {
     if (isCategoryVerdictLine(line)) continue;
     if (verdictLabelRe.test(line)) return true;
-    if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)\b/.test(line)) return true;
+    if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/.test(line)) return true;
     if (matchLabeledVerdict(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
   }
   return false;
