@@ -37,10 +37,10 @@ Ask once via `ask_question` before compiling plans whenever any of these four se
 
 ### Stage 2: Content Gate & Flat Integrity Audit
 1. Collect isolated `share`/`branch` slots (`agy-squad collect`), scope board checks via `read_board{since|seqs}`, verify claims against primary files/tests, and write `lead/report.md` (`Content Verdict: ...`).
-2. Run `agy-squad fingerprint`, `bundle-init --digest` (or `bundle-init` + `digest`), then wake `@audit-<id>` (`[agy-transcript-access: allow]` on leads/auditors, `deny` on leaf specialists; single-pass `agy-context transcript list|query --summary|read --last-turns 10` or coordinator `export --sanitized`) to emit `Target Squad: <id>`, `Evidence Digest: <64-hex>`, and strict `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` ([transcript fallback](./references/bundling-and-wire-format.md#coordinator-extracted-transcript-index-native-swarm-fallback)).
+2. Run `agy-squad verdict`, `fingerprint`, `bundle-init`, `inspect`, and `digest` (or `bundle-init --digest` + `inspect`), then wake `@audit-<id>` (`[agy-transcript-access: allow]` on leads/auditors, `deny` on leaf specialists; single-pass `agy-context transcript list|query --summary|read --last-turns 10` or coordinator `export --sanitized`) to emit `Target Squad: <id>`, `Evidence Digest: <64-hex>`, and strict `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` ([transcript fallback](./references/bundling-and-wire-format.md#coordinator-extracted-transcript-index-native-swarm-fallback)).
 
 ### Stage 3: Bundle, Multi-Cycle Continuation, or Final Close
-1. Run `verdict` / `inspect` / `verdict --integrity` / `bundle` / `verify --prune [--keep-reports]` (or separate `verify` + `prune`) independently per working squad ([bundle schema](./references/bundling-and-wire-format.md#bundle-record-schema-and-cli)).
+1. Run `verdict --integrity` / `bundle` / `verify --prune [--keep-reports]` (or separate `verify` + `prune`) independently per working squad ([bundle schema](./references/bundling-and-wire-format.md#bundle-record-schema-and-cli)).
 2. Keep waiting workers idle for multi-cycle fixes via `post_message` (`occupiedWorkerNames` if adding workers; fresh conversation between major waves). On normal completion, finish [pre-kill collection](./references/large-swarms.md#pre-kill-checklist-for-share-and-branch-worktrees), post `[done] <summary>`, kill workers + `monitor` (`swarm{action: "kill"}`), complete Section 5, and omit `open_board`.
 
 ---

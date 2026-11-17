@@ -141,7 +141,7 @@ const TOOLS = [
         executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (default: swarm)." },
         model: { type: "string", minLength: 1, description: "Target model ID." },
         workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation." },
-        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task scopePaths." },
+        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task paths." },
         roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task role titles." },
         includeIntegrityAuditor: { type: "boolean", description: "Include integrity audit." },
         reportRoot: { type: "string", minLength: 1, description: "Relative report root." },

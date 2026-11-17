@@ -33,12 +33,11 @@ const usage = [
 ].join("\n");
 
 async function runPlanCommand(rest, root) {
+  const usageLine =
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]";
   if (!rest.length) {
-    throw new Error(
-      "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]"
-    );
+    throw new Error(usageLine);
   }
-  const { planSquadCohort } = await import("../mcp/planner.mjs");
   const parseSeqArg = (raw, flagName) => {
     if (!/^(?:0|[1-9]\d*)$/.test(String(raw).trim())) {
       throw new Error(`${flagName} requires a non-negative integer sequence number.`);
@@ -49,26 +48,23 @@ async function runPlanCommand(rest, root) {
     }
     return parsed;
   };
-  const { values, positionals } = parseArgs({
-    args: rest,
-    allowPositionals: true,
-    options: {
-      manifest: { type: "string" },
-      squad: { type: "string" },
-      topology: { type: "string" },
-      mode: { type: "string" },
-      model: { type: "string" },
-      "workspace-isolation": { type: "string" },
-      scope: { type: "string", multiple: true },
-      role: { type: "string", multiple: true },
-      "no-integrity": { type: "boolean", default: false },
-      "report-root": { type: "string" },
-      "known-model": { type: "string", multiple: true },
-      "occupied-worker": { type: "string", multiple: true },
-      "board-since": { type: "string" },
-      "board-seq": { type: "string", multiple: true }
-    }
+  const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+    manifest: { type: "string" },
+    squad: { type: "string" },
+    topology: { type: "string" },
+    mode: { type: "string" },
+    model: { type: "string" },
+    "workspace-isolation": { type: "string" },
+    scope: { type: "string", multiple: true },
+    role: { type: "string", multiple: true },
+    "no-integrity": { type: "boolean", default: false },
+    "report-root": { type: "string" },
+    "known-model": { type: "string", multiple: true },
+    "occupied-worker": { type: "string", multiple: true },
+    "board-since": { type: "string" },
+    "board-seq": { type: "string", multiple: true }
   });
+  const { planSquadCohort } = await import("../mcp/planner.mjs");
   const task = positionals.join(" ").trim();
   const planArgs = {
     ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {}),
@@ -78,10 +74,10 @@ async function runPlanCommand(rest, root) {
     ...(values.mode !== undefined ? { executionMode: values.mode } : {}),
     ...(values.model !== undefined ? { model: values.model } : {}),
     ...(values["workspace-isolation"] !== undefined ? { workspaceIsolation: values["workspace-isolation"] } : {}),
-    ...(values.scope !== undefined ? { scopeFiles: values.scope } : {}),
+    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(normalizeWorkspaceCliPath) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
-    ...(values["report-root"] !== undefined ? { reportRoot: values["report-root"] } : {}),
+    ...(values["report-root"] !== undefined ? { reportRoot: normalizeWorkspaceCliPath(values["report-root"]) } : {}),
     ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {}),
     ...(values["occupied-worker"] !== undefined ? { occupiedWorkerNames: values["occupied-worker"] } : {}),
     ...(values["board-since"] !== undefined ? { boardSince: parseSeqArg(values["board-since"], "--board-since") } : {}),
@@ -163,6 +159,15 @@ function resolveWorkspaceRoot(workspaceArg, fallbackRoot) {
 }
 
 function readRegularJsonFileSafe(resolvedPath, displayPath, label, decodeUtf8) {
+  const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
+  if (process.platform !== "linux" || !hasONofollow) {
+    const linkStat = fs.lstatSync(resolvedPath);
+    if (linkStat.isSymbolicLink()) {
+      const err = new Error(`${label} path must be a regular non-symlink file: ${displayPath}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+  }
   const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
   const fd = fs.openSync(resolvedPath, openFlags);
   try {
@@ -324,7 +329,7 @@ async function main(args) {
   }
   const [command, ...rest] = args;
   if (!KNOWN_COMMANDS.has(command)) {
-    throw new Error(`Unknown command '${command}'. Expected setup, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
+    throw new Error(`Unknown command '${command}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
   }
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
@@ -448,7 +453,7 @@ async function main(args) {
       plan,
       record,
       squadId: values.squad,
-      reportRoot: values["report-root"],
+      reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"]) : undefined,
       overwrite: values.overwrite,
       dryRun: values["dry-run"],
       strict: values.strict,
@@ -511,7 +516,7 @@ async function main(args) {
       provenance,
       squadId: values.squad,
       files,
-      reportRoot: values["report-root"],
+      reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"]) : undefined,
       verdict: values.verdict,
       idMap,
       handoffs,

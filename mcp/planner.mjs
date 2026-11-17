@@ -565,7 +565,8 @@ function planSquadCohort(
     const squad = loadedSquads[id];
     const resolvedLeadSpec = resolveSquadLead(squad, id, topology === "layered");
     if (topology === "flat" && resolvedLeadSpec) {
-      buildSubagentSpec(resolvedLeadSpec, id, manifestPathForBrief, undefined, normalizedReportRoot, {
+      const { canonical: canonicalStrippedLead } = canonicalizeAgentSpec(resolvedLeadSpec, `${id}-lead`);
+      buildSubagentSpec(canonicalStrippedLead, id, manifestPathForBrief, undefined, normalizedReportRoot, {
         executionMode,
         workspaceIsolation: "inherit",
         validateOnly: true

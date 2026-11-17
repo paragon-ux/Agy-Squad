@@ -19,8 +19,15 @@ function validateSquadId(squadId) {
 const HISTORICAL_CONTEXT_RE =
   /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old|initial|original|earlier)\b/i;
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
-const LABELED_VERDICT_RE =
-  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*(PASS|FAIL|BLOCKED)(?![-\w/])/i;
+const LABELED_VERDICT_PREFIX_RE =
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]{1,3})?(?:[A-Za-z0-9_-]+\s+){0,2}(?:verdict|status|result|check|disposition|outcome)\s*(?:[*_]{1,3})?\s*[:—–-]\s*(?:[*_]{1,3})?\s*/i;
+const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![-\w/])/;
+
+function matchLabeledVerdict(line) {
+  const prefixMatch = LABELED_VERDICT_PREFIX_RE.exec(line);
+  if (!prefixMatch) return null;
+  return STRICT_UPPERCASE_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+}
 
 function isHistoricalTableHeader(header) {
   return HISTORICAL_CONTEXT_RE.test(header) && !CURRENT_CONTEXT_RE.test(header);
@@ -128,7 +135,7 @@ function hasContentVerdictAttempt(markdown) {
     if (isCategoryVerdictLine(line)) continue;
     if (verdictLabelRe.test(line)) return true;
     if (/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(?:PASS|FAIL|BLOCKED)\b/.test(line)) return true;
-    if (LABELED_VERDICT_RE.test(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
+    if (matchLabeledVerdict(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
   }
   return false;
 }
@@ -162,9 +169,9 @@ function parseContentVerdict(markdown) {
       found.add("FAIL");
     }
     // Reject secondary labeled verdict/status/check lines asserting conflicting verdicts (excluding historical/compound tokens)
-    const labeled = line.match(LABELED_VERDICT_RE);
+    const labeled = matchLabeledVerdict(line);
     if (labeled && !HISTORICAL_CONTEXT_RE.test(line)) {
-      found.add(labeled[1].toUpperCase());
+      found.add(labeled[1]);
     }
     const leading = line.match(/^\s*(?:\d+[.)]\s*|[-*+]\s*|#+\s*)?(?:[*_]{1,3})?(PASS|FAIL|BLOCKED)(?:[*_]{1,3})?\s*[:—–-]/);
     if (leading) {

@@ -45,6 +45,7 @@ node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.j
 node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <accepted-sha256> [--keep-reports]
 ```
 
+- **Temporary `<plan.json>` / `<bundle-record-<id>.json>` placement (`SD2-DOC-02`):** `--out` (and `inspect`/`digest`/`bundle`) require workspace-relative paths. Write temporary `<bundle-record-<id>.json>` files outside `scratch/agy-squad/squad-<id>/` (for example, `scratch/bundle-record-<id>.json`) so `--teardown` does not reject `unexpectedArtifacts`, and delete those temporary JSON files before `--teardown` so `removeEmpty` cleans `scratch/agy-squad` and `scratch`.
 - **Scope 2 (`prune`) vs. Scope 3 (`--teardown`):** `prune` removes only verified loose `specialist-<N>/report.md` files (preserving `lead/report.md` and `lead/report.sources.json`) unless `--keep-reports` is passed. `Scope 3` (`--teardown`) removes the entire `scratch/agy-squad/squad-*` cohort tree after durable ledger verification.
 
 ## Scope 3 Atomic Teardown and Failure Modes
@@ -68,7 +69,7 @@ node .agents/skills/self-diagnosis/scripts/diagnose.mjs \
 ### Pre-Teardown Refusal Conditions and Partial Cleanup
 
 1. **Unbundled evidence refusal:** If `scratch/agy-squad/squad-<id>/lead/report.sources.json` is missing or fails `verifyBundle()`, `--teardown` exits `1` (`unbundled evidence`) and deletes nothing unless `--force` is passed.
-2. **Stale ledger refusal (`mtime + 1000 ms < bundle mtime`):** If the target `docs/reviews/<target-review-slug>.md` has an `mtime` older than `bundle mtime - 1000 ms` (or fails `v1.4.0` ledger schema validation or contains open P0–P2 blockers), `--teardown` exits `1` without deleting `scratch/`.
+2. **Stale or schema-invalid ledger refusal (`mtime + 1000 ms < bundle mtime`):** If the target `docs/reviews/<target-review-slug>.md` has an `mtime` older than `bundle mtime - 1000 ms`, fails `v1.4.0` ledger schema validation, or omits the bundle SHA-256 digest from Section 9, `--teardown` exits `1` without deleting `scratch/`. (Audit-only ledgers recording `Open (Pre-Remediation)` P0–P2 blockers are permitted through `--teardown` once transcribed, while `diagnose.mjs` audit mode flags `DOC-LEDGER-OPEN-BLOCKERS` until closed.)
 3. **Finding-ID coverage check:** Scoped teardown verifies that findings referenced in the verified bundle/reports appear in the target ledger before removing evidence.
 4. **Scoped vs. `all` teardown with auditors:** Single-squad `--teardown <squadId>` removes `squad-<squadId>`, `squad-integrity_auditor-<squadId>`, and flat `squad-integrity_auditor` when matched in that squad's bundle; `--teardown all` deletes all working squad and auditor directories alongside verified bundle/ledger gates. Never call `--teardown` before saving the durable ledger or running same-cohort remediation re-checks.
 5. **Partial permission failure during cleanup:** Check command exit codes and `ls scratch/` afterwards; if a partial deletion failure leaves orphaned files after fixing permissions, re-run `--teardown` (or `prune` for `Scope 2`) to finish cleaning empty `scratch/agy-squad/` and `scratch/` directories.

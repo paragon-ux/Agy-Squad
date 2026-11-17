@@ -807,6 +807,105 @@ try {
     fs.rmSync(svcRepo, { recursive: true, force: true });
   }
 
+  // 6. Wave 2 Regressions: SD2-DOC-01, SD2-SCRIPT-02..06
+  const w2DiagRepo = path.join(temporary, "w2-diag-repo");
+  fs.mkdirSync(w2DiagRepo, { recursive: true });
+  const w2Diag = copyIsolatedRepo(w2DiagRepo);
+  try {
+    const writeW2 = (rel, body) => {
+      const abs = path.join(w2DiagRepo, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, "utf8");
+    };
+    writeW2("target.txt", "wave2 diag\n");
+    const w2Files = fingerprint(w2DiagRepo, ["target.txt"]);
+
+    // SD2-SCRIPT-04: --mode and --workspace-isolation rejected outside --print-plan even when set to defaults ('swarm'/'inherit')
+    const modeWithoutPrintPlan = spawnSync(process.execPath, [w2Diag, "--markdown", "--mode", "swarm", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.notEqual(modeWithoutPrintPlan.status, 0, "SD2-SCRIPT-04: --mode swarm without --print-plan must exit non-zero");
+    assert.match(modeWithoutPrintPlan.stderr, /--print-plan/);
+    const isoWithoutPrintPlan = spawnSync(process.execPath, [w2Diag, "--workspace-isolation", "inherit", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.notEqual(isoWithoutPrintPlan.status, 0, "SD2-SCRIPT-04: --workspace-isolation inherit without --print-plan must exit non-zero");
+
+    // SD2-SCRIPT-06: --markdown Section 2 displays /swarm and precompiled template budgets; SKILL-BUDGET says warn threshold
+    const w2LedgerRel = "docs/reviews/w2-clean.md";
+    const w2LedgerAbs = path.join(w2DiagRepo, w2LedgerRel);
+    writeW2(w2LedgerRel, buildTestLedger({ includeFindingRow: true }));
+    const w2Md = spawnSync(process.execPath, [w2Diag, "--markdown", "--ledger", w2LedgerRel, "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2Md.status, 0, w2Md.stderr);
+    assert.match(w2Md.stdout, /Precompiled Lead Template/i, "SD2-SCRIPT-06: --markdown must report precompiled lead template bytes");
+    assert.match(w2Md.stdout, /\/swarm Specialist Template/i, "SD2-SCRIPT-06: --markdown must report /swarm specialist template bytes");
+    assert.match(w2Md.stdout, /\/swarm Lead Template/i, "SD2-SCRIPT-06: --markdown must report /swarm lead template bytes");
+    assert.match(w2Md.stdout, /\/swarm Auditor Template/i, "SD2-SCRIPT-06: --markdown must report /swarm auditor template bytes");
+
+    const diagSrc = fs.readFileSync(w2Diag, "utf8");
+    assert.match(diagSrc, /RUN-BUDGET-PRECOMPILED-LEAD/, "SD2-SCRIPT-06: precompiledLeadTemplateBytes budget check required");
+    assert.match(diagSrc, /RUN-BUDGET-SWARM-AUDIT/, "SD2-SCRIPT-06: swarmAuditorTemplateBytes budget check required");
+    assert.match(diagSrc, /exceeds progressive-disclosure warn threshold/, "SD2-SCRIPT-06: SKILL-BUDGET message must say warn threshold");
+
+    // SD2-SCRIPT-02, SD2-SCRIPT-03, SD2-DOC-01: prose tokens, slash lookahead, bold heading records with *Status*, and audit-only teardown
+    const w2S1 = reportPath("skill_and_pr_review_audit", 1);
+    const w2Lead = reportPath("skill_and_pr_review_audit");
+    writeW2(w2S1, [
+      "- `DOC-TOOLS-01` / `DOC-TOOLS-02`: verified.",
+      "- L1-L51, P0-P2, P1-P2, P1-P3, FAIL-CLOSED, PRE-FLIGHT, BUILT-IN, IN-FLIGHT, MID-COHORT, NO-BIAS"
+    ].join("\n"));
+    writeW2(w2Lead, [
+      "Content Verdict: PASS",
+      "- DOC-TOOLS-01 / DOC-TOOLS-02: verified prose slash.",
+      "- L1-L51, P0-P2, P1-P2, P1-P3, FAIL-CLOSED, PRE-FLIGHT, BUILT-IN, IN-FLIGHT, MID-COHORT, NO-BIAS"
+    ].join("\n"));
+    const w2Rec = {
+      workspace: w2DiagRepo,
+      squadId: "skill_and_pr_review_audit",
+      verdict: "PASS",
+      requireIntegrityAudit: false,
+      verifiedFiles: w2Files,
+      assignments: [{ conversationId: "s1", report: w2S1 }],
+      handoffs: [{ sender: "s1", message: `READY ${w2S1} — Ok.` }]
+    };
+    const w2Bundled = bundleReports(w2DiagRepo, w2Rec);
+    // Test bold heading record #### **REC-BOLD-01** — Title | P2 | *Closed* AND open P2 audit-only teardown
+    const w2AuditLedger = buildTestLedger({ bundleSha: w2Bundled.sha256, openBlocking: true })
+      .replace(
+        "| `P1-SYN-01` | P1 | `SVC` | `Open (Pre-Remediation)` | `target.txt#L1` | Synthetic P1 | Resolved |",
+        [
+          "| `DOC-TOOLS-01` | P2 | `DOC` | `Open (Pre-Remediation)` | `target.txt#L1` | Open audit finding | Pending |",
+          "| `DOC-TOOLS-02` | P2 | `DOC` | `Closed` | `target.txt#L1` | Closed | Fixed |",
+          "",
+          "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*"
+        ].join("\n")
+      );
+    fs.writeFileSync(w2LedgerAbs, w2AuditLedger, "utf8");
+    const w2MtimeSec = Math.floor(fs.statSync(path.join(w2DiagRepo, w2Bundled.path)).mtimeMs / 1000);
+    fs.utimesSync(w2LedgerAbs, w2MtimeSec + 5, w2MtimeSec + 5);
+
+    const w2OpenAudit = spawnSync(process.execPath, [w2Diag, "--ledger", w2LedgerRel, "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2OpenAudit.status, 1, "SD2-DOC-01: audit mode must still flag Open (Pre-Remediation) P2 blocker");
+    assert.ok(JSON.parse(w2OpenAudit.stdout).findings.some(f => f.id === "DOC-LEDGER-OPEN-BLOCKERS"));
+
+    const w2Td = spawnSync(process.execPath, [w2Diag, "--teardown", "skill_and_pr_review_audit", "--accept", w2Bundled.sha256, "--ledger", w2LedgerRel], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2Td.status, 0, `SD2-DOC-01 & SD2-SCRIPT-02: audit-only teardown & prose tokens failed: ${w2Td.stderr}`);
+
+    // SD2-SCRIPT-03: bold heading record conflict (**REC-BOLD-01** with *Closed* vs Open (Pre-Remediation) in Section 8/another table) is caught
+    const boldConflictLedger = w2AuditLedger.replace(
+      "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*",
+      "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*\n\n| ID | Status |\n| --- | --- |\n| `REC-BOLD-01` | Open (Pre-Remediation) |"
+    );
+    writeW2("docs/reviews/w2-bold-conflict.md", boldConflictLedger);
+    const boldConflictRun = spawnSync(process.execPath, [w2Diag, "--ledger", "docs/reviews/w2-bold-conflict.md", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(boldConflictRun.status, 1, "SD2-SCRIPT-03: conflicting status against bold **REC-BOLD-01** *Closed* heading record must fail");
+    assert.ok(JSON.parse(boldConflictRun.stdout).findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /REC-BOLD-01/.test(f.summary)));
+
+    // SD2-SCRIPT-05: --print-dispatch all_specialists on malformed manifest exits 1 cleanly without stack trace
+    writeW2(".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json", "{ malformed json");
+    const badDispatchRun = spawnSync(process.execPath, [w2Diag, "--print-dispatch", "all_specialists"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(badDispatchRun.status, 1);
+    assert.doesNotMatch(badDispatchRun.stderr, /^\s+at\s+/m, "SD2-SCRIPT-05: --print-dispatch must not leak raw JS stack trace");
+  } finally {
+    fs.rmSync(w2DiagRepo, { recursive: true, force: true });
+  }
+
   console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });

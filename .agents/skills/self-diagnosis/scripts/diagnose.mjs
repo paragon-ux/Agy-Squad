@@ -253,6 +253,16 @@ const NON_FINDING_HYPHEN_TOKENS = new Set([
   "SELF-DIAGNOSIS",
   "CLI-FLAGS",
   "L1-L50",
+  "L1-L51",
+  "P0-P2",
+  "P1-P2",
+  "P1-P3",
+  "FAIL-CLOSED",
+  "PRE-FLIGHT",
+  "BUILT-IN",
+  "IN-FLIGHT",
+  "MID-COHORT",
+  "NO-BIAS",
   "PR-REVIEW",
   "POST-REMEDIATION",
   "PRE-REMEDIATION",
@@ -270,7 +280,11 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
   const idPattern = /^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})$/;
   const addCandidate = raw => {
     const clean = raw.replace(/\([^)]*\)/g, "").replace(/[`*]/g, "").trim();
-    if (idPattern.test(clean) && !NON_FINDING_HYPHEN_TOKENS.has(clean.toUpperCase())) {
+    if (
+      idPattern.test(clean) &&
+      !/^L\d+-L\d+$/i.test(clean) &&
+      !NON_FINDING_HYPHEN_TOKENS.has(clean.toUpperCase())
+    ) {
       ids.add(clean);
     }
   };
@@ -288,13 +302,13 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
   if (includeProseHeadingsAndBullets) {
     // Plain, numbered, or styled headings (e.g., "### SD-TEST-01 — ...", "#### **SD-TEST-01:** ...", "### 2.1 SD-HEAD-02: ...")
     const headingRe =
-      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?=$|\s*(?:[:—–`*,.)\]]|\(|-\s))/gm;
+      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?=$|\s*(?:[:—–`*,.)\]/]|\(|-\s))/gm;
     for (const match of stripped.matchAll(headingRe)) {
       addCandidate(match[1]);
     }
     // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **SD-TEST-01:** ...", "- **[P2] `SD-TEST-01` (`SVC`):** ...")
     const bulletRe =
-      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?:\s*\([^)]*\))?[*`]*(?=$|\s*(?:[:—–`*,.)\]]|-\s))/gm;
+      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?:\s*\([^)]*\))?[*`]*(?=$|\s*(?:[:—–`*,.)\]/]|-\s))/gm;
     for (const match of stripped.matchAll(bulletRe)) {
       addCandidate(match[1]);
     }
@@ -387,7 +401,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
         seenIds.add(primaryId);
       }
 
-      const cleanStatus = row[statusIdx].replace(/\*\*|`/g, "").trim();
+      const cleanStatus = row[statusIdx].replace(/[*`]/g, "").trim();
       if (!ALLOWED_LEDGER_STATUSES.has(cleanStatus)) {
         errors.push(`${label} row '${primaryId || rawId}' uses non-canonical status '${cleanStatus}'.`);
       } else if (section8Only && !SECTION8_STATUSES.has(cleanStatus)) {
@@ -428,11 +442,11 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
       }
       // Also inspect atomic "#### `ID` — Title | P1 | Open (Pre-Remediation)" heading records
       const strippedChunk = chunk.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
-      const recRe = /^#{3,4}\s+`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`?[^|\r\n]*\|\s*(P[0-3])\s*\|\s*([^\r\n|]+)$/gm;
+      const recRe = /^#{3,4}\s+[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*[^|\r\n]*\|\s*(P[0-3])\s*\|\s*([^\r\n|]+)$/gm;
       for (const match of strippedChunk.matchAll(recRe)) {
         const recId = match[1].trim();
         const recPrio = match[2].trim();
-        const recStatus = match[3].replace(/\*\*|`/g, "").trim();
+        const recStatus = match[3].replace(/[*`]/g, "").trim();
         recordedFindingIds.add(recId);
         if (!ALLOWED_LEDGER_STATUSES.has(recStatus)) {
           errors.push(`Section ${secNum} record '${recId}' uses non-canonical status '${recStatus}'.`);
@@ -1102,7 +1116,7 @@ function auditSkills(ledgerArg) {
         id: `SKILL-BUDGET-${entry.name}`,
         category: "SKILL",
         priority: "P3",
-        summary: `.agents/skills/${entry.name}/SKILL.md exceeds progressive-disclosure target (${lines} lines, ${bytes} bytes; target <= 250 lines / <= 10,240 bytes).`
+        summary: `.agents/skills/${entry.name}/SKILL.md exceeds progressive-disclosure warn threshold (${lines} lines, ${bytes} bytes; warn > 300 lines / > 12,288 bytes; rubric target <= 250 lines / <= 10,240 bytes).`
       });
     }
     if (proseShare > 0.7 && markdownBytes > 8192) {
@@ -1501,8 +1515,10 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
   for (const [budgetId, actual, limit, label] of [
     ["RUN-BUDGET-SPEC", specialistTemplateBytes, 1800, "Subagent specialist brief template"],
     ["RUN-BUDGET-LEAD", leadTemplateBytes, 3300, "Subagent lead brief template"],
+    ["RUN-BUDGET-PRECOMPILED-LEAD", precompiledLeadTemplateBytes, 3300, "Subagent precompiled lead brief template"],
     ["RUN-BUDGET-SWARM-SPEC", swarmSpecialistTemplateBytes, 1800, "/swarm specialist brief template"],
-    ["RUN-BUDGET-SWARM-LEAD", swarmLeadTemplateBytes, 3300, "/swarm lead brief template"]
+    ["RUN-BUDGET-SWARM-LEAD", swarmLeadTemplateBytes, 3300, "/swarm lead brief template"],
+    ["RUN-BUDGET-SWARM-AUDIT", swarmAuditorTemplateBytes, 3300, "/swarm integrity auditor brief template"]
   ]) {
     if (actual > limit) {
       findings.push({
@@ -1758,7 +1774,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
       id,
       agents.map((a, idx) => {
         const slot = a.Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
-        const receiptHeadroomBytes = checkHeadroom(slot, `SVC-HEADROOM-${id}-${idx + 1}`, `Specialist ${idx + 1} in '${id}'`);
+        const receiptHeadroomBytes = slot ? checkHeadroom(slot, `SVC-HEADROOM-${id}-${idx + 1}`, `Specialist ${idx + 1} in '${id}'`) : null;
         return {
           Role: a.Role,
           TypeName: a.TypeName,
@@ -1828,6 +1844,8 @@ function parseCliArgs(argv) {
   let topology;
   let sawTopologyFlag = false;
   let sawFlatFlag = false;
+  let sawModeFlag = false;
+  let sawIsolationFlag = false;
   let executionMode = "swarm";
   let workspaceIsolation = "inherit";
   let teardownTarget = "all";
@@ -1882,6 +1900,7 @@ function parseCliArgs(argv) {
       if (next !== "swarm" && next !== "subagent") {
         throw new Error("Flag '--mode' requires 'swarm' or 'subagent'.");
       }
+      sawModeFlag = true;
       executionMode = next;
       i += 1;
     } else if (arg === "--workspace-isolation") {
@@ -1889,6 +1908,7 @@ function parseCliArgs(argv) {
       if (next !== "inherit" && next !== "share" && next !== "branch") {
         throw new Error("Flag '--workspace-isolation' requires 'inherit', 'share', or 'branch'.");
       }
+      sawIsolationFlag = true;
       workspaceIsolation = next;
       i += 1;
     } else if (arg === "--print-dispatch") {
@@ -1955,7 +1975,7 @@ function parseCliArgs(argv) {
   if (topology && !printPlan) {
     throw new Error("Flags '--topology' and '--flat' are only valid with '--print-plan'.");
   }
-  if ((executionMode !== "swarm" || workspaceIsolation !== "inherit") && !printPlan) {
+  if ((sawModeFlag || sawIsolationFlag) && !printPlan) {
     throw new Error("Flags '--mode' and '--workspace-isolation' are only valid with '--print-plan'.");
   }
   if (ledgerPath && (printPlan || printDispatch)) {
@@ -2058,34 +2078,39 @@ if (cli.printPlan) {
 }
 
 if (cli.printDispatch) {
-  let parsed;
-  if (cli.squadId === "all_specialists") {
-    const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-    const Subagents = [];
-    for (const id of Object.keys(manifest.squads)) {
-      const res = handleDispatchSquad({ squadId: id, manifestPath: manifestRelative }, repoRoot);
-      if (res.isError) {
-        console.error(res.content[0].text);
+  try {
+    let parsed;
+    if (cli.squadId === "all_specialists") {
+      const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
+      const Subagents = [];
+      for (const id of Object.keys(manifest.squads)) {
+        const res = handleDispatchSquad({ squadId: id, manifestPath: manifestRelative }, repoRoot);
+        if (res.isError) {
+          console.error(res.content[0].text);
+          process.exit(1);
+        }
+        Subagents.push(...JSON.parse(res.content[0].text).Subagents);
+      }
+      parsed = { Subagents };
+    } else {
+      const result = handleDispatchSquad({ squadId: cli.squadId, manifestPath: manifestRelative }, repoRoot);
+      if (result.isError) {
+        console.error(result.content[0].text);
         process.exit(1);
       }
-      Subagents.push(...JSON.parse(res.content[0].text).Subagents);
+      parsed = JSON.parse(result.content[0].text);
     }
-    parsed = { Subagents };
-  } else {
-    const result = handleDispatchSquad({ squadId: cli.squadId, manifestPath: manifestRelative }, repoRoot);
-    if (result.isError) {
-      console.error(result.content[0].text);
-      process.exit(1);
+    if (cli.parentId) {
+      for (const agent of parsed.Subagents) {
+        agent.Prompt += `\nParent conversation ID (send_message Recipient): ${cli.parentId}`;
+      }
     }
-    parsed = JSON.parse(result.content[0].text);
+    console.log(JSON.stringify(parsed, null, 2));
+    process.exit(0);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
-  if (cli.parentId) {
-    for (const agent of parsed.Subagents) {
-      agent.Prompt += `\nParent conversation ID (send_message Recipient): ${cli.parentId}`;
-    }
-  }
-  console.log(JSON.stringify(parsed, null, 2));
-  process.exit(0);
 }
 
 let skillAudit;
@@ -2153,6 +2178,10 @@ if (cli.markdown) {
     "",
     `- **Specialist Template:** \`${report.promptBudgets.specialistTemplateBytes} B\` (~${report.promptBudgets.specialistEstimatedTokens} tokens)`,
     `- **Lead Template:** \`${report.promptBudgets.leadTemplateBytes} B\` (~${report.promptBudgets.leadEstimatedTokens} tokens)`,
+    `- **Precompiled Lead Template:** \`${report.promptBudgets.precompiledLeadTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.precompiledLeadTemplateBytes)} tokens)`,
+    `- **/swarm Specialist Template:** \`${report.promptBudgets.swarmSpecialistTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmSpecialistTemplateBytes)} tokens)`,
+    `- **/swarm Lead Template:** \`${report.promptBudgets.swarmLeadTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmLeadTemplateBytes)} tokens)`,
+    `- **/swarm Auditor Template:** \`${report.promptBudgets.swarmAuditorTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmAuditorTemplateBytes)} tokens)`,
     `- **MCP \`tools/list\` Response:** \`${report.promptBudgets.mcpToolsListResponseBytes} B\` (~${report.promptBudgets.mcpToolsListEstimatedTokens} tokens)`,
     "",
     "## 3. PR-Review Standard v1.4.0 Category Matrix",

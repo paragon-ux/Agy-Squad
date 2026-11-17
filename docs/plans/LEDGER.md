@@ -1,6 +1,6 @@
 # Decision and work ledger
 
-This ledger records the active Agy-Squad decisions. IDs shared with Agy-Context-Saver stay stable (`L13–L15, L25–L27, L32–L34` are allocated in the Agy-Context-Saver ledger; note historical `L35–L40` ID overlap where Agy-Squad used `L35–L40` for Nov 2026 WSL rebuild items while Agy-Context-Saver used `L35–L40` for v2.0.0–v2.0.1 CLI/governance items, resuming shared non-overlapping allocations at `L44+`). The previous Docker plan and its decision history are in commit `ee10ebc`.
+This ledger records the active Agy-Squad decisions. IDs shared with Agy-Context-Saver stay stable (`L13–L15, L25–L27, L32–L34` are allocated in the Agy-Context-Saver ledger; note historical `L35–L40` ID overlap where Agy-Squad used `L35–L40` for Nov 2026 WSL rebuild items while Agy-Context-Saver used `L35–L40` for v2.0.0–v2.0.1 CLI/governance items, `L41–L43` are Agy-Squad-only entries, and shared non-overlapping allocations resume at `L44+`). The previous Docker plan and its decision history are in commit `ee10ebc`.
 
 | ID | Decision | Status |
 | --- | --- | --- |

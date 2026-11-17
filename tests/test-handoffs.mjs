@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -1347,6 +1347,106 @@ try {
       assert.notEqual(keepOnlyErr.status, 0, "verify --keep-reports without --prune must fail closed");
     } finally {
       fs.rmSync(batchDir, { recursive: true, force: true });
+    }
+
+    // Wave 2 Regressions: W2-SCRIPT-001 (collect/bundle-init --report-root ./), W2-SVC-002, S2R-SCRIPT-002, OPT-GAP-L46-CLI
+    const w2CliDir = path.join(w2Root, "..", `w2-cli-${process.pid}`);
+    const w2CliWt = path.join(w2Root, "..", `w2-cli-wt-${process.pid}`);
+    const w2OutsideJson = path.join(w2Root, "..", `w2-outside-plan-${process.pid}.json`);
+    fs.mkdirSync(w2CliDir, { recursive: true });
+    fs.mkdirSync(w2CliWt, { recursive: true });
+    try {
+      const cWrite = (base, rel, c) => {
+        const dest = path.join(base, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, c, "utf8");
+      };
+      cWrite(w2CliDir, "src/w2.js", "export const w2 = 1;\n");
+      const customRoot = "scratch/w2-custom";
+      const customPlan = {
+        executionMode: "swarm",
+        workers: [{ squadId: "alpha", specialists: [{ workerName: "alpha-spec", reportSlot: `${customRoot}/squad-alpha/specialist-1/report.md` }] }],
+        bundleRecordTemplates: {
+          alpha: {
+            squadId: "alpha",
+            workspace: w2CliDir,
+            reportRoot: customRoot,
+            verdict: "PASS",
+            verifiedFiles: {},
+            assignments: [{ conversationId: "alpha-spec", report: `${customRoot}/squad-alpha/specialist-1/report.md` }],
+            handoffs: [],
+            requireIntegrityAudit: false
+          }
+        }
+      };
+      cWrite(w2CliDir, "scratch/custom-plan.json", JSON.stringify(customPlan));
+      cWrite(w2CliWt, `${customRoot}/squad-alpha/specialist-1/report.md`, "# Custom Spec\nVerified w2.\n");
+
+      const dotCollect = spawnSync(
+        process.execPath,
+        [agySquadCli, "collect", "--squad", "alpha", "--report-root", `./${customRoot}`, "--from", w2CliWt],
+        { cwd: w2CliDir, encoding: "utf8" }
+      );
+      assert.equal(dotCollect.status, 0, `W2-SCRIPT-001: collect --report-root ./ failed: ${dotCollect.stderr}`);
+      assert.equal(dotCollect.status === 0 && JSON.parse(dotCollect.stdout).collected.length, 1);
+
+      const dotBundleInit = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "scratch/custom-plan.json", "--report-root", `./${customRoot}`, "--allow-unaudited", "src/w2.js"],
+        { cwd: w2CliDir, encoding: "utf8" }
+      );
+      assert.equal(dotBundleInit.status, 0, `W2-SCRIPT-001: bundle-init --report-root ./ failed: ${dotBundleInit.stderr}`);
+      assert.equal(JSON.parse(dotBundleInit.stdout).reportRoot, customRoot);
+
+      // W2-SVC-002: buildBundleRecordInit validates idMap and template as plain non-null objects
+      for (const badMap of [null, [], "invalid"]) {
+        assert.throws(
+          () => buildBundleRecordInit(w2CliDir, { plan: customPlan, idMap: badMap }),
+          /idMap must be a plain object/,
+          `W2-SVC-002: idMap=${JSON.stringify(badMap)} must throw plain-object error instead of TypeError`
+        );
+      }
+      for (const badTpl of [null, [], "bad"]) {
+        assert.throws(
+          () => buildBundleRecordInit(w2CliDir, {
+            plan: { ...customPlan, bundleRecordTemplates: { alpha: badTpl } }
+          }),
+          /bundleRecordTemplates.*must be a plain object/,
+          `W2-SVC-002: template=${JSON.stringify(badTpl)} must throw plain-object error`
+        );
+      }
+
+      // S2R-SCRIPT-002: plan --unknown-flag emits Usage: agy-squad plan ... and unknown command mentions install
+      const badPlanFlag = spawnSync(process.execPath, [agySquadCli, "plan", "--unknown-flag", "Audit"], { cwd: w2CliDir, encoding: "utf8" });
+      assert.notEqual(badPlanFlag.status, 0);
+      assert.match(badPlanFlag.stderr, /Usage: agy-squad plan/, "S2R-SCRIPT-002: plan unknown flag must show usage line");
+      const unknownCmd = spawnSync(process.execPath, [agySquadCli, "boguscmd"], { cwd: w2CliDir, encoding: "utf8" });
+      assert.notEqual(unknownCmd.status, 0);
+      assert.match(unknownCmd.stderr, /\binstall\b/, "S2R-SCRIPT-002: unknown command error must include install");
+
+      // OPT-GAP-L46-CLI: readRegularJsonFileSafe rejects symlinked --plan outside workspace
+      fs.writeFileSync(w2OutsideJson, JSON.stringify(customPlan), "utf8");
+      const symOutsidePlan = path.join(w2CliDir, "..", `w2-outside-sym-${process.pid}.json`);
+      let outsideSymCreated = false;
+      try {
+        fs.symlinkSync(w2OutsideJson, symOutsidePlan, "file");
+        outsideSymCreated = true;
+      } catch (err) {
+        if (err?.code !== "EPERM") throw err;
+      }
+      if (outsideSymCreated) {
+        const symPlanRes = spawnSync(
+          process.execPath,
+          [agySquadCli, "bundle-init", "--plan", symOutsidePlan, "--allow-unaudited"],
+          { cwd: w2CliDir, encoding: "utf8" }
+        );
+        assert.notEqual(symPlanRes.status, 0, "OPT-GAP-L46-CLI: symlinked external --plan must be rejected");
+        fs.rmSync(symOutsidePlan, { force: true });
+      }
+    } finally {
+      fs.rmSync(w2CliDir, { recursive: true, force: true });
+      fs.rmSync(w2CliWt, { recursive: true, force: true });
+      fs.rmSync(w2OutsideJson, { force: true });
     }
   } finally {
     fs.rmSync(w2Root, { recursive: true, force: true });

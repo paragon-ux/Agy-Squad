@@ -3,6 +3,7 @@ import { messageLimit, reportPath } from "./handoffs.mjs";
 
 const DISALLOWED_BUILTINS = new Set(["research", "browser", "image-generator"]);
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 
 const superviseCohort = [
   "Before launch: record acceptance criteria, evidence, operator, shared workspace, unused slots, and checkpoint (default 10m). Use the shared workspace; map returned conversationId+workspace to each slot (unexpected workspace = blocker; new slots on retry).",
@@ -29,7 +30,7 @@ const superviseSwarmIntegrityCohort = [
   "Before launch: record audit criteria, target squad, coordinator, workspace mode, unused slots, and worker/lead board seqs (#N). Never copy raw .system_generated/ transcripts into workspace files.",
   "Map worker names->slots; use read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} (never unfiltered read_board()) and swarm_wait; reconcile one post/slot.",
   "Audit Execution Forensics: read_board/status verify handoffs/roster/models only. Before CLEAN, audit traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'; re-execution alone cannot satisfy CLEAN); fail closed with 'Integrity Verdict: INTEGRITY VIOLATION' if missing.",
-  "Verify artifacts/hashes via 'rtk read'/'rtk grep' or <=150-line read_file slices (StartLine/EndLine), never unbounded read_file; recheck changed inputs, preserve contradictions, never emit a content PASS."
+  "Verify artifacts/hashes via 'rtk read'/'rtk grep' or <=150-line read_file slices (StartLine/EndLine), never unbounded read_file; recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -40,7 +41,7 @@ function validateScopeFiles(scope, agentLabel) {
     scope.some(file => {
       if (typeof file !== "string") return true;
       const trimmed = file.trim();
-      if (!trimmed || /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed)) return true;
+      if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) return true;
       if (trimmed.startsWith("/") || trimmed.includes("\\") || /^[a-zA-Z]:/.test(trimmed)) return true;
       return trimmed !== "." && trimmed.split("/").some(part => !part || part === "." || part === "..");
     })
@@ -104,11 +105,12 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const rawWorkspace = pickAlias("workspace", "Workspace", "inherit");
   if (
     [rawRole, rawTypeName, rawModel, rawWorkspace, rawDeliverable].some(
-      value => typeof value !== "string" || !value.trim()
+      value => typeof value !== "string" || !value.trim() || CONTROL_CHAR_RE.test(value)
     ) ||
     (instructions !== undefined && typeof instructions !== "string")
   ) {
-    throw new Error(`Agent '${role || "unnamed"}' has invalid brief or payload fields.`);
+    const safeRole = role.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim() || "unnamed";
+    throw new Error(`Agent '${safeRole}' has invalid brief or payload fields.`);
   }
   const trimmedModel = rawModel.trim();
   const coercedSubagentModel = executionMode === "subagent" && !SUBAGENT_MODEL_ALIASES.has(trimmedModel);
@@ -184,7 +186,9 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? Array.isArray(boardSeqs) && boardSeqs.length > 0
       ? `Board scope: read_board{seqs: [${boardSeqs.join(", ")}]} only (no unfiltered/since:0/limit:50).`
       : boardSince !== undefined
-        ? `Board scope: read_board{since: ${boardSince}} only (no unfiltered/since:0/limit:50).`
+        ? boardSince === 0
+          ? "Board scope: read_board{since: 0} only (no unfiltered read_board() or limit:50)."
+          : `Board scope: read_board{since: ${boardSince}} only (no unfiltered/since:0/limit:50).`
         : isIntegrityAuditor
           ? "Board scope: read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} only (no unfiltered/since:0/limit:50)."
           : "Board scope: read_board{since: <cohortBaseSeq>} only (no unfiltered/since:0/limit:50)."

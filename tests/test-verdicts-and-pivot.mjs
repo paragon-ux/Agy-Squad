@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -422,6 +422,36 @@ try {
   }));
   const draftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
   assert.equal(draftInitOut.verdict, "PASS", "RUN-003: category Verdict line must not trigger hasContentVerdictAttempt error");
+
+  // Wave 2 Regressions (W2-RUN-001): LABELED_VERDICT_RE requires uppercase PASS|FAIL|BLOCKED while keeping labels case-insensitive
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- Error check: fail closed on empty input.\n- Input status: blocked by gate.\n- Smoke result: pass on retry.\n"),
+    "PASS",
+    "W2-RUN-001: lowercase prose fail/blocked/pass after check:/status:/result: must not trigger conflicting verdict"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Error check:** Fail closed.\n"),
+    "PASS",
+    "W2-RUN-001: mixed-case prose 'Fail' after label must not trigger conflicting verdict"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- Error check: fail closed on empty input.\n- Input status: blocked by gate.\n"),
+    false,
+    "W2-RUN-001: lowercase prose in draft report must not trip hasContentVerdictAttempt"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n- Secondary check: FAIL\n"),
+    /conflicting content verdicts/,
+    "W2-RUN-001: uppercase secondary check: FAIL must still fail closed"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: FAIL\nfinal status: PASS\n"),
+    /conflicting content verdicts/,
+    "W2-RUN-001: case-insensitive label with uppercase PASS must still fail closed"
+  );
+  write(draftLeadSlot, "# Draft Synthesis\n- Error check: fail closed on empty input.\n");
+  const w2DraftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
+  assert.equal(w2DraftInitOut.verdict, "PASS", "W2-RUN-001: bundle-init must not crash on draft containing lowercase 'check: fail ...'");
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

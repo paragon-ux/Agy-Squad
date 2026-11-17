@@ -62,6 +62,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
   assert.ok(planner.inputSchema.properties.boardSince && planner.inputSchema.properties.boardSeqs, "SQ-SWARM-BOARD-SCOPE schema fields exposed");
+  assert.equal(planner.inputSchema.properties.scopeFiles.description, "Task paths.", "OPT-GAP-SCHEMA-WORD: scopeFiles description must use 'Task paths.'");
   const toolsListBytes = Buffer.byteLength(JSON.stringify(res), "utf8");
   assert.ok(toolsListBytes <= 3072, `W4 target: tools/list response must stay <= 3072 B (got ${toolsListBytes})`);
   const invalidParamsRes = await handleRequest({ jsonrpc: "2.0", id: 98, method: "tools/call", params: null });

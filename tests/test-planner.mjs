@@ -936,6 +936,92 @@ try {
     assert.equal(multiCustomAudit.integrityAuditPlan.length, 2);
     assert.equal(multiCustomAudit.warnings.filter(w => /Custom 'integrity_auditor' lead is ignored/.test(w)).length, 1);
 
+    // Wave 2 Regressions: W2-RUN-002, W2-RUN-003, W2-SVC-001, W2-SCRIPT-001, SD2-SKILL-01..02, OPT-GAP-AUDIT-LEAD
+    // W2-RUN-002: boardSince: 0 must not emit self-contradictory '(no unfiltered/since:0/limit:50)'
+    const zeroBoardPlan = planSquadCohort({ task: "Check zero cursor", boardSince: 0 }, root);
+    const zeroBrief = zeroBoardPlan.workers[0].specialists[0].swarmAdd.brief;
+    assert.match(zeroBrief, /Board scope: read_board\{since:\s*0\} only/);
+    assert.doesNotMatch(zeroBrief, /no unfiltered\/since:0/, "W2-RUN-002: boardSince=0 must omit since:0 from negative clause");
+
+    // W2-RUN-003: CONTROL_CHAR_RE rejected in single-line header fields (role, typeName, model, expectedDeliverable)
+    for (const [badField, val] of [
+      ["role", "Spec\nReport slot: evil"],
+      ["typeName", "self\r\nevil"],
+      ["model", "inherit\nfake"],
+      ["expectedDeliverable", "Report\u2028injected"]
+    ]) {
+      assert.throws(
+        () => buildSubagentSpec({ role: "Spec", objective: "Check", scopeFiles: ["a"], [badField]: val }, "alpha", "m.json", 1),
+        /invalid brief or payload fields/,
+        `W2-RUN-003: control character in '${badField}' must throw`
+      );
+    }
+
+    // W2-SVC-001: topology='flat' must validate stripped lead readOnly and ReadOnly alias conflicts
+    assert.throws(
+      () => planSquadCohort({
+        manifest: {
+          squads: {
+            alpha: {
+              lead: { role: "Flat Lead", objective: "Lead", scopeFiles: ["a"], readOnly: "yes" },
+              specialists: [{ role: "Spec", objective: "Ok", scopeFiles: ["a"] }]
+            }
+          }
+        },
+        topology: "flat"
+      }, root),
+      /readOnly must be a boolean/,
+      "W2-SVC-001: stripped flat lead with non-boolean readOnly must reject"
+    );
+    assert.throws(
+      () => planSquadCohort({
+        manifest: {
+          squads: {
+            alpha: {
+              lead: { role: "Flat Lead", objective: "Lead", scopeFiles: ["a"], readOnly: true, ReadOnly: false },
+              specialists: [{ role: "Spec", objective: "Ok", scopeFiles: ["a"] }]
+            }
+          }
+        },
+        topology: "flat"
+      }, root),
+      /cannot define both 'readOnly' and 'ReadOnly'/,
+      "W2-SVC-001: stripped flat lead with conflicting readOnly/ReadOnly must reject"
+    );
+
+    // W2-SCRIPT-001: CLI plan normalizes leading ./ on --scope and --report-root
+    const dotPlanCli = runCli(["plan", "--scope", "./src/a.js", "--report-root", "./scratch/w2-custom", "Check ./ flags"]);
+    assert.equal(dotPlanCli.status, 0, `W2-SCRIPT-001: plan --scope ./ --report-root ./ failed: ${dotPlanCli.stderr}`);
+    const dotPlanJson = JSON.parse(dotPlanCli.stdout);
+    assert.equal(dotPlanJson.workers[0].specialists[0].reportSlot, "scratch/w2-custom/squad-task_squad/specialist-1/report.md");
+    assert.match(dotPlanJson.workers[0].specialists[0].swarmAdd.brief, /^- src\/a\.js$/m);
+
+    // OPT-GAP-AUDIT-LEAD: swarm integrity auditor lead instructions include Target Squad, Evidence Digest, and Integrity Verdict
+    const swarmAuditLeadSpec = buildSubagentSpec(
+      { role: "Audit Lead", objective: "Lead audit", scopeFiles: ["."] },
+      "integrity_auditor-alpha",
+      "m.json",
+      undefined,
+      undefined,
+      { executionMode: "swarm" }
+    );
+    assert.match(swarmAuditLeadSpec.Prompt, /Target Squad: <id>/);
+    assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
+    assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
+
+    // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and /swarm lead wording
+    const compPlan = planSquadCohort(
+      { manifestPath: ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json" },
+      repoRoot
+    );
+    assert.deepEqual(compPlan.topology.scopeOverlaps, [], "SD2-SKILL-01: comparative-research-manifest specialists must be readOnly: true");
+    const compLeadBrief = compPlan.workers[0].lead.swarmAdd.brief;
+    assert.match(compLeadBrief, /read_board\{since\|seqs\}/);
+    assert.match(compLeadBrief, /agy-context transcript/);
+    assert.match(compLeadBrief, /Content Verdict/);
+    assert.match(compLeadBrief, /post <=500B READY/);
+    assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent/);
+
     console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

@@ -1327,9 +1327,15 @@ function collectReportSlots(root, options = {}) {
   };
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 function buildBundleRecordInit(root, options = {}) {
   root = resolveCanonicalRoot(root);
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
+  if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
   }
   const {
@@ -1346,11 +1352,14 @@ function buildBundleRecordInit(root, options = {}) {
     allowPartial = false
   } = options;
 
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+  if (!isPlainObject(plan)) {
     throw new Error("Provide a valid squad_planner JSON object.");
   }
+  if (!isPlainObject(idMap)) {
+    throw new Error("idMap must be a plain object mapping worker names to IDs.");
+  }
   const templates = plan.bundleRecordTemplates;
-  if (!templates || typeof templates !== "object" || Array.isArray(templates)) {
+  if (!isPlainObject(templates)) {
     throw new Error("Plan output does not contain bundleRecordTemplates.");
   }
   const templateKeys = Object.keys(templates);
@@ -1369,6 +1378,9 @@ function buildBundleRecordInit(root, options = {}) {
   }
 
   const template = templates[selectedSquadId];
+  if (!isPlainObject(template)) {
+    throw new Error(`Plan bundleRecordTemplates['${selectedSquadId}'] must be a plain object.`);
+  }
   const resolvedReportRoot =
     reportRoot !== undefined
       ? normalizeReportRoot(reportRoot)

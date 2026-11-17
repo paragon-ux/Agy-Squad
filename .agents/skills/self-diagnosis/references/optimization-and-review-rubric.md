@@ -14,7 +14,7 @@ Map every diagnosed defect or optimization opportunity to **one primary category
 
 | Category | Self-Diagnosis & Optimization Focus |
 | --- | --- |
-| `ARCH` | `L1`–`L50` ledger alignment (`L17` retired; `L35–L40` WSL/overlap note), host-enforced vs. receipt-verified boundaries, workspace containment, and cohort topology. |
+| `ARCH` | `L1`–`L51` ledger alignment (`L17` retired; `L35–L40` WSL/overlap note), host-enforced vs. receipt-verified boundaries, workspace containment, and cohort topology. |
 | `DOC` | `README.md`, `docs/tools.md`, `docs/plans/LEDGER.md`, and `docs/reviews/` parity with runtime behavior and benchmark/trial evidence. |
 | `SKILL` | `.agents/skills/*/SKILL.md` frontmatter (`name`, `description`), relative link integrity, progressive disclosure ratio (`SKILL.md` vs. `references/` and `scripts/`), and accuracy of referenced tools/flags. |
 | `MCP` | `mcp/index.js` JSON-RPC 2.0 compliance, positive integer `AGY_MAX_STDIO_PAYLOAD_BYTES` limits, and `dispatch_squad` / `squad_planner` schema compactness. |
