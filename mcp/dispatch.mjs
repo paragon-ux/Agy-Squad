@@ -32,17 +32,31 @@ function readManifest(root, filename, logicalRoot = root) {
   } else {
     assertWithinWorkspace(root, candidate);
   }
-  const file = fs.realpathSync(candidate);
-  assertWithinWorkspace(root, file);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+  let file = candidate;
+  let fd;
+  try {
+    fd = fs.openSync(candidate, openFlags);
+  } catch (error) {
+    if (error.code !== "ELOOP") throw error;
+    file = fs.realpathSync(candidate);
+    assertWithinWorkspace(root, file);
+    fd = fs.openSync(file, openFlags);
+  }
   let manifest;
   try {
     if (!fs.fstatSync(fd).isFile()) {
       throw new Error("Manifest path must name a regular file.");
     }
-    // On WSL, check the opened descriptor in case a path changed after realpath.
     if (process.platform === "linux") {
-      assertWithinWorkspace(root, fs.readlinkSync(`/proc/self/fd/${fd}`));
+      // On Linux/WSL, verify the opened fd target stays inside workspace (catches symlinked ancestor dirs).
+      const fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
+      assertWithinWorkspace(root, fdTarget);
+      file = fdTarget;
+    } else {
+      const realFile = fs.realpathSync(file);
+      assertWithinWorkspace(root, realFile);
+      file = realFile;
     }
     manifest = JSON.parse(fs.readFileSync(fd, "utf8"));
   } finally {
@@ -105,7 +119,7 @@ function appendTargetInstruction(spec, targetLine) {
   return next;
 }
 
-function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
+function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options = {}) {
   const slotId = targetSquad ? `integrity_auditor-${targetSquad}` : "integrity_auditor";
   const targetIds = targetSquad
     ? [targetSquad]
@@ -126,6 +140,8 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
       throw new Error(`Squad '${auditKey}' must be an object.`);
     }
     if (!auditSquad._synthesized) {
+      const { validatedAuditKeys } = options;
+      const alreadyValidated = Boolean(validatedAuditKeys?.has(auditKey));
       if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
         throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
       }
@@ -135,12 +151,13 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null) {
         if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
           throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
         }
-        if (customLead) {
-          buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true });
+        if (customLead && !alreadyValidated) {
+          buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true, validateOnly: true });
           if (Array.isArray(warnings)) {
             warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
           }
         }
+        validatedAuditKeys?.add(auditKey);
         return customSpecs.map((spec, index) => ({
           spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
           id: slotId,
@@ -327,10 +344,11 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
 
     const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
     const warnings = [];
-    const build = ({ spec, id, number }, emitWarnings = false) =>
+    const build = ({ spec, id, number }, emitWarnings = false, validateOnly = false) =>
       buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
         isIntegrityAuditor,
         workspace: delegateWorkspace,
+        validateOnly,
         ...(emitWarnings ? { warnings } : {})
       });
     let assignments;
@@ -350,14 +368,14 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
     } else {
       assignments = specialistAssignments(squads, squadId);
     }
-    const Subagents = assignments.map(item => build(item, true));
+    const Subagents = assignments.map(item => build(item, true, false));
     if (squadId === "all_l1") {
       const children = assignments.flatMap(({ id }) => specialistAssignments(squads, id));
-      for (const child of children) build(child, false);
+      for (const child of children) build(child, false, true);
     } else if (!isIntegrityAuditor) {
       // Validate only the target squad's own lead (when present) without rebuilding unrelated sibling squads (S2-OPT2).
       const leadSpec = resolveSquadLead(squads[squadId], squadId, false);
-      if (leadSpec) build({ spec: leadSpec, id: squadId }, false);
+      if (leadSpec) build({ spec: leadSpec, id: squadId }, false, true);
     }
     const uniqueWarnings = [...new Set(warnings)];
     return {

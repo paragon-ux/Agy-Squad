@@ -567,7 +567,8 @@ function planSquadCohort(
     if (topology === "flat" && resolvedLeadSpec) {
       buildSubagentSpec(resolvedLeadSpec, id, manifestPathForBrief, undefined, normalizedReportRoot, {
         executionMode,
-        workspaceIsolation: "inherit"
+        workspaceIsolation: "inherit",
+        validateOnly: true
       });
       strippedFlatLeads.push(id);
     }
@@ -740,12 +741,13 @@ function planSquadCohort(
   }
 
   const auditWarnings = [];
+  const validatedAuditKeys = new Set();
   const integrityAuditPlan = includeIntegrityAuditor
     ? targetWorkingIds.flatMap(id => {
         const hasTargetOverride = Object.hasOwn(loadedSquads, `integrity_auditor-${id}`);
         const auditTargetArg =
           allWorkingIds.length > 1 || targetWorkingIds.length > 1 || hasTargetOverride ? id : undefined;
-        const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings);
+        const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings, { validatedAuditKeys });
         const compiledAudits = auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
           const auditSlot = reportPath(auditSquadId, auditItem.number, normalizedReportRoot);

@@ -920,6 +920,22 @@ try {
     const badBoardSeq = runCli(["plan", "--board-seq", "abc", "Audit"]);
     assert.notEqual(badBoardSeq.status, 0);
 
+    // OPT-RT-08: multi-squad manifest with shared custom integrity_auditor.lead validates and warns once
+    const multiCustomAudit = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: { lead: { role: "A Lead", objective: "Lead a", scopeFiles: ["a"] }, specialists: [{ role: "A1", objective: "Do a", scopeFiles: ["a/1"] }] },
+          beta: { lead: { role: "B Lead", objective: "Lead b", scopeFiles: ["b"] }, specialists: [{ role: "B1", objective: "Do b", scopeFiles: ["b/1"] }] },
+          integrity_auditor: {
+            lead: { role: "Ignored Audit Lead", objective: "Ignored", scopeFiles: ["."] },
+            specialists: [{ role: "Shared Auditor", objective: "Audit", scopeFiles: ["."] }]
+          }
+        }
+      }
+    }, root);
+    assert.equal(multiCustomAudit.integrityAuditPlan.length, 2);
+    assert.equal(multiCustomAudit.warnings.filter(w => /Custom 'integrity_auditor' lead is ignored/.test(w)).length, 1);
+
     console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

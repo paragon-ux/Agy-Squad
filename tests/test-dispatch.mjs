@@ -402,6 +402,19 @@ try {
   }));
   rejects({ squadId: "all_l1", manifestPath: "audit-only.json" }, /at least one non-audit working squad/);
 
+  // OPT-RT-07: validateOnly avoids building discarded Prompt strings while preserving validation on all_l1 children and target lead
+  const validateOnlySpec = buildSubagentSpec(agent("Check", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, { validateOnly: true });
+  assert.equal(validateOnlySpec.Prompt, undefined, "OPT-RT-07: validateOnly must skip Prompt string formatting");
+  fs.writeFileSync(path.join(workspace, "bad-child-all-l1.json"), JSON.stringify({
+    squads: {
+      alpha: {
+        lead: agent("Lead", "src"),
+        specialists: [{ role: "Bad Child", objective: "Fail validation", scopeFiles: ["src"], typeName: "Browser" }]
+      }
+    }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "bad-child-all-l1.json" }, /writable typeName/);
+
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

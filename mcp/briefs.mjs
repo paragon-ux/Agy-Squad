@@ -60,7 +60,8 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     workspace: delegateWorkspace,
     leadWorkerName,
     boardSince,
-    boardSeqs
+    boardSeqs,
+    validateOnly = false
   } = options;
   if (executionMode !== "subagent" && executionMode !== "swarm") {
     throw new Error(`Unsupported executionMode '${executionMode}'.`);
@@ -127,6 +128,9 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   }
   if (payload.Workspace !== "inherit") {
     throw new Error(`Assignment '${role}' needs Workspace 'inherit' so its report slot is shared.`);
+  }
+  if (validateOnly) {
+    return payload;
   }
 
   const isIntegrityAuditor =
