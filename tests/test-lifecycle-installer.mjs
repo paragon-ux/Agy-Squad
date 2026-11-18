@@ -353,6 +353,22 @@ try {
     formattedPosix.includes('exec "C:/Program Files/node \\"24\\" \\`bt\\` \\$v/node.exe" "C:/Program Files/Agy \\$Squad/\\"root\\"\\`1\\`/bin/agy-squad.mjs" "$@"'),
     "formatPosixShim must normalize backslashes to slashes and escape quotes, backticks, and $ in both execPath and targetRoot"
   );
+  const livePluginSchemaDir = path.join(mcpRootDir, "agy-squad_agy-squad");
+  fs.mkdirSync(livePluginSchemaDir, { recursive: true });
+  fs.writeFileSync(path.join(livePluginSchemaDir, "squad_planner.json"), "{}\n");
+  try {
+    const activeSchemaDetect = detectExistingInstallation({ includeCompanions: false });
+    assert.equal(activeSchemaDetect.details.mcp.pluginRegistered, true);
+    assert.equal(activeSchemaDetect.details.mcp.globalDuplicate, false, "Active host-materialized agy-squad_agy-squad schema dir must not trigger globalDuplicate");
+    assert.equal(activeSchemaDetect.details.mcp.staleSchemaCount, 0);
+    assert.equal(activeSchemaDetect.details.mcp.registered, true);
+    assert.equal(activeSchemaDetect.isComplete, true);
+    await runAgySquadInstall({ silent: true });
+    assert.equal(fs.existsSync(path.join(livePluginSchemaDir, "squad_planner.json")), true, "Repeat setup must preserve live host-materialized agy-squad_agy-squad schema dir");
+  } finally {
+    fs.rmSync(livePluginSchemaDir, { recursive: true, force: true });
+  }
+
   const staleSchemaSubdir = path.join(mcpRootDir, "agy-squad_dup_probe");
   fs.mkdirSync(staleSchemaSubdir, { recursive: true });
   try {
@@ -432,6 +448,14 @@ try {
   assert.equal(staleJson.details.plugin.isCopyFallback, true);
   assert.equal(staleJson.details.plugin.version, "0.1.1");
   assert.equal(staleJson.details.plugin.versionMismatch, true);
+  fs.mkdirSync(livePluginSchemaDir, { recursive: true });
+  fs.writeFileSync(path.join(livePluginSchemaDir, "stale_v011.json"), "{}\n");
+  try {
+    await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+    assert.equal(fs.existsSync(livePluginSchemaDir), false, "Version upgrade install must sweep stale agy-squad_agy-squad schema dir");
+  } finally {
+    fs.rmSync(livePluginSchemaDir, { recursive: true, force: true });
+  }
   fs.writeFileSync(pluginPkgPath, savedPluginPkg);
 
   // SQ-BOOST-DEP-001: Redirected symlinked bin / mcp / skills / pluginDest must print REDIRECTED (citing redirected checkout) + PARTIAL INSTALLATION and exit 1

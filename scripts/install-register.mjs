@@ -495,6 +495,7 @@ export function detectExistingInstallation(options = {}) {
   }
 
   const globalMcpCheck = inspectJsonObject(mcpJsonPath, "mcp_config.json");
+  let hasGlobalMcpEntry = false;
   if (globalMcpCheck.error) {
     appendMcpError(globalMcpCheck.error);
   } else if (globalMcpCheck.data) {
@@ -506,17 +507,26 @@ export function detectExistingInstallation(options = {}) {
     ) {
       appendMcpError("mcp_config.json field 'mcpServers' must be a JSON object");
     } else if (globalMcpCheck.data.mcpServers && PLUGIN_KEY in globalMcpCheck.data.mcpServers) {
+      hasGlobalMcpEntry = true;
       details.mcp.globalDuplicate = true;
       details.mcp.staleSchemaCount += 1;
     }
   }
 
+  const activePluginSchemaDir = `${PLUGIN_KEY}_${PLUGIN_KEY}`;
   try {
     if (fs.existsSync(antigravityMcpRootDir)) {
       for (const entry of fs.readdirSync(antigravityMcpRootDir)) {
         if (entry === PLUGIN_KEY || entry.startsWith(`${PLUGIN_KEY}_`)) {
-          details.mcp.globalDuplicate = true;
-          details.mcp.staleSchemaCount += 1;
+          // Antigravity creates ~/.gemini/antigravity/mcp/<plugin>_<server> ("agy-squad_agy-squad")
+          // when loading the plugin's canonical mcp_config.json; only treat it as stale when
+          // the plugin is unregistered or duplicated in global mcp_config.json.
+          const isActivePluginSchemaDir =
+            entry === activePluginSchemaDir && details.mcp.pluginRegistered && !hasGlobalMcpEntry;
+          if (!isActivePluginSchemaDir) {
+            details.mcp.globalDuplicate = true;
+            details.mcp.staleSchemaCount += 1;
+          }
         }
       }
     }
@@ -836,7 +846,13 @@ export async function runInstall(options = {}) {
   log(`[OK] Plugin skills, docs & manifest verified: ${path.join(pluginDest, "skills")}`);
 
   // Strip duplicate global mcp_config.json entry; plugin-scoped mcp_config.json is canonical (SQ-DEP-001)
-  if (validatedMcp?.mcpServers && typeof validatedMcp.mcpServers === "object" && !Array.isArray(validatedMcp.mcpServers) && PLUGIN_KEY in validatedMcp.mcpServers) {
+  const hadGlobalMcpEntry = Boolean(
+    validatedMcp?.mcpServers &&
+      typeof validatedMcp.mcpServers === "object" &&
+      !Array.isArray(validatedMcp.mcpServers) &&
+      PLUGIN_KEY in validatedMcp.mcpServers
+  );
+  if (hadGlobalMcpEntry) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
     const nextMcp = { ...validatedMcp, mcpServers: nextServers };
@@ -857,11 +873,22 @@ export async function runInstall(options = {}) {
     log(`[OK] Removed duplicate global '${PLUGIN_KEY}' entry from: ${mcpJsonPath} (plugin mcp_config.json is canonical)`);
   }
 
-  // Sweep stale global/cached agy-squad* MCP schema directories
+  // Sweep stale global/cached agy-squad* MCP schema directories, preserving the host-managed
+  // plugin schema directory (agy-squad_agy-squad) once plugin registration is clean.
+  const activePluginSchemaDir = `${PLUGIN_KEY}_${PLUGIN_KEY}`;
+  const preserveActivePluginSchemaDir =
+    existing.details.plugin.exists &&
+    !existing.details.plugin.pointsElsewhere &&
+    !existing.details.plugin.versionMismatch &&
+    existing.details.mcp.pluginRegistered &&
+    !hadGlobalMcpEntry;
   if (fs.existsSync(antigravityMcpRootDir)) {
     try {
       for (const entry of fs.readdirSync(antigravityMcpRootDir)) {
         if (entry === PLUGIN_KEY || entry.startsWith(`${PLUGIN_KEY}_`)) {
+          if (preserveActivePluginSchemaDir && entry === activePluginSchemaDir) {
+            continue;
+          }
           await fsPromises.rm(path.join(antigravityMcpRootDir, entry), { recursive: true, force: true });
           log(`[OK] Swept stale MCP schema cache: ${path.join(antigravityMcpRootDir, entry)}`);
         }
