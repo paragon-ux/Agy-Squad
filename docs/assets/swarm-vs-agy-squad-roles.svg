@@ -156,7 +156,7 @@
     <!-- Content Plane: Scoped Specialists -->
     <rect x="500" y="226" width="192" height="60" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
     <text class="node-title" x="596" y="252">Scoped Specialists</text>
-    <text class="node-sub" x="596" y="271">Disjoint files -&gt; report.md</text>
+    <text class="node-sub" x="596" y="271">Separate files &#8594; report.md</text>
 
     <!-- Specialists -> Working Lead -->
     <line class="arrow-line" x1="596" y1="286" x2="596" y2="306"/>
@@ -205,12 +205,12 @@
     <text class="card-head" x="52" y="570">1. Scope, Model &amp; Isolation</text>
     <text class="bullet" x="52" y="596">&#8226; Non-overlapping file scopes per worker</text>
     <text class="bullet" x="52" y="618">&#8226; Explicit per-role model pinning</text>
-    <text class="bullet" x="52" y="640">&#8226; Workspace mode: inherit / share / branch</text>
+    <text class="bullet" x="52" y="640">&#8226; Shared or isolated worktrees</text>
 
     <!-- Card 2 -->
     <rect x="324" y="544" width="272" height="128" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
-    <text class="card-head" x="340" y="570">2. Report Slots &amp; Slim Receipts</text>
-    <text class="bullet" x="340" y="596">&#8226; File-backed report.md slots per role</text>
+    <text class="card-head" x="340" y="570">2. Report Files &amp; Slim Receipts</text>
+    <text class="bullet" x="340" y="596">&#8226; Local report.md files per role</text>
     <text class="bullet" x="340" y="618">&#8226; One-line status receipts on the board</text>
     <text class="bullet" x="340" y="640">&#8226; Replaces long board replies &amp; bloat</text>
 
