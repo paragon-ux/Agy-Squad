@@ -30,18 +30,20 @@ agy-squad status
   - **Zero-PATH fallback:** `npx --package=agy-squad agy-squad status` (works for any subcommand without modifying `PATH`).
 - **Standalone usage without `Agy-Context-Saver`:** `setup` prints a `[NEXT STEP]` notice if `agy-context` or `rtk` is absent. Install `Agy-Context-Saver` (`npx --package=agy-context-saver agy-context setup`) for full live integrity trace audits, or pass `--no-integrity` to `agy-squad plan` and `--allow-unaudited` to `agy-squad bundle` or `agy-squad finalize` for standalone runs.
 
-### Local repository checkout (optional)
+### Local repository checkout and development (optional)
 
-If you are developing `Agy-Squad` from source, clone the repository and run `npm run setup && npm test` (source checkouts may also invoke the CLI directly via `node bin/agy-squad.mjs`):
+If you are developing `Agy-Squad` from source, clone the repository and run the setup, preflight, test, and package-boundary checks (source checkouts may also invoke the CLI directly via `node bin/agy-squad.mjs`):
 
 ```bash
 git clone https://github.com/paragon-ux/Agy-Squad.git
 cd Agy-Squad
 npm run setup
+node scripts/release-preflight.mjs
 npm test
+npm run verify:package
 ```
 
-`npm test` runs locally in Node.js without spawning live subagents. It exercises the lifecycle installer (`setup`, `status`, `--check`, `uninstall`), MCP server, `dispatch_squad` compiler, `squad_planner` planner, handoff bundler, `/self-diagnosis` profiler, and benchmark fixture.
+Runs all 10 test suites (`tests/test-verdicts-and-pivot.mjs`, `tests/test-dispatch.mjs`, `tests/test-planner.mjs`, `tests/test-handoffs.mjs`, `tests/test-run.mjs`, `tests/test-server.mjs`, `tests/test-comparative-dossier.mjs`, `tests/test-lifecycle-installer.mjs`, `benchmarks/teamwork-vs-squad/verify-benchmark.mjs`, and `tests/verify-package.mjs`) locally in isolated temporary directories without spawning live subagents or mutating your live `~/.gemini` configuration.
 
 ### Uninstall & Rollback
 
@@ -91,16 +93,25 @@ In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` a
 
 For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `agy-squad` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) subcommands (run `agy-squad <command> --help` for full options and examples). Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in favor of native `/swarm` planning and the unified `agy-squad` governance CLI.
 
-### Generate a `/swarm` plan and provenance scaffold
+### Generate a `/swarm` plan, audit, and proof bundle
 
-Plan a self-contained `/swarm` cohort directly in any repository:
+Plan a self-contained read-only `/swarm` cohort in any repository, check the lead and integrity auditor verdicts, and seal the SHA-256 bundle in one step:
 
 ```bash
-agy-squad plan \
-  --mode swarm \
-  --scope src \
-  --role "Implementer" --role "Reviewer" \
-  "Audit authentication flow"
+# Plan a read-only /swarm cohort in any repository and save the plan JSON
+mkdir -p scratch && agy-squad plan --mode swarm --read-only --scope src \
+  --role "Security" --role "Test Audit" \
+  "Audit authentication flow" > scratch/plan.json
+
+# After workers finish, check the lead verdict and initialize the bundle record + Evidence Digest
+agy-squad verdict scratch/agy-squad/squad-task_squad/lead/report.md
+agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json \
+  --digest --out scratch/record.json src/auth.js
+
+# Verify the integrity auditor verdict (single-squad slot; multi-squad uses squad-integrity_auditor-<id>)
+# and finalize (inspect -> bundle -> verify + prune) in one step
+agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md
+agy-squad finalize scratch/record.json --replace --prune
 ```
 
 Or compile a multi-squad cohort from a workspace manifest file:

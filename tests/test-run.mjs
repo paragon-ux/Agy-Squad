@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function copyIsolatedRepo(targetDir) {
-  for (const rel of ["bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
+  for (const rel of ["assets", "bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
     fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
   }
   return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");

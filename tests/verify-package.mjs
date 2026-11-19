@@ -6,6 +6,7 @@ import { text } from "node:stream/consumers";
 const REQUIRED = [
   "package.json",
   "plugin.json",
+  "assets/logo.svg",
   "README.md",
   "CHANGELOG.md",
   "LICENSE",
@@ -97,7 +98,7 @@ function validate(packages) {
       name === "README.md" || name === "CHANGELOG.md" ||
       name === "install.sh" || name === "install.ps1" ||
       name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
-      name.startsWith("bin/") || name.startsWith("mcp/") ||
+      name.startsWith("assets/") || name.startsWith("bin/") || name.startsWith("mcp/") ||
       name.startsWith("scripts/") ||
       name.startsWith(".agents/skills/") || name.startsWith("docs/"))
   );

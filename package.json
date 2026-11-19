@@ -8,6 +8,7 @@
     "agy-squad-mcp": "mcp/index.js"
   },
   "files": [
+    "assets",
     "bin",
     "mcp",
     "scripts",

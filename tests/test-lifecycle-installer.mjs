@@ -75,6 +75,17 @@ try {
     });
     assert.notEqual(pluginNegPreflight.status, 0);
     assert.match(pluginNegPreflight.stderr, /plugin\.json/);
+
+    // Missing logo target in plugin.json must fail preflight
+    const logoNegPlugin = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
+    logoNegPlugin.logo = "assets/does-not-exist.svg";
+    fs.writeFileSync(negPluginPath, JSON.stringify(logoNegPlugin, null, 2) + "\n");
+    const logoNegPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.notEqual(logoNegPreflight.status, 0);
+    assert.match(logoNegPreflight.stderr, /plugin\.json logo target does not exist/);
   } finally {
     fs.rmSync(negRoot, { recursive: true, force: true });
   }
@@ -185,6 +196,11 @@ try {
   assert.match(statusRes.stdout, /Plugin Docs & Links: READY/);
   assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.1\):/);
   assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
+  assert.equal(
+    fs.existsSync(path.join(tmpProfile, ".gemini", "config", "plugins", "agy-squad", "assets", "logo.svg")),
+    true,
+    "Installed plugin directory must expose assets/logo.svg referenced by plugin.json"
+  );
 
   const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
   assert.ok(posixShimBody.startsWith("#!/bin/sh\n"), "POSIX shim must use #!/bin/sh so fallback works when PATH lacks sh");

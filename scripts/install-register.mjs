@@ -686,6 +686,7 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
   }
   const isWin = os.platform() === "win32";
   const linkMappings = [
+    ["assets", path.join(sourceRoot, "assets")],
     ["bin", path.join(sourceRoot, "bin")],
     ["docs", path.join(sourceRoot, "docs")],
     ["mcp", path.join(sourceRoot, "mcp")],
