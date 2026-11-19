@@ -1,7 +1,7 @@
 [project]
 site_url = "https://paragon-ux.github.io/Agy-Squad/"
 site_name = "Agy-Squad Documentation"
-site_description = "Scoped /swarm & subagent governance, Pointer-Over-Wire SHA-256 verification, and PR Review Standard v1.4.0 for Antigravity Desktop and CLI"
+site_description = "Structured multi-agent /swarm code reviews, non-overlapping file scopes, tiny handoffs, and SHA-256 proof bundles for Google Antigravity."
 site_author = "paragon-ux"
 copyright = "Copyright &copy; 2026 paragon-ux. Released under the MIT License."
 
