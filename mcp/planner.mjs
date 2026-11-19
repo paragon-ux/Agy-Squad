@@ -1009,14 +1009,14 @@ function planSquadCohort(
       ...(workspaceIsolation !== "inherit"
         ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
         : []),
-      "agy-squad fingerprint <changed-or-verified-files...>",
-      "agy-squad bundle-init --plan <plan.json> <verified-files...>",
-      "agy-squad inspect <bundle-record.json>",
-      "agy-squad digest <bundle-record.json>",
-      "agy-squad verdict --integrity <integrity-report.md>",
-      "agy-squad bundle <bundle-record.json>",
-      "agy-squad verify <report.sources.json>",
-      "agy-squad prune <report.sources.json> <accepted-sha256>"
+      "agy-squad bundle-init --plan <plan.json> --digest --out <bundle-record.json> <verified-files...>",
+      ...(includeIntegrityAuditor
+        ? ["agy-squad verdict --integrity <integrity-report.md>"]
+        : []),
+      includeIntegrityAuditor
+        ? "agy-squad finalize <bundle-record.json> [--prune [--keep-reports]]  # shorthand for inspect -> bundle -> verify (+ optional prune)"
+        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--prune [--keep-reports]]  # shorthand for inspect -> bundle -> verify (+ optional prune)",
+      "# Granular steps remain available: agy-squad fingerprint, inspect, digest, bundle, verify, prune"
     ]
   };
 }

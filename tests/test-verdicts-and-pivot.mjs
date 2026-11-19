@@ -328,12 +328,14 @@ try {
 
   for (const sub of [
     "plan", "dispatch", "collect", "bundle-init", "fingerprint", "inspect",
-    "digest", "bundle", "verify", "prune", "verdict",
-    "setup", "status", "uninstall", "restore-backups"
+    "digest", "bundle", "verify", "finalize", "prune", "verdict",
+    "setup", "install", "status", "uninstall", "restore-backups"
   ]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
-    assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);
+    const expectedCmd = sub === "install" ? "setup" : sub;
+    assert.match(helpRes.stdout, new RegExp(`Usage: agy-squad ${expectedCmd}\\b`));
+    assert.match(helpRes.stdout, /Examples:/);
   }
   // SQ-DEP-007: --help and --version combined with operational flags/args must fail closed
   for (const badHelp of [

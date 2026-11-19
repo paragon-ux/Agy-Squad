@@ -124,7 +124,7 @@ Do not cite a model's summary of a transcript as if it were the transcript. Quot
 
 | Evidence | Format |
 | --- | --- |
-| Code at a commit | `https://github.com/paragon-ux/Agy-Squad/blob/<sha>/path#Lx-Ly` |
+| Code at a commit | `https://github.com/<owner>/<repo>/blob/<sha>/path#Lx-Ly` |
 | Local code | `path#Lx-Ly` with the SHA pinned in Section 1 |
 | Transcript | `transcript_full.jsonl step 1375 @ 2026-11-10T06:29:55Z` plus a short quote |
 | Command | `cwd`, command, exit code, output excerpt |

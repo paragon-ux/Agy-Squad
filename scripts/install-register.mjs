@@ -238,6 +238,66 @@ function normalizeSlash(p) {
   return p.replace(/\\/g, "/");
 }
 
+function resolveEnvPathValue(env = process.env, platform = os.platform()) {
+  if (!env || typeof env !== "object") return "";
+  if (typeof env.PATH === "string") return env.PATH;
+  if (platform === "win32") {
+    const key = Object.keys(env).find((k) => k.toLowerCase() === "path");
+    if (key && typeof env[key] === "string") return env[key];
+  }
+  return "";
+}
+
+function normalizePathEntry(entry, platform = os.platform(), homeDir = os.homedir()) {
+  if (typeof entry !== "string") return "";
+  let trimmed = entry.trim();
+  if (!trimmed) return "";
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  if (!trimmed) return "";
+  if (platform !== "win32" && (trimmed === "~" || trimmed.startsWith("~/"))) {
+    trimmed = path.join(homeDir, trimmed.slice(1));
+  }
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  let resolved = pathImpl.resolve(trimmed);
+  if (platform === os.platform()) {
+    try {
+      resolved = fs.realpathSync(resolved);
+    } catch {}
+  }
+  resolved = resolved.replace(/[\\/]+$/, "") || resolved;
+  return platform === "win32" || platform === "darwin" ? resolved.toLowerCase() : resolved;
+}
+
+export function isDirOnPath(targetDir, envPath, platform = os.platform()) {
+  const rawPath = envPath !== undefined ? String(envPath ?? "") : resolveEnvPathValue(process.env, platform);
+  if (!rawPath || !targetDir) return false;
+  const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
+  const normalizedTarget = normalizePathEntry(targetDir, platform, homeDir);
+  if (!normalizedTarget) return false;
+  const delimiter = platform === "win32" ? ";" : ":";
+  return rawPath
+    .split(delimiter)
+    .some((segment) => normalizePathEntry(segment, platform, homeDir) === normalizedTarget);
+}
+
+export function formatPathGuidanceLines(antigravityBinDir, platform = os.platform()) {
+  if (platform === "win32") {
+    return [
+      `[WARN] CLI bin directory is not on your PATH: ${antigravityBinDir}`,
+      `       PowerShell (current session): $env:PATH = "${antigravityBinDir};$env:PATH"`,
+      `       PowerShell (persist for user): [Environment]::SetEnvironmentVariable("Path", "${antigravityBinDir};" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")`,
+      "       Or invoke without editing PATH: npx --package=agy-squad agy-squad status"
+    ];
+  }
+  return [
+    `[WARN] CLI bin directory is not on your PATH: ${antigravityBinDir}`,
+    `       Add to ~/.bashrc or ~/.zshrc: export PATH="${antigravityBinDir}:$PATH"`,
+    "       Then reload your shell (e.g. 'source ~/.bashrc') or run: npx --package=agy-squad agy-squad status"
+  ];
+}
+
 async function safeWriteFileIfChanged(filePath, content, mode) {
   try {
     if (fs.existsSync(filePath)) {
@@ -317,7 +377,7 @@ export function detectExistingInstallation(options = {}) {
       path: pluginMcpJsonPath,
       globalPath: mcpJsonPath
     },
-    cliShim: { exists: false, path: antigravityBinDir },
+    cliShim: { exists: false, onPath: isDirOnPath(antigravityBinDir), path: antigravityBinDir },
     config: { enabled: false, corrupt: false, error: null, path: configJsonPath },
     companions: null
   };
@@ -963,9 +1023,33 @@ export async function runInstall(options = {}) {
 
   await installCliShims({ targetRoot: pluginDest, log });
 
+  const onPath = isDirOnPath(antigravityBinDir);
+  if (!onPath) {
+    for (const line of formatPathGuidanceLines(antigravityBinDir)) {
+      log(line);
+    }
+  }
+
+  const companions = detectCompanionDependencies();
+  const missingCompanions = [];
+  if (!companions.agyContext?.available) {
+    missingCompanions.push(`agy-context >= ${MIN_AGY_CONTEXT_VERSION}`);
+  }
+  if (!companions.rtk?.available) {
+    missingCompanions.push(`rtk >= ${MIN_RTK_VERSION}`);
+  }
+  if (missingCompanions.length > 0) {
+    log(`[NEXT STEP] Optional companion tools not ready (${missingCompanions.join(", ")}):`);
+    log("            - For full live integrity trace audits, install Agy-Context-Saver: npx --package=agy-context-saver agy-context setup");
+    log("            - For standalone usage without live trace audits, pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize'.");
+  }
+
   const elapsed = (performance.now() - startTime).toFixed(1);
-  log(`\nAgy-Squad installation ${existing.isInstalled ? "synchronized & up-to-date" : "completed"} in ${elapsed}ms!\n`);
-  return { ...detectExistingInstallation({ includeCompanions: false }), isInstalled: true, elapsedMs: elapsed };
+  log(`\nAgy-Squad installation ${existing.isInstalled ? "synchronized & up-to-date" : "completed"} in ${elapsed}ms!`);
+  log("Next steps: reload or restart Antigravity Desktop IDE (if open) so the registered 'agy-squad' MCP server and skills load, then run 'agy-squad status' (or 'npx --package=agy-squad agy-squad status').\n");
+  const finalStatus = detectExistingInstallation({ includeCompanions: false });
+  finalStatus.details.companions = companions;
+  return { ...finalStatus, isInstalled: true, elapsedMs: elapsed };
 }
 
 export async function runRestoreBackups(options = {}) {
@@ -1160,8 +1244,17 @@ export function printStatus(options = {}) {
     } (${status.details.mcp.path})`
   );
   log(
-    `- CLI Shim (agy-squad): ${status.details.cliShim.exists ? "INSTALLED" : "MISSING"} (${status.details.cliShim.path})`
+    `- CLI Shim (agy-squad): ${
+      status.details.cliShim.exists
+        ? (status.details.cliShim.onPath ? "INSTALLED (on PATH)" : "INSTALLED (not on PATH)")
+        : "MISSING"
+    } (${status.details.cliShim.path})`
   );
+  if (status.details.cliShim.exists && !status.details.cliShim.onPath) {
+    for (const line of formatPathGuidanceLines(status.details.cliShim.path)) {
+      log(line);
+    }
+  }
   log(
     `- Plugin Enabled (config.json / plugin.json): ${
       status.details.config.corrupt
@@ -1185,6 +1278,9 @@ export function printStatus(options = {}) {
         ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
         : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
+  if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
+    log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
+  }
   return status;
 }
 

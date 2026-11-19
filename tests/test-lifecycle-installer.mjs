@@ -903,6 +903,89 @@ try {
     }
   }
 
+  // UX-SQ-004, UX-SQ-005, UX-SQ-012, UX-SQ-014: PATH & companion onboarding in setup/status, NOT INSTALLED hint, copy-fallback skill link safety
+  {
+    const uxProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ux-onboarding-")));
+    const uxEmptyPath = path.join(uxProfile, "empty-bin");
+    fs.mkdirSync(uxEmptyPath, { recursive: true });
+    const uxBaseEnv = withEnvPath(uxEmptyPath, { ...process.env, AGY_TEST_PROFILE_DIR: uxProfile });
+    try {
+      // UX-SQ-014: NOT INSTALLED prints actionable setup hint in human mode, while --json stays pure JSON
+      const preStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(preStatusHuman.status, 1);
+      assert.match(preStatusHuman.stdout, /Overall Status: NOT INSTALLED/);
+      assert.match(preStatusHuman.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+
+      const preStatusJson = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(preStatusJson.status, 1);
+      const parsedPreJson = JSON.parse(preStatusJson.stdout);
+      assert.equal(parsedPreJson.isInstalled, false);
+      assert.doesNotMatch(preStatusJson.stdout, /Next step:/);
+
+      // UX-SQ-005 & UX-SQ-012: setup on clean profile without PATH entry or companions emits PATH guidance, [NEXT STEP] companion notice, and IDE reload guidance
+      const uxSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(uxSetup.status, 0, uxSetup.stderr || uxSetup.stdout);
+      assert.match(uxSetup.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+      assert.match(uxSetup.stdout, /npx --package=agy-squad agy-squad status/);
+      assert.match(uxSetup.stdout, /\[NEXT STEP\] Optional companion tools not ready/);
+      assert.match(uxSetup.stdout, /npx --package=agy-context-saver agy-context setup/);
+      assert.match(uxSetup.stdout, /--no-integrity.*--allow-unaudited/);
+      assert.match(uxSetup.stdout, /Next steps: reload or restart Antigravity Desktop IDE/);
+
+      // UX-SQ-005: status shows (not on PATH) + guidance when binDir missing, and (on PATH) with no PATH warning when included
+      const statusOffPath = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(statusOffPath.status, 0, statusOffPath.stderr || statusOffPath.stdout);
+      assert.match(statusOffPath.stdout, /CLI Shim \(agy-squad\): INSTALLED \(not on PATH\)/);
+      assert.match(statusOffPath.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+
+      const uxBinDir = path.join(uxProfile, ".gemini", "antigravity", "bin");
+      const statusOnPath = spawnSync(process.execPath, [cli, "status"], {
+        cwd: repoRoot,
+        env: withEnvPath(`${uxBinDir}${path.delimiter}${uxEmptyPath}`, { ...process.env, AGY_TEST_PROFILE_DIR: uxProfile }),
+        encoding: "utf8"
+      });
+      assert.equal(statusOnPath.status, 0, statusOnPath.stderr || statusOnPath.stdout);
+      assert.match(statusOnPath.stdout, /CLI Shim \(agy-squad\): INSTALLED \(on PATH\)/);
+      assert.doesNotMatch(statusOnPath.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+
+      // UX-SQ-005: cross-platform isDirOnPath helper check (POSIX & Windows delimiters)
+      assert.equal(installerMod.isDirOnPath("/home/dev/.gemini/antigravity/bin", "/usr/bin:/home/dev/.gemini/antigravity/bin", "linux"), true);
+      assert.equal(installerMod.isDirOnPath("/home/dev/.gemini/antigravity/bin", "/usr/bin:/usr/local/bin", "linux"), false);
+      assert.equal(installerMod.isDirOnPath("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "C:\\Windows;c:\\users\\dev\\.gemini\\antigravity\\bin\\", "win32"), true);
+      assert.equal(installerMod.isDirOnPath("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "C:\\Windows;C:\\Tools", "win32"), false);
+
+      // UX-SQ-014: PARTIAL INSTALLATION also prints actionable setup hint
+      fs.rmSync(path.join(uxProfile, ".gemini", "config", "plugins", "agy-squad", "mcp_config.json"), { force: true });
+      const partialStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(partialStatus.status, 1);
+      assert.match(partialStatus.stdout, /Overall Status: PARTIAL INSTALLATION/);
+      assert.match(partialStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+
+      // UX-SQ-004: forceCopyFallback installed skills contain zero ../../../docs/ or ../../../../docs/ links
+      process.env.AGY_TEST_PROFILE_DIR = uxProfile;
+      await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+      const copiedSkillsRoot = path.join(uxProfile, ".gemini", "config", "plugins", "agy-squad", "skills");
+      const walkCopiedMd = (dir) => {
+        const res = [];
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) res.push(...walkCopiedMd(full));
+          else if (entry.isFile() && entry.name.endsWith(".md")) res.push(full);
+        }
+        return res;
+      };
+      const copiedMdFiles = walkCopiedMd(copiedSkillsRoot);
+      assert.ok(copiedMdFiles.length >= 4, "UX-SQ-004: expected copied skill markdown files under forceCopyFallback");
+      for (const file of copiedMdFiles) {
+        const body = fs.readFileSync(file, "utf8");
+        assert.doesNotMatch(body, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: relative ../../../docs/ link leaked into copy-fallback skill ${file}`);
+      }
+    } finally {
+      process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
+      fs.rmSync(uxProfile, { recursive: true, force: true });
+    }
+  }
+
   console.log("Lifecycle installer, --check, and rollback tests passed");
 } finally {
   if (prevProfileEnv === undefined) delete process.env.AGY_TEST_PROFILE_DIR;

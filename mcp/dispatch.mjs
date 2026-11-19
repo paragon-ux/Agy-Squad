@@ -301,7 +301,7 @@ function formatNotFoundError(args, fallbackWorkspace) {
     typeof args?.manifestPath === "string" && args.manifestPath.trim()
       ? `, manifestPath: '${args.manifestPath.trim()}'`
       : "";
-  return `Manifest or workspace not found (workspace: '${attemptedWorkspace}'${manifestDetail}). Pass 'workspace' set to your active repository root, set AGY_SQUAD_WORKSPACE, or run 'node bin/agy-squad.mjs' from the repository root.`;
+  return `Manifest or workspace not found (workspace: '${attemptedWorkspace}'${manifestDetail}). Pass 'workspace' set to your active repository root, set AGY_SQUAD_WORKSPACE, or run 'agy-squad plan' / 'agy-squad dispatch' from the repository root.`;
 }
 
 function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {

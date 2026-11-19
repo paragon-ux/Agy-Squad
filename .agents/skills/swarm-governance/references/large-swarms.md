@@ -11,9 +11,9 @@ Standalone reference for running larger `/swarm` cohorts (`8+` workers, concurre
 
 `swarm{action: "kill"}` permanently deletes worker `share` and `branch` copies along with any unmerged code edits or uncollected `report.md` slots inside them. During normal completion of a `share` or `branch` swarm (for example, 10–20 concurrent workers), complete all four steps **in order** before calling `kill`:
 
-1. **Collect report slots (`agy-squad collect`):** Run `node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...` (or `--record`/`--squad`) to stage every `scratch/agy-squad/squad-<id>/specialist-<N>/report.md`, `lead/report.md`, and `audit-<id>` slot from each worker's `share` or `branch` copy into the coordinator workspace.
+1. **Collect report slots (`agy-squad collect`):** Run `agy-squad collect --plan <plan.json> --from <worktree-dir>...` (or `--record`/`--squad`) to stage every `scratch/agy-squad/squad-<id>/specialist-<N>/report.md`, `lead/report.md`, and `audit-<id>` slot from each worker's `share` or `branch` copy into the coordinator workspace.
 2. **Collect and merge code diffs:** Inspect and cherry-pick, patch, or merge any verified worker code modifications into the coordinator workspace before terminating workers.
-3. **Verify and bundle:** From the coordinator workspace, run `node bin/agy-squad.mjs fingerprint`, `bundle-init`, `inspect`, `digest`, flat `audit-<id>`, `verdict --integrity`, `bundle`, and `verify`, confirming `report.sources.json` validates against the final collected files.
+3. **Verify and bundle:** From the coordinator workspace, run `agy-squad bundle-init --digest` (or `fingerprint`, `bundle-init`, `inspect`, `digest`), flat `audit-<id>`, `verdict --integrity`, and `agy-squad finalize <record.json> [--prune]` (or separate `bundle` and `verify`), confirming `report.sources.json` validates against the final collected files.
 4. **Kill workers only after bundle verification:** Call `swarm{action: "kill"}` on specialists, leads, auditors, and `monitor` only after `verify` passes (or after saving partial evidence on an early coordinator abort).
 
 ## Shared Board `O(N^2)` Broadcast and Zero Mid-Flight Chatter

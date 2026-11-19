@@ -13,7 +13,7 @@
           ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
           "docs/tools.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via rtk read, write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <id>').",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (reserve 'rtk read' for spillovers/task logs), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <id>').",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
@@ -29,7 +29,7 @@
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
             ".agents/skills/self-diagnosis/references/execution-and-teardown.md"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine); pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort.",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only); pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort.",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -44,7 +44,7 @@
             "docs/plans/LEDGER.md",
             "docs/tools.md"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only).",
           "expectedDeliverable": "Markdown evidence report with SKILL/ARCH/DOC P1/P2/P3 triage, contract provenance checks, and concrete optimization recommendations."
         }
       ]
@@ -63,7 +63,7 @@
           "bin/agy-squad.mjs",
           "scripts/install-register.mjs"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via rtk read, write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <id>').",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (reserve 'rtk read' for spillovers/task logs), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <id>').",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
       },
       "specialists": [
@@ -79,7 +79,7 @@
             "mcp/verdicts.mjs",
             "mcp/planner.mjs"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
@@ -100,7 +100,7 @@
             "tests/test-comparative-dossier.mjs",
             "tests/verify-package.mjs"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only).",
           "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP P1/P2/P3 triage and verification gap analysis."
         }
       ]
@@ -120,7 +120,7 @@
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/pr-review/SKILL.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via rtk read, write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <id>').",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (reserve 'rtk read' for spillovers/task logs), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <id>').",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [
@@ -136,7 +136,7 @@
             ".agents/skills/full-review/SKILL.md",
             ".agents/skills/swarm-governance/SKILL.md"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only).",
           "expectedDeliverable": "Markdown evidence report with exact byte/token measurements and concrete before/after optimization proposals."
         },
         {
@@ -149,7 +149,7 @@
             "mcp/handoffs.mjs",
             "bin/agy-squad.mjs"
           ],
-          "instructions": "Inspect your scopeFiles using 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine).",
+          "instructions": "Inspect your scopeFiles using 'rtk grep'/'rtk find' and bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs only).",
           "expectedDeliverable": "Markdown evidence report with syscall/latency analysis and ranked runtime optimization proposals."
         }
       ]

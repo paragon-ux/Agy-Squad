@@ -686,16 +686,19 @@ try {
     assert.equal(overridePlan.workers[0].squadId, "alpha");
     assert.match(
       inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
-      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\)/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\).*spillovers\/task logs/
     );
+    assert.doesNotMatch(inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
     assert.match(
       overridePlan.workers[0].specialists[0].swarmAdd.brief,
-      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
     );
+    assert.doesNotMatch(overridePlan.workers[0].specialists[0].swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
-      /bounded <=150-line read_file slices \(StartLine\/EndLine\) or 'rtk read'\/'rtk grep', never unbounded read_file/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
     );
+    assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /or 'rtk read'\/'rtk grep'/);
 
     const symlinkAbsPlan = handleSquadPlanner({
       manifestPath: path.join(linkRoot, "plan-manifest.json"),
@@ -1192,6 +1195,20 @@ try {
     assert.match(layeredLeadBrief, /follow Board scope above/);
     const leadTemplateSavings = Buffer.byteLength(superviseSwarmCohort, "utf8") - Buffer.byteLength(superviseSwarmLayeredLead, "utf8");
     assert.ok(leadTemplateSavings >= 226, `OPT-BRIEF-03: expected >= 226 B/lead savings, got ${leadTemplateSavings} B`);
+
+    // UX-SQ-003 & UX-SQ-015: handleSquadPlanner ENOENT recommends global 'agy-squad plan' and verificationPipeline surfaces 'agy-squad finalize'
+    const missingPlanErr = handleSquadPlanner({ manifestPath: "missing-manifest.json" }, root);
+    assert.equal(missingPlanErr.isError, true);
+    assert.match(missingPlanErr.content[0].text, /agy-squad plan/);
+    assert.doesNotMatch(missingPlanErr.content[0].text, /node bin\/agy-squad\.mjs/);
+    assert.ok(
+      layeredLeadCheckPlan.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json>/.test(step)),
+      "UX-SQ-015: audited verificationPipeline must surface agy-squad finalize shorthand"
+    );
+    assert.ok(
+      defaultRoleScopeTask.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json> --allow-unaudited/.test(step)),
+      "UX-SQ-015: standalone (--no-integrity) verificationPipeline must surface finalize --allow-unaudited"
+    );
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

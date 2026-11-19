@@ -415,6 +415,26 @@ try {
   }));
   rejects({ squadId: "all_l1", manifestPath: "bad-child-all-l1.json" }, /writable typeName/);
 
+  // UX-SQ-003: formatNotFoundError recommends global 'agy-squad plan' / 'agy-squad dispatch', never checkout-only 'node bin/agy-squad.mjs'
+  const missingRes = dispatch({ squadId: "all_l1", manifestPath: "does-not-exist.json" });
+  assert.equal(missingRes.isError, true);
+  assert.match(missingRes.content[0].text, /agy-squad plan.*agy-squad dispatch/);
+  assert.doesNotMatch(missingRes.content[0].text, /node bin\/agy-squad\.mjs/);
+
+  // UX-SQ-006: compiled briefs align with Agy-Context-Saver v2.0.4 (rtk grep/find + bounded <=150-line read_file; rtk read for spillovers/task logs only)
+  const uxSpecBrief = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1).Prompt;
+  const uxLeadBrief = buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json").Prompt;
+  const uxAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1).Prompt;
+  for (const [label, promptText] of [
+    ["specialist", uxSpecBrief],
+    ["lead", uxLeadBrief],
+    ["auditor", uxAuditBrief]
+  ]) {
+    assert.match(promptText, /'rtk grep'\/'rtk find'/, `UX-SQ-006: ${label} brief must recommend rtk grep/find`);
+    assert.match(promptText, /<=150-line read_file slices \(StartLine\/EndLine\)/, `UX-SQ-006: ${label} brief must recommend bounded read_file slices`);
+    assert.doesNotMatch(promptText, /via 'rtk read'\/'rtk grep'|or 'rtk read'\/'rtk grep'/, `UX-SQ-006: ${label} brief must not recommend rtk read for workspace files`);
+  }
+
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

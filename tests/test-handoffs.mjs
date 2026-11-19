@@ -1614,6 +1614,101 @@ try {
         /disagrees with integrityAudits\[0\]/,
         "SVC-002: verifyBundle must reject v2 integrityAudit missing evidenceDigest relative to integrityAudits[0]"
       );
+
+      // UX-SQ-015: agy-squad finalize <record.json> runs inspect -> bundle -> verify (+ optional --prune [--keep-reports]) in one call
+      const finDir = path.join(w2Root, "..", `ux-finalize-${process.pid}`);
+      fs.mkdirSync(finDir, { recursive: true });
+      try {
+        const finWrite = (rel, content) => {
+          const dest = path.join(finDir, rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, content, "utf8");
+        };
+        finWrite("src/auth.js", "export function verifyToken(t) { return Boolean(t); }\n");
+        const finS1 = reportPath("auth", 1);
+        const finLead = reportPath("auth");
+        const finAudit = reportPath("integrity_auditor", 1);
+        finWrite(finS1, "# Auth Specialist\nVerified src/auth.js:1.\n");
+        finWrite(finLead, "# Auth Lead\nContent Verdict: PASS\nVerified src/auth.js.\n");
+        const finRec = {
+          squadId: "auth",
+          workspace: finDir,
+          verdict: "PASS",
+          requireIntegrityAudit: true,
+          verifiedFiles: fingerprint(finDir, ["src/auth.js"]),
+          assignments: [{ conversationId: "auth-spec-1", report: finS1 }],
+          handoffs: [{ sender: "auth-spec-1", message: `@coordinator READY ${finS1} — src/auth.js:1 verified` }]
+        };
+        finWrite("scratch/fin-record.json", JSON.stringify(finRec, null, 2) + "\n");
+
+        // 1. Fail closed when integrity audit is missing (no --allow-unaudited)
+        const finMissingAudit = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-record.json"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finMissingAudit.status, 0, "UX-SQ-015: finalize must fail closed when integrity audit is missing");
+        assert.equal(fs.existsSync(path.join(finDir, "scratch/agy-squad/squad-auth/lead/report.sources.json")), false);
+
+        // 2. Fail closed when handoff receipt is malformed (before writing any bundle)
+        const badHandoffRec = { ...finRec, handoffs: [{ sender: "auth-spec-1", message: "bad receipt" }] };
+        finWrite("scratch/fin-bad-handoff.json", JSON.stringify(badHandoffRec, null, 2) + "\n");
+        const finBadHandoff = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-bad-handoff.json", "--allow-unaudited"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finBadHandoff.status, 0, "UX-SQ-015: finalize must fail closed on invalid handoff receipt");
+        assert.equal(fs.existsSync(path.join(finDir, "scratch/agy-squad/squad-auth/lead/report.sources.json")), false);
+
+        // 3. Reject --keep-reports without --prune
+        const finBadFlags = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-record.json", "--keep-reports"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finBadFlags.status, 0, "UX-SQ-015: finalize --keep-reports without --prune must fail");
+        assert.match(finBadFlags.stderr, /--keep-reports.*requires '--prune'/);
+
+        // 4. Write valid CLEAN integrity audit with matching Evidence Digest and finalize cleanly (no prune)
+        const finDigest = computeEvidenceDigest(finDir, finRec).evidenceDigest;
+        finWrite(finAudit, `# Integrity Audit\nTarget Squad: auth\nEvidence Digest: ${finDigest}\nIntegrity Verdict: CLEAN\n`);
+        const finOk = spawnSync(process.execPath, [agySquadCli, "finalize", "./scratch/fin-record.json"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(finOk.status, 0, `UX-SQ-015: audited finalize failed: ${finOk.stderr}`);
+        const finOkJson = JSON.parse(finOk.stdout);
+        assert.equal(finOkJson.inspected.length, 1);
+        assert.equal(finOkJson.inspected[0].status, "READY");
+        assert.equal(finOkJson.bundled.auditPolicy, "required");
+        assert.equal(finOkJson.verified.sha256, finOkJson.bundled.sha256);
+        assert.equal(finOkJson.verified.auditPolicy, "required");
+        assert.equal(finOkJson.pruned, null);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), true, "Without --prune, loose specialist report stays on disk");
+
+        // 5. Finalize with --allow-unaudited --replace --prune --keep-reports
+        const finKeep = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-record.json", "--allow-unaudited", "--replace", "--prune", "--keep-reports"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finKeep.status, 0, `UX-SQ-015: finalize --allow-unaudited --prune --keep-reports failed: ${finKeep.stderr}`);
+        const finKeepJson = JSON.parse(finKeep.stdout);
+        assert.equal(finKeepJson.verified.auditPolicy, "unaudited-explicit");
+        assert.deepEqual(finKeepJson.pruned.removed, []);
+        assert.deepEqual(finKeepJson.pruned.retained, [finS1]);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), true);
+
+        // 6. Finalize audited with --replace --prune removes verified loose specialist report
+        const finPrune = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-record.json", "--replace", "--prune"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finPrune.status, 0, `UX-SQ-015: finalize --replace --prune failed: ${finPrune.stderr}`);
+        const finPruneJson = JSON.parse(finPrune.stdout);
+        assert.equal(finPruneJson.verified.auditPolicy, "required");
+        assert.deepEqual(finPruneJson.pruned.removed, [finS1]);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), false, "With --prune, loose specialist report must be unlinked");
+
+        // 7. Fail closed when lead verdict is FAIL without --allow-non-passing
+        finWrite(finS1, "# Auth Specialist\nVerified src/auth.js:1.\n");
+        finWrite(finLead, "# Auth Lead\nContent Verdict: FAIL\nBlocker found.\n");
+        const finFailVerdict = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-record.json", "--allow-unaudited", "--replace"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(finFailVerdict.status, 0, "UX-SQ-015: finalize must reject FAIL verdict unless --allow-non-passing");
+      } finally {
+        fs.rmSync(finDir, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(w2CliDir, { recursive: true, force: true });
       fs.rmSync(w2CliWt, { recursive: true, force: true });
