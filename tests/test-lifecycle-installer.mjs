@@ -429,6 +429,7 @@ try {
   assert.match(cmdShimText, /setlocal/);
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
+  assert.match(cmdShimText, /Math\.min\(parseInt\(process\.versions\.node,10\),22\)===22/);
   assert.match(cmdShimText, /:fallback/);
   assert.match(cmdShimText, /\(goto\) 2>nul & node\.exe /);
   assert.doesNotMatch(cmdShimText, /if %errorlevel% equ 0 \(/i);
@@ -1069,6 +1070,28 @@ try {
       assert.ok(
         unsupportedStatusLines.some((l) => l.includes("upgrade Node.js to >= 22.0.0 (found v20.18.0)")),
         "RAW-DEP-001: status under Node < 22 must instruct upgrading Node.js rather than re-running setup on Node 20"
+      );
+
+      const prefixedVersionLines = [];
+      installerMod.printStatus({
+        includeCompanions: false,
+        nodeVersion: "v20.18.0",
+        log: (line) => prefixedVersionLines.push(line)
+      });
+      assert.ok(
+        prefixedVersionLines.some((l) => l.includes("UNSUPPORTED (v20.18.0 < 22.0.0; upgrade Node.js)")),
+        `printStatus must not double-prefix v-prefixed nodeVersion, got: ${prefixedVersionLines.join("\n")}`
+      );
+
+      const emptyVersionLines = [];
+      installerMod.printStatus({
+        includeCompanions: false,
+        nodeVersion: "",
+        log: (line) => emptyVersionLines.push(line)
+      });
+      assert.ok(
+        emptyVersionLines.some((l) => l.includes("UNSUPPORTED (unknown < 22.0.0; upgrade Node.js)")),
+        `printStatus must normalize empty nodeVersion to unknown, got: ${emptyVersionLines.join("\n")}`
       );
 
       const runtimeStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });

@@ -730,6 +730,34 @@ console.log("Agy-Squad MCP server tests\n");
       repoRoot
     );
 
+    const rootUriFallbackResponses = runInCwd(simPluginDir, [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", rootUri: pathToFileURL(repoRoot).href }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "squad_planner",
+          arguments: { task: "Review this repository", roles: ["Security"], scopeFiles: ["mcp"] }
+        }
+      }
+    ]);
+    assert.equal(
+      Boolean(rootUriFallbackResponses[1].result.isError),
+      false,
+      rootUriFallbackResponses[1].result.content[0].text
+    );
+    assert.equal(
+      JSON.parse(rootUriFallbackResponses[1].result.content[0].text).bundleRecordTemplates.task_squad.workspace,
+      repoRoot,
+      "RAW-MCP-001: initialize rootUri must supply workspace cleanly even when MCP cwd is installed plugin directory"
+    );
+
     const customPluginResponses = runInCwd(simCustomPkgPlugin, [
       { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
       {

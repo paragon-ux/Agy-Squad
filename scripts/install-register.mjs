@@ -855,6 +855,8 @@ export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
     "setlocal",
     "where node.exe >nul 2>nul",
     "if errorlevel 1 goto :fallback",
+    `node.exe -e "process.exit(Math.min(parseInt(process.versions.node,10),${MIN_NODE_MAJOR})===${MIN_NODE_MAJOR}?0:1)" >nul 2>nul`,
+    "if errorlevel 1 goto :fallback",
     // A label-less GOTO ends the batch context. The queued executable can
     // delete this shim (and any managed node.cmd) and return its own status.
     `(goto) 2>nul & node.exe "${escapedTarget}" %*`,
@@ -1328,11 +1330,13 @@ export function printStatus(options = {}) {
             : `ACTIVE (${plug.path})`;
   log("Checking Agy-Squad installation status...\n");
   const rt = status.details.runtime;
+  const cleanedNode = typeof rt.nodeVersion === "string" ? rt.nodeVersion.trim().replace(/^v/i, "") : "";
+  const foundNode = cleanedNode ? `v${cleanedNode}` : "unknown";
   log(
     `- Node.js Runtime (>= ${rt.minNodeVersion}): ${
       rt.supported
-        ? `SUPPORTED (v${rt.nodeVersion})`
-        : `UNSUPPORTED (v${rt.nodeVersion} < ${rt.minNodeVersion}; upgrade Node.js)`
+        ? `SUPPORTED (${foundNode})`
+        : `UNSUPPORTED (${foundNode} < ${rt.minNodeVersion}; upgrade Node.js)`
     }`
   );
   log(`- Native Plugin Link: ${pluginNote}`);
@@ -1393,8 +1397,6 @@ export function printStatus(options = {}) {
           : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
   if (!status.details.runtime.supported) {
-    const cleanedNode = typeof rt.nodeVersion === "string" ? rt.nodeVersion.trim().replace(/^v/i, "") : "";
-    const foundNode = cleanedNode ? `v${cleanedNode}` : "unknown";
     log(`Next step: upgrade Node.js to >= ${rt.minNodeVersion} (found ${foundNode}), then run 'npx --package=agy-squad@latest agy-squad setup'.`);
   } else if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
     log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
