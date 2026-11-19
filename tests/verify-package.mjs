@@ -21,6 +21,8 @@ const REQUIRED = [
   "mcp/planner.mjs",
   "mcp/handoffs.mjs",
   "mcp/verdicts.mjs",
+  ".agents/skills/day-one-review/SKILL.md",
+  ".agents/skills/day-one-review/references/day-one-protocol.md",
   ".agents/skills/full-review/SKILL.md",
   ".agents/skills/full-review/references/evidence-intake.md",
   ".agents/skills/full-review/references/report-template.md",

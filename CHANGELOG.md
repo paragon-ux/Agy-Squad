@@ -5,6 +5,15 @@ All notable changes to `Agy-Squad` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-19
+
+### Added
+- **PR Review Standard `v1.5.0` with Category `4.11 SEC` (`.agents/skills/pr-review/references/pr-review-standard.md`, `pr-review`, `full-review`, `self-diagnosis`, `diagnose.mjs`)**: Added mandatory 11th category `SEC` (Security, trust boundaries, and vulnerabilities) at the end of the category order (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`, `SEC`) with explicit non-double-counting rules separating functional `RUN`/`SCRIPT`/`SVC` bugs from exploitable security defects; updated `diagnose.mjs` to emit the 11-category `v1.5.0` matrix and validate `SEC` coverage on `v1.5.0` ledgers while remaining backward-compatible with historical `v1.4.0` ledgers.
+- **New `day-one-review` Task-Spec Skill (`.agents/skills/day-one-review/SKILL.md`, `references/day-one-protocol.md`)**: Added a structured Day-1 launch-readiness review and remediation workflow built on PR Review Standard `v1.5.0`: defaults to non-`/swarm` execution (direct `invoke_subagent` or single-agent audit) under `scratch/day-one-review/`, enforces a raw unguided initial pass (`r1`) with a Cold Day-1 User-Journey Trace Matrix and Ship Verdict (`SHIP NOW` | `SHIP WITH QUICK FIXES` | `HOLD BEFORE PUBLIC RELEASE`), separates remediation with strict interruption-safe selective subagent resume (never interrupting active workers or launching duplicate replacements, with read-only git + transcript recovery audit if a worker dies permanently), builds follow-up reviews (`r2`, `r3`, ...) cumulatively on `r1`, and supports an explicit opt-in flat category-specialist + flat auditor `/swarm` mode generalized for any target repository.
+
+### Changed
+- **5-Skill Installer, Preflight, Packaging & Docs Parity (`scripts/install-register.mjs`, `scripts/release-preflight.mjs`, `tests/verify-package.mjs`, `docs/`, `package.json`, `plugin.json`)**: Updated plugin registration, `--check`, `status`, release preflight, and package boundary verification (`50` verified files) to require all five skills (`pr-review`, `full-review`, `day-one-review`, `self-diagnosis`, `swarm-governance`), and updated public documentation (`docs/roles-and-workflows.md`, `docs/core-workflows.md`, `docs/getting-started.md`, `docs/index.md`, `docs/concepts.md`) for Standard `v1.5.0` and `day-one-review`.
+
 ## [0.1.3] - 2026-11-19
 
 ### Added

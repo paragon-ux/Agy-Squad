@@ -1,7 +1,7 @@
 # Agy-Squad PR Review Standard
 
-Version: 1.4.0
-Status: Active repository workflow standard (enforced by `.agents/skills/pr-review/SKILL.md` and `.agents/skills/self-diagnosis/SKILL.md`)
+Version: 1.5.0
+Status: Active repository workflow standard (enforced by `.agents/skills/pr-review/SKILL.md`, `.agents/skills/full-review/SKILL.md`, `.agents/skills/day-one-review/SKILL.md`, and `.agents/skills/self-diagnosis/SKILL.md`)
 Established: 2026-11-08
 
 ## Purpose and authority
@@ -53,8 +53,9 @@ Each category has its own coverage statement, independently triaged P1/P2/P3 fin
 | SCRIPT | Scripts, evaluation, and developer tooling | Do scripts fail on unexpected results? Are exceptions scenario-specific? Are measurement claims limited to what was measured? |
 | TEST | Tests and CI | Do tests prove the guarantees, including adversarial cases? What ran, where, against which revision, and what remains unverified? |
 | DEP | Dependencies, packaging, and configuration | Are installation paths, lockfiles, supported versions, configuration names, and startup assumptions coherent? |
+| SEC | Security, trust boundaries, and vulnerabilities | Are untrusted inputs guarded against injection (shell/command/SQL/template/prompt), path traversal, and symlink/TOCTOU escapes? Are authn/authz, isolation, secret/PII hygiene, supply-chain checksums/timeouts, and fail-closed defaults enforced? |
 
-Map every changed file to one primary category. Cross-reference affected categories without counting the same defect twice. Split a category into named subsections when necessary; additions cannot replace the required categories. A documentation file defining architecture can belong primarily to ARCH.
+Map every changed file to one primary category. Cross-reference affected categories without counting the same defect twice: functional parsing or logic bugs belong primarily to `RUN`, `SCRIPT`, or `SVC`, whereas exploitable security vulnerabilities or broken trust boundaries belong primarily to `SEC` and cross-reference affected layers. Split a category into named subsections when necessary; additions cannot replace the required categories. A documentation file defining architecture can belong primarily to ARCH.
 
 "No findings" is permitted. A finding quota is prohibited.
 
@@ -143,7 +144,7 @@ Re-review each fix in its primary category and all affected categories. A fix co
 1. Review metadata, Session Provenance table, and evidence limits.
 2. File-to-category inventory and coverage matrix.
 3. Architecture-to-implementation trace.
-4. Ten category sections (`ARCH`..`DEP`), each with separate P1, P2, and P3 triage, verification status, and verdict.
+4. Eleven category sections (`ARCH`..`DEP`, `SEC`), each with separate P1, P2, and P3 triage, verification status, and verdict.
 5. Atomic P0–P3 findings (whether embedded in category tables/pipe-delimited headings in Section 4 or consolidated in Section 5 ahead of cross-category root causes in Section 6; `diagnose.mjs` validates Sections 4–7 uniformly).
 6. Cross-category root causes, verification record, and remaining gaps.
 7. Overall disposition, Direction decision (when requested), and finding closure table.
@@ -156,6 +157,7 @@ Save in-repo review reports under `docs/reviews/` when the target repository alr
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.5.0 | 2026-11-19 | Add mandatory 11th category `4.11 SEC` (Security, trust boundaries, and vulnerabilities) at the end of the category list (`ARCH`..`DEP`, `SEC`) with explicit non-double-counting boundaries; align `diagnose.mjs` and review skills (`pr-review`, `full-review`, `day-one-review`, `self-diagnosis`) while keeping legacy `v1.4.0` ledgers valid. |
 | 1.4.0 | 2026-11-14 | Enforce mandatory Sections 1–8 and cross-section ID-status consistency in `validateTargetReviewLedger`; surface open P0–P2 ledger blockers explicitly; require `Evidence Digest: <64-hex>` binding (`agy-squad digest`), multi-auditor `integrityAudits[]` consensus, persisted bundle `auditPolicy`, atomic pre-delete teardown preflight, and documented single- vs multi-squad audit slots (`squad-integrity_auditor` vs `squad-integrity_auditor-<id>`). |
 | 1.3.0 | 2026-11-08 | Enforce `1 ID = 1 Row` (ban umbrella/range IDs) and 6-status enum, add tiered record density for P3 tables, require Section 1 Session Provenance and mandatory Section 8 (Post-Remediation Residuals & Deferred Dispositions), and standardize Section 9 (`/self-diagnosis` Cohort & Bundle Ledger). |
 | 1.2.0 | 2026-11-08 | Adapt standard to Agy-Squad with 5 WSL runtime verification boundaries, durable review ledger coupling with `/self-diagnosis`, and distinct version bump per Section 0. |

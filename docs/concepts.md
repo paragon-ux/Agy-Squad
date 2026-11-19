@@ -71,5 +71,8 @@ The command-line companion binary (`>= 1.1.0`) provisioned by `Agy-Context-Saver
 ### Self-diagnosis (`/self-diagnosis`)
 Agy-Squad's harness diagnostic and optimization skill (`.agents/skills/self-diagnosis/SKILL.md`). It provides a zero-subagent local profiler (`diagnose.mjs`) and three targeted specialist cohorts that audit skills, runtime contracts, and token budgets under operator supervision.
 
-### PR Review Standard `v1.4.0` (`/pr-review`)
-Agy-Squad's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` structured reports delivered in chat, an Antigravity artifact, or `docs/reviews/<slug>.md` when requested or already adopted in the repository.
+### PR Review Standard `v1.5.0` (`/pr-review`)
+Agy-Squad's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across eleven categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`, and `SEC` for security, trust boundaries, and vulnerabilities), and `1 ID = 1 Row` structured reports delivered in chat, an Antigravity artifact, or `docs/reviews/<slug>.md` when requested or already adopted in the repository.
+
+### Day-one review (`/day-one-review`)
+Agy-Squad's raw, unguided first-time-user launch-readiness skill (`.agents/skills/day-one-review/SKILL.md`). It runs without `/swarm` by default (using direct `invoke_subagent` or single-agent audits under `scratch/day-one-review/`), starts with an unanchored cold review under PR Review Standard `v1.5.0`, remediates findings with selective resume of interrupted subagents only, builds follow-up reviews cumulatively on the initial pass, and supports an explicit flat category-specialist + flat auditor `/swarm` opt-in for any target repository.

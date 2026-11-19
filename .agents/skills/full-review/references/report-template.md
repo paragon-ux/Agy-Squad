@@ -8,11 +8,11 @@ Copy this skeleton into `docs/reviews/<review-slug>.md` when the target reposito
 
 # <Review title>
 
-**Governing Standard:** Agy-Squad PR Review Standard `v1.4.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md))
+**Governing Standard:** Agy-Squad PR Review Standard `v1.5.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md))
 **Review type:** `<PR / branch / working tree / subsystem / evidence bundle / direction decision>`
 **Review date:** `<YYYY-MM-DD>`
 **Reviewer:** `<name / agent>`
-**Standard version:** `1.4.0`
+**Standard version:** `1.5.0`
 
 ## 1. Review metadata, Session Provenance, and evidence limits
 
@@ -50,7 +50,7 @@ Copy this skeleton into `docs/reviews/<review-slug>.md` when the target reposito
 
 | Artifact | Change / role | Primary category | Cross-references | Coverage |
 | --- | --- | --- | --- | --- |
-| `<path>` | `<added/modified/unchanged>` | `<ARCH...DEP>` | `<categories>` | `<Complete/Partial/Not reviewed>` |
+| `<path>` | `<added/modified/unchanged>` | `<ARCH...DEP, SEC>` | `<categories>` | `<Complete/Partial/Not reviewed>` |
 
 | Category | Scope covered | Coverage | Verdict |
 | --- | --- | --- | --- |
@@ -64,6 +64,7 @@ Copy this skeleton into `docs/reviews/<review-slug>.md` when the target reposito
 | `SCRIPT` | | | |
 | `TEST` | | | |
 | `DEP` | | | |
+| `SEC` | | | |
 
 ## 3. Architecture-to-implementation trace
 
@@ -89,7 +90,7 @@ Narrative: `<what the trace establishes and what it does not>`
 - **Verification:** `<tests inspected/executed, CI, missing proof>`
 - **Category Verdict:** `<Changes required / No findings within reviewed scope / Incomplete / Not applicable>`
 
-Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, and `DEP`.
+Repeat this seven-item record for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (`4.6`), `DB` (`4.7`), `SCRIPT` (`4.8`), `TEST` (`4.9`), `DEP` (`4.10`), and `SEC` (`4.11`: Security, trust boundaries, and vulnerabilities).
 
 ### 4.12 Integrity audit record (when an integrity audit is used)
 
@@ -203,7 +204,7 @@ Include only when cohorts were dispatched.
 ## Quality gates
 
 - [ ] The standard was read; target, base, dirty state, evidence manifest, and exclusions are pinned.
-- [ ] Every changed file or artifact is mapped to one primary category; all ten categories have scope, coverage, P1/P2/P3, verification, and verdict.
+- [ ] Every changed file or artifact is mapped to one primary category; all eleven categories (`ARCH`..`DEP`, `SEC`) have scope, coverage, P1/P2/P3, verification, and verdict.
 - [ ] Every finding has one ID, one status, and the required fields; no umbrella or range IDs.
 - [ ] Every material claim has a locator; observed and inferred are separated.
 - [ ] Prior findings are explicitly accepted, revised, or rejected.

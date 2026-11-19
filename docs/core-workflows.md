@@ -4,7 +4,7 @@ Agy-Squad runs four connected workflows across **Antigravity Desktop (IDE)** and
 
 1. **Task-proportional orchestration** (`squad_planner` / `agy-squad plan`, `dispatch_squad` / `agy-squad dispatch`, and `agy-squad` (`collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) backed by `mcp/handoffs.mjs`)
 2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))
-3. **Governed PR & non-diff reviews under Standard v1.4.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [`full-review`](roles-and-workflows.md#full-review))
+3. **Governed PR, non-diff, and Day-1 launch reviews under Standard v1.5.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), [`full-review`](roles-and-workflows.md#full-review), and [`day-one-review`](roles-and-workflows.md#day-one-review))
 4. **Three-scope evidence retention and deterministic scratch teardown**
 
 For the canonical definition of every role, Task-Spec vs. Execution-Modifier skill composition, MCP/CLI surface map, and the 4-check runtime closure gate, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
@@ -56,7 +56,7 @@ The [`self-diagnosis` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.
 
 ### Run the zero-subagent profiler
 
-From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, `dispatch_squad` and `squad_planner` compilation, handoff pipeline canaries, and the v1.4.0 review ledger schema:
+From the repository root, run `diagnose.mjs` to check skill frontmatter, relative links, byte/token budgets, `dispatch_squad` and `squad_planner` compilation, handoff pipeline canaries, and the v1.5.0 review ledger schema:
 
 ```bash
 # Markdown diagnostic report:
@@ -90,15 +90,15 @@ Every diagnostic pass follows one fixed sequence:
 
 `run zero-subagent profiler -> launch cohort -> reconcile & bundle reports -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> run diagnose.mjs --teardown -> remediate -> re-verify with the same specialists -> terminate subagents`
 
-## 3. Review pull requests to the v1.4.0 standard
+## 3. Review pull requests to the v1.5.0 standard
 
-The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) and [PR Review Standard v1.4.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
+The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), [`full-review` skill](roles-and-workflows.md#full-review), [`day-one-review` skill](roles-and-workflows.md#day-one-review), and [PR Review Standard v1.5.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
 
 | Standard section | Requirement |
 | --- | --- |
 | **Section 1: Commit and session provenance** | Pin base/head SHAs, dirty working-tree deltas, CI run IDs, and an append-only `Session Provenance` table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`). |
 | **Sections 2 and 3: Architecture-before-runtime trace** | Trace normative architecture docs or ADRs (when present in the target repository) to public contracts, source code, and tests before evaluating runtime behavior. |
-| **Section 4: Ten review categories** | Map every changed file to one primary category across `ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, and `DEP`. |
+| **Section 4: Eleven review categories** | Map every changed file to one primary category across `ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`, and `SEC` (`4.11` security, trust boundaries, and vulnerabilities). |
 | **Sections 7, 8, and 9: `1 ID = 1 Row` durability** | Give every distinct `P0` through `P3` finding its own row (range/umbrella IDs fail `diagnose.mjs`) with one of six statuses: `Open (Pre-Remediation)`, `Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, or `Closed (By Design)` / `Informational`. Record post-remediation residuals in Section 8 and `/self-diagnosis` cohort provenance plus bundle SHA-256 digests in Section 9. |
 
 `diagnose.mjs` and `npm test` enforce `pr-review` locally in the repository (not as a GitHub branch-protection rule).

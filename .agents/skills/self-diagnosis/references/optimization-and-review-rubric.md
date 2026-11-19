@@ -1,16 +1,16 @@
 # Agy-Squad Self-Diagnosis, PR-Review & Optimization Rubric
 
-This reference pairs the `self-diagnosis` skill with the [Agy-Squad PR Review Standard v1.4.0](../../pr-review/references/pr-review-standard.md) ([`pr-review` skill](../../pr-review/SKILL.md)). Use it to classify self-diagnosis findings, verify skill and runtime invariants, and evaluate token and execution optimizations.
+This reference pairs the `self-diagnosis` skill with the [Agy-Squad PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md) ([`pr-review` skill](../../pr-review/SKILL.md)). Use it to classify self-diagnosis findings, verify skill and runtime invariants, and evaluate token and execution optimizations.
 
 ---
 
-## 1. Coupling `self-diagnosis` with `pr-review` (Standard v1.4.0)
+## 1. Coupling `self-diagnosis` with `pr-review` (Standard v1.5.0)
 
-Every self-diagnosis pass evaluates `Agy-Squad` and its skills (`.agents/skills/self-diagnosis/`, `.agents/skills/pr-review/`) using the `pr-review` v1.4.0 trace chain:
+Every self-diagnosis pass evaluates `Agy-Squad` and its skills (`.agents/skills/self-diagnosis/`, `.agents/skills/pr-review/`, `.agents/skills/full-review/`, `.agents/skills/day-one-review/`, `.agents/skills/swarm-governance/`) using the `pr-review` v1.5.0 trace chain:
 
 `design thesis / invariant -> current architecture decision (docs/plans/LEDGER.md in Agy-Squad maintainer checkouts) -> public contract -> implementation -> verification`
 
-Map every diagnosed defect or optimization opportunity to **one primary category** from the 10 mandatory `pr-review` categories (cross-referencing related categories without double-counting):
+Map every diagnosed defect or optimization opportunity to **one primary category** from the 11 mandatory `pr-review` categories (cross-referencing related categories without double-counting):
 
 | Category | Self-Diagnosis & Optimization Focus |
 | --- | --- |
@@ -24,6 +24,7 @@ Map every diagnosed defect or optimization opportunity to **one primary category
 | `SCRIPT` | `bin/agy-squad.mjs` (`setup|install`, `status`, `uninstall`, `restore-backups`, `plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) and `.agents/skills/self-diagnosis/scripts/diagnose.mjs` deterministic exit codes and argument validation (`mcp/handoffs.mjs` is the internal library module, not a CLI). |
 | `TEST` | `tests/test-*.mjs` assertion strength, adversarial coverage, two-process concurrency, and supervised live subagent verification. |
 | `DEP` | `package.json`, `zensical.toml`, `.gitignore`, and `.github/workflows/*.yml` coherence. |
+| `SEC` | Untrusted input/injection safety, symlink/fd containment escapes, isolation/transcript access boundaries, secret/PII hygiene, supply-chain checksums/timeouts, and fail-closed security defaults. |
 
 ---
 
@@ -55,7 +56,7 @@ Map every diagnosed defect or optimization opportunity to **one primary category
 | **Synthesis Verdict Gate** | `bundleReports` or `verifyBundle` accepts a `lead/report.md` containing `FAIL`, `BLOCKED`, or no `PASS` token | `SVC` (**P1**) | Ensure `readSynthesis` in `mcp/handoffs.mjs` validates line-anchored `PASS` and rejects `FAIL` / `BLOCKED` across both `bundleReports` and `verifyBundle`. |
 | **Receipt Reconciliation** | Handoff rejected for `> 500` UTF-8 bytes, multiline text, wrong sender, or wrong slot | `SVC` (**P2**) | Ensure child sends single-line `READY <assigned-slot> — <observation>` within `500` UTF-8 bytes (`Buffer.byteLength`). |
 | **MCP Framing & Planner Boundary** | Oversized stdio payload allowed past `AGY_MAX_STDIO_PAYLOAD_BYTES`, negative byte limit accepted, or `squad_planner` omits `modelProvenance` / `provenanceScaffold` | `MCP` (**P1** / **P2**) | Verify positive integer `AGY_MAX_STDIO_PAYLOAD_BYTES` guard in `mcp/index.js` and `planSquadCohort` invariants in `mcp/planner.mjs`. |
-| **Durable Target PR Review Ledger Gate & `v1.4.0` Schema (`docs/reviews/`)** | Missing target ledger, starting code edits or `--teardown` before updating `docs/reviews/<target-review-slug>.md`, missing Sections `1–8` (`Session Provenance`, `Post-Remediation Residuals & Deferred Dispositions`, cross-section ID-status conflicts) or Section 9 (`/self-diagnosis` Cohort & Bundle Ledger), open P0–P2 ledger blockers, or umbrella IDs (`DOC-LEDGER-MISSING`, `DOC-LEDGER-SCHEMA`, `DOC-LEDGER-OPEN-BLOCKERS`) | `DOC` / `SVC` (**P1** if missing/stale pre-teardown; **P2** if schema/umbrella/open-blocker violation; **P3** `DOC-LEDGER-RESIDUALS-OPEN` while Section 8 `Residual (Open)` rows await fix) | Update `docs/reviews/<target-review-slug>.md` in place before remediation or `--teardown` with consistent `v1.4.0` Sections `1–8` (+ Section 9 for `/self-diagnosis` cohorts). |
+| **Durable Target PR Review Ledger Gate & `v1.5.0` Schema (`docs/reviews/`)** | Missing target ledger, starting code edits or `--teardown` before updating `docs/reviews/<target-review-slug>.md`, missing Sections `1–8` (`Session Provenance`, `SEC` coverage on `v1.5.0` ledgers, `Post-Remediation Residuals & Deferred Dispositions`, cross-section ID-status conflicts) or Section 9 (`/self-diagnosis` Cohort & Bundle Ledger), open P0–P2 ledger blockers, or umbrella IDs (`DOC-LEDGER-MISSING`, `DOC-LEDGER-SCHEMA`, `DOC-LEDGER-OPEN-BLOCKERS`) | `DOC` / `SVC` (**P1** if missing/stale pre-teardown; **P2** if schema/umbrella/open-blocker violation; **P3** `DOC-LEDGER-RESIDUALS-OPEN` while Section 8 `Residual (Open)` rows await fix) | Update `docs/reviews/<target-review-slug>.md` in place before remediation or `--teardown` with consistent `v1.5.0` Sections `1–8` (+ Section 9 for `/self-diagnosis` cohorts; historical `v1.4.0` ledgers remain valid). |
 | **Self-Diagnosis Deterministic Scratch Teardown** | Lingering `scratch/agy-squad/squad-<id>` or `self-diag-canary-*` directories left in workspace after verification (`SVC-TEARDOWN-*`) | `SVC` (**P2** post-cohort; **P3** advisory when `--allow-active-cohort` is passed mid-cohort) | Run `node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown [all | <squadId> [--accept <sha256>]] [--ledger docs/reviews/<slug>.md]` after updating the target `docs/reviews/` ledger to atomically verify bundles and remove self-diagnosis directories and empty `scratch/agy-squad` / `scratch` parent directories. |
 | **Cohort Agent Freshness vs. Remediation Check** | Reusing an old pass's IDs for an unrelated pass (`swarm{action: "add"}` / `invoke_subagent` required), or spawning a brand-new squad when verifying remediations on the active squad's exact findings (`post_message` on `/swarm` / `send_message` on subagents required) | `SVC` (**P2**) | Launch fresh workers/subagents for new independent passes; wake the **same** cohort (`post_message` on `/swarm` or `send_message` for `invoke_subagent`) after `prune`/`--teardown` when verifying that their exact reported findings were remediated. |
 | **Post-Cohort Worker & Task Closure** | Completed `/swarm` workers (including `monitor`), subagents, background tasks (`manage_task`), or child commands left lingering after final bundle verification and `--teardown` | `SVC` (**P2**) | Complete the 4-check closure gate once final verification and `--teardown` finish: kill all `/swarm` members including `monitor` (`swarm{action: "status"}` -> `swarm{action: "kill"}`), confirm `manage_subagents` (when exposed in toolset) = `0`, `manage_task(Action='list')` empty, and zero stray child commands. |

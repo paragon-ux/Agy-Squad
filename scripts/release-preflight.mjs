@@ -116,6 +116,8 @@ if (pkg) {
     ".agents/skills/full-review/references/evidence-intake.md",
     ".agents/skills/full-review/references/report-template.md",
     ".agents/skills/full-review/references/review-roles.md",
+    ".agents/skills/day-one-review/SKILL.md",
+    ".agents/skills/day-one-review/references/day-one-protocol.md",
     ".agents/skills/self-diagnosis/SKILL.md",
     ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
     ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",

@@ -597,11 +597,17 @@ try {
   assert.match(partialStatus.stdout, /PARTIAL INSTALLATION/);
   fs.writeFileSync(shimFile, savedShim, os.platform() === "win32" ? undefined : { mode: 0o755 });
 
-  // L49: skillsReady must require all 4 skills (including swarm-governance) and lifecycle subcommands enforce strict args
+  // L49 / v0.2.0: skillsReady must require all 5 skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
   const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
   fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
   assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, false);
   fs.writeFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), savedSwarmSkill);
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, true);
+
+  const savedDayOneSkill = fs.readFileSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"), "utf8");
+  fs.rmSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"));
+  assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, false);
+  fs.writeFileSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"), savedDayOneSkill);
   assert.equal(detectExistingInstallation({ includeCompanions: false }).details.plugin.skillsReady, true);
 
   if (os.platform() !== "win32") {
