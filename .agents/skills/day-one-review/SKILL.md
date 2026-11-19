@@ -13,7 +13,7 @@ description: >-
 
 # Agy-Squad Day-One Review Skill (Standard v1.5.0)
 
-Audit any repository from the outside in as a cold Day-1 developer installing and using it publicly tomorrow, then remediate confirmed findings and verify iteratively without digressing. The governing report contract is [PR Review Standard v1.5.0](../pr-review/references/pr-review-standard.md). Consult [references/day-one-protocol.md](./references/day-one-protocol.md), [Core workflows](https://paragon-ux.github.io/Agy-Squad/core-workflows/), and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#day-one-review).
+Audit any repository from the outside in as a cold Day-1 developer installing and using it publicly tomorrow, then remediate confirmed findings and verify iteratively without digressing. The governing report contract is [PR Review Standard v1.5.0](../pr-review/references/pr-review-standard.md). Consult [references/day-one-protocol.md](./references/day-one-protocol.md), [Day-One review guide](https://paragon-ux.github.io/Agy-Squad/skills/day-one-review/), [Core workflows](https://paragon-ux.github.io/Agy-Squad/core-workflows/), and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/).
 
 ---
 

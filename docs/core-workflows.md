@@ -3,8 +3,8 @@
 Agy-Squad runs four connected workflows across **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** on **Linux, macOS, and Windows**:
 
 1. **Task-proportional orchestration** (`squad_planner` / `agy-squad plan`, `dispatch_squad` / `agy-squad dispatch`, and `agy-squad` (`collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) backed by `mcp/handoffs.mjs`)
-2. **Recursive harness self-diagnosis** ([`.agents/skills/self-diagnosis/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/self-diagnosis/SKILL.md))
-3. **Governed PR, non-diff, and Day-1 launch reviews under Standard v1.5.0** ([`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), [`full-review`](roles-and-workflows.md#full-review), and [`day-one-review`](roles-and-workflows.md#day-one-review))
+2. **Recursive harness self-diagnosis** ([`self-diagnosis`](skills/self-diagnosis.md))
+3. **Governed PR, non-diff, and Day-1 launch reviews under Standard v1.5.0** ([`pr-review`](skills/pr-review.md), [`full-review`](skills/full-review.md), and [`day-one-review`](skills/day-one-review.md))
 4. **Three-scope evidence retention and deterministic scratch teardown**
 
 For the canonical definition of every role, Task-Spec vs. Execution-Modifier skill composition, MCP/CLI surface map, and the 4-check runtime closure gate, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
@@ -92,7 +92,7 @@ Every diagnostic pass follows one fixed sequence:
 
 ## 3. Review pull requests to the v1.5.0 standard
 
-The [`pr-review` skill](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md), [`full-review` skill](roles-and-workflows.md#full-review), [`day-one-review` skill](roles-and-workflows.md#day-one-review), and [PR Review Standard v1.5.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
+The [`pr-review` skill](skills/pr-review.md), [`full-review` skill](skills/full-review.md), [`day-one-review` skill](skills/day-one-review.md), and [PR Review Standard v1.5.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md) define the repository review contract:
 
 | Standard section | Requirement |
 | --- | --- |

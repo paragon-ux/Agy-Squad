@@ -14,7 +14,7 @@ description: >-
 
 Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs, `day-one-review` for raw cold first-time-user launch reviews, and `self-diagnosis` for maintainer harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`agy-squad plan`) for `/swarm` or `dispatch_squad` (`agy-squad dispatch`) for `invoke_subagent`.
 
-The governing report contract is [Agy-Squad PR Review Standard v1.5.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
+The governing report contract is [Agy-Squad PR Review Standard v1.5.0](../pr-review/references/pr-review-standard.md); see [Full review guide](https://paragon-ux.github.io/Agy-Squad/skills/full-review/) and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
 
 ## Use this skill when
 

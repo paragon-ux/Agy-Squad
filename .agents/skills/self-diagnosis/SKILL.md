@@ -11,7 +11,7 @@ description: >-
 
 # Agy-Squad Self-Diagnosis & Optimization Skill
 
-**[Agy-Squad maintainers only: run inside an Agy-Squad source checkout.]** Self-diagnose, audit, and optimize `Agy-Squad` and its workspace skills ([`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), [`day-one-review`](../day-one-review/SKILL.md), [`swarm-governance`](../swarm-governance/SKILL.md)). Pair this **Task Spec** with `swarm-governance` on `/swarm`; see [Optimization & Review Rubric](./references/optimization-and-review-rubric.md), [Execution & Teardown Reference](./references/execution-and-teardown.md), and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#self-diagnosis).
+**[Agy-Squad maintainers only: run inside an Agy-Squad source checkout.]** Self-diagnose, audit, and optimize `Agy-Squad` and its workspace skills ([`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), [`day-one-review`](../day-one-review/SKILL.md), [`swarm-governance`](../swarm-governance/SKILL.md)). Pair this **Task Spec** with `swarm-governance` on `/swarm`; see [Optimization & Review Rubric](./references/optimization-and-review-rubric.md), [Execution & Teardown Reference](./references/execution-and-teardown.md), [Self-diagnosis guide](https://paragon-ux.github.io/Agy-Squad/skills/self-diagnosis/), and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/).
 
 ---
 

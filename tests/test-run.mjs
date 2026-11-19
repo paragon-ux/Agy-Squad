@@ -324,7 +324,10 @@ try {
     );
     fs.writeFileSync(
       prSkillPath,
-      origPrSkill.replace("roles-and-workflows/#pr-review", "roles-and-workflows/#nonexistent-anchor")
+      origPrSkill.replace(
+        "https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/",
+        "https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#nonexistent-anchor"
+      )
     );
     fs.writeFileSync(
       stoppingDocPath,
@@ -1158,9 +1161,13 @@ try {
     }
 
     // UX-SQ-R2-003 & UX-SQ-R2-006: hosted docs align with opt-in docs/reviews/ and CHANGELOG [0.1.3] documents finalize without internal ledger codes
+    const prSkillDocText = fs.readFileSync(path.join(repoRoot, "docs/skills/pr-review.md"), "utf8");
     const rolesDocText = fs.readFileSync(path.join(repoRoot, "docs/roles-and-workflows.md"), "utf8");
     const conceptsDocText = fs.readFileSync(path.join(repoRoot, "docs/concepts.md"), "utf8");
-    assert.match(rolesDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    assert.match(prSkillDocText, /in chat or an Antigravity artifact.*`docs\/reviews\/<review-slug>\.md`/i);
+    for (const skillPage of ["pr-review", "full-review", "day-one-review", "swarm-governance", "self-diagnosis"]) {
+      assert.ok(rolesDocText.includes(`skills/${skillPage}.md`), `docs/roles-and-workflows.md must link to skills/${skillPage}.md`);
+    }
     assert.match(conceptsDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
     const changelogText = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
     const v013Section = changelogText.slice(changelogText.indexOf("## [0.1.3]"), changelogText.indexOf("## [0.1.2]"));
