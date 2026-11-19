@@ -201,6 +201,30 @@ try {
     true,
     "Installed plugin directory must expose assets/logo.svg referenced by plugin.json"
   );
+  // Redirected assets symlink in linked install must be detected as pointsElsewhere
+  const installedAssetsPath = path.join(tmpProfile, ".gemini", "config", "plugins", "agy-squad", "assets");
+  if (fs.lstatSync(installedAssetsPath).isSymbolicLink()) {
+    const altAssetsDir = path.join(tmpProfile, "alt-assets");
+    fs.mkdirSync(altAssetsDir, { recursive: true });
+    fs.copyFileSync(path.join(repoRoot, "assets", "logo.svg"), path.join(altAssetsDir, "logo.svg"));
+    fs.unlinkSync(installedAssetsPath);
+    fs.symlinkSync(altAssetsDir, installedAssetsPath, os.platform() === "win32" ? "junction" : "dir");
+    const redirectedAssetsStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.equal(redirectedAssetsStatus.status, 1, "Redirected assets symlink must fail health status");
+    const redirectedAssetsParsed = JSON.parse(redirectedAssetsStatus.stdout);
+    assert.equal(redirectedAssetsParsed.details.plugin.pointsElsewhere, true);
+    assert.equal(redirectedAssetsParsed.isComplete, false);
+    const repairAssetsRes = spawnSync(process.execPath, [cli, "setup"], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.equal(repairAssetsRes.status, 0, repairAssetsRes.stderr || repairAssetsRes.stdout);
+  }
 
   const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
   assert.ok(posixShimBody.startsWith("#!/bin/sh\n"), "POSIX shim must use #!/bin/sh so fallback works when PATH lacks sh");
@@ -882,6 +906,20 @@ try {
       const status = shim(installedShim, "status", "--json");
       ok(status);
       assert.equal(JSON.parse(status.stdout).isComplete, true);
+
+      // Missing assets/logo.svg in installed copy must fail runtimeReady / isComplete until restored
+      const installedLogo = path.join(installed, "assets", "logo.svg");
+      const logoBackup = fs.readFileSync(installedLogo, "utf8");
+      fs.unlinkSync(installedLogo);
+      const missingLogoStatus = shim(installedShim, "status", "--json");
+      assert.equal(missingLogoStatus.status, 1, "Missing assets/logo.svg must fail status check");
+      const missingLogoParsed = JSON.parse(missingLogoStatus.stdout);
+      assert.equal(missingLogoParsed.details.plugin.runtimeReady, false);
+      assert.equal(missingLogoParsed.isComplete, false);
+      fs.writeFileSync(installedLogo, logoBackup, "utf8");
+      const restoredLogoStatus = shim(installedShim, "status", "--json");
+      ok(restoredLogoStatus);
+      assert.equal(JSON.parse(restoredLogoStatus.stdout).isComplete, true);
 
       // The shim must propagate real failures and leave the working install intact.
       fs.writeFileSync(mcp, "{ malformed");

@@ -417,6 +417,7 @@ export function detectExistingInstallation(options = {}) {
         }
       } else {
         const linkedDirs = [
+          ["assets", "assets"],
           ["bin", "bin"],
           ["docs", "docs"],
           ["mcp", "mcp"],
@@ -497,10 +498,22 @@ export function detectExistingInstallation(options = {}) {
         fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
       );
       details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
+      let logoTarget = "assets/logo.svg";
+      try {
+        const installedPlugin = JSON.parse(fs.readFileSync(path.join(pluginDest, "plugin.json"), "utf8"));
+        if (typeof installedPlugin?.logo === "string" && installedPlugin.logo.trim()) {
+          logoTarget = installedPlugin.logo.trim();
+        }
+      } catch {}
+      const resolvedLogoPath = path.resolve(pluginDest, logoTarget);
+      const logoInsidePlugin =
+        resolvedLogoPath === pluginDest || resolvedLogoPath.startsWith(pluginDest + path.sep);
       details.plugin.runtimeReady =
         fs.existsSync(path.join(pluginDest, "package.json")) &&
         fs.existsSync(path.join(pluginDest, "plugin.json")) &&
         Boolean(details.plugin.version) &&
+        logoInsidePlugin &&
+        fs.existsSync(resolvedLogoPath) &&
         fs.existsSync(path.join(pluginDest, "bin", "agy-squad.mjs")) &&
         fs.existsSync(path.join(pluginDest, "mcp", "index.js"));
     } else if (pluginLst && pluginLst.isSymbolicLink()) {
