@@ -1,6 +1,6 @@
 # Full review report template
 
-Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>` placeholder. Delete no mandatory section; use Not applicable with a reason where a section does not apply, and None identified within reviewed scope or Not assessed inside each triage bucket as the standard requires.
+Copy this skeleton into `docs/reviews/<review-slug>.md` when the target repository already maintains `docs/reviews/` or the user explicitly requests an in-repo ledger (otherwise deliver the filled report in chat or the Antigravity artifact directory), and replace every `<...>` placeholder. Delete no mandatory section; use Not applicable with a reason where a section does not apply, and None identified within reviewed scope or Not assessed inside each triage bucket as the standard requires.
 
 **Formatting & Readability:** Keep reports scannable in plain prose and Markdown tables. Reserve backticks strictly for exact code identifiers, file paths, CLI flags, and commands; never wrap plain numbers, statuses (Closed, Open, PASS), or quoted sentences inside inline backticks or fenced code blocks inside table cells.
 
@@ -20,7 +20,7 @@ Copy this skeleton into `docs/reviews/<review-slug>.md` and replace every `<...>
 
 | Field | Value |
 | --- | --- |
-| Repository | `paragon-ux/Agy-Squad` |
+| Repository | `<owner/repo>` |
 | Target | `<PR URL / branch / commit / working tree / evidence bundle>` |
 | Comparison base | `<base SHA / tag / none>` |
 | Head / tree | `<head SHA / tree>` |
@@ -73,7 +73,7 @@ For each behavior or claim:
 
 | Claim | Normative source | Architecture decision | Public contract | Implementation | Verification | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| `<claim>` | `<LEDGER ID / standard / user requirement>` | `<decision>` | `<schema/docs>` | `<code>` | `<test/run/evidence>` | `<satisfied / mismatch / unverified>` |
+| `<claim>` | `<architecture doc / ADR / standard / user requirement>` | `<decision>` | `<schema/docs>` | `<code>` | `<test/run/evidence>` | `<satisfied / mismatch / unverified>` |
 
 Narrative: `<what the trace establishes and what it does not>`
 
@@ -106,7 +106,7 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 
 ### 5.1 P0/P1/P2 finding records
 
-#### `<ID>`: `<title>` (`P1`, `Open (Pre-Remediation)`)
+#### `<ID>`: <title> | P1 | Open (Pre-Remediation)
 
 1. **Title, priority, status:** `<...>`
 2. **Contract provenance:** `<exact invariant / decision / contract / external norm>`

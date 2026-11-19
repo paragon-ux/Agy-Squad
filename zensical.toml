@@ -17,9 +17,6 @@ nav = [
   { "Tools" = "tools.md" },
   { "Stopping Agents" = "stopping-agents.md" },
   { "Benchmarks" = "benchmarks.md" },
-  { "Cross-Platform & WSL Verification" = "plans/wsl-cli-verification.md" },
-  { "Decision Ledger" = "plans/LEDGER.md" },
-  { "Native Enforcement Ledger" = "plans/native-enforcement-ledger.md" },
 ]
 
 [project.theme]

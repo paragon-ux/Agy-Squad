@@ -302,6 +302,139 @@ try {
   if (internalLinkCreated) {
     assert.equal(payload({ squadId: "all_l1", manifestPath: "internal.json" }).length, 2);
   }
+  // W1 Regressions (RUN-006..008, LEAD-RUN-001, SVC-001, SVC-002, SVC-006)
+  // LEAD-RUN-001: equal array scopeFiles / ScopeFiles aliases must not conflict
+  const equalScopeSpec = buildSubagentSpec(
+    { role: "Alias Spec", objective: "Check", scopeFiles: ["src/a.js"], ScopeFiles: ["src/a.js"] },
+    "alpha",
+    "swarm-manifest.json",
+    1
+  );
+  assert.equal(equalScopeSpec.Role, "Alias Spec");
+
+  // RUN-007: explicit null optional agent fields must reject instead of coalescing to defaults
+  for (const nullField of [
+    { role: null },
+    { typeName: null },
+    { model: null },
+    { workspace: null },
+    { expectedDeliverable: null }
+  ]) {
+    assert.throws(
+      () => buildSubagentSpec({ objective: "Check", scopeFiles: ["src/a.js"], ...nullField }, "alpha", "swarm-manifest.json", 1),
+      /invalid brief or payload fields|Agent '.*'/,
+      `RUN-007: explicit null for ${Object.keys(nullField)[0]} must throw`
+    );
+  }
+
+  // RUN-008: DISALLOWED_BUILTINS check is case-insensitive
+  for (const upperBuiltin of ["Research", "BROWSER", "Image-Generator"]) {
+    assert.throws(
+      () => buildSubagentSpec({ role: "Bad", objective: "Check", scopeFiles: ["src/a.js"], typeName: upperBuiltin }, "alpha", "swarm-manifest.json", 1),
+      /writable typeName/,
+      `RUN-008: disallowed builtin '${upperBuiltin}' must be rejected case-insensitively`
+    );
+  }
+
+  // RUN-006: custom integrity_auditor with matching instructions & Instructions must not trigger conflict after appendTargetInstruction
+  fs.writeFileSync(path.join(workspace, "dual-instr-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: {
+        specialists: [{
+          role: "Custom Dual Auditor",
+          objective: "Audit alpha",
+          scopeFiles: ["."],
+          instructions: "Keep evidence crisp.",
+          Instructions: "Keep evidence crisp."
+        }]
+      }
+    }
+  }));
+  const dualAuditPayload = payload({ squadId: "integrity_auditor", manifestPath: "dual-instr-auditor.json" });
+  assert.match(dualAuditPayload[0].Prompt, /Target Squad: alpha/);
+  assert.match(dualAuditPayload[0].Prompt, /Keep evidence crisp\./);
+
+  // SVC-001: dispatch_squad emits warnings when non-alias manifest models coerce to 'inherit'
+  fs.writeFileSync(path.join(workspace, "pinned-model.json"), JSON.stringify({
+    squads: {
+      alpha: {
+        lead: { ...agent("Lead", "src"), model: "gemini-4-hydrogen-high" },
+        specialists: [{ ...agent("First", "src/a.js"), model: "gemini-3.8-flash-high" }]
+      }
+    }
+  }));
+  const coercedDispatch = dispatch({ squadId: "alpha", manifestPath: "pinned-model.json" });
+  assert.equal(coercedDispatch.isError, undefined);
+  const coercedJson = JSON.parse(coercedDispatch.content[0].text);
+  assert.equal(coercedJson.Subagents[0].Model, "inherit");
+  assert.ok(Array.isArray(coercedJson.warnings) && coercedJson.warnings.some(w => /gemini-3\.8-flash-high/.test(w)), "SVC-001: dispatch_squad must emit model coercion warning");
+
+  // SVC-002 & SVC-006: integrity_auditor-<target> overrides honored, direct dispatch forbidden, non-canonical variants rejected, empty all_l1 throws
+  fs.writeFileSync(path.join(workspace, "scoped-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      beta: { lead: agent("Lead B", "docs"), specialists: [agent("Second", "docs/a.md")] },
+      "integrity_auditor-alpha": {
+        specialists: [{ role: "Alpha Custom Auditor", objective: "Custom audit for alpha", scopeFiles: ["src"] }]
+      }
+    }
+  }));
+  const scopedOverride = payload({ squadId: "integrity_auditor:alpha", manifestPath: "scoped-auditor.json" });
+  assert.equal(scopedOverride[0].Role, "Alpha Custom Auditor", "SVC-002: resolveIntegrityAuditor must honor integrity_auditor-<target>");
+  assert.match(scopedOverride[0].Prompt, /Target Squad: alpha/);
+  rejects({ squadId: "integrity_auditor-alpha", manifestPath: "scoped-auditor.json" }, /reserved|integrity_auditor:alpha/i);
+
+  for (const badAuditKey of ["integrity_auditor_custom", "INTEGRITY_AUDITOR"]) {
+    fs.writeFileSync(path.join(workspace, "bad-audit-key.json"), JSON.stringify({
+      squads: {
+        alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+        [badAuditKey]: { specialists: [{ role: "Bad", objective: "Audit", scopeFiles: ["."] }] }
+      }
+    }));
+    rejects({ squadId: "all_l1", manifestPath: "bad-audit-key.json" }, /integrity_auditor/i);
+  }
+
+  fs.writeFileSync(path.join(workspace, "audit-only.json"), JSON.stringify({
+    squads: {
+      integrity_auditor: { specialists: [{ role: "Auditor", objective: "Audit", scopeFiles: ["."] }] }
+    }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "audit-only.json" }, /at least one non-audit working squad/);
+
+  // OPT-RT-07: validateOnly avoids building discarded Prompt strings while preserving validation on all_l1 children and target lead
+  const validateOnlySpec = buildSubagentSpec(agent("Check", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, { validateOnly: true });
+  assert.equal(validateOnlySpec.Prompt, undefined, "OPT-RT-07: validateOnly must skip Prompt string formatting");
+  fs.writeFileSync(path.join(workspace, "bad-child-all-l1.json"), JSON.stringify({
+    squads: {
+      alpha: {
+        lead: agent("Lead", "src"),
+        specialists: [{ role: "Bad Child", objective: "Fail validation", scopeFiles: ["src"], typeName: "Browser" }]
+      }
+    }
+  }));
+  rejects({ squadId: "all_l1", manifestPath: "bad-child-all-l1.json" }, /writable typeName/);
+
+  // UX-SQ-003: formatNotFoundError recommends global 'agy-squad plan' / 'agy-squad dispatch', never checkout-only 'node bin/agy-squad.mjs'
+  const missingRes = dispatch({ squadId: "all_l1", manifestPath: "does-not-exist.json" });
+  assert.equal(missingRes.isError, true);
+  assert.match(missingRes.content[0].text, /agy-squad plan.*agy-squad dispatch/);
+  assert.doesNotMatch(missingRes.content[0].text, /node bin\/agy-squad\.mjs/);
+
+  // UX-SQ-006: compiled briefs align with Agy-Context-Saver v2.0.4 (rtk grep/find + bounded <=150-line read_file; rtk read for spillovers/task logs only)
+  const uxSpecBrief = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1).Prompt;
+  const uxLeadBrief = buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json").Prompt;
+  const uxAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1).Prompt;
+  for (const [label, promptText] of [
+    ["specialist", uxSpecBrief],
+    ["lead", uxLeadBrief],
+    ["auditor", uxAuditBrief]
+  ]) {
+    assert.match(promptText, /'rtk grep'\/'rtk find'/, `UX-SQ-006: ${label} brief must recommend rtk grep/find`);
+    assert.match(promptText, /<=150-line read_file slices \(StartLine\/EndLine\)/, `UX-SQ-006: ${label} brief must recommend bounded read_file slices`);
+    assert.doesNotMatch(promptText, /via 'rtk read'\/'rtk grep'|or 'rtk read'\/'rtk grep'/, `UX-SQ-006: ${label} brief must not recommend rtk read for workspace files`);
+  }
+
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

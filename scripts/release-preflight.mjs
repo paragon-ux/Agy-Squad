@@ -71,6 +71,11 @@ if (pkg) {
       ) {
         errors.push('plugin.json must define a non-empty string array "suggestedPrompts".');
       }
+      if (typeof pluginManifest.logo !== "string" || !pluginManifest.logo.trim()) {
+        errors.push('plugin.json must define a non-empty "logo" path.');
+      } else if (!exists(pluginManifest.logo.trim())) {
+        errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
+      }
     } catch (error) {
       errors.push(`plugin.json is not valid JSON: ${error.message}`);
     }
@@ -95,6 +100,7 @@ if (pkg) {
   }
 
   const requiredPackageFiles = [
+    "assets/logo.svg",
     "bin/agy-squad.mjs",
     "mcp/index.js",
     "mcp/dispatch.mjs",
@@ -121,6 +127,19 @@ if (pkg) {
     ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
     ".agents/skills/swarm-governance/references/intake-and-planning.md",
     ".agents/skills/swarm-governance/references/large-swarms.md",
+    "docs/benchmarks.md",
+    "docs/concepts.md",
+    "docs/core-workflows.md",
+    "docs/getting-started.md",
+    "docs/index.md",
+    "docs/roles-and-workflows.md",
+    "docs/stopping-agents.md",
+    "docs/tools.md",
+    "docs/assets/architecture-overview.svg",
+    "docs/assets/manifest-and-modes.svg",
+    "docs/assets/role-and-verdict-gate.svg",
+    "docs/assets/skill-role-workflows.svg",
+    "docs/assets/swarm-lifecycle.svg",
     "plugin.json",
     "install.sh",
     "install.ps1",
@@ -144,8 +163,11 @@ if (pkg) {
   const matchesPackageEntry = (relativePath, normalized) => {
     if (!normalized) return false;
     if (normalized.includes("*")) {
-      const escaped = normalized.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(`^${escaped.replace(/\*\*|\*/g, (m) => (m === "**" ? ".*" : "[^/]*"))}$`).test(relativePath);
+      const escaped = normalized.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+      const pattern = escaped.replace(/\*\*\/|\*\*|\*/g, (m) =>
+        m === "**/" ? "(?:.*/)?" : m === "**" ? ".*" : "[^/]*"
+      );
+      return new RegExp(`^${pattern}$`).test(relativePath);
     }
     return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
   };
@@ -154,7 +176,7 @@ if (pkg) {
     if (!exists(relativePath)) {
       errors.push(`Required runtime/release file is missing: ${relativePath}`);
     }
-    const alwaysIncluded = ["package.json", "README.md", "CHANGELOG.md", "LICENSE"].includes(relativePath);
+    const alwaysIncluded = ["package.json", "README.md", "LICENSE"].includes(relativePath);
     const coveredByFiles =
       alwaysIncluded ||
       (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
@@ -208,16 +230,16 @@ if (pkg) {
         errors.push(`npm test references a missing test file: ${suitePath}`);
       }
     }
-    const readmeText = readText("README.md");
-    const countMatch = readmeText.match(/Runs all\s+(\d+)\s+test suites?/i);
+    const gettingStartedText = readText("docs/getting-started.md");
+    const countMatch = gettingStartedText.match(/Runs all\s+(\d+)\s+test suites?/i);
     if (!countMatch) {
-      errors.push('README.md must state the exact suite count using a phrase such as "Runs all 10 test suites".');
+      errors.push('docs/getting-started.md must state the exact suite count using a phrase such as "Runs all 10 test suites".');
     } else if (Number(countMatch[1]) !== suitePaths.length) {
-      errors.push(`README.md says ${countMatch[1]} test suites, but package.json scripts.test runs ${suitePaths.length}.`);
+      errors.push(`docs/getting-started.md says ${countMatch[1]} test suites, but package.json scripts.test runs ${suitePaths.length}.`);
     }
     for (const suitePath of suitePaths) {
-      if (!readmeText.includes(suitePath)) {
-        errors.push(`README.md does not list the test entrypoint that npm test runs: ${suitePath}`);
+      if (!gettingStartedText.includes(suitePath)) {
+        errors.push(`docs/getting-started.md does not list the test entrypoint that npm test runs: ${suitePath}`);
       }
     }
   }

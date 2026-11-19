@@ -6,6 +6,7 @@ import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, par
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 const SWARM_MENTION_RESERVE_BYTES = 26; // "@<24-char-name> " prefix headroom on /swarm
+const MIN_OBSERVATION_BYTES = 16; // minimum observation reserve alongside PARTIAL prefix + @24-char mention
 
 function isValidRelativePrefix(prefix) {
   return (
@@ -50,8 +51,8 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
   }
   const slot = specialistNumber === undefined ? "lead" : `specialist-${specialistNumber}`;
   const relative = `${normalizedRoot}/${directory}/${slot}/report.md`;
-  if (Buffer.byteLength(`READY ${relative} — `) + SWARM_MENTION_RESERVE_BYTES >= messageLimit) {
-    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including /swarm @mention headroom): ${relative}`);
+  if (Buffer.byteLength(`PARTIAL ${relative} — `) + SWARM_MENTION_RESERVE_BYTES + MIN_OBSERVATION_BYTES > messageLimit) {
+    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including PARTIAL, /swarm @mention, and observation headroom): ${relative}`);
   }
   return relative;
 }
@@ -109,8 +110,8 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     const { sender, message } = item ?? {};
     const report = expected.get(sender);
     if (!report) throw new Error("Handoff is from outside the recorded cohort.");
-    if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || /[\r\n\u2028\u2029]/.test(message)) {
-      throw new Error("Handoff must be one line within 500 UTF-8 bytes.");
+    if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || CONTROL_CHAR_RE.test(message)) {
+      throw new Error("Handoff must be one line within 500 UTF-8 bytes without control characters.");
     }
     // Allow one or more leading /swarm @mention prefixes before Pointer-Over-Wire verbs.
     const parsedMessage = message.replace(/^(?:@[A-Za-z0-9._:-]+\s+)+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
@@ -124,9 +125,30 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     const observation = status
       ? parsedMessage.slice((status === "READY" ? readyPrefix : partialPrefix).length)
       : "";
-    const noReport = /^NO_REPORT — \S/.test(parsedMessage);
+    const noReport = /^NO_REPORT — \s*\S/.test(parsedMessage);
     // REVIEW: Compare to the exact assigned path. It may contain spaces or " — ".
     if (!noReport && (!status || !observation.trim())) {
+      const matchedVerb = parsedMessage.startsWith(`READY ${report}`)
+        ? "READY"
+        : parsedMessage.startsWith(`PARTIAL ${report}`)
+          ? "PARTIAL"
+          : undefined;
+      const afterSlot = matchedVerb ? parsedMessage.slice(`${matchedVerb} ${report}`.length) : "";
+      const afterSlotTrimmed = afterSlot.trim();
+      const afterNoReport = parsedMessage.startsWith("NO_REPORT") ? parsedMessage.slice("NO_REPORT".length) : "";
+      const afterNoReportTrimmed = afterNoReport.trim();
+      const delimiterMismatch =
+        (matchedVerb && !status && /^(?:\s|[-:–—])/.test(afterSlot) && Boolean(afterSlotTrimmed) && afterSlotTrimmed !== "—") ||
+        (!noReport &&
+          !parsedMessage.startsWith("NO_REPORT — ") &&
+          /^NO_REPORT(?:\s|[-:–—])/.test(parsedMessage) &&
+          Boolean(afterNoReportTrimmed) &&
+          afterNoReportTrimmed !== "—");
+      if (delimiterMismatch) {
+        throw new Error(
+          `Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason. Expected literal U+2014 em-dash delimiter: '${matchedVerb ? `${matchedVerb} ${report} — <observation>` : "NO_REPORT — <reason>"}' (ASCII '-' or '--' is not accepted).`
+        );
+      }
       throw new Error("Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason.");
     }
     if (received.has(sender) && received.get(sender).message !== message) {
@@ -170,6 +192,38 @@ function resolveCanonicalRoot(root) {
   return realRoot;
 }
 
+function assertNoSymlinkedAncestors(root, relative, verifiedDirs) {
+  const relDir = path.posix.dirname(relative);
+  if (!relDir || relDir === ".") return;
+  let current = root;
+  for (const part of relDir.split("/")) {
+    if (!part || part === "." || part === "..") {
+      throw new Error(`Expected a workspace-relative file path: ${relative}`);
+    }
+    current = path.join(current, part);
+    if (verifiedDirs?.has(current)) continue;
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (error.code === "ENOENT") break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      const err = new Error(`ELOOP: symlinked directories are unsupported: ${relative}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Expected a workspace directory for '${relative}' at '${part}'.`);
+    }
+    if (!isExpectedRealPath(current, fs.realpathSync(current))) {
+      throw new Error(`Symlinked directories are unsupported: ${relative}`);
+    }
+    verifiedDirs?.add(current);
+  }
+}
+
 function workspacePath(root, relative, verifiedDirs) {
   if (
     typeof relative !== "string" ||
@@ -193,23 +247,52 @@ function workspacePath(root, relative, verifiedDirs) {
 }
 
 function readOpenedFileWithStat(file, relative) {
-  const linkStat = fs.lstatSync(file);
-  if (linkStat.isSymbolicLink()) {
-    const err = new Error(`ELOOP: symlinked file is unsupported: ${relative}`);
-    err.code = "ELOOP";
-    throw err;
+  const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
+  if (process.platform !== "linux" || !hasONofollow) {
+    const linkStat = fs.lstatSync(file);
+    if (linkStat.isSymbolicLink()) {
+      const err = new Error(`ELOOP: symlinked file is unsupported: ${relative}`);
+      err.code = "ELOOP";
+      throw err;
+    }
   }
   const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
-    if (
-      !stat.isFile() ||
-      (process.platform === "linux" && fs.readlinkSync(`/proc/self/fd/${fd}`) !== file) ||
-      !isExpectedRealPath(file, fs.realpathSync(file))
-    ) {
+    if (!stat.isFile()) {
       throw new Error(`Expected a regular file at the recorded path: ${relative}`);
     }
-    return { bytes: fs.readFileSync(fd), stat };
+    if (process.platform === "linux") {
+      if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== file) {
+        throw new Error(`Expected a regular file at the recorded path: ${relative}`);
+      }
+      if (!hasONofollow && !isExpectedRealPath(file, fs.realpathSync(file))) {
+        throw new Error(`Expected a regular file at the recorded path: ${relative}`);
+      }
+    } else if (!isExpectedRealPath(file, fs.realpathSync(file))) {
+      throw new Error(`Expected a regular file at the recorded path: ${relative}`);
+    }
+    if (stat.size === 0) {
+      return { bytes: Buffer.alloc(0), stat };
+    }
+    const buf = Buffer.allocUnsafe(stat.size);
+    let offset = 0;
+    while (offset < stat.size) {
+      const n = fs.readSync(fd, buf, offset, stat.size - offset, null);
+      if (n <= 0) break;
+      offset += n;
+    }
+    if (offset !== stat.size) {
+      const tail = [buf.subarray(0, offset)];
+      const extra = Buffer.allocUnsafe(65536);
+      while (true) {
+        const n = fs.readSync(fd, extra, 0, extra.length, null);
+        if (n <= 0) break;
+        tail.push(Buffer.from(extra.subarray(0, n)));
+      }
+      return { bytes: Buffer.concat(tail), stat };
+    }
+    return { bytes: buf, stat };
   } finally {
     fs.closeSync(fd);
   }
@@ -261,7 +344,7 @@ function bundlePath(squadId, reportRoot = defaultReportRoot()) {
   return reportPath(squadId, undefined, reportRoot).replace(/\.md$/, ".sources.json");
 }
 
-function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256) {
+function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256, { sync = true } = {}) {
   const canonicalRoot = resolveCanonicalRoot(root);
   const destination = workspacePath(canonicalRoot, relative, verifiedDirs);
   let existingBytes;
@@ -295,7 +378,7 @@ function publish(root, relative, contents, replace = false, verifiedDirs, expect
   try {
     try {
       fs.writeFileSync(fd, contents);
-      fs.fsyncSync(fd);
+      if (sync) fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -362,6 +445,9 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expecte
   }
   if (verdict !== "CLEAN") {
     throw new Error(`Acceptance blocked: Integrity audit verdict is ${verdict}.`);
+  }
+  if (hasContentVerdictAttempt(markdown)) {
+    throw new Error("Acceptance blocked: Integrity audit verdict is not CLEAN. (Integrity audit report must not declare a content verdict.)");
   }
   const targetSquad = parseTargetSquad(markdown);
   if (expectedSquadId && (!targetSquad || targetSquad !== expectedSquadId)) {
@@ -459,7 +545,20 @@ function discoverAuditSlots(root, squadId, rootPrefix) {
   const scopedSlots = listCohortSlotsIfPresent(root, scopedDir);
   if (scopedSlots.length > 0) return scopedSlots;
   const flatDir = `${rootPrefix}/squad-integrity_auditor`;
-  return listCohortSlotsIfPresent(root, flatDir);
+  const flatSlots = listCohortSlotsIfPresent(root, flatDir);
+  const verifiedDirs = new Set();
+  return flatSlots.filter(rel => {
+    try {
+      const opened = readIfPresentWithStat(root, rel, verifiedDirs);
+      if (!opened) return false;
+      const text = decodeUtf8(opened.bytes, rel);
+      if (!text.trim()) return true;
+      const declaredTarget = parseTargetSquad(text);
+      return !declaredTarget || declaredTarget === squadId;
+    } catch {
+      return true;
+    }
+  });
 }
 
 function computeEvidenceDigest(root, record) {
@@ -548,6 +647,12 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
   }
   const resolvedRoot = resolveReportRoot(record);
   const received = reconcileHandoffs(assignments, handoffs, resolvedRoot);
+  if (record.squadId !== undefined) {
+    validateSquadId(record.squadId);
+    if (assignments.some((item, index) => item?.report !== reportPath(record.squadId, index + 1, resolvedRoot))) {
+      throw new Error("Launch assignments must have distinct native IDs and their exact compiled report slots.");
+    }
+  }
   return assignments.map(({ conversationId, report }) => {
     const status = received.get(conversationId)?.status ?? "PENDING";
     let bytes;
@@ -674,9 +779,14 @@ function bundleReports(root, record) {
       }
       candidateSet.add(integrityReport);
     }
-    if (requireIntegrityAudit || integrityReport !== undefined) {
+    const hasExplicitAudit =
+      integrityReport !== undefined ||
+      (Array.isArray(integrityAuditSlots) && integrityAuditSlots.length > 0);
+    if (requireIntegrityAudit || hasExplicitAudit) {
       for (const slot of integrityAuditSlots ?? []) candidateSet.add(slot);
-      for (const slot of discoverAuditSlots(root, squadId, rootPrefix)) candidateSet.add(slot);
+      if (!hasExplicitAudit) {
+        for (const slot of discoverAuditSlots(root, squadId, rootPrefix)) candidateSet.add(slot);
+      }
     }
     const candidates = [...candidateSet];
     if (requireIntegrityAudit && candidates.length === 0) {
@@ -694,7 +804,10 @@ function bundleReports(root, record) {
     });
   }
 
-  const auditPolicy = isAuditCohort || !requireIntegrityAudit ? "unaudited-explicit" : "required";
+  const auditPolicy =
+    isAuditCohort || (!requireIntegrityAudit && integrityAudits.length === 0)
+      ? "unaudited-explicit"
+      : "required";
   const integrityAudit = integrityAudits[0];
   const bundlePayload = Buffer.from(
     JSON.stringify(
@@ -821,6 +934,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (parsed.integrityAudits !== undefined && (!Array.isArray(parsed.integrityAudits) || parsed.integrityAudits.length === 0)) {
     throw new Error("Invalid integrityAudits array in bundle.");
   }
+  const isV2 = parsed.schemaVersion >= 2 || parsed.auditPolicy !== undefined;
   const auditEntries = Array.isArray(parsed.integrityAudits)
     ? parsed.integrityAudits
     : (parsed.integrityAudit ? [parsed.integrityAudit] : []);
@@ -829,21 +943,26 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     if (
       parsed.integrityAudit.path !== head?.path ||
       parsed.integrityAudit.sha256 !== head?.sha256 ||
-      (parsed.integrityAudit.evidenceDigest !== undefined && parsed.integrityAudit.evidenceDigest !== head?.evidenceDigest) ||
-      (parsed.integrityAudit.targetSquad !== undefined && parsed.integrityAudit.targetSquad !== head?.targetSquad) ||
-      (parsed.integrityAudit.verdict !== undefined && parsed.integrityAudit.verdict !== head?.verdict)
+      ((isV2 || parsed.integrityAudit.evidenceDigest !== undefined) && parsed.integrityAudit.evidenceDigest !== head?.evidenceDigest) ||
+      ((isV2 || parsed.integrityAudit.targetSquad !== undefined) && parsed.integrityAudit.targetSquad !== head?.targetSquad) ||
+      ((isV2 || parsed.integrityAudit.verdict !== undefined) && parsed.integrityAudit.verdict !== head?.verdict)
     ) {
       throw new Error("Bundle integrityAudit disagrees with integrityAudits[0].");
     }
   }
-  const isV2 = parsed.schemaVersion >= 2 || parsed.auditPolicy !== undefined;
   const auditRequired = parsed.auditPolicy === "required" || (parsed.schemaVersion >= 2 && parsed.auditPolicy !== "unaudited-explicit");
   if (auditRequired && auditEntries.length === 0) {
     throw new Error("Acceptance blocked: Bundle auditPolicy 'required' is missing integrityAudit evidence.");
   }
+  if (parsed.auditPolicy === "unaudited-explicit" && auditEntries.length > 0) {
+    throw new Error("Bundle auditPolicy 'unaudited-explicit' cannot embed integrityAudit evidence.");
+  }
   for (const audit of auditEntries) {
     if (!audit || typeof audit !== "object" || typeof audit.path !== "string" || typeof audit.sha256 !== "string") {
       throw new Error("Invalid integrityAudit entry in bundle.");
+    }
+    if ((isV2 || audit.verdict !== undefined) && audit.verdict !== "CLEAN") {
+      throw new Error(`Integrity audit entry verdict '${audit.verdict}' is not CLEAN.`);
     }
     if (audit.targetSquad !== undefined && audit.targetSquad !== squadId) {
       throw new Error(`Integrity audit targetSquad '${audit.targetSquad}' does not match bundle squad '${squadId}'.`);
@@ -888,13 +1007,7 @@ function verifyBundle(root, relative, acceptedHash) {
   return { path: p, sha256: s, auditPolicy, reports };
 }
 
-function pruneReports(root, relative, acceptedHash, options = {}) {
-  const canonicalRoot = resolveCanonicalRoot(root);
-  if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
-  if (options.keepReports || retainReports) {
-    return { removed: [], retained: loosePresent };
-  }
+function removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots) {
   const verifiedDirs = new Set();
   const removed = [];
   for (let i = 0; i < looseSnapshots.length; i += 1) {
@@ -936,13 +1049,58 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
   return { removed };
 }
 
+function pruneReports(root, relative, acceptedHash, options = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
+  if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
+  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
+  if (options.keepReports || retainReports) {
+    return { removed: [], retained: loosePresent };
+  }
+  return removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots);
+}
+
+function verifyAndPruneBundle(root, relative, options = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root);
+  const verified = verifyBundleInternal(canonicalRoot, relative, options.acceptedHash);
+  const { path: p, sha256: s, auditPolicy, reports, loosePresent, looseSnapshots, retainReports } = verified;
+  const pruned = options.keepReports || retainReports
+    ? { removed: [], retained: loosePresent }
+    : removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots);
+  return { path: p, sha256: s, auditPolicy, reports, pruned };
+}
+
+function validateReportSlotPath(slotPath) {
+  if (typeof slotPath !== "string" || !slotPath) {
+    throw new Error(`Invalid report slot path '${slotPath}': expected '<reportRoot>/squad-<id>/(lead|specialist-<N>)/report.md'.`);
+  }
+  const match = /^(.+)\/squad-([^/\s]+)\/(?:lead|specialist-[1-9]\d*)\/report\.md$/.exec(slotPath);
+  if (!match) {
+    throw new Error(`Invalid report slot path '${slotPath}': expected '<reportRoot>/squad-<id>/(lead|specialist-<N>)/report.md'.`);
+  }
+  const rawRoot = match[1];
+  const rawSquadId = match[2];
+  if (rawRoot !== rawRoot.trim() || /^[a-zA-Z]:/.test(rawRoot) || !isValidRelativePrefix(rawRoot)) {
+    throw new Error(`Invalid report slot path '${slotPath}': invalid reportRoot prefix.`);
+  }
+  validateSquadId(rawSquadId);
+  const directory = `squad-${encodeURIComponent(rawSquadId)}`;
+  if (directory !== `squad-${rawSquadId}` || Buffer.byteLength(directory) > 255) {
+    throw new Error(`Invalid report slot path '${slotPath}': invalid squad directory name.`);
+  }
+  return {
+    reportRoot: rawRoot,
+    squadId: rawSquadId,
+    slotTail: slotPath.slice(rawRoot.length + 1)
+  };
+}
+
 function rebaseSlotReportRoot(slotPath, targetReportRoot) {
-  if (typeof slotPath !== "string" || !targetReportRoot) return slotPath;
-  const match = /^.+\/(squad-[^/\s]+\/(?:lead\/report\.md|specialist-[1-9]\d*\/report\.md))$/.exec(slotPath);
-  if (!match) return slotPath;
-  const rebased = `${targetReportRoot}/${match[1]}`;
-  if (Buffer.byteLength(`READY ${rebased} — `) + SWARM_MENTION_RESERVE_BYTES >= messageLimit) {
-    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including /swarm @mention headroom): ${rebased}`);
+  const { slotTail } = validateReportSlotPath(slotPath);
+  if (!targetReportRoot) return slotPath;
+  const cleanTargetRoot = normalizeReportRoot(targetReportRoot);
+  const rebased = `${cleanTargetRoot}/${slotTail}`;
+  if (Buffer.byteLength(`PARTIAL ${rebased} — `) + SWARM_MENTION_RESERVE_BYTES + MIN_OBSERVATION_BYTES > messageLimit) {
+    throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including PARTIAL, /swarm @mention, and observation headroom): ${rebased}`);
   }
   return rebased;
 }
@@ -1017,33 +1175,49 @@ function collectReportSlots(root, options = {}) {
   }
 
   const targetSlotSet = new Set();
-  const addSlot = (slot) => {
-    if (typeof slot !== "string") return;
-    targetSlotSet.add(overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  const inheritSlotSet = new Set();
+  const addSlot = (slot, isInherit = false) => {
+    validateReportSlotPath(slot);
+    const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot;
+    targetSlotSet.add(resolvedSlot);
+    if (isInherit) {
+      inheritSlotSet.add(resolvedSlot);
+    }
   };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
       throw new Error("Provide a valid squad_planner JSON object.");
     }
+    if (!Array.isArray(plan.workers) || (plan.integrityAuditPlan !== undefined && !Array.isArray(plan.integrityAuditPlan))) {
+      throw new Error("Plan output must define a workers array (and integrityAuditPlan array when present).");
+    }
     if (squadId !== undefined) validateSquadId(squadId);
     let matchedPlanSquad = false;
-    for (const w of plan.workers ?? []) {
+    for (const w of plan.workers) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof w?.lead?.reportSlot === "string") addSlot(w.lead.reportSlot);
+      if (w?.lead?.reportSlot !== undefined) {
+        addSlot(w.lead.reportSlot, w.lead.swarmAdd?.workspace === "inherit");
+      }
       for (const s of w?.specialists ?? []) {
-        if (typeof s?.reportSlot === "string") addSlot(s.reportSlot);
+        if (s?.reportSlot !== undefined) {
+          addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
+        }
       }
     }
     for (const entry of plan.provenanceScaffold?.entries ?? []) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof entry?.reportSlot === "string") addSlot(entry.reportSlot);
+      if (entry?.reportSlot !== undefined) {
+        addSlot(entry.reportSlot, plan.executionMode === "swarm" && entry?.slotType === "lead");
+      }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
-      if (typeof audit?.reportSlot === "string") addSlot(audit.reportSlot);
+      if (audit?.reportSlot !== undefined) {
+        addSlot(audit.reportSlot, audit.swarmAdd?.workspace === "inherit");
+      }
     }
     if (squadId !== undefined && !matchedPlanSquad) {
       throw new Error(`Squad '${squadId}' was not found in the supplied plan.`);
@@ -1060,16 +1234,14 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix));
     for (const a of record.assignments ?? []) {
-      if (typeof a?.report === "string") addSlot(a.report);
+      if (a?.report !== undefined) addSlot(a.report);
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
-      if (typeof slot === "string") {
-        addSlot(slot);
-        hasExplicitAuditSlot = true;
-      }
+      addSlot(slot);
+      hasExplicitAuditSlot = true;
     }
-    if (typeof record.integrityReport === "string") {
+    if (record.integrityReport !== undefined) {
       addSlot(record.integrityReport);
       hasExplicitAuditSlot = true;
     }
@@ -1136,7 +1308,17 @@ function collectReportSlots(root, options = {}) {
     }
   }
 
-  const missing = targetSlots.filter(slotRel => !foundBySlot.has(slotRel));
+  const verifiedInheritDirs = new Set();
+  const missing = targetSlots.filter(slotRel => {
+    if (foundBySlot.has(slotRel)) return false;
+    if (inheritSlotSet.has(slotRel)) {
+      const rootExisting = readIfPresentWithStat(root, slotRel, verifiedInheritDirs);
+      if (rootExisting && decodeUtf8(rootExisting.bytes, slotRel).trim().length > 0) {
+        return false;
+      }
+    }
+    return true;
+  });
   if (foundBySlot.size === 0 && !allowEmpty) {
     throw new Error("No non-empty report slots were found across the provided worktrees.");
   }
@@ -1147,6 +1329,7 @@ function collectReportSlots(root, options = {}) {
   const verifiedDestDirs = new Set();
   const pendingActions = [];
   for (const [slotRel, entry] of foundBySlot.entries()) {
+    assertNoSymlinkedAncestors(root, slotRel, verifiedDestDirs);
     const existing = readIfPresentWithStat(root, slotRel, verifiedDestDirs);
     if (existing) {
       if (existing.bytes.equals(entry.bytes)) {
@@ -1179,7 +1362,7 @@ function collectReportSlots(root, options = {}) {
     }
     if (!dryRun) {
       ensureDirectory(root, path.posix.dirname(slotRel), [], verifiedDestDirs);
-      publish(root, slotRel, entry.bytes, true, verifiedDestDirs);
+      publish(root, slotRel, entry.bytes, true, verifiedDestDirs, undefined, { sync: false });
     }
     collected.push({
       slot: slotRel,
@@ -1200,9 +1383,15 @@ function collectReportSlots(root, options = {}) {
   };
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 function buildBundleRecordInit(root, options = {}) {
   root = resolveCanonicalRoot(root);
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
+  if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
   }
   const {
@@ -1219,11 +1408,14 @@ function buildBundleRecordInit(root, options = {}) {
     allowPartial = false
   } = options;
 
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+  if (!isPlainObject(plan)) {
     throw new Error("Provide a valid squad_planner JSON object.");
   }
+  if (!isPlainObject(idMap)) {
+    throw new Error("idMap must be a plain object mapping worker names to IDs.");
+  }
   const templates = plan.bundleRecordTemplates;
-  if (!templates || typeof templates !== "object" || Array.isArray(templates)) {
+  if (!isPlainObject(templates)) {
     throw new Error("Plan output does not contain bundleRecordTemplates.");
   }
   const templateKeys = Object.keys(templates);
@@ -1240,8 +1432,12 @@ function buildBundleRecordInit(root, options = {}) {
       `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id>.`
     );
   }
+  validateSquadId(selectedSquadId);
 
   const template = templates[selectedSquadId];
+  if (!isPlainObject(template)) {
+    throw new Error(`Plan bundleRecordTemplates['${selectedSquadId}'] must be a plain object.`);
+  }
   const resolvedReportRoot =
     reportRoot !== undefined
       ? normalizeReportRoot(reportRoot)
@@ -1263,6 +1459,9 @@ function buildBundleRecordInit(root, options = {}) {
 
   const matchedIdMapKeys = new Set();
   const assignments = (Array.isArray(template.assignments) ? template.assignments : []).map((item, idx) => {
+    if (!isPlainObject(item)) {
+      throw new Error(`Plan bundleRecordTemplates['${selectedSquadId}'] assignment must be a plain object.`);
+    }
     const slotPath =
       reportRoot !== undefined ? reportPath(selectedSquadId, idx + 1, resolvedReportRoot) : item.report;
     const entry = bySlot.get(slotPath) || bySlot.get(item.report) || byWorker.get(item.conversationId);
@@ -1391,5 +1590,6 @@ export {
   publish,
   readFile,
   reportPath,
+  verifyAndPruneBundle,
   verifyBundle
 };

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { parseContentVerdict, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -328,12 +328,14 @@ try {
 
   for (const sub of [
     "plan", "dispatch", "collect", "bundle-init", "fingerprint", "inspect",
-    "digest", "bundle", "verify", "prune", "verdict",
-    "setup", "status", "uninstall", "restore-backups"
+    "digest", "bundle", "verify", "finalize", "prune", "verdict",
+    "setup", "install", "status", "uninstall", "restore-backups"
   ]) {
     const helpRes = runCliFail([sub, "--help"]);
     assert.equal(helpRes.status, 0, `Expected --help exit 0 for ${sub}`);
-    assert.match(helpRes.stdout, /Agy-Squad Governance & Verification CLI/);
+    const expectedCmd = sub === "install" ? "setup" : sub;
+    assert.match(helpRes.stdout, new RegExp(`Usage: agy-squad ${expectedCmd}\\b`));
+    assert.match(helpRes.stdout, /Examples:/);
   }
   // SQ-DEP-007: --help and --version combined with operational flags/args must fail closed
   for (const badHelp of [
@@ -356,6 +358,342 @@ try {
   const badUtf8Res = runCliFail(["verdict", badUtf8Report]);
   assert.notEqual(badUtf8Res.status, 0);
   assert.match(badUtf8Res.stderr, /UTF-8/);
+
+  // W1 Regressions (RUN-001..005, RUN-012, LEAD-RUN-002): prose negation, historical status, table result matrices, indented code, trailing dot
+  assert.equal(
+    parseContentVerdict("Content Verdict: BLOCKED\nPrerequisites did not pass.\n"),
+    "BLOCKED",
+    "RUN-001: 'did not pass.' must not inject synthetic FAIL into Content Verdict: BLOCKED"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nPrior baseline check did not pass.\n"),
+    "PASS",
+    "RUN-001: historical 'did not pass.' must not contradict Content Verdict: PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nCheck result is fail/pass depending on mode.\nPrior status: FAIL\n"),
+    "PASS",
+    "RUN-005: slash compounds and historical status lines must not trigger false conflict"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: BLOCKED\n| Suite | Result | Status |\n| --- | --- | --- |\n| Unit | PASS | PASS |\n| Smoke | FAIL | FAIL |\n"),
+    "BLOCKED",
+    "RUN-004: Result/Status matrix tables must not override Content Verdict: BLOCKED"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: FAIL\n| Squad | Verdict |\n| --- | --- |\n| Alpha | PASS |\n"),
+    /conflicting content verdicts/,
+    "RUN-004: Verdict table column MUST still catch conflicting verdicts"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n\n    Verdict: FAIL\n    Content Verdict: BLOCKED\n"),
+    "PASS",
+    "RUN-012: 4-space indented code blocks must be stripped by stripCode"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n\tVerdict: FAIL\n"),
+    "PASS",
+    "RUN-012: tab-indented code blocks must be stripped by stripCode"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (all tests pass).\n"),
+    "PASS",
+    "LEAD-RUN-002: lowercase 'pass' inside category Verdict line must not break bypass"
+  );
+  assert.equal(
+    parseTargetSquad("Target Squad: alpha.\nIntegrity Verdict: CLEAN\n"),
+    "alpha",
+    "RUN-002: trailing sentence period in Target Squad must be stripped cleanly"
+  );
+  // RUN-003: bundle-init pre-verdict draft containing category Verdict: Changes required must not throw
+  const draftSlot = reportPath("draft_check", 1);
+  const draftLeadSlot = reportPath("draft_check");
+  write(draftSlot, "Evidence: ok.\n");
+  write(draftLeadSlot, "# Draft Synthesis\n- **Verdict:** Changes required (`SQ-001`)\n");
+  write("draft-plan.json", JSON.stringify({
+    executionMode: "swarm",
+    workers: [{ squadId: "draft_check", specialists: [{ reportSlot: draftSlot }] }],
+    bundleRecordTemplates: {
+      draft_check: {
+        squadId: "draft_check",
+        workspace: root,
+        assignments: [{ conversationId: "w1", report: draftSlot }],
+        requireIntegrityAudit: false
+      }
+    }
+  }));
+  const draftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
+  assert.equal(draftInitOut.verdict, "PASS", "RUN-003: category Verdict line must not trigger hasContentVerdictAttempt error");
+
+  // Wave 2 Regressions (W2-RUN-001): LABELED_VERDICT_RE requires uppercase PASS|FAIL|BLOCKED while keeping labels case-insensitive
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- Error check: fail closed on empty input.\n- Input status: blocked by gate.\n- Smoke result: pass on retry.\n"),
+    "PASS",
+    "W2-RUN-001: lowercase prose fail/blocked/pass after check:/status:/result: must not trigger conflicting verdict"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Error check:** Fail closed.\n"),
+    "PASS",
+    "W2-RUN-001: mixed-case prose 'Fail' after label must not trigger conflicting verdict"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- Error check: fail closed on empty input.\n- Input status: blocked by gate.\n"),
+    false,
+    "W2-RUN-001: lowercase prose in draft report must not trip hasContentVerdictAttempt"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n- Secondary check: FAIL\n"),
+    /conflicting content verdicts/,
+    "W2-RUN-001: uppercase secondary check: FAIL must still fail closed"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: FAIL\nfinal status: PASS\n"),
+    /conflicting content verdicts/,
+    "W2-RUN-001: case-insensitive label with uppercase PASS must still fail closed"
+  );
+  write(draftLeadSlot, "# Draft Synthesis\n- Error check: fail closed on empty input.\n");
+  const w2DraftInitOut = JSON.parse(runCli(["bundle-init", "--plan", "draft-plan.json", "--allow-unaudited"]));
+  assert.equal(w2DraftInitOut.verdict, "PASS", "W2-RUN-001: bundle-init must not crash on draft containing lowercase 'check: fail ...'");
+
+  // Wave 2 Regressions (W2-RUN-004): bolded label-with-inner-colon paired with emphasized verdict tokens
+  for (const [boldLine, expectedAttempt] of [
+    ["- **Status:** **FAIL**", true],
+    ["- **Final Status:** **PASS**", true],
+    ["**Final check:** **BLOCKED**", true],
+    ["- ***Status:*** ***FAIL***", true],
+    ["- __Status:__ __FAIL__", true],
+    ["- _Status:_ _FAIL_", true],
+    ["- *__Status:__* *__FAIL__*", true],
+    ["- __FAIL__: reason", true]
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${boldLine}\n`),
+      expectedAttempt,
+      `W2-RUN-004: hasContentVerdictAttempt must detect '${boldLine}'`
+    );
+  }
+  for (const [primary, conflictLine] of [
+    ["PASS", "- **Status:** **FAIL**"],
+    ["FAIL", "- **Final Status:** **PASS**"],
+    ["PASS", "**Final check:** **BLOCKED**"],
+    ["PASS", "- ***Status:*** ***FAIL***"],
+    ["PASS", "- __Status:__ __FAIL__"],
+    ["PASS", "- _Status:_ _FAIL_"],
+    ["PASS", "- *__Status:__* *__FAIL__*"]
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: ${primary}\n${conflictLine}\n`),
+      /conflicting content verdicts/,
+      `W2-RUN-004: conflicting emphasized line '${conflictLine}' must throw against ${primary}`
+    );
+  }
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Final Status:** **PASS**\n"),
+    "PASS",
+    "W2-RUN-004: matching emphasized secondary status must agree cleanly"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Status:** **pass** all checks\n"),
+    "PASS",
+    "W2-RUN-004: lowercase emphasized '- **Status:** **pass** all checks' must not false-trigger"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- **Status:** **pass** all checks\n"),
+    false,
+    "W2-RUN-004: lowercase emphasized '- **Status:** **pass** all checks' must not trip hasContentVerdictAttempt"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\n- **Status:** **FAIL-fast** mode\n- **Status:** FAIL_FAST\n- **Status:** __FAIL__-mode\n- **Status:** **FAIL**ed\n- **Prior Status:** **FAIL**\n"
+    ),
+    "PASS",
+    "W2-RUN-004: hyphenated/snake_case/suffixed compounds and historical emphasized lines must not false-trigger"
+  );
+
+  // Additional W2-RUN-004 edge-case regressions: leading/label hyphenated compounds, 4+ char emphasis, split-word emphasis, outer periods
+  for (const [doc, expected] of [
+    ["Content Verdict: PASS\n- **FAIL-fast** mode enabled\n- __FAIL__-mode enabled\n- FAIL-safe behavior\n", "PASS"],
+    ["Content Verdict: FAIL\n- PASS-through mode enabled\n", "FAIL"],
+    ["Content Verdict: PASS\n- check-FAIL path tested\n- status-PASS flag ignored\n", "PASS"],
+    ["- **Content Verdict:** **PASS**.\n", "PASS"],
+    ["**__Content Verdict:__** **__PASS__**\n", "PASS"],
+    ["**__Content Verdict:__** **__FAIL__**\n", "FAIL"],
+    ["Content Verdict: PASS\n- **__Verdict:__** Changes required (`SQ-001`)\n", "PASS"]
+  ]) {
+    assert.equal(
+      parseContentVerdict(doc),
+      expected,
+      `W2-RUN-004: parseContentVerdict must return ${expected} for ${JSON.stringify(doc)}`
+    );
+  }
+  for (const draftLine of [
+    "- **FAIL-fast** mode enabled",
+    "- __FAIL__-mode enabled",
+    "- FAIL-safe behavior",
+    "- PASS-through mode enabled",
+    "- check-FAIL path tested"
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${draftLine}\n`),
+      false,
+      `W2-RUN-004: hasContentVerdictAttempt must not false-trigger on '${draftLine}'`
+    );
+  }
+  for (const attemptLine of [
+    "- **Status:** **__FAIL__**",
+    "- **__Status:__** **__FAIL__**",
+    "- **Final** **Status:** **FAIL**",
+    "- Final **Status:** **FAIL**",
+    "- **Check** - **FAIL**",
+    "- **__FAIL__**: reason",
+    "- **__FAIL__:** reason",
+    "- **FAIL** - reason",
+    "**__Content Verdict:__** **__FAIL__**"
+  ]) {
+    assert.equal(
+      hasContentVerdictAttempt(`# Draft\n${attemptLine}\n`),
+      true,
+      `W2-RUN-004: hasContentVerdictAttempt must detect '${attemptLine}'`
+    );
+  }
+  for (const conflictLine of [
+    "- **Status:** **__FAIL__**",
+    "- **__Status:__** **__FAIL__**",
+    "- **Final** **Status:** **FAIL**",
+    "- Final **Status:** **FAIL**",
+    "- **Check** - **FAIL**",
+    "- **__FAIL__**: reason",
+    "- **__FAIL__:** reason",
+    "- **FAIL** - reason",
+    "| Squad | Verdict |\n| --- | --- |\n| Alpha | **__FAIL__** |"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: PASS\n${conflictLine}\n`),
+      /conflicting content verdicts/,
+      `W2-RUN-004: conflicting line '${conflictLine}' must throw against PASS`
+    );
+  }
+  assert.equal(parseIntegrityVerdict("**Integrity Verdict:** **CLEAN**.\n"), "CLEAN");
+  assert.equal(parseTargetSquad("**__Target Squad:__** **__alpha__**.\n"), "alpha");
+  assert.equal(
+    parseEvidenceDigest(`**__Evidence Digest:__** **__${"a".repeat(64)}__**.\n`),
+    "a".repeat(64)
+  );
+
+  // v0.1.3 Remediation Regressions: RUN-002, RUN-003, RUN-004, S2-SCRIPT-04, S2-TEST-02
+  // RUN-002: Balanced emphasis stripping in parseTargetSquad + reconciled trailing-dot rejection in SQUAD_ID_RE
+  for (const id of ["_auth", "auth_", "v1.0", "__auth_", "_auth__", "___"]) {
+    assert.equal(validateSquadId(id), id);
+    assert.equal(parseTargetSquad(`Target Squad: ${id}\nIntegrity Verdict: CLEAN\n`), id, `RUN-002: round-trip failed for '${id}'`);
+  }
+  assert.equal(parseTargetSquad("**Target Squad:** _auth\n"), "_auth");
+  assert.equal(parseTargetSquad("Target Squad: **auth_**\n"), "auth_");
+  assert.equal(parseTargetSquad("Target Squad: *_auth*\n"), "_auth");
+  assert.equal(parseTargetSquad("Target Squad: _alpha_.\n"), "alpha");
+  assert.equal(parseTargetSquad("Target Squad: v1.0.\n"), "v1.0");
+  assert.throws(() => validateSquadId("v1."), /Invalid squad ID/);
+  assert.throws(() => validateSquadId("_v1_."), /Invalid squad ID/);
+  assert.throws(() => parseTargetSquad("Target Squad: alpha..\n"), /Malformed Target Squad/);
+  assert.throws(() => parseTargetSquad("Target Squad: *alpha\n"), /Malformed Target Squad/);
+  assert.throws(() => parseTargetSquad("Target Squad: __proto__\n"), /Invalid reserved squad ID/);
+  assert.throws(() => parseTargetSquad("Target Squad: **__proto__**\n"), /Invalid reserved squad ID/);
+
+  // RUN-003: parseIntegrityVerdict and readIntegrityAudit reject role-conflated content verdicts and secondary INTEGRITY VIOLATION lines
+  write(first, "Evidence: node --test passed (exit 0).\n");
+  for (const badAuditMd of [
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nContent Verdict: PASS\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nVerdict: INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nAudit Status: INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nAudit is NOT CLEAN.\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nNot CLEAN due to hash mismatch.\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n## INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Audit Status | INTEGRITY VIOLATION |\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Content Verdict | PASS |\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Squad | Content Verdict | Notes |\n| --- | --- | --- |\n| alpha | PASS | ok |\n`
+  ]) {
+    assert.throws(() => parseIntegrityVerdict(badAuditMd), /conflicting verdicts|role conflation|content verdict/i);
+    write(scopedIntAlpha, badAuditMd);
+    assert.throws(() => bundleReports(root, { ...record, replaceExisting: true }), /Integrity audit verdict is not CLEAN/);
+  }
+  assert.equal(
+    parseIntegrityVerdict(
+      `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Prior Baseline |\n| --- | --- |\n| Audit Status | INTEGRITY VIOLATION |\n`
+    ),
+    "CLEAN",
+    "RUN-003: historical 2-column baseline column must not falsely contradict CLEAN"
+  );
+  write(scopedIntAlpha, cleanAlphaAudit);
+
+  // RUN-004: parseContentVerdict avoids false positives on negative-test prose & historical leading bullets, and scans 2-column key-value verdict tables
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nInvalid inputs do not pass.\nNegative tests for malformed records do not pass.\n"),
+    "PASS",
+    "RUN-004: normal negative-test prose with 'do not pass.' must not falsely contradict PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **FAIL:** Prior Wave 1 run failed on missing fixture.\n"),
+    "PASS",
+    "RUN-004: historical leading FAIL bullet must not contradict Content Verdict: PASS"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| Content Verdict | FAIL |\n"),
+    /conflicting content verdicts/,
+    "RUN-004: 2-column key-value verdict table contradicting PASS must throw"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| Prior Verdict | FAIL |\n"),
+    "PASS",
+    "RUN-004: historical 2-column key-value row must not contradict PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n| Field | Prior Baseline |\n| --- | --- |\n| Content Verdict | FAIL |\n"),
+    "PASS",
+    "RUN-004: historical 2-column baseline column must not contradict PASS"
+  );
+  for (const contradictingPassDoc of [
+    "Content Verdict: PASS\nInvalid inputs do not pass; verification does not PASS.\n",
+    "Content Verdict: PASS\nFixed invalid input handling; unit tests did not pass.\n",
+    "Content Verdict: PASS\nVerification checks for auth do not pass.\n",
+    "Content Verdict: PASS\nTests in `tests/test-run.mjs` did not pass.\n",
+    "Content Verdict: PASS\nUnit tests don't pass.\n",
+    "Content Verdict: PASS\nThe unit tests did not pass on Linux.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(contradictingPassDoc),
+      /conflicting content verdicts/,
+      `RUN-004: real failure negation must contradict PASS: ${JSON.stringify(contradictingPassDoc)}`
+    );
+  }
+
+  // S2-SCRIPT-04 & S2-TEST-02: CLI bundle --allow-unaudited reconciles record.integrityReport and record.integrityAuditSlots cleanly
+  const missingAuditRecPath = "unaudited-with-missing-report.json";
+  write(missingAuditRecPath, JSON.stringify({ ...record, integrityReport: "scratch/agy-squad/missing-audit.md" }));
+  const missingAuditCli = runCliFail(["bundle", missingAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(missingAuditCli.status, 0, `S2-SCRIPT-04: --allow-unaudited must override missing integrityReport: ${missingAuditCli.stderr}`);
+  const missingAuditRes = JSON.parse(missingAuditCli.stdout);
+  assert.equal(missingAuditRes.auditPolicy, "unaudited-explicit");
+  const missingAuditBundleJson = JSON.parse(fs.readFileSync(path.join(root, missingAuditRes.path), "utf8"));
+  assert.equal(missingAuditBundleJson.integrityAudit, undefined);
+  assert.equal(missingAuditBundleJson.integrityAudits, undefined);
+
+  const violatingAuditSlot = reportPath("integrity_auditor-alpha", 2);
+  write(violatingAuditSlot, `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: INTEGRITY VIOLATION\n`);
+  const badAuditRecPath = "unaudited-with-bad-report.json";
+  write(badAuditRecPath, JSON.stringify({ ...record, integrityReport: violatingAuditSlot }));
+  const badAuditOverrideCli = runCliFail(["bundle", badAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(badAuditOverrideCli.status, 0, `S2-SCRIPT-04: --allow-unaudited must override bad integrityReport: ${badAuditOverrideCli.stderr}`);
+  assert.equal(JSON.parse(badAuditOverrideCli.stdout).auditPolicy, "unaudited-explicit");
+
+  const cleanAuditRecPath = "unaudited-with-clean-report.json";
+  write(cleanAuditRecPath, JSON.stringify({ ...record, integrityReport: scopedIntAlpha, integrityAuditSlots: [scopedIntAlpha] }));
+  const cleanAuditOverrideCli = runCliFail(["bundle", cleanAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(cleanAuditOverrideCli.status, 0, `S2-SCRIPT-04: --allow-unaudited with clean integrityReport/slots failed: ${cleanAuditOverrideCli.stderr}`);
+  const cleanOverrideRes = JSON.parse(cleanAuditOverrideCli.stdout);
+  assert.equal(cleanOverrideRes.auditPolicy, "unaudited-explicit");
+  const cleanOverrideBundleJson = JSON.parse(fs.readFileSync(path.join(root, cleanOverrideRes.path), "utf8"));
+  assert.equal(cleanOverrideBundleJson.integrityAudit, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudit");
+  assert.equal(cleanOverrideBundleJson.integrityAudits, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudits");
+  assert.equal(verifyBundle(root, cleanOverrideRes.path).auditPolicy, "unaudited-explicit");
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

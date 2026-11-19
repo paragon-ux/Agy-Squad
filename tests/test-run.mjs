@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function copyIsolatedRepo(targetDir) {
-  for (const rel of ["bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
+  for (const rel of ["assets", "bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
     fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
   }
   return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
@@ -279,7 +279,7 @@ try {
     );
     fs.writeFileSync(
       prSkillPath,
-      origPrSkill.replace("roles-and-workflows.md#pr-review", "roles-and-workflows.md#nonexistent-anchor")
+      origPrSkill.replace("roles-and-workflows/#pr-review", "roles-and-workflows/#nonexistent-anchor")
     );
     fs.writeFileSync(
       stoppingDocPath,
@@ -485,14 +485,15 @@ try {
   // Remove any newer ledger in isoCopy so rebuild-wsl-dispatch-review* precedence is isolated cleanly
   for (const name of fs.readdirSync(path.join(isoRepo, "docs/reviews"))) {
     if (!name.startsWith("rebuild-wsl-dispatch-review")) {
-      fs.rmSync(path.join(isoRepo, "docs/reviews", name));
+      fs.rmSync(path.join(isoRepo, "docs/reviews", name), { recursive: true, force: true });
     }
   }
   const isoDiagRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(isoDiagRun.status, 0, isoDiagRun.stderr);
   assert.equal(JSON.parse(isoDiagRun.stdout).targetReviewLedger, "docs/reviews/rebuild-wsl-dispatch-review-r2.md");
 
-  // Fresh clone / equal-mtime checkout: prN-* ledgers must beat legacy cross-family -r2 ledgers
+  // Fresh clone / equal-mtime checkout: semantic vX.Y.Z release ledgers beat prN-* (`SD-SCRIPT-LEDGER-SORT`),
+  // and without release/remediation ledgers, prN-* ledgers still beat legacy cross-family -r2 ledgers
   const freshRepo = path.join(temporary, "fresh-repo");
   fs.mkdirSync(freshRepo, { recursive: true });
   const freshDiag = copyIsolatedRepo(freshRepo);
@@ -505,7 +506,16 @@ try {
     }
     const freshRun = spawnSync(process.execPath, [freshDiag], { cwd: freshRepo, encoding: "utf8" });
     assert.equal(freshRun.status, 0, freshRun.stderr);
-    assert.match(JSON.parse(freshRun.stdout).targetReviewLedger, /^docs\/reviews\/pr5-/);
+    assert.equal(JSON.parse(freshRun.stdout).targetReviewLedger, "docs/reviews/v0.1.3-self-diagnosis-review.md");
+
+    for (const name of fs.readdirSync(path.join(freshRepo, "docs/reviews"))) {
+      if (/^v\d+\./i.test(name) || /(?:remediation|fix-p[0-9]|self-diagnosis-review)/i.test(name)) {
+        fs.rmSync(path.join(freshRepo, "docs/reviews", name), { recursive: true, force: true });
+      }
+    }
+    const freshPrRun = spawnSync(process.execPath, [freshDiag, "--skip-mcp-spawn"], { cwd: freshRepo, encoding: "utf8" });
+    assert.equal(freshPrRun.status, 0, freshPrRun.stderr);
+    assert.match(JSON.parse(freshPrRun.stdout).targetReviewLedger, /^docs\/reviews\/pr5-/);
   } finally {
     fs.rmSync(freshRepo, { recursive: true, force: true });
   }
@@ -646,7 +656,9 @@ try {
     );
     assert.equal(pkgDiagRes.status, 0, pkgDiagRes.stderr);
     const pkgDiagJson = JSON.parse(pkgDiagRes.stdout);
-    assert.equal(pkgDiagJson.targetReviewLedger, "docs/reviews/pr5-reconciled-review.md");
+    assert.equal(pkgDiagJson.targetReviewLedger, null);
+    assert.equal(pkgDiagJson.ledgerDisposition, "PACKAGED_OMITTED");
+    assert.ok(pkgDiagJson.findings.some((f) => f.id === "DOC-PACKAGED-LEDGER-OMITTED" && f.priority === "P3"));
     assert.ok(pkgDiagJson.findings.some((f) => f.id === "DEP-PACKAGED-CHECKOUT-SCOPE" && f.priority === "P3"));
     assert.equal(pkgDiagJson.status, "HEALTHY");
 
@@ -672,8 +684,480 @@ try {
     assert.match(installPs1, /Get-Command node/);
     assert.match(installPs1, /\$PSCommandPath/);
     assert.match(installPs1, /\$LASTEXITCODE/);
+
+    // W3 Regressions (SD-SCRIPT-*, COORD-DIAG-001, OPT-SVC-01, OPT-PROF-01)
+    // SD-SCRIPT-SEC4 & SD-SCRIPT-BOLDID: Section 4 open blockers & bold **ID** duplicates detected
+    const sec4OpenText = buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true })
+      .replace("None (0 open residuals, 0 deferred items)", "| ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| `RES-01` | Wave 1 | `SVC` | `Closed (Post-Remediation)` | `target.txt#L1` | Closed residual | Fixed | `verified` |")
+      .replace("## 4. Architecture-Before-Runtime Execution & Verification Trace", "## 4. Architecture-Before-Runtime Execution & Verification Trace\n\n| ID | Wave | Cat | Priority | Status | Source | Summary |\n| --- | --- | --- | --- | --- | --- | --- |\n| `SEC4-P2-01` | v0.1.2 | `SVC` | P2 | `Open (Pre-Remediation)` | `target.txt#L1` | Open blocker in section 4 |");
+    writeSvc("docs/reviews/sec4-open.md", sec4OpenText);
+    const sec4OpenRun = spawnSync(process.execPath, [svcDiag, "--ledger", "docs/reviews/sec4-open.md", "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(sec4OpenRun.status, 1, "SD-SCRIPT-SEC4: open P2 in Section 4 must exit 1");
+    assert.ok(JSON.parse(sec4OpenRun.stdout).findings.some(f => f.id === "DOC-LEDGER-OPEN-BLOCKERS"));
+
+    const boldDupText = buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true })
+      .replace("| `P1-SYN-01` |", "| **`P1-SYN-01`** | P1 | `SVC` | `Closed` | `target.txt#L1` | Bold duplicate | Fixed |\n| `P1-SYN-01` |");
+    writeSvc("docs/reviews/bold-dup.md", boldDupText);
+    const boldDupRun = spawnSync(process.execPath, [svcDiag, "--ledger", "docs/reviews/bold-dup.md", "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(boldDupRun.status, 1, "SD-SCRIPT-BOLDID: **ID** must strip asterisks and catch duplicate");
+    assert.ok(JSON.parse(boldDupRun.stdout).findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /duplicate/i.test(f.summary)));
+
+    // SD-SCRIPT-CLI-ORDER & SD-OPT-MCP-SPAWN & SD-SCRIPT-BUDGET-SWARM & SD-OPT-CANARY-TIMING
+    const orderPlan = spawnSync(process.execPath, [svcDiag, "--print-plan", "--flat", "skill_and_pr_review_audit"], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(orderPlan.status, 0, `SD-SCRIPT-CLI-ORDER: --print-plan --flat <id> must work: ${orderPlan.stderr}`);
+    assert.equal(JSON.parse(orderPlan.stdout).workers[0].squadId, "skill_and_pr_review_audit");
+    const conflictTopo = spawnSync(process.execPath, [svcDiag, "--print-plan", "--topology", "layered", "--flat"], { cwd: svcRepo, encoding: "utf8" });
+    assert.notEqual(conflictTopo.status, 0, "SD-SCRIPT-CLI-ORDER: --topology layered --flat must conflict");
+
+    const fastDiagRes = spawnSync(process.execPath, [svcDiag, "--ledger", svcLedgerRel, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(fastDiagRes.status, 0, fastDiagRes.stderr);
+    const fastDiag = JSON.parse(fastDiagRes.stdout);
+    assert.equal(fastDiag.timings.mcpSpawnSkipped, true, "SD-OPT-MCP-SPAWN: --skip-mcp-spawn flag must skip stdio child spawn");
+    assert.equal(typeof fastDiag.timings.digestMs, "number", "SD-OPT-CANARY-TIMING: timings.digestMs must be reported separately");
+    assert.equal(typeof fastDiag.timings.canaryFingerprintMs, "number", "SD-SCRIPT-LATENCY: timings.canaryFingerprintMs must be reported separately");
+    assert.equal(typeof fastDiag.promptBudgets.swarmSpecialistTemplateBytes, "number", "SD-SCRIPT-BUDGET-SWARM: must report swarm specialist template bytes");
+    assert.equal(typeof fastDiag.promptBudgets.swarmLeadTemplateBytes, "number", "SD-SCRIPT-BUDGET-SWARM: must report swarm lead template bytes");
+    assert.equal(typeof fastDiag.promptBudgets.swarmAuditorTemplateBytes, "number", "OPT-SVC-01: must report swarm auditor template bytes");
+
+    // SD-SCRIPT-LEDGER-ERR: invalid --ledger prints clean message without JS stack trace
+    const badLedgerErr = spawnSync(process.execPath, [svcDiag, "--ledger", "/etc/passwd"], { cwd: svcRepo, encoding: "utf8" });
+    assert.equal(badLedgerErr.status, 1);
+    assert.doesNotMatch(badLedgerErr.stderr, /^\s+at\s+/m, "SD-SCRIPT-LEDGER-ERR: invalid --ledger must not leak raw JS stack trace");
+
+    // SD-SCRIPT-SHARE, SD-SCRIPT-FM-EDGE, COORD-DIAG-001, SD-SCRIPT-PROSE-FP, SD-SCRIPT-OVERLAP-DENOM
+    // Add bloated JS script + large SKILL.md to existing skill to trigger SKILL-SHARE (proseShare > 0.7) even though entryShareOfTotal < 0.1
+    const shareSkillDir = path.join(svcRepo, ".agents", "skills", "self-diagnosis");
+    fs.writeFileSync(path.join(shareSkillDir, "scripts", "huge-filler.mjs"), "// " + "x".repeat(500000));
+    fs.writeFileSync(path.join(shareSkillDir, "SKILL.md"), "---\nname: self-diagnosis\ndescription: >-\n  Self diagnosis skill.\n---\n" + "line of markdown prose\n".repeat(2500));
+    writeSvc(".agents/skills/fm-empty-block/SKILL.md", "---\nname: fm-empty-block\ndescription: >-\nlicense: MIT\n---\nBody.\n");
+    writeSvc(".agents/skills/fm-empty-quotes/SKILL.md", "---\nname: fm-empty-quotes\ndescription: \"\"\n---\nBody.\n");
+    writeSvc(".agents/skills/fm-eof-no-nl/SKILL.md", "---\nname: fm-eof-no-nl\ndescription: Valid at EOF\n---");
+    const skillEdgeDiag = JSON.parse(spawnSync(process.execPath, [svcDiag, "--ledger", svcLedgerRel, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
+    assert.ok(skillEdgeDiag.findings.some(f => f.id === "SKILL-SHARE-self-diagnosis"), "SD-SCRIPT-SHARE: proseShare > 0.7 && markdownBytes > 8192 must trigger SKILL-SHARE");
+    assert.ok(skillEdgeDiag.findings.some(f => f.id === "SKILL-FM-fm-empty-block"), "SD-SCRIPT-FM-EDGE: description: >- before next key must fail");
+    assert.ok(skillEdgeDiag.findings.some(f => f.id === "SKILL-FM-fm-empty-quotes"), "SD-SCRIPT-FM-EDGE: description: \"\" must fail");
+    assert.ok(!skillEdgeDiag.findings.some(f => f.id === "SKILL-FM-fm-eof-no-nl"), "SD-SCRIPT-FM-EDGE: closing --- at EOF without newline must pass");
+
+    // COORD-DIAG-001 & SD-SCRIPT-PROSE-FP: hyphenated ID + trailing comma and prose tokens (SELF-DIAGNOSIS, L1-L50, CLI-FLAGS) must not break --teardown
+    const tdProseDir = path.join(svcRepo, "scratch/agy-squad/squad-skill_and_pr_review_audit/lead");
+    fs.mkdirSync(tdProseDir, { recursive: true });
+    writeSvc(
+      "scratch/agy-squad/squad-skill_and_pr_review_audit/specialist-1/report.md",
+      "- `P1-SYN-01`, `DOC-TOOLS-01`, SELF-DIAGNOSIS, L1-L50, CLI-FLAGS\n"
+    );
+    writeSvc(
+      "scratch/agy-squad/squad-skill_and_pr_review_audit/lead/report.md",
+      "Content Verdict: PASS\n- P1-SYN-01, DOC-TOOLS-01, reviewed SELF-DIAGNOSIS & L1-L50 & CLI-FLAGS\n"
+    );
+    const tdProseRec = {
+      workspace: svcRepo,
+      squadId: "skill_and_pr_review_audit",
+      verdict: "PASS",
+      requireIntegrityAudit: false,
+      verifiedFiles: svcFiles,
+      assignments: [{ conversationId: "p1", report: "scratch/agy-squad/squad-skill_and_pr_review_audit/specialist-1/report.md" }],
+      handoffs: [{ sender: "p1", message: "READY scratch/agy-squad/squad-skill_and_pr_review_audit/specialist-1/report.md — Ok." }]
+    };
+    const tdProseBundled = bundleReports(svcRepo, tdProseRec);
+    const tdProseLedger = buildTestLedger({ bundleSha: tdProseBundled.sha256, includeFindingRow: true }).replace(
+      "| `P1-SYN-01` |",
+      "| `DOC-TOOLS-01` | P2 | `DOC` | `Closed` | `target.txt#L1` | Hyphenated ID | Fixed |\n| `P1-SYN-01` |"
+    );
+    fs.writeFileSync(svcLedgerAbs, tdProseLedger);
+    const tdProseSec = Math.floor(fs.statSync(path.join(svcRepo, tdProseBundled.path)).mtimeMs / 1000);
+    fs.utimesSync(svcLedgerAbs, tdProseSec + 5, tdProseSec + 5);
+    const proseTeardown = spawnSync(
+      process.execPath,
+      [svcDiag, "--teardown", "skill_and_pr_review_audit", "--accept", tdProseBundled.sha256, "--ledger", svcLedgerRel],
+      { cwd: svcRepo, encoding: "utf8" }
+    );
+    assert.equal(proseTeardown.status, 0, `COORD-DIAG-001/SD-SCRIPT-PROSE-FP: false-positive hyphenated prose tokens broke teardown: ${proseTeardown.stderr}`);
+
+    // SD-SCRIPT-LEDGER-SORT: semantic vX.Y.Z ledger beats pr5 ledger under equal mtimes (v0.1.3 > v0.1.2 > pr5)
+    const tEq = new Date(Date.now() + 10000);
+    for (const f of fs.readdirSync(path.join(svcRepo, "docs/reviews"))) {
+      if (f.endsWith(".md")) {
+        fs.utimesSync(path.join(svcRepo, "docs/reviews", f), tEq, tEq);
+      }
+    }
+    writeSvc("docs/reviews/pr5-reconciled-review.md", buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true }));
+    writeSvc("docs/reviews/v0.1.2-self-diagnosis-review.md", buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true }));
+    fs.utimesSync(path.join(svcRepo, "docs/reviews/pr5-reconciled-review.md"), tEq, tEq);
+    fs.utimesSync(path.join(svcRepo, "docs/reviews/v0.1.2-self-diagnosis-review.md"), tEq, tEq);
+    const sortDiagV013 = JSON.parse(spawnSync(process.execPath, [svcDiag, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
+    assert.equal(sortDiagV013.targetReviewLedger, "docs/reviews/v0.1.3-self-diagnosis-review.md", "SD-SCRIPT-LEDGER-SORT: v0.1.3 must outrank v0.1.2 and pr5 on equal mtimes");
+    fs.rmSync(path.join(svcRepo, "docs/reviews/v0.1.3-self-diagnosis-review.md"), { force: true });
+    const sortDiag = JSON.parse(spawnSync(process.execPath, [svcDiag, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
+    assert.equal(sortDiag.targetReviewLedger, "docs/reviews/v0.1.2-self-diagnosis-review.md", "SD-SCRIPT-LEDGER-SORT: versioned release ledger must outrank pr5 on equal mtimes");
+
+    // SD-SCRIPT-OVERLAP-DENOM: readOnly specialist scopeFiles excluded from overlapRatio denominator
+    const roManifestPath = path.join(svcRepo, ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json");
+    const roManifest = JSON.parse(fs.readFileSync(roManifestPath, "utf8"));
+    const firstSqKey = Object.keys(roManifest.squads)[0];
+    roManifest.squads[firstSqKey] = {
+      lead: { role: "Lead", objective: "Synthesize", scopeFiles: ["target.txt"] },
+      specialists: [
+        { role: "W1", objective: "Write 1", scopeFiles: ["target.txt"] },
+        { role: "W2", objective: "Write 2", scopeFiles: ["target.txt"] },
+        { role: "RO", objective: "ReadOnly", readOnly: true, scopeFiles: ["README.md", "package.json", "docs/tools.md"] }
+      ]
+    };
+    writeSvc(".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json", JSON.stringify(roManifest));
+    const denomDiag = JSON.parse(spawnSync(process.execPath, [svcDiag, "--ledger", svcLedgerRel, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
+    const sqTopo = denomDiag.topology.find(t => t.squadId === firstSqKey);
+    assert.equal(sqTopo.overlapRatio, 0.5, `SD-SCRIPT-OVERLAP-DENOM: expected 1 overlap / 2 writable scopeFiles = 0.5, got ${sqTopo.overlapRatio}`);
   } finally {
     fs.rmSync(svcRepo, { recursive: true, force: true });
+  }
+
+  // 6. Wave 2 Regressions: SD2-DOC-01, SD2-SCRIPT-02..06
+  const w2DiagRepo = path.join(temporary, "w2-diag-repo");
+  fs.mkdirSync(w2DiagRepo, { recursive: true });
+  const w2Diag = copyIsolatedRepo(w2DiagRepo);
+  try {
+    const writeW2 = (rel, body) => {
+      const abs = path.join(w2DiagRepo, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, "utf8");
+    };
+    writeW2("target.txt", "wave2 diag\n");
+    const w2Files = fingerprint(w2DiagRepo, ["target.txt"]);
+
+    // SD2-SCRIPT-04: --mode and --workspace-isolation rejected outside --print-plan even when set to defaults ('swarm'/'inherit')
+    const modeWithoutPrintPlan = spawnSync(process.execPath, [w2Diag, "--markdown", "--mode", "swarm", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.notEqual(modeWithoutPrintPlan.status, 0, "SD2-SCRIPT-04: --mode swarm without --print-plan must exit non-zero");
+    assert.match(modeWithoutPrintPlan.stderr, /--print-plan/);
+    const isoWithoutPrintPlan = spawnSync(process.execPath, [w2Diag, "--workspace-isolation", "inherit", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.notEqual(isoWithoutPrintPlan.status, 0, "SD2-SCRIPT-04: --workspace-isolation inherit without --print-plan must exit non-zero");
+
+    // SD2-SCRIPT-06: --markdown Section 2 displays /swarm and precompiled template budgets; SKILL-BUDGET says warn threshold
+    const w2LedgerRel = "docs/reviews/w2-clean.md";
+    const w2LedgerAbs = path.join(w2DiagRepo, w2LedgerRel);
+    writeW2(w2LedgerRel, buildTestLedger({ includeFindingRow: true }));
+    const w2Md = spawnSync(process.execPath, [w2Diag, "--markdown", "--ledger", w2LedgerRel, "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2Md.status, 0, w2Md.stderr);
+    assert.match(w2Md.stdout, /Precompiled Lead Template/i, "SD2-SCRIPT-06: --markdown must report precompiled lead template bytes");
+    assert.match(w2Md.stdout, /\/swarm Specialist Template/i, "SD2-SCRIPT-06: --markdown must report /swarm specialist template bytes");
+    assert.match(w2Md.stdout, /\/swarm Lead Template/i, "SD2-SCRIPT-06: --markdown must report /swarm lead template bytes");
+    assert.match(w2Md.stdout, /\/swarm Auditor Template/i, "SD2-SCRIPT-06: --markdown must report /swarm auditor template bytes");
+
+    const diagSrc = fs.readFileSync(w2Diag, "utf8");
+    assert.match(diagSrc, /RUN-BUDGET-PRECOMPILED-LEAD/, "SD2-SCRIPT-06: precompiledLeadTemplateBytes budget check required");
+    assert.match(diagSrc, /RUN-BUDGET-SWARM-AUDIT/, "SD2-SCRIPT-06: swarmAuditorTemplateBytes budget check required");
+    assert.match(diagSrc, /exceeds progressive-disclosure warn threshold/, "SD2-SCRIPT-06: SKILL-BUDGET message must say warn threshold");
+
+    // SD2-SCRIPT-02, SD2-SCRIPT-03, SD2-DOC-01: prose tokens, slash lookahead, bold heading records with *Status*, and audit-only teardown
+    const w2S1 = reportPath("skill_and_pr_review_audit", 1);
+    const w2Lead = reportPath("skill_and_pr_review_audit");
+    writeW2(w2S1, [
+      "- `DOC-TOOLS-01` / `DOC-TOOLS-02`: verified.",
+      "- L1-L51, P0-P2, P1-P2, P1-P3, FAIL-CLOSED, PRE-FLIGHT, BUILT-IN, IN-FLIGHT, MID-COHORT, NO-BIAS"
+    ].join("\n"));
+    writeW2(w2Lead, [
+      "Content Verdict: PASS",
+      "- DOC-TOOLS-01 / DOC-TOOLS-02: verified prose slash.",
+      "- L1-L51, P0-P2, P1-P2, P1-P3, FAIL-CLOSED, PRE-FLIGHT, BUILT-IN, IN-FLIGHT, MID-COHORT, NO-BIAS"
+    ].join("\n"));
+    const w2Rec = {
+      workspace: w2DiagRepo,
+      squadId: "skill_and_pr_review_audit",
+      verdict: "PASS",
+      requireIntegrityAudit: false,
+      verifiedFiles: w2Files,
+      assignments: [{ conversationId: "s1", report: w2S1 }],
+      handoffs: [{ sender: "s1", message: `READY ${w2S1} — Ok.` }]
+    };
+    const w2Bundled = bundleReports(w2DiagRepo, w2Rec);
+    // Test bold heading record #### **REC-BOLD-01** — Title | P2 | *Closed* AND open P2 audit-only teardown
+    const w2AuditLedger = buildTestLedger({ bundleSha: w2Bundled.sha256, openBlocking: true })
+      .replace(
+        "| `P1-SYN-01` | P1 | `SVC` | `Open (Pre-Remediation)` | `target.txt#L1` | Synthetic P1 | Resolved |",
+        [
+          "| `DOC-TOOLS-01` | P2 | `DOC` | `Open (Pre-Remediation)` | `target.txt#L1` | Open audit finding | Pending |",
+          "| `DOC-TOOLS-02` | P2 | `DOC` | `Closed` | `target.txt#L1` | Closed | Fixed |",
+          "",
+          "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*"
+        ].join("\n")
+      );
+    fs.writeFileSync(w2LedgerAbs, w2AuditLedger, "utf8");
+    const w2MtimeSec = Math.floor(fs.statSync(path.join(w2DiagRepo, w2Bundled.path)).mtimeMs / 1000);
+    fs.utimesSync(w2LedgerAbs, w2MtimeSec + 5, w2MtimeSec + 5);
+
+    const w2OpenAudit = spawnSync(process.execPath, [w2Diag, "--ledger", w2LedgerRel, "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2OpenAudit.status, 1, "SD2-DOC-01: audit mode must still flag Open (Pre-Remediation) P2 blocker");
+    assert.ok(JSON.parse(w2OpenAudit.stdout).findings.some(f => f.id === "DOC-LEDGER-OPEN-BLOCKERS"));
+
+    const w2Td = spawnSync(process.execPath, [w2Diag, "--teardown", "skill_and_pr_review_audit", "--accept", w2Bundled.sha256, "--ledger", w2LedgerRel], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(w2Td.status, 0, `SD2-DOC-01 & SD2-SCRIPT-02: audit-only teardown & prose tokens failed: ${w2Td.stderr}`);
+
+    // SD2-SCRIPT-03: bold heading record conflict (**REC-BOLD-01** with *Closed* vs Open (Pre-Remediation) in Section 8/another table) is caught
+    const boldConflictLedger = w2AuditLedger.replace(
+      "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*",
+      "#### **REC-BOLD-01** — Bold pipe record | P2 | *Closed*\n\n| ID | Status |\n| --- | --- |\n| `REC-BOLD-01` | Open (Pre-Remediation) |"
+    );
+    writeW2("docs/reviews/w2-bold-conflict.md", boldConflictLedger);
+    const boldConflictRun = spawnSync(process.execPath, [w2Diag, "--ledger", "docs/reviews/w2-bold-conflict.md", "--skip-mcp-spawn"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(boldConflictRun.status, 1, "SD2-SCRIPT-03: conflicting status against bold **REC-BOLD-01** *Closed* heading record must fail");
+    assert.ok(JSON.parse(boldConflictRun.stdout).findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /REC-BOLD-01/.test(f.summary)));
+
+    // SD2-SCRIPT-05: --print-dispatch all_specialists on malformed manifest exits 1 cleanly without stack trace
+    writeW2(".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json", "{ malformed json");
+    const badDispatchRun = spawnSync(process.execPath, [w2Diag, "--print-dispatch", "all_specialists"], { cwd: w2DiagRepo, encoding: "utf8" });
+    assert.equal(badDispatchRun.status, 1);
+    assert.doesNotMatch(badDispatchRun.stderr, /^\s+at\s+/m, "SD2-SCRIPT-05: --print-dispatch must not leak raw JS stack trace");
+  } finally {
+    fs.rmSync(w2DiagRepo, { recursive: true, force: true });
+  }
+
+  // 7. v0.1.3 Remediation Regressions: SD-SCRIPT-01..03, S2-DEP-01..02
+  const v013Repo = path.join(temporary, "v013-diag-repo");
+  fs.mkdirSync(v013Repo, { recursive: true });
+  const v013Diag = copyIsolatedRepo(v013Repo);
+  try {
+    const writeV013 = (rel, body) => {
+      const abs = path.join(v013Repo, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, "utf8");
+    };
+    const v013LedgerRel = "docs/reviews/v013-clean.md";
+    writeV013(v013LedgerRel, buildTestLedger({ includeFindingRow: true }));
+
+    // SD-SCRIPT-03: fenced ## 10. and fenced finding table inside ledger must NOT trigger errors; unfenced ## 10. and ## 100. MUST fail
+    const fencedSec10Ledger = buildTestLedger({ includeFindingRow: true })
+      .replace(
+        "## 6. Verification Record",
+        "## 6. Verification Record\n\n```markdown\n## 10. Quoted Example Heading\n```\n"
+      )
+      .replace(
+        "## 5. Atomic Finding Records",
+        "## 5. Atomic Finding Records\n\n```markdown\n| ID | Status |\n| --- | --- |\n| `FAKE-01` | Open (Pre-Remediation) |\n```\n"
+      );
+    writeV013("docs/reviews/v013-fenced-sec10.md", fencedSec10Ledger);
+    const fencedSec10Run = spawnSync(process.execPath, [v013Diag, "--ledger", "docs/reviews/v013-fenced-sec10.md", "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fencedSec10Run.status, 0, `SD-SCRIPT-03: fenced '## 10.' and fenced finding table must not fail schema: ${fencedSec10Run.stdout} ${fencedSec10Run.stderr}`);
+
+    for (const badHeading of ["## 10. Ad-Hoc Wave", "## 100. Ad-Hoc Wave"]) {
+      const realSecOver9Ledger = `${buildTestLedger({ includeFindingRow: true })}\n\n${badHeading}\n\nBad.\n`;
+      writeV013("docs/reviews/v013-real-sec10.md", realSecOver9Ledger);
+      const realSec10Run = spawnSync(process.execPath, [v013Diag, "--ledger", "docs/reviews/v013-real-sec10.md", "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+      assert.equal(realSec10Run.status, 1, `SD-SCRIPT-03: unfenced '${badHeading}' must fail schema`);
+      assert.ok(JSON.parse(realSec10Run.stdout).findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /beyond Section 9/.test(f.summary)));
+    }
+
+    // SD-SCRIPT-03: fenced bash '# deprecated' comment must NOT suppress drift below it, AND active retired CLI commands inside fenced bash blocks MUST still be detected
+    const fenceDriftRef = ".agents/skills/swarm-governance/references/v013-fence-drift.md";
+    writeV013(fenceDriftRef, "```bash\n# deprecated example\necho ok\n```\n\nRun `subagent_brief` now.\n");
+    const fenceDriftRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fenceDriftRun.status, 1, "SD-SCRIPT-03: bash '# deprecated' inside fence must not disable drift scanning");
+    assert.ok(JSON.parse(fenceDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance" && /subagent_brief/.test(f.summary)));
+    writeV013(fenceDriftRef, "## Quick Start\n\n```bash\nagy-squad run --manifest squad.json\n```\n");
+    const fenceCmdDriftRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fenceCmdDriftRun.status, 1, "SD-SCRIPT-03: retired CLI command inside fenced bash block must still trigger SKILL-DRIFT");
+    assert.ok(JSON.parse(fenceCmdDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance" && /agy-squad run/.test(f.summary)));
+    fs.rmSync(path.join(v013Repo, fenceDriftRef), { force: true });
+
+    // SD-SCRIPT-02: multi-file broken ref links emit unique IDs and count refBroken in brokenLinksCount
+    const refBreakA = ".agents/skills/swarm-governance/references/v013-break-a.md";
+    const refBreakB = ".agents/skills/swarm-governance/references/v013-break-b.md";
+    writeV013(refBreakA, "See [missing A](./missing-a.md).\n");
+    writeV013(refBreakB, "See [missing B](./missing-b.md).\n");
+    const refBreakRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(refBreakRun.status, 1);
+    const refBreakJson = JSON.parse(refBreakRun.stdout);
+    const refLinkFindings = refBreakJson.findings.filter(f => f.id.startsWith("SKILL-REFLINKS-swarm-governance"));
+    assert.equal(refLinkFindings.length, 2, "SD-SCRIPT-02: expected 2 ref-link findings");
+    assert.equal(new Set(refLinkFindings.map(f => f.id)).size, 2, "SD-SCRIPT-02: SKILL-REFLINKS IDs must be unique");
+    const sgSkillStats = refBreakJson.skills.find(s => s.name === "swarm-governance");
+    assert.ok(sgSkillStats.brokenLinksCount >= 2, `SD-SCRIPT-02: brokenLinksCount must include refBroken (got ${sgSkillStats.brokenLinksCount})`);
+    fs.rmSync(path.join(v013Repo, refBreakA), { force: true });
+    fs.rmSync(path.join(v013Repo, refBreakB), { force: true });
+
+    // SD-SCRIPT-01 & SD-SCRIPT-02: writable overlap >25% is P2, readOnly overlap >25% is P3 Advisory, and missing scopeFiles emit unique IDs
+    const v013ManifestPath = ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json";
+    const origManifestText = fs.readFileSync(path.join(v013Repo, v013ManifestPath), "utf8");
+    const baseManifest = JSON.parse(origManifestText);
+    const sqKeys = Object.keys(baseManifest.squads);
+
+    // Subcase A: readOnly overlap > 25% -> P3 Advisory (HEALTHY exit 0)
+    const roOverlapManifest = structuredClone(baseManifest);
+    roOverlapManifest.squads[sqKeys[0]] = {
+      lead: { role: "Lead", readOnly: true, objective: "Lead", scopeFiles: ["README.md"] },
+      specialists: [
+        { role: "RO1", readOnly: true, objective: "Audit 1", scopeFiles: ["README.md"] },
+        { role: "RO2", readOnly: true, objective: "Audit 2", scopeFiles: ["README.md"] }
+      ]
+    };
+    writeV013(v013ManifestPath, JSON.stringify(roOverlapManifest));
+    const roOverlapRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(roOverlapRun.status, 0, `SD-SCRIPT-01: read-only overlap should be P3 Advisory (exit 0), got: ${roOverlapRun.stdout}`);
+    const roOverlapJson = JSON.parse(roOverlapRun.stdout);
+    const roFinding = roOverlapJson.findings.find(f => f.id === `ARCH-READ-OVERLAP-${sqKeys[0]}`);
+    assert.ok(roFinding && roFinding.priority === "P3", "SD-SCRIPT-01: read-only overlap >25% must emit P3 Advisory");
+
+    // Subcase B: writable overlap > 25% -> P2 blocking (exit 1) + unique RUN-LEADSCOPE / RUN-SCOPE IDs for multiple missing files
+    const rwOverlapManifest = structuredClone(baseManifest);
+    rwOverlapManifest.squads[sqKeys[0]] = {
+      lead: { role: "Lead", objective: "Lead", scopeFiles: ["missing-lead-1.txt", "missing-lead-2.txt"] },
+      specialists: [
+        { role: "W1", objective: "Write 1", scopeFiles: ["README.md", "package.json", "missing-spec-1.txt"] },
+        { role: "W2", objective: "Write 2", scopeFiles: ["README.md", "package.json", "missing-spec-2.txt"] }
+      ]
+    };
+    writeV013(v013ManifestPath, JSON.stringify(rwOverlapManifest));
+    const rwOverlapRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(rwOverlapRun.status, 1, "SD-SCRIPT-01: writable overlap >25% must be P2 blocking");
+    const rwOverlapJson = JSON.parse(rwOverlapRun.stdout);
+    const rwFinding = rwOverlapJson.findings.find(f => f.id === `ARCH-OVERLAP-${sqKeys[0]}`);
+    assert.ok(rwFinding && rwFinding.priority === "P2", "SD-SCRIPT-01: writable overlap >25% must emit P2");
+    const allIds = rwOverlapJson.findings.map(f => f.id);
+    assert.equal(new Set(allIds).size, allIds.length, `SD-SCRIPT-02: all finding IDs must be unique, got: ${JSON.stringify(allIds)}`);
+    assert.equal(rwOverlapJson.findings.filter(f => f.id.startsWith(`RUN-LEADSCOPE-${sqKeys[0]}-`)).length, 2);
+    assert.equal(rwOverlapJson.findings.filter(f => f.id.startsWith(`RUN-SCOPE-${sqKeys[0]}-`)).length, 2);
+    writeV013(v013ManifestPath, origManifestText);
+
+    // S2-DEP-01 & S2-DEP-02: release-preflight.mjs passes on baseline and fails if 'docs' or 'CHANGELOG.md' is dropped from package.json files
+    for (const extra of ["LICENSE", "SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "benchmarks"]) {
+      fs.cpSync(path.join(repoRoot, extra), path.join(v013Repo, extra), { recursive: true });
+    }
+    const preflightScript = path.join(v013Repo, "scripts/release-preflight.mjs");
+    const preflightBaseline = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(preflightBaseline.status, 0, `Baseline release-preflight failed: ${preflightBaseline.stderr}`);
+    const origPkg = fs.readFileSync(path.join(v013Repo, "package.json"), "utf8");
+    const pkgNoDocs = JSON.parse(origPkg);
+    pkgNoDocs.files = pkgNoDocs.files.filter(f => f !== "docs");
+    writeV013("package.json", JSON.stringify(pkgNoDocs, null, 2) + "\n");
+    const preflightNoDocs = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.notEqual(preflightNoDocs.status, 0, "S2-DEP-01: release-preflight must fail when 'docs' is dropped from package.json files");
+    assert.match(preflightNoDocs.stderr, /docs\/tools\.md/);
+
+    const pkgNoChangelog = JSON.parse(origPkg);
+    pkgNoChangelog.files = pkgNoChangelog.files.filter(f => f !== "CHANGELOG.md");
+    writeV013("package.json", JSON.stringify(pkgNoChangelog, null, 2) + "\n");
+    const preflightNoChangelog = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.notEqual(preflightNoChangelog.status, 0, "S2-DEP-02: release-preflight must fail when 'CHANGELOG.md' is dropped from package.json files");
+    assert.match(preflightNoChangelog.stderr, /CHANGELOG\.md/);
+    writeV013("package.json", origPkg);
+
+    // UX-SQ-004 & UX-SQ-R2-005: diagnose.mjs rejects cross-root links escaping .agents/skills/ and malformed hosted docs URLs
+    const crossRootSkill = path.join(v013Repo, ".agents/skills/pr-review/SKILL.md");
+    const savedPrSkill = fs.readFileSync(crossRootSkill, "utf8");
+    for (const [label, badLink] of [
+      ["cross-root ../../../docs/", "../../../docs/tools.md"],
+      ["non-docs escape ../../../README.md", "../../../README.md"],
+      ["malformed hosted .. URL", "https://paragon-ux.github.io/Agy-Squad/../README.md"],
+      ["malformed hosted backslash URL", "https://paragon-ux.github.io/Agy-Squad/tools\\bad"]
+    ]) {
+      fs.writeFileSync(crossRootSkill, `${savedPrSkill}\nSee [bad link](${badLink}).\n`);
+      const badLinkRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+      fs.writeFileSync(crossRootSkill, savedPrSkill);
+      assert.equal(badLinkRun.status, 1, `UX-SQ-004/UX-SQ-R2-005: ${label} in SKILL.md must fail diagnose.mjs`);
+      assert.ok(JSON.parse(badLinkRun.stdout).findings.some(f => f.id === "SKILL-LINKS-pr-review"), `Expected SKILL-LINKS-pr-review for ${label}`);
+    }
+
+    // UX-SQ-008: diagnose.mjs exits cleanly (code 1, friendly message, no stack trace) when run outside an Agy-Squad checkout
+    const unrelatedEmpty = path.join(temporary, "unrelated-empty");
+    const unrelatedApp = path.join(temporary, "my-react-app");
+    fs.mkdirSync(unrelatedEmpty, { recursive: true });
+    fs.mkdirSync(unrelatedApp, { recursive: true });
+    fs.writeFileSync(path.join(unrelatedApp, "package.json"), JSON.stringify({ name: "my-react-app", version: "1.0.0" }) + "\n");
+    for (const [label, dir] of [["empty dir", unrelatedEmpty], ["unrelated repo", unrelatedApp]]) {
+      const outsideRun = spawnSync(process.execPath, [v013Diag, "--skip-mcp-spawn"], { cwd: dir, encoding: "utf8" });
+      assert.equal(outsideRun.status, 1, `UX-SQ-008: diagnose.mjs must exit 1 from ${label}`);
+      assert.match(outsideRun.stderr, /maintainer profiler.*Agy-Squad checkout/i);
+      assert.doesNotMatch(outsideRun.stderr, /at\s+.*diagnose\.mjs:/, `UX-SQ-008: ${label} must not print raw stack trace`);
+    }
+    const outsideHelp = spawnSync(process.execPath, [v013Diag, "--help"], { cwd: unrelatedApp, encoding: "utf8" });
+    assert.equal(outsideHelp.status, 0, "UX-SQ-008: diagnose.mjs --help must still exit 0 from any cwd");
+
+    // UX-SQ-010 & UX-SQ-013: grouped top-level --help (<= 100 chars/line) and focused per-subcommand --help
+    const topHelp = spawnSync(process.execPath, [cli, "--help"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(topHelp.status, 0, topHelp.stderr);
+    assert.match(topHelp.stdout, /Lifecycle Commands:/);
+    assert.match(topHelp.stdout, /Planning Commands:/);
+    assert.match(topHelp.stdout, /Verification & Bundling Commands:/);
+    assert.match(topHelp.stdout, /--version,\s*-v/);
+    assert.match(topHelp.stdout, /\bfinalize\b/);
+    const longHelpLines = topHelp.stdout.split(/\r?\n/).filter(line => line.length > 100);
+    assert.deepEqual(longHelpLines, [], `UX-SQ-010: top-level --help lines must be <= 100 chars, got: ${JSON.stringify(longHelpLines)}`);
+
+    for (const sub of [
+      "setup", "install", "status", "uninstall", "restore-backups",
+      "plan", "dispatch", "collect", "bundle-init", "fingerprint",
+      "inspect", "digest", "bundle", "verify", "finalize", "prune", "verdict"
+    ]) {
+      const subHelp = spawnSync(process.execPath, [cli, sub, "--help"], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(subHelp.status, 0, `UX-SQ-013: '${sub} --help' failed: ${subHelp.stderr}`);
+      const expectedUsageName = sub === "install" ? "setup" : sub;
+      assert.match(subHelp.stdout, new RegExp(`Usage: agy-squad ${expectedUsageName}\\b`), `UX-SQ-013: '${sub} --help' must print focused Usage`);
+      assert.match(subHelp.stdout, /Examples:/, `UX-SQ-013: '${sub} --help' must include Examples`);
+      assert.doesNotMatch(subHelp.stdout, /Lifecycle Commands:/, `UX-SQ-013: '${sub} --help' must not dump full top-level usage`);
+    }
+    const conflictSubHelp = spawnSync(process.execPath, [cli, "plan", "--help", "--topology", "flat"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(conflictSubHelp.status, 1, "UX-SQ-013: conflicting flags with --help must remain rejected");
+    assert.match(conflictSubHelp.stderr, /Conflicting flags/);
+
+    // UX-SQ-R2-001 & UX-SQ-R2-004: bundle-init --help --digest example includes --handoffs/--handoff, and bundled short/inline help conflicts fail closed
+    const bundleInitHelp = spawnSync(process.execPath, [cli, "bundle-init", "--help"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(bundleInitHelp.status, 0, bundleInitHelp.stderr);
+    const digestHelpLine = bundleInitHelp.stdout.split(/\r?\n/).find(line => /agy-squad bundle-init\b/.test(line) && /--digest\b/.test(line));
+    assert.ok(digestHelpLine && /--handoffs?\b/.test(digestHelpLine), `UX-SQ-R2-001: bundle-init --help --digest example must include --handoffs/--handoff, got: ${bundleInitHelp.stdout}`);
+
+    for (const badHelpArgs of [
+      ["setup", "-ch"],
+      ["plan", "-xh"],
+      ["plan", "--help=false"]
+    ]) {
+      const badHelpRes = spawnSync(process.execPath, [cli, ...badHelpArgs], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(badHelpRes.status, 1, `UX-SQ-R2-004: '${badHelpArgs.join(" ")}' must fail closed instead of exiting 0`);
+      assert.match(badHelpRes.stderr, /Conflicting flags/);
+    }
+
+    // UX-SQ-R2-003 & UX-SQ-R2-006: hosted docs align with opt-in docs/reviews/ and CHANGELOG [0.1.3] documents finalize without internal ledger codes
+    const rolesDocText = fs.readFileSync(path.join(repoRoot, "docs/roles-and-workflows.md"), "utf8");
+    const conceptsDocText = fs.readFileSync(path.join(repoRoot, "docs/concepts.md"), "utf8");
+    assert.match(rolesDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    assert.match(conceptsDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    const changelogText = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
+    const v013Section = changelogText.slice(changelogText.indexOf("## [0.1.3]"), changelogText.indexOf("## [0.1.2]"));
+    assert.match(v013Section, /\bagy-squad finalize\b/);
+    assert.doesNotMatch(v013Section, /docs\/plans\/LEDGER\.md|\bL51\b|\bL56\b/);
+
+    // UX-SQ-001, UX-SQ-002, UX-SQ-003, UX-SQ-004, UX-SQ-009, UX-SQ-011: portable skill & plugin.json hygiene checks
+    const walkMd = (dir) => {
+      const out = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) out.push(...walkMd(full));
+        else if (entry.isFile() && entry.name.endsWith(".md")) out.push(full);
+      }
+      return out;
+    };
+    const allSkillMdFiles = walkMd(path.join(repoRoot, ".agents/skills"));
+    for (const mdFile of allSkillMdFiles) {
+      const rel = path.relative(repoRoot, mdFile).replace(/\\/g, "/");
+      const text = fs.readFileSync(mdFile, "utf8");
+      assert.doesNotMatch(text, /\/home\/paragon-ux/i, `UX-SQ-003: hardcoded author path in ${rel}`);
+      assert.doesNotMatch(text, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: broken relative ../../../docs/ link in ${rel}`);
+      if (!rel.startsWith(".agents/skills/self-diagnosis/")) {
+        assert.doesNotMatch(text, /node bin\/agy-squad\.mjs/, `UX-SQ-003: checkout-only 'node bin/agy-squad.mjs' in portable skill ${rel}`);
+      }
+    }
+    const prSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/pr-review/SKILL.md"), "utf8");
+    const fullSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/full-review/SKILL.md"), "utf8");
+    const reportTplText = fs.readFileSync(path.join(repoRoot, ".agents/skills/full-review/references/report-template.md"), "utf8");
+    const swarmSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/swarm-governance/SKILL.md"), "utf8");
+    const selfDiagSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/self-diagnosis/SKILL.md"), "utf8");
+    assert.doesNotMatch(prSkillText, /branch review in Agy-Squad/i, "UX-SQ-001: pr-review must target the active repository");
+    assert.doesNotMatch(fullSkillText, /recommendation on Agy-Squad/i, "UX-SQ-001: full-review must target the active repository");
+    assert.match(reportTplText, /\| Repository \| `<owner\/repo>` \|/, "UX-SQ-001: report-template.md must use <owner/repo>");
+    assert.doesNotMatch(swarmSkillText, /\b(?:antislop|permissioned-github)\b/i, "UX-SQ-011: swarm-governance/SKILL.md must not front-load third-party skills");
+    assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
+
+    const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
+    assert.doesNotMatch(pluginMeta.description, /Pointer-Over-Wire/i, "UX-SQ-009: plugin.json description must be plain English");
+    assert.ok(pluginMeta.suggestedPrompts.every(p => !/integrity_auditor/i.test(p)), "UX-SQ-009: suggestedPrompts must be Day-1 runnable");
+  } finally {
+    fs.rmSync(v013Repo, { recursive: true, force: true });
   }
 
   console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");
