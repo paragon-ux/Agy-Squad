@@ -13,6 +13,13 @@ nav = [
   { "Getting Started" = "getting-started.md" },
   { "Core Workflows" = "core-workflows.md" },
   { "Roles & Skill Workflows" = "roles-and-workflows.md" },
+  { "Skills" = [
+    { "PR Review (pr-review)" = "skills/pr-review.md" },
+    { "Full Review (full-review)" = "skills/full-review.md" },
+    { "Day-One Review (day-one-review)" = "skills/day-one-review.md" },
+    { "Swarm Governance (swarm-governance)" = "skills/swarm-governance.md" },
+    { "Self-Diagnosis (self-diagnosis)" = "skills/self-diagnosis.md" },
+  ] },
   { "Concepts" = "concepts.md" },
   { "Tools" = "tools.md" },
   { "Stopping Agents" = "stopping-agents.md" },

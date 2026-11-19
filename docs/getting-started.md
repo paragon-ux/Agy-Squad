@@ -1,6 +1,6 @@
 # Getting started (Desktop IDE & CLI)
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows** (Node.js parity tested in CI on `ubuntu-latest`, `macos-latest`, and `windows-latest`; live host `agy` IDE/CLI execution verified on Linux/WSL2, with physical macOS/Windows `agy` verification tracked as a remaining cross-platform parity gate). It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows** (Node.js parity tested in CI on `ubuntu-latest`, `macos-latest`, and `windows-latest`; live host `agy` IDE/CLI execution verified on Linux/WSL2, with physical macOS/Windows `agy` verification tracked as a remaining cross-platform parity gate). It pairs [`swarm-governance`](skills/swarm-governance.md) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](skills/self-diagnosis.md), [`pr-review`](skills/pr-review.md), [`full-review`](skills/full-review.md), and [`day-one-review`](skills/day-one-review.md)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.5.0`).
 
 ## Host and companion compatibility matrix
 
@@ -16,7 +16,7 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 
 ## 1. Install via NPX (Recommended, zero clone required)
 
-Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the four governance skills (`pr-review`, `full-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/plugins/agy-squad/mcp_config.json` (sweeping any duplicate global entry in `~/.gemini/config/mcp_config.json`), and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
+Register the native Antigravity plugin (`~/.gemini/config/plugins/agy-squad`), link the five governance skills (`pr-review`, `full-review`, `day-one-review`, `self-diagnosis`, `swarm-governance`), register the `agy-squad` MCP server in `~/.gemini/config/plugins/agy-squad/mcp_config.json` (sweeping any duplicate global entry in `~/.gemini/config/mcp_config.json`), and provision the `agy-squad` CLI shim in `~/.gemini/antigravity/bin/` with a single command:
 
 ```bash
 npx --package=agy-squad agy-squad setup

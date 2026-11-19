@@ -23,6 +23,24 @@ npx --package=agy-squad agy-squad status
 
 Reload Antigravity Desktop IDE after setup finishes so the MCP server and skills load. For shell PATH configuration, cohort planning and bundling examples, standalone mode, local checkout tests, and uninstallation, see the [Getting started guide](https://paragon-ux.github.io/Agy-Squad/getting-started/).
 
+## How Agy-Squad extends native swarm
+
+Agy-Squad configures Antigravity's native swarm runtime rather than replacing it, adding non-overlapping file scopes, explicit model pinning, file-backed worker reports, one-line status receipts, and independent integrity auditing on top of the built-in shared board:
+
+![Native Antigravity /swarm vs. Agy-Squad roles and configuration additions](docs/assets/swarm-vs-agy-squad-roles.svg)
+
+## Built-in skills
+
+Agy-Squad ships five Antigravity skills covering structured code reviews, cold launch readiness, swarm governance, and harness diagnostics:
+
+| Skill | Best for | What it delivers |
+| --- | --- | --- |
+| [pr-review](https://paragon-ux.github.io/Agy-Squad/skills/pr-review/) | Pull requests, branch diffs, and CI checks | Commit-pinned, eleven-category review reports (including security and vulnerabilities) with atomic one-ID-per-row findings and re-verification closure |
+| [full-review](https://paragon-ux.github.io/Agy-Squad/skills/full-review/) | Whole repositories, subsystems, logs, or direction choices | Evidence-manifest triage across transcripts, CI runs, and code, plus structured direction decisions with constraints, options, and falsifiers |
+| [day-one-review](https://paragon-ux.github.io/Agy-Squad/skills/day-one-review/) | Public launch readiness from a cold first-time user lens | Raw, unguided Day-1 audit under scratch/ with a user-journey trace matrix, ship verdict, selective-resume remediation, and cumulative follow-up passes |
+| [swarm-governance](https://paragon-ux.github.io/Agy-Squad/skills/swarm-governance/) | Multi-agent teams running on Antigravity native swarm | Disjoint file scopes, model pinning, tiny one-line board receipts, independent integrity trace audits, SHA-256 proof bundles, and clean worker teardown |
+| [self-diagnosis](https://paragon-ux.github.io/Agy-Squad/skills/self-diagnosis/) | Maintainers working inside an Agy-Squad source checkout | Zero-subagent profiler checking skill token budgets, links, closure gates, ledger schemas, and compiled prompt sizes alongside optional audit cohorts |
+
 ## Documentation
 
 Read the full documentation at [paragon-ux.github.io/Agy-Squad](https://paragon-ux.github.io/Agy-Squad/):
@@ -31,6 +49,7 @@ Read the full documentation at [paragon-ux.github.io/Agy-Squad](https://paragon-
 - [Getting started](https://paragon-ux.github.io/Agy-Squad/getting-started/)
 - [Core workflows: orchestrate, self-diagnose, review, and tear down](https://paragon-ux.github.io/Agy-Squad/core-workflows/)
 - [Roles, skill workflows, and runtime closure checklist](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/)
+- [Skill guides](https://paragon-ux.github.io/Agy-Squad/skills/pr-review/) ([pr-review](https://paragon-ux.github.io/Agy-Squad/skills/pr-review/), [full-review](https://paragon-ux.github.io/Agy-Squad/skills/full-review/), [day-one-review](https://paragon-ux.github.io/Agy-Squad/skills/day-one-review/), [swarm-governance](https://paragon-ux.github.io/Agy-Squad/skills/swarm-governance/), [self-diagnosis](https://paragon-ux.github.io/Agy-Squad/skills/self-diagnosis/))
 - [Concepts and terminology](https://paragon-ux.github.io/Agy-Squad/concepts/)
 - [Manifest and tool contract](https://paragon-ux.github.io/Agy-Squad/tools/)
 - [Stopping agents and child processes](https://paragon-ux.github.io/Agy-Squad/stopping-agents/)

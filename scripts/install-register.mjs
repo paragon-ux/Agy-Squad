@@ -23,9 +23,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.1.3";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.0";
   } catch {
-    return "0.1.3";
+    return "0.2.0";
   }
 })();
 
@@ -515,7 +515,7 @@ export function detectExistingInstallation(options = {}) {
       );
 
       const skillsPath = path.join(pluginDest, "skills");
-      const requiredSkills = ["pr-review", "full-review", "self-diagnosis", "swarm-governance"];
+      const requiredSkills = ["pr-review", "full-review", "day-one-review", "self-diagnosis", "swarm-governance"];
       details.plugin.skillsReady = requiredSkills.every((skillName) =>
         fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
       );
@@ -917,6 +917,7 @@ export async function runCheckOnly(options = {}) {
     "mcp/index.js",
     ".agents/skills/pr-review/SKILL.md",
     ".agents/skills/full-review/SKILL.md",
+    ".agents/skills/day-one-review/SKILL.md",
     ".agents/skills/self-diagnosis/SKILL.md",
     ".agents/skills/swarm-governance/SKILL.md"
   ]) {
@@ -1341,7 +1342,7 @@ export function printStatus(options = {}) {
   );
   log(`- Native Plugin Link: ${pluginNote}`);
   log(
-    `- Governance Skills (pr-review, full-review, self-diagnosis, swarm-governance): ${
+    `- Governance Skills (pr-review, full-review, day-one-review, self-diagnosis, swarm-governance): ${
       status.details.plugin.skillsReady ? "READY" : "MISSING"
     }`
   );

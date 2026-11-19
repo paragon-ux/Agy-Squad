@@ -138,6 +138,15 @@ try {
   assert.equal(diagRun.status, 0, diagRun.stderr);
   const diagParsed = JSON.parse(diagRun.stdout);
   assert.equal(diagParsed.status, "HEALTHY");
+  assert.equal(diagParsed.standardVersion, "1.5.0");
+  assert.deepEqual(
+    diagParsed.prReviewCategoryMatrix.map(c => c.category),
+    ["ARCH", "DOC", "SKILL", "MCP", "RUN", "SVC", "DB", "SCRIPT", "TEST", "DEP", "SEC"],
+    "v1.5.0 diagnose.mjs must emit all 11 mandatory categories ending in SEC"
+  );
+  const dayOneSkillDiag = diagParsed.skills.find(s => s.name === "day-one-review");
+  assert.ok(dayOneSkillDiag, "diagnose.mjs must audit day-one-review skill");
+  assert.equal(dayOneSkillDiag.brokenLinksCount, 0, "day-one-review must have 0 broken links");
   assert.ok(diagParsed.promptBudgets.specialistTemplateBytes > 0);
   assert.ok(diagParsed.promptBudgets.leadTemplateBytes > 0);
   assert.equal(typeof diagParsed.timings.squadPlannerMs, "number");
@@ -146,7 +155,43 @@ try {
   const diagMd = spawnSync(process.execPath, [isoDiag, "--markdown"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagMd.status, 0, diagMd.stderr);
   assert.match(diagMd.stdout, /# Agy-Squad Self-Diagnosis & Optimization Report/);
+  assert.match(diagMd.stdout, /PR-Review Standard v1\.5\.0 Category Matrix/);
+  assert.match(diagMd.stdout, /\| `SEC` \|/);
   assert.match(diagMd.stdout, /HEALTHY/);
+
+  // v1.5.0 ledger SEC validation: require SEC on v1.5.0 ledgers while staying backward-compatible with v1.4.0 ledgers
+  const v15MissingSecLedger = path.join(isoRepo, "docs/reviews/test-v15-missing-sec.md");
+  fs.writeFileSync(
+    v15MissingSecLedger,
+    "**Governing Standard:** Agy-Squad PR Review Standard `v1.5.0`\n\n" + buildTestLedger(),
+    "utf8"
+  );
+  const v15MissingRun = spawnSync(process.execPath, [isoDiag, "--ledger", "docs/reviews/test-v15-missing-sec.md"], {
+    cwd: isoRepo,
+    encoding: "utf8"
+  });
+  assert.equal(v15MissingRun.status, 1, "v1.5.0 ledger missing SEC category must fail schema check");
+  const v15MissingJson = JSON.parse(v15MissingRun.stdout);
+  assert.ok(
+    v15MissingJson.findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /missing required 'SEC'/.test(f.summary)),
+    `Expected DOC-LEDGER-SCHEMA for missing SEC on v1.5.0 ledger, got: ${JSON.stringify(v15MissingJson.findings)}`
+  );
+
+  const v15WithSecLedger = path.join(isoRepo, "docs/reviews/test-v15-with-sec.md");
+  fs.writeFileSync(
+    v15WithSecLedger,
+    "**Governing Standard:** Agy-Squad PR Review Standard `v1.5.0`\n\n" +
+      buildTestLedger().replace("| ARCH | Checked | Verified |", "| ARCH | Checked | Verified |\n| SEC | Checked | Verified |"),
+    "utf8"
+  );
+  const v15WithSecRun = spawnSync(process.execPath, [isoDiag, "--ledger", "docs/reviews/test-v15-with-sec.md"], {
+    cwd: isoRepo,
+    encoding: "utf8"
+  });
+  assert.equal(v15WithSecRun.status, 0, v15WithSecRun.stderr || v15WithSecRun.stdout);
+  assert.equal(JSON.parse(v15WithSecRun.stdout).status, "HEALTHY");
+  fs.rmSync(v15MissingSecLedger, { force: true });
+  fs.rmSync(v15WithSecLedger, { force: true });
 
   const badFlags = spawnSync(process.execPath, [isoDiag, "--markdown", "--teardown"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(badFlags.status, 1);
@@ -279,7 +324,10 @@ try {
     );
     fs.writeFileSync(
       prSkillPath,
-      origPrSkill.replace("roles-and-workflows/#pr-review", "roles-and-workflows/#nonexistent-anchor")
+      origPrSkill.replace(
+        "https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/",
+        "https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#nonexistent-anchor"
+      )
     );
     fs.writeFileSync(
       stoppingDocPath,
@@ -1113,9 +1161,13 @@ try {
     }
 
     // UX-SQ-R2-003 & UX-SQ-R2-006: hosted docs align with opt-in docs/reviews/ and CHANGELOG [0.1.3] documents finalize without internal ledger codes
+    const prSkillDocText = fs.readFileSync(path.join(repoRoot, "docs/skills/pr-review.md"), "utf8");
     const rolesDocText = fs.readFileSync(path.join(repoRoot, "docs/roles-and-workflows.md"), "utf8");
     const conceptsDocText = fs.readFileSync(path.join(repoRoot, "docs/concepts.md"), "utf8");
-    assert.match(rolesDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    assert.match(prSkillDocText, /in chat or an Antigravity artifact.*`docs\/reviews\/<review-slug>\.md`/i);
+    for (const skillPage of ["pr-review", "full-review", "day-one-review", "swarm-governance", "self-diagnosis"]) {
+      assert.ok(rolesDocText.includes(`skills/${skillPage}.md`), `docs/roles-and-workflows.md must link to skills/${skillPage}.md`);
+    }
     assert.match(conceptsDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
     const changelogText = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
     const v013Section = changelogText.slice(changelogText.indexOf("## [0.1.3]"), changelogText.indexOf("## [0.1.2]"));

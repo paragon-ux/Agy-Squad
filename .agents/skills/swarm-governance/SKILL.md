@@ -8,7 +8,7 @@ description: >-
 
 # Agy-Squad Swarm Governance (Native `/swarm` Execution Modifier)
 
-Governs Antigravity native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`) alongside any **Task Spec** ([`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), or [`self-diagnosis`](../self-diagnosis/SKILL.md)). For ecosystem modifiers (`/teamwork` exclusion, `run_workflow`, `/goal`, optional companion skills), see [ecosystem & modifiers](./references/ecosystem-and-modifiers.md). Also consult [Core workflows](https://paragon-ux.github.io/Agy-Squad/core-workflows/) and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#swarm-governance).
+Governs Antigravity native `/swarm` orchestration (`swarm`, `post_message`, `read_board`, `swarm_wait`, `swarm_monitor`) alongside any **Task Spec** ([`pr-review`](../pr-review/SKILL.md), [`full-review`](../full-review/SKILL.md), [`self-diagnosis`](../self-diagnosis/SKILL.md), or opt-in flat [`day-one-review`](../day-one-review/SKILL.md)). For ecosystem modifiers (`/teamwork` exclusion, `run_workflow`, `/goal`, optional companion skills), see [ecosystem & modifiers](./references/ecosystem-and-modifiers.md). Also consult [Swarm governance guide](https://paragon-ux.github.io/Agy-Squad/skills/swarm-governance/), [Core workflows](https://paragon-ux.github.io/Agy-Squad/core-workflows/), and [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/).
 
 ---
 

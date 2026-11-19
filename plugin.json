@@ -1,7 +1,7 @@
 {
   "name": "agy-squad",
   "displayName": "Agy-Squad",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Plan scoped multi-agent /swarm cohorts, run structured PR and full-repo reviews, and verify worker reports with SHA-256 proof bundles in Google Antigravity.",
   "logo": "assets/logo.svg",
   "author": {

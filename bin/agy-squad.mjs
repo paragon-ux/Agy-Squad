@@ -22,9 +22,9 @@ function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NO
 
 function readPkgVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.3";
+    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.2.0";
   } catch {
-    return "0.1.3";
+    return "0.2.0";
   }
 }
 

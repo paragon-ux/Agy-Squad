@@ -513,6 +513,24 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   }
 
+  const declaredV15 = /(?:PR Review Standard\s+`?v?1\.5\.0`?|Standard\s+version\*?\*?:\s*`?v?1\.5\.0`?)/i.test(markdown);
+  if (declaredV15) {
+    const sec2 = extractTopLevelSection(markdown, 2);
+    const sec3 = extractTopLevelSection(markdown, 3);
+    const sec4 = extractTopLevelSection(markdown, 4);
+    const hasSecHeading = Boolean(sec4 && /^###\s+(?:4\.11\b[^\r\n]*\bSEC\b|`?SEC`?\b)/im.test(sec4.body));
+    const hasSecRow = Boolean(
+      (sec2 && /\|\s*`?SEC`?\s*\|/i.test(sec2.body)) ||
+      (sec3 && /\|\s*`?SEC`?\s*\|/i.test(sec3.body)) ||
+      (sec4 && /\|\s*`?SEC`?\s*\|/i.test(sec4.body))
+    );
+    if (!hasSecHeading && !hasSecRow) {
+      errors.push(
+        "PR Review Standard v1.5.0 ledger is missing required 'SEC' category coverage (Section 4.11 / category coverage matrix)."
+      );
+    }
+  }
+
   const sec8 = extractTopLevelSection(markdown, 8);
   const expectedSec8Headers = [
     "ID",
@@ -639,7 +657,7 @@ function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = fals
       ledgerCheck = validateTargetReviewLedger(targetLedger, { requireCohortSection: true });
       if (ledgerCheck.errors.length > 0) {
         throw new Error(
-          `Refusing to tear down ${failingRelDir}: ${targetLedger.relative} violates PR Review Standard v1.4.0 schema: ${ledgerCheck.errors.join(" ")}`
+          `Refusing to tear down ${failingRelDir}: ${targetLedger.relative} violates PR Review Standard v1.5.0 schema: ${ledgerCheck.errors.join(" ")}`
         );
       }
     }
@@ -1123,7 +1141,7 @@ function auditSkills(ledgerArg) {
         id: "DOC-LEDGER-SCHEMA",
         category: "DOC",
         priority: "P2",
-        summary: `${targetLedger.relative} violates PR Review Standard v1.4.0 ledger structure: ${ledgerCheck.errors.join(" ")}`
+        summary: `${targetLedger.relative} violates PR Review Standard v1.5.0 ledger structure: ${ledgerCheck.errors.join(" ")}`
       });
     }
     if (ledgerCheck.openBlockingFindings.length > 0) {
@@ -1965,7 +1983,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
 }
 
 function buildPrReviewCategoryMatrix(allFindings) {
-  const categories = ["ARCH", "DOC", "SKILL", "MCP", "RUN", "SVC", "DB", "SCRIPT", "TEST", "DEP"];
+  const categories = ["ARCH", "DOC", "SKILL", "MCP", "RUN", "SVC", "DB", "SCRIPT", "TEST", "DEP", "SEC"];
   return categories.map(cat => {
     const items = allFindings.filter(f => f.category === cat);
     const p1 = items.filter(f => f.priority === "P1").length;
@@ -2214,7 +2232,7 @@ function assertAgySquadWorkspace() {
     [
       "Error: diagnose.mjs is an Agy-Squad repository maintainer profiler and must be run inside an Agy-Squad checkout.",
       `Current working directory: ${rawCwd}${detail}`,
-      "To review or govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', or '/swarm-governance' instead."
+      "To review or govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', '/day-one-review', or '/swarm-governance' instead."
     ].join("\n")
   );
   process.exit(1);
@@ -2333,7 +2351,7 @@ const report = {
   profilerHealth: profilerBlockingCount === 0 ? "HEALTHY" : "CHANGES_REQUIRED",
   ledgerDisposition: skillAudit.ledgerDisposition,
   openLedgerBlockers: skillAudit.openLedgerBlockers,
-  standardVersion: "1.4.0",
+  standardVersion: "1.5.0",
   manifestPath: manifestRelative,
   targetReviewLedger: skillAudit.targetReviewLedger,
   skills: skillAudit.skills,
@@ -2379,7 +2397,7 @@ if (cli.markdown) {
     `- **/swarm Auditor Template:** \`${report.promptBudgets.swarmAuditorTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmAuditorTemplateBytes)} tokens)`,
     `- **MCP \`tools/list\` Response:** \`${report.promptBudgets.mcpToolsListResponseBytes} B\` (~${report.promptBudgets.mcpToolsListEstimatedTokens} tokens)`,
     "",
-    "## 3. PR-Review Standard v1.4.0 Category Matrix",
+    "## 3. PR-Review Standard v1.5.0 Category Matrix",
     "",
     "| Category | P1 | P2 | P3 (Advisory) | Verdict |",
     "| --- | ---: | ---: | ---: | --- |",
