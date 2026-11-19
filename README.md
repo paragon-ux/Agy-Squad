@@ -55,16 +55,19 @@ agy-squad uninstall --restore-backups
 ### Plan, audit, and bundle a cohort
 
 ```bash
-# Plan a repo-agnostic /swarm cohort in any repository
-agy-squad plan --mode swarm --scope src --role "Implementer" --role "Reviewer" \
-  "Audit authentication flow"
+# Plan a read-only /swarm cohort in any repository and save the plan JSON
+mkdir -p scratch && agy-squad plan --mode swarm --read-only --scope src \
+  --role "Security" --role "Test Audit" \
+  "Audit authentication flow" > scratch/plan.json
 
-# Parse strict content and integrity verdicts
-agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
-agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md
+# After workers finish, check the lead verdict and initialize the bundle record + Evidence Digest
+agy-squad verdict scratch/agy-squad/squad-task_squad/lead/report.md
+agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json \
+  --digest --out scratch/record.json src/auth.js
 
-# Initialize bundle record + Evidence Digest, then inspect -> bundle -> verify (+ optional prune) in one step
-agy-squad bundle-init --plan scratch/plan.json --digest --out scratch/record.json src/auth.js
+# Verify the integrity auditor verdict (single-squad slot; multi-squad uses squad-integrity_auditor-<id>)
+# and finalize (inspect -> bundle -> verify + prune) in one step
+agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md
 agy-squad finalize scratch/record.json --replace --prune
 
 # Granular steps also remain available individually:

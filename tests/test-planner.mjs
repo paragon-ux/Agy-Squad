@@ -1210,6 +1210,36 @@ try {
       "UX-SQ-015: standalone (--no-integrity) verificationPipeline must surface finalize --allow-unaudited"
     );
 
+    // UX-SQ-R2-001 & UX-SQ-R2-002: verificationPipeline bundle-init --digest includes --handoffs/--handoff, and README Quickstart plan runs warning-free with single-squad auditor slot
+    assert.ok(
+      layeredLeadCheckPlan.verificationPipeline.some(
+        step => /agy-squad bundle-init\b/.test(step) && /--digest\b/.test(step) && /--handoffs?\b/.test(step)
+      ),
+      `UX-SQ-R2-001: verificationPipeline bundle-init --digest must include --handoffs or --handoff, got: ${JSON.stringify(layeredLeadCheckPlan.verificationPipeline)}`
+    );
+    const readmeQuickstartPlan = runCli([
+      "plan",
+      "--mode", "swarm",
+      "--read-only",
+      "--scope", "src",
+      "--role", "Security",
+      "--role", "Test Audit",
+      "Audit authentication flow"
+    ]);
+    assert.equal(readmeQuickstartPlan.status, 0, `UX-SQ-R2-002: README Quickstart plan failed: ${readmeQuickstartPlan.stderr}`);
+    const readmeQuickstartJson = JSON.parse(readmeQuickstartPlan.stdout);
+    assert.deepEqual(
+      readmeQuickstartJson.warnings,
+      [],
+      `UX-SQ-R2-002: README Quickstart plan must emit 0 warnings, got: ${JSON.stringify(readmeQuickstartJson.warnings)}`
+    );
+    assert.equal(readmeQuickstartJson.workers.length, 1);
+    assert.equal(readmeQuickstartJson.workers[0].squadId, "task_squad");
+    assert.equal(
+      readmeQuickstartJson.integrityAuditPlan[0].reportSlot,
+      "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
+    );
+
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

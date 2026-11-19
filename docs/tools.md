@@ -135,7 +135,7 @@ Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Sq
 | `--overwrite` / `--dry-run` / `--strict` / `--allow-empty` | `collect` | Overwrite differing coordinator slots, preview copies without writing, fail on missing slots, or allow zero found slots. |
 | `--provenance <path>` / `--verdict <v>` / `--file <path>` | `bundle-init` | Merge external provenance entries, supply an explicit verdict (`PASS\|FAIL\|BLOCKED`), and add repeatable verified file inputs. |
 | `--id-map <worker=id>` / `--handoffs <json>` / `--handoff <sender=msg>` | `bundle-init` | Map worker names to runtime IDs and inject handoff receipts from JSON or inline `sender=message` pairs. |
-| `--digest` | `bundle-init` | Compute and output `evidenceDigest` alongside the initialized record (`--out` optional). |
+| `--digest` | `bundle-init` | Compute and output `evidenceDigest` alongside the initialized record (requires `--handoffs` or `--handoff`; `--out` optional). |
 | `--out <path>` | `bundle-init` | Write the initialized `<record.json>` to disk instead of printing only to stdout. |
 | `--integrity` | `verdict` | Parse `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` instead of a content verdict. |
 | `--allow-unaudited` | `bundle`, `finalize`, `bundle-init` | Opt out of the default `requireIntegrityAudit: true` gate. |

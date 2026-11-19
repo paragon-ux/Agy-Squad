@@ -17,7 +17,7 @@ This page is the single repository reference for Agy-Squad skill composition, MC
 
 | Role | Active in | Verdict or primary output | Authority and boundary |
 | --- | --- | --- | --- |
-| **Operator / Primary Agent** | All workflows | Compiles plans, updates `docs/reviews/`, runs `finalize`/`bundle`/`--teardown`, stops agents | Owns user intake, final reporting, and teardown; never fabricates specialist evidence |
+| **Operator / Primary Agent** | All workflows | Compiles plans, delivers structured reviews (in chat, artifacts, or opt-in `docs/reviews/`), runs `finalize`/`bundle`/`--teardown`, stops agents | Owns user intake, final reporting, and teardown; never fabricates specialist evidence |
 | **Coordinator (`/swarm`)** | `swarm-governance` | Briefs workers on the shared board (`post_message`), writes `lead/report.md` in flat mode, runs `agy-squad` | Owns single-squad orchestration and worker `kill` cleanup; never delegates coordination to `monitor` or `narrator` |
 | **Working Lead** | `swarm-governance` (layered), `self-diagnosis` (`all_l1`) | `Content Verdict: PASS \| FAIL \| BLOCKED` (legacy alias `Verdict: ...`) | Reviews specialist slot reports against cited files/tests and re-checks after integrity `CLEAN`; never audits its own integrity |
 | **Specialist** | `swarm-governance`, `self-diagnosis`, `pr-review`, `full-review` | Writes `specialist-<N>/report.md` + `<= 500` B receipt (`READY`, `PARTIAL`, `NO_REPORT`) | Inspects assigned `scopeFiles` via executed tools/commands (`Subagent Alignment Policy`); never guesses from memory |
@@ -59,7 +59,7 @@ Source specification: [`.agents/skills/self-diagnosis/SKILL.md`](https://github.
 
 Source specification: [`.agents/skills/pr-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/SKILL.md) (`Standard v1.4.0`).
 
-1. **Intake and provenance (`Operator / Review Lead`):** Ask neutrally when topology (`Flat` vs `Layered` vs single-agent) is unspecified via `ask_question`, pin PR/branch base and head SHAs, CI SHAs, and the append-only `Session Provenance` table in `docs/reviews/<slug>.md`.
+1. **Intake and provenance (`Operator / Review Lead`):** Ask neutrally when topology (`Flat` vs `Layered` vs single-agent) is unspecified via `ask_question`, and pin PR/branch base and head SHAs, CI SHAs, and the append-only `Session Provenance` table in the structured v1.4.0 report (delivered in chat, an Antigravity artifact, or `docs/reviews/<slug>.md` when requested or already adopted in the repository).
 2. **Architecture trace and category review (`Review Lead` + optional `Category Specialists`):** Trace `design thesis -> architecture decision -> public contract -> code -> verification` across all ten mandatory categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), recording `1 ID = 1 Row` findings (`P0` through `P2` 10-field blocks; `P3` table; Section 8 mandatory residual/deferred sink).
 3. **Independent audit before final approval (`Review Lead` <-> `Integrity Auditor`):** Run an independent integrity auditor when a cohort ran or integrity verification is selected. Only after `Integrity Verdict: CLEAN` does the review lead finalize `Approve` or `Request Changes`.
 4. **Remediation loop (`Implementer / Author` -> `Review Lead`):** Implementation changes happen separately from the review; the review lead (or same review cohort) re-verifies the delta at the new SHA before moving rows from `Open (Pre-Remediation)` to `Closed`.

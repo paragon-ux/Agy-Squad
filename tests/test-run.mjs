@@ -1038,14 +1038,21 @@ try {
     assert.match(preflightNoChangelog.stderr, /CHANGELOG\.md/);
     writeV013("package.json", origPkg);
 
-    // UX-SQ-004: diagnose.mjs rejects non-portable cross-root ../../../docs/ links inside skills
+    // UX-SQ-004 & UX-SQ-R2-005: diagnose.mjs rejects cross-root links escaping .agents/skills/ and malformed hosted docs URLs
     const crossRootSkill = path.join(v013Repo, ".agents/skills/pr-review/SKILL.md");
     const savedPrSkill = fs.readFileSync(crossRootSkill, "utf8");
-    fs.writeFileSync(crossRootSkill, savedPrSkill + "\nSee [broken relative](../../../docs/tools.md).\n");
-    const crossRootRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
-    fs.writeFileSync(crossRootSkill, savedPrSkill);
-    assert.equal(crossRootRun.status, 1, "UX-SQ-004: cross-root ../../../docs/ link in SKILL.md must fail diagnose.mjs");
-    assert.ok(JSON.parse(crossRootRun.stdout).findings.some(f => f.id === "SKILL-LINKS-pr-review"));
+    for (const [label, badLink] of [
+      ["cross-root ../../../docs/", "../../../docs/tools.md"],
+      ["non-docs escape ../../../README.md", "../../../README.md"],
+      ["malformed hosted .. URL", "https://paragon-ux.github.io/Agy-Squad/../README.md"],
+      ["malformed hosted backslash URL", "https://paragon-ux.github.io/Agy-Squad/tools\\bad"]
+    ]) {
+      fs.writeFileSync(crossRootSkill, `${savedPrSkill}\nSee [bad link](${badLink}).\n`);
+      const badLinkRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+      fs.writeFileSync(crossRootSkill, savedPrSkill);
+      assert.equal(badLinkRun.status, 1, `UX-SQ-004/UX-SQ-R2-005: ${label} in SKILL.md must fail diagnose.mjs`);
+      assert.ok(JSON.parse(badLinkRun.stdout).findings.some(f => f.id === "SKILL-LINKS-pr-review"), `Expected SKILL-LINKS-pr-review for ${label}`);
+    }
 
     // UX-SQ-008: diagnose.mjs exits cleanly (code 1, friendly message, no stack trace) when run outside an Agy-Squad checkout
     const unrelatedEmpty = path.join(temporary, "unrelated-empty");
@@ -1088,6 +1095,32 @@ try {
     const conflictSubHelp = spawnSync(process.execPath, [cli, "plan", "--help", "--topology", "flat"], { cwd: repoRoot, encoding: "utf8" });
     assert.equal(conflictSubHelp.status, 1, "UX-SQ-013: conflicting flags with --help must remain rejected");
     assert.match(conflictSubHelp.stderr, /Conflicting flags/);
+
+    // UX-SQ-R2-001 & UX-SQ-R2-004: bundle-init --help --digest example includes --handoffs/--handoff, and bundled short/inline help conflicts fail closed
+    const bundleInitHelp = spawnSync(process.execPath, [cli, "bundle-init", "--help"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(bundleInitHelp.status, 0, bundleInitHelp.stderr);
+    const digestHelpLine = bundleInitHelp.stdout.split(/\r?\n/).find(line => /agy-squad bundle-init\b/.test(line) && /--digest\b/.test(line));
+    assert.ok(digestHelpLine && /--handoffs?\b/.test(digestHelpLine), `UX-SQ-R2-001: bundle-init --help --digest example must include --handoffs/--handoff, got: ${bundleInitHelp.stdout}`);
+
+    for (const badHelpArgs of [
+      ["setup", "-ch"],
+      ["plan", "-xh"],
+      ["plan", "--help=false"]
+    ]) {
+      const badHelpRes = spawnSync(process.execPath, [cli, ...badHelpArgs], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(badHelpRes.status, 1, `UX-SQ-R2-004: '${badHelpArgs.join(" ")}' must fail closed instead of exiting 0`);
+      assert.match(badHelpRes.stderr, /Conflicting flags/);
+    }
+
+    // UX-SQ-R2-003 & UX-SQ-R2-006: hosted docs align with opt-in docs/reviews/ and CHANGELOG [0.1.3] documents finalize without internal ledger codes
+    const rolesDocText = fs.readFileSync(path.join(repoRoot, "docs/roles-and-workflows.md"), "utf8");
+    const conceptsDocText = fs.readFileSync(path.join(repoRoot, "docs/concepts.md"), "utf8");
+    assert.match(rolesDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    assert.match(conceptsDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    const changelogText = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
+    const v013Section = changelogText.slice(changelogText.indexOf("## [0.1.3]"), changelogText.indexOf("## [0.1.2]"));
+    assert.match(v013Section, /\bagy-squad finalize\b/);
+    assert.doesNotMatch(v013Section, /docs\/plans\/LEDGER\.md|\bL51\b|\bL56\b/);
 
     // UX-SQ-001, UX-SQ-002, UX-SQ-003, UX-SQ-004, UX-SQ-009, UX-SQ-011: portable skill & plugin.json hygiene checks
     const walkMd = (dir) => {

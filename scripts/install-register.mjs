@@ -1040,7 +1040,7 @@ export async function runInstall(options = {}) {
   }
   if (missingCompanions.length > 0) {
     log(`[NEXT STEP] Optional companion tools not ready (${missingCompanions.join(", ")}):`);
-    log("            - For full live integrity trace audits, install Agy-Context-Saver: npx --package=agy-context-saver agy-context setup");
+    log("            - For full live integrity trace audits, install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended): npx --package=agy-context-saver agy-context setup");
     log("            - For standalone usage without live trace audits, pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize'.");
   }
 
@@ -1200,9 +1200,9 @@ function formatCompanionLine(label, info, note) {
     return `- ${label}: AVAILABLE (${info.rawVersion || info.version} at ${info.path})`;
   }
   if (info?.installed && !info?.compatible) {
-    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal — ${note})`;
+    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal: ${note})`;
   }
-  return `- ${label}: MISSING (non-fatal — ${note})`;
+  return `- ${label}: MISSING (non-fatal: ${note})`;
 }
 
 export function printStatus(options = {}) {
@@ -1268,7 +1268,7 @@ export function printStatus(options = {}) {
   log(formatCompanionLine("Companion CLI (agy-context >= 2.0.1)", agyContext, "needed for integrity trace audits"));
   log(formatCompanionLine("Companion Optimizer (rtk >= 1.1.0)", rtk, "needed by Agy-Context-Saver hooks"));
   if (!agyContext?.available || !rtk?.available) {
-    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1) + RTK (>= 1.1.0) for full live integrity audits.");
+    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended) + RTK (>= 1.1.0) for full live integrity audits, or pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize' for standalone runs.");
   }
   const overallLabel = status.isComplete
     ? "HEALTHY & ACTIVE"

@@ -194,8 +194,8 @@ const SUBCOMMAND_HELP = {
     "  --replace                        Overwrite an existing --out file",
     "",
     "Examples:",
-    "  agy-squad bundle-init --plan scratch/plan.json --digest --out scratch/rec.json src/app.js",
-    "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/h.json"
+    "  agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json --digest --out scratch/rec.json src/app.js",
+    "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json"
   ].join("\n"),
   fingerprint: [
     "Usage: agy-squad fingerprint <file...>",
@@ -627,7 +627,7 @@ async function main(args) {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
   if (hasHelpFlag(rest)) {
-    if (rest.length > 1) {
+    if (rest.length > 1 || (rest[0] !== "--help" && rest[0] !== "-h")) {
       throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
     }
     console.log(SUBCOMMAND_HELP[command] ?? usage);
@@ -816,6 +816,11 @@ async function main(args) {
       allowNonPassing: values["allow-non-passing"],
       allowPartial: values["allow-partial"]
     });
+    if (values.digest && (!Array.isArray(record.handoffs) || record.handoffs.length === 0)) {
+      throw new Error(
+        "bundle-init --digest requires specialist handoff receipts. Pass --handoffs <file.json> or --handoff <worker=READY ...>, or omit --digest until handoffs are recorded."
+      );
+    }
     const digestResult = values.digest ? handoffsMod.computeEvidenceDigest(targetRoot, record) : undefined;
     if (values.out !== undefined) {
       const trimmedOut = typeof values.out === "string" ? values.out.trim() : "";

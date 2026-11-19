@@ -298,6 +298,10 @@ try {
   assert.equal(outdatedCompanionStatus.status, 0, "Outdated companions must remain non-fatal");
   assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.1\): OUTDATED/);
   assert.match(outdatedCompanionStatus.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\): OUTDATED/);
+  assert.doesNotMatch(outdatedCompanionStatus.stdout, /\u2014/, "UX-SQ-R2-007: OUTDATED companion status output must not contain prose U+2014 em dashes");
+  assert.match(outdatedCompanionStatus.stdout, /non-fatal:/);
+  assert.match(outdatedCompanionStatus.stdout, /2\.0\.4\+/);
+  assert.match(outdatedCompanionStatus.stdout, /--no-integrity.*--allow-unaudited/);
 
   writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.1");
   writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 1.1.0");
@@ -932,11 +936,15 @@ try {
       assert.match(uxSetup.stdout, /--no-integrity.*--allow-unaudited/);
       assert.match(uxSetup.stdout, /Next steps: reload or restart Antigravity Desktop IDE/);
 
-      // UX-SQ-005: status shows (not on PATH) + guidance when binDir missing, and (on PATH) with no PATH warning when included
+      // UX-SQ-005 & UX-SQ-R2-007: status shows (not on PATH) + guidance, zero prose em dashes, 2.0.4+ recommendation, and standalone opt-out flags
       const statusOffPath = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(statusOffPath.status, 0, statusOffPath.stderr || statusOffPath.stdout);
       assert.match(statusOffPath.stdout, /CLI Shim \(agy-squad\): INSTALLED \(not on PATH\)/);
       assert.match(statusOffPath.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+      assert.doesNotMatch(statusOffPath.stdout, /\u2014/, "UX-SQ-R2-007: MISSING companion status output must not contain prose U+2014 em dashes");
+      assert.match(statusOffPath.stdout, /MISSING \(non-fatal:/);
+      assert.match(statusOffPath.stdout, /2\.0\.4\+/);
+      assert.match(statusOffPath.stdout, /--no-integrity.*--allow-unaudited/);
 
       const uxBinDir = path.join(uxProfile, ".gemini", "antigravity", "bin");
       const statusOnPath = spawnSync(process.execPath, [cli, "status"], {

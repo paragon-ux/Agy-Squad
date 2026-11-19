@@ -1009,7 +1009,7 @@ function planSquadCohort(
       ...(workspaceIsolation !== "inherit"
         ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
         : []),
-      "agy-squad bundle-init --plan <plan.json> --digest --out <bundle-record.json> <verified-files...>",
+      "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> <verified-files...>",
       ...(includeIntegrityAuditor
         ? ["agy-squad verdict --integrity <integrity-report.md>"]
         : []),
