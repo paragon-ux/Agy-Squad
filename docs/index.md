@@ -22,6 +22,12 @@ Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antig
 3. **Repository review standards (`/pr-review` & `/full-review`, v1.4.0):** Reviewers apply commit and session provenance, architecture-before-runtime tracing, ten mandatory categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` structured reports (in chat, Antigravity artifacts, or `docs/reviews/` when requested or already adopted).
 4. **Governed evidence retention and teardown:** `agy-squad` verifies SHA-256 source and report digests before pruning loose specialist reports (`finalize --prune` or `bundle` + `verify` + `prune`), binds flat integrity audit `CLEAN` verdicts (`audit-<id>` on `/swarm`, `integrity_auditor[:<id>]` via slot), and gates `diagnose.mjs --teardown` on a verified bundle and updated `docs/reviews/` ledger.
 
+## How Agy-Squad extends native `/swarm`
+
+Agy-Squad configures Antigravity's native `/swarm` runtime rather than replacing it, adding non-overlapping scopes, file-backed report slots, and independent integrity auditing on top of the built-in shared board (see [Roles, skill workflows, and runtime closure](roles-and-workflows.md)):
+
+![Native Antigravity /swarm vs. Agy-Squad roles and configuration additions](assets/swarm-vs-agy-squad-roles.svg)
+
 ## Companion integration: Agy-Context-Saver
 
 `Agy-Squad` and `Agy-Context-Saver` remain separate packages that interact across four execution stages:

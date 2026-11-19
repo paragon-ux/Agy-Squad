@@ -15,6 +15,10 @@ This page is the single repository reference for Agy-Squad skill composition, MC
 
 ## 1. Canonical role inventory
 
+Agy-Squad runs inside Google Antigravity's native `/swarm` runtime without replacing it, structuring roles, file scopes, board receipts, and dual-gate verification on top of the shared board:
+
+![Native Antigravity /swarm vs. Agy-Squad roles and configuration additions](assets/swarm-vs-agy-squad-roles.svg)
+
 | Role | Active in | Verdict or primary output | Authority and boundary |
 | --- | --- | --- | --- |
 | **Operator / Primary Agent** | All workflows | Compiles plans, delivers structured reviews (in chat, artifacts, or opt-in `docs/reviews/`), runs `finalize`/`bundle`/`--teardown`, stops agents | Owns user intake, final reporting, and teardown; never fabricates specialist evidence |

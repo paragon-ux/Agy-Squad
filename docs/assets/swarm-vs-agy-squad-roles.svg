@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 704" width="920" height="704" style="max-width:100%;height:auto" role="img" aria-labelledby="cmp-title cmp-desc">
+  <title id="cmp-title">Native Antigravity /swarm vs. Agy-Squad Roles and Configuration Additions</title>
+  <desc id="cmp-desc">Side-by-side comparison of native Antigravity /swarm roles and Agy-Squad governed roles, highlighting non-overlapping scopes, model pinning, workspace isolation, report slots with one-line receipts, dual-gate integrity auditing, and per-worker transcript access directives.</desc>
+  <style>
+    :root {
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      --bg: #ffffff;
+      --fg: #1f2328;
+      --muted: #57606a;
+      --line: #57606a;
+      --card: #ffffff;
+      --panel-native: #f6f8fa;
+      --panel-native-border: #d0d7de;
+      --panel-squad: #f2f7fd;
+      --panel-squad-border: #80b3f2;
+      --panel-add: #f6f8fa;
+      --audit-bg: #eef8f0;
+      --audit-border: #52a868;
+      --board-bg: #eaeef2;
+      --board-squad-bg: #e1effe;
+      --card-border: #d0d7de;
+      --accent: #0969da;
+      --green: #1a7f37;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --fg: #e6edf3;
+        --muted: #9ea7b3;
+        --line: #8b949e;
+        --card: #161b22;
+        --panel-native: #161b22;
+        --panel-native-border: #30363d;
+        --panel-squad: #121d2b;
+        --panel-squad-border: #2f5d96;
+        --panel-add: #161b22;
+        --audit-bg: #122117;
+        --audit-border: #2d7a43;
+        --board-bg: #21262d;
+        --board-squad-bg: #192c44;
+        --card-border: #30363d;
+        --accent: #58a6ff;
+        --green: #3fb950;
+      }
+    }
+    text { font-family: var(--font); fill: var(--fg); }
+    .panel-title { font-size: 15px; font-weight: 700; }
+    .panel-sub { font-size: 12px; fill: var(--muted); }
+    .section-title { font-size: 13px; font-weight: 700; fill: var(--accent); }
+    .node-title { font-size: 13px; font-weight: 600; text-anchor: middle; }
+    .node-sub { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+    .board-title { font-size: 12.5px; font-weight: 600; text-anchor: middle; }
+    .board-sub { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+    .card-head { font-size: 13px; font-weight: 600; }
+    .bullet { font-size: 11.5px; fill: var(--fg); }
+    .bullet-muted { font-size: 11px; fill: var(--muted); }
+    .foot-note { font-size: 11.5px; fill: var(--muted); text-anchor: middle; }
+    .arrow-line { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-linecap: round; }
+    .arrow-head { fill: var(--line); }
+  </style>
+
+  <!-- Self-contained adaptive canvas background (seamless on GitHub/Zensical light and dark) -->
+  <rect x="0" y="0" width="920" height="704" rx="12" fill="var(--bg)"/>
+
+  <!-- LEFT PANEL: Native Antigravity /swarm -->
+  <g id="panel-native">
+    <rect x="16" y="16" width="424" height="466" rx="10" fill="var(--panel-native)" stroke="var(--panel-native-border)" stroke-width="1.25"/>
+    <text class="panel-title" x="36" y="44">Native Antigravity /swarm</text>
+    <text class="panel-sub" x="36" y="63">Built-in multi-agent runtime and shared message board</text>
+
+    <!-- Coordinator -->
+    <rect x="108" y="80" width="240" height="54" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="228" y="103">Coordinator</text>
+    <text class="node-sub" x="228" y="121">Posts task briefs &amp; collects replies</text>
+
+    <!-- Coordinator -> Board -->
+    <line class="arrow-line" x1="228" y1="134" x2="228" y2="152"/>
+    <polygon class="arrow-head" points="228,158 224,150 232,150"/>
+
+    <!-- Shared Board -->
+    <rect x="36" y="158" width="384" height="44" rx="6" fill="var(--board-bg)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="board-title" x="228" y="177">Shared Message Board</text>
+    <text class="board-sub" x="228" y="193">Freeform updates &amp; full replies visible to all workers</text>
+
+    <!-- Board -> Workers -->
+    <line class="arrow-line" x1="94" y1="202" x2="94" y2="224"/>
+    <polygon class="arrow-head" points="94,230 90,222 98,222"/>
+    <line class="arrow-line" x1="228" y1="202" x2="228" y2="224"/>
+    <polygon class="arrow-head" points="228,230 224,222 232,222"/>
+    <line class="arrow-line" x1="362" y1="202" x2="362" y2="224"/>
+    <polygon class="arrow-head" points="362,230 358,222 366,222"/>
+
+    <!-- Generic Workers -->
+    <rect x="36" y="230" width="116" height="72" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="94" y="261">Worker 1</text>
+    <text class="node-sub" x="94" y="280">Generic brief</text>
+
+    <rect x="170" y="230" width="116" height="72" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="228" y="261">Worker 2</text>
+    <text class="node-sub" x="228" y="280">Generic brief</text>
+
+    <rect x="304" y="230" width="116" height="72" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="362" y="261">Worker 3</text>
+    <text class="node-sub" x="362" y="280">Generic brief</text>
+
+    <!-- Optional Monitor and Narrator -->
+    <rect x="36" y="330" width="384" height="90" rx="6" fill="none" stroke="var(--card-border)" stroke-width="1" stroke-dasharray="4 3"/>
+    <text class="board-sub" x="228" y="349">Optional native support helpers</text>
+
+    <rect x="52" y="360" width="168" height="48" rx="5" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="136" y="380">Monitor</text>
+    <text class="node-sub" x="136" y="396">Stall alerts on board</text>
+
+    <rect x="236" y="360" width="168" height="48" rx="5" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="320" y="380">Narrator</text>
+    <text class="node-sub" x="320" y="396">Swarm UI summary</text>
+
+    <!-- Baseline note -->
+    <text class="foot-note" x="228" y="446">All coordination flows through the shared board;</text>
+    <text class="foot-note" x="228" y="464">no built-in file-scope checks, proof bundles, or trace audit</text>
+  </g>
+
+  <!-- Center Transition Indicator -->
+  <g id="bridge-indicator">
+    <line class="arrow-line" x1="446" y1="248" x2="466" y2="248" style="stroke:var(--accent);stroke-width:2"/>
+    <polygon points="474,248 464,242.5 464,253.5" style="fill:var(--accent)"/>
+  </g>
+
+  <!-- RIGHT PANEL: Native /swarm + Agy-Squad -->
+  <g id="panel-squad">
+    <rect x="480" y="16" width="424" height="466" rx="10" fill="var(--panel-squad)" stroke="var(--panel-squad-border)" stroke-width="1.25"/>
+    <text class="panel-title" x="500" y="44" style="fill:var(--accent)">Native /swarm + Agy-Squad</text>
+    <text class="panel-sub" x="500" y="63">Same native runtime, configured with role &amp; proof governance</text>
+
+    <!-- Coordinator -->
+    <rect x="572" y="80" width="240" height="54" rx="6" fill="var(--card)" stroke="var(--panel-squad-border)" stroke-width="1"/>
+    <text class="node-title" x="692" y="103">Coordinator</text>
+    <text class="node-sub" x="692" y="121">Pins models, scopes &amp; seals bundles</text>
+
+    <!-- Coordinator -> Board -->
+    <line class="arrow-line" x1="692" y1="134" x2="692" y2="152"/>
+    <polygon class="arrow-head" points="692,158 688,150 696,150"/>
+
+    <!-- Shared Board (Slimmed) -->
+    <rect x="500" y="158" width="384" height="44" rx="6" fill="var(--board-squad-bg)" stroke="var(--panel-squad-border)" stroke-width="1"/>
+    <text class="board-title" x="692" y="177">Shared Message Board (Slim Receipts Only)</text>
+    <text class="board-sub" x="692" y="193">One-line status pointers; full evidence stays in report files</text>
+
+    <!-- Board -> Content Plane and Audit Plane -->
+    <line class="arrow-line" x1="596" y1="202" x2="596" y2="220"/>
+    <polygon class="arrow-head" points="596,226 592,218 600,218"/>
+
+    <line class="arrow-line" x1="796" y1="202" x2="796" y2="220"/>
+    <polygon class="arrow-head" points="796,226 792,218 800,218"/>
+
+    <!-- Content Plane: Scoped Specialists -->
+    <rect x="500" y="226" width="192" height="60" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="596" y="252">Scoped Specialists</text>
+    <text class="node-sub" x="596" y="271">Disjoint files -&gt; report.md</text>
+
+    <!-- Specialists -> Working Lead -->
+    <line class="arrow-line" x1="596" y1="286" x2="596" y2="306"/>
+    <polygon class="arrow-head" points="596,312 592,304 600,304"/>
+
+    <!-- Content Plane: Optional Working Lead / Reviewer -->
+    <rect x="500" y="312" width="192" height="58" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="node-title" x="596" y="337">Working Lead / Reviewer</text>
+    <text class="node-sub" x="596" y="355">Optional; content verdict</text>
+
+    <!-- Audit Plane: Flat Integrity Auditor -->
+    <rect x="708" y="226" width="176" height="72" rx="6" fill="var(--audit-bg)" stroke="var(--audit-border)" stroke-width="1.25"/>
+    <text class="node-title" x="796" y="248" style="fill:var(--green)">Flat Integrity Auditor</text>
+    <text class="node-sub" x="796" y="267">Independent peer; checks</text>
+    <text class="node-sub" x="796" y="284">traces &amp; SHA-256 hashes</text>
+
+    <!-- Auditor -> Dual-Gate Sign-Off -->
+    <line class="arrow-line" x1="796" y1="298" x2="796" y2="314" style="stroke:var(--green)"/>
+    <polygon points="796,320 792,312 800,312" style="fill:var(--green)"/>
+
+    <!-- Dual-Gate Box under Auditor -->
+    <rect x="708" y="320" width="176" height="50" rx="6" fill="var(--card)" stroke="var(--audit-border)" stroke-width="1.25"/>
+    <text class="board-title" x="796" y="341" style="fill:var(--green)">Dual-Gate Sign-Off</text>
+    <text class="board-sub" x="796" y="358">Content + Audit required</text>
+
+    <!-- Lead -> Dual-Gate connector -->
+    <line class="arrow-line" x1="692" y1="345" x2="702" y2="345" stroke-dasharray="3 2"/>
+    <polygon class="arrow-head" points="708,345 701,341.5 701,348.5"/>
+
+    <!-- Native Monitor and Narrator (strictly observational) -->
+    <rect x="500" y="388" width="384" height="52" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1" stroke-dasharray="4 3"/>
+    <text class="node-title" x="692" y="410">Native Monitor &amp; Narrator (Observational Only)</text>
+    <text class="node-sub" x="692" y="427">Stall alerts &amp; Swarm UI; never briefed, never edit or vote</text>
+
+    <!-- Summary line -->
+    <text class="foot-note" x="692" y="461">Runs inside native /swarm; never replaces the host runtime</text>
+  </g>
+
+  <!-- BOTTOM PANEL: What Agy-Squad Adds / Changes -->
+  <g id="panel-additions">
+    <rect x="16" y="502" width="888" height="186" rx="10" fill="var(--panel-add)" stroke="var(--panel-native-border)" stroke-width="1.25"/>
+    <text class="section-title" x="36" y="529">What Agy-Squad adds to native /swarm configuration (without replacing it)</text>
+
+    <!-- Card 1 -->
+    <rect x="36" y="544" width="272" height="128" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="card-head" x="52" y="570">1. Scope, Model &amp; Isolation</text>
+    <text class="bullet" x="52" y="596">&#8226; Non-overlapping file scopes per worker</text>
+    <text class="bullet" x="52" y="618">&#8226; Explicit per-role model pinning</text>
+    <text class="bullet" x="52" y="640">&#8226; Workspace mode: inherit / share / branch</text>
+
+    <!-- Card 2 -->
+    <rect x="324" y="544" width="272" height="128" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="card-head" x="340" y="570">2. Report Slots &amp; Slim Receipts</text>
+    <text class="bullet" x="340" y="596">&#8226; File-backed report.md slots per role</text>
+    <text class="bullet" x="340" y="618">&#8226; One-line status receipts on the board</text>
+    <text class="bullet" x="340" y="640">&#8226; Replaces long board replies &amp; bloat</text>
+
+    <!-- Card 3 -->
+    <rect x="612" y="544" width="272" height="128" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
+    <text class="card-head" x="628" y="570">3. Dual-Gate Proof &amp; Access</text>
+    <text class="bullet" x="628" y="596">&#8226; Content review split from SHA-256 audit</text>
+    <text class="bullet" x="628" y="618">&#8226; Independent peer verifies tool traces</text>
+    <text class="bullet" x="628" y="640">&#8226; Per-worker transcript access directives</text>
+    <text class="bullet-muted" x="638" y="657">(when paired with Agy-Context-Saver)</text>
+  </g>
+</svg>

@@ -50,7 +50,8 @@ const REQUIRED = [
   "docs/assets/manifest-and-modes.svg",
   "docs/assets/role-and-verdict-gate.svg",
   "docs/assets/skill-role-workflows.svg",
-  "docs/assets/swarm-lifecycle.svg"
+  "docs/assets/swarm-lifecycle.svg",
+  "docs/assets/swarm-vs-agy-squad-roles.svg"
 ];
 
 const RETIRED_DENYLIST = [
