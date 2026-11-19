@@ -121,6 +121,19 @@ if (pkg) {
     ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
     ".agents/skills/swarm-governance/references/intake-and-planning.md",
     ".agents/skills/swarm-governance/references/large-swarms.md",
+    "docs/benchmarks.md",
+    "docs/concepts.md",
+    "docs/core-workflows.md",
+    "docs/getting-started.md",
+    "docs/index.md",
+    "docs/roles-and-workflows.md",
+    "docs/stopping-agents.md",
+    "docs/tools.md",
+    "docs/assets/architecture-overview.svg",
+    "docs/assets/manifest-and-modes.svg",
+    "docs/assets/role-and-verdict-gate.svg",
+    "docs/assets/skill-role-workflows.svg",
+    "docs/assets/swarm-lifecycle.svg",
     "plugin.json",
     "install.sh",
     "install.ps1",
@@ -157,7 +170,7 @@ if (pkg) {
     if (!exists(relativePath)) {
       errors.push(`Required runtime/release file is missing: ${relativePath}`);
     }
-    const alwaysIncluded = ["package.json", "README.md", "CHANGELOG.md", "LICENSE"].includes(relativePath);
+    const alwaysIncluded = ["package.json", "README.md", "LICENSE"].includes(relativePath);
     const coveredByFiles =
       alwaysIncluded ||
       (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&

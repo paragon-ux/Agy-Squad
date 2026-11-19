@@ -49,10 +49,7 @@ const REQUIRED = [
   "docs/assets/manifest-and-modes.svg",
   "docs/assets/role-and-verdict-gate.svg",
   "docs/assets/skill-role-workflows.svg",
-  "docs/assets/swarm-lifecycle.svg",
-  "docs/plans/LEDGER.md",
-  "docs/plans/native-enforcement-ledger.md",
-  "docs/plans/wsl-cli-verification.md"
+  "docs/assets/swarm-lifecycle.svg"
 ];
 
 const RETIRED_DENYLIST = [
@@ -78,11 +75,22 @@ function validate(packages) {
   );
   assert.deepEqual(unsafe, [], `Unsafe package paths: ${unsafe.join(", ")}`);
 
-  const hasBadSubpath = (name) =>
-    name.endsWith(".tgz") ||
-    name.endsWith(".log") ||
-    /(?:^|\/)scratch(?:\/|$)/.test(name) ||
-    name.startsWith("docs/reviews/");
+  const hasBadSubpath = (name) => {
+    const lower = name.toLowerCase();
+    const segments = lower.split("/");
+    return (
+      lower.endsWith(".tgz") ||
+      lower.endsWith(".log") ||
+      lower.endsWith(".bak") ||
+      lower.endsWith(".tmp") ||
+      segments.some(seg => seg === ".env" || seg.startsWith(".env.") || seg === ".ds_store") ||
+      /(?:^|\/)scratch(?:\/|$)/.test(lower) ||
+      lower === "docs/plans" ||
+      lower.startsWith("docs/plans/") ||
+      lower === "docs/reviews" ||
+      lower.startsWith("docs/reviews/")
+    );
+  };
   const allowed = names.filter(name =>
     !hasBadSubpath(name) &&
     (name === "package.json" || name === "plugin.json" ||
@@ -106,15 +114,28 @@ function validate(packages) {
 
 function selfTest() {
   const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
-  assert.equal(validate(fixture(["docs/plans/pr3-option-b-fixes.md"])), REQUIRED.length + 1);
+  assert.equal(validate(fixture(["docs/extra-guide.md"])), REQUIRED.length + 1);
   const badCases = [
     "tests/leaked.mjs",
     "benchmarks/private.json",
     "scratch/trace.log",
     "docs/scratch/leak.md",
+    "docs/plans",
+    "docs/plans/LEDGER.md",
+    "docs/plans/pr3-option-b-fixes.md",
+    "docs/reviews",
     "docs/reviews/pr5-reconciled-review.md",
     "docs/package.tgz",
     "mcp/debug.log",
+    "mcp/.env",
+    "mcp/.ENV",
+    "mcp/.env/secret",
+    "scripts/.env.local",
+    "docs/.DS_Store",
+    "docs/.ds_store",
+    "scripts/foo.bak",
+    "scripts/FOO.BAK",
+    "bin/bar.tmp",
     ".agents/teamwork/session.json",
     "other/private.txt",
     "../outside.txt",

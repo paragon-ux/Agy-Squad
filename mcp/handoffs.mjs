@@ -425,6 +425,9 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expecte
   if (verdict !== "CLEAN") {
     throw new Error(`Acceptance blocked: Integrity audit verdict is ${verdict}.`);
   }
+  if (hasContentVerdictAttempt(markdown)) {
+    throw new Error("Acceptance blocked: Integrity audit verdict is not CLEAN. (Integrity audit report must not declare a content verdict.)");
+  }
   const targetSquad = parseTargetSquad(markdown);
   if (expectedSquadId && (!targetSquad || targetSquad !== expectedSquadId)) {
     throw new Error(
@@ -758,7 +761,7 @@ function bundleReports(root, record) {
     const hasExplicitAudit =
       integrityReport !== undefined ||
       (Array.isArray(integrityAuditSlots) && integrityAuditSlots.length > 0);
-    if (requireIntegrityAudit || integrityReport !== undefined) {
+    if (requireIntegrityAudit || hasExplicitAudit) {
       for (const slot of integrityAuditSlots ?? []) candidateSet.add(slot);
       if (!hasExplicitAudit) {
         for (const slot of discoverAuditSlots(root, squadId, rootPrefix)) candidateSet.add(slot);
@@ -780,7 +783,10 @@ function bundleReports(root, record) {
     });
   }
 
-  const auditPolicy = isAuditCohort || !requireIntegrityAudit ? "unaudited-explicit" : "required";
+  const auditPolicy =
+    isAuditCohort || (!requireIntegrityAudit && integrityAudits.length === 0)
+      ? "unaudited-explicit"
+      : "required";
   const integrityAudit = integrityAudits[0];
   const bundlePayload = Buffer.from(
     JSON.stringify(
@@ -907,6 +913,7 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   if (parsed.integrityAudits !== undefined && (!Array.isArray(parsed.integrityAudits) || parsed.integrityAudits.length === 0)) {
     throw new Error("Invalid integrityAudits array in bundle.");
   }
+  const isV2 = parsed.schemaVersion >= 2 || parsed.auditPolicy !== undefined;
   const auditEntries = Array.isArray(parsed.integrityAudits)
     ? parsed.integrityAudits
     : (parsed.integrityAudit ? [parsed.integrityAudit] : []);
@@ -915,21 +922,26 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     if (
       parsed.integrityAudit.path !== head?.path ||
       parsed.integrityAudit.sha256 !== head?.sha256 ||
-      (parsed.integrityAudit.evidenceDigest !== undefined && parsed.integrityAudit.evidenceDigest !== head?.evidenceDigest) ||
-      (parsed.integrityAudit.targetSquad !== undefined && parsed.integrityAudit.targetSquad !== head?.targetSquad) ||
-      (parsed.integrityAudit.verdict !== undefined && parsed.integrityAudit.verdict !== head?.verdict)
+      ((isV2 || parsed.integrityAudit.evidenceDigest !== undefined) && parsed.integrityAudit.evidenceDigest !== head?.evidenceDigest) ||
+      ((isV2 || parsed.integrityAudit.targetSquad !== undefined) && parsed.integrityAudit.targetSquad !== head?.targetSquad) ||
+      ((isV2 || parsed.integrityAudit.verdict !== undefined) && parsed.integrityAudit.verdict !== head?.verdict)
     ) {
       throw new Error("Bundle integrityAudit disagrees with integrityAudits[0].");
     }
   }
-  const isV2 = parsed.schemaVersion >= 2 || parsed.auditPolicy !== undefined;
   const auditRequired = parsed.auditPolicy === "required" || (parsed.schemaVersion >= 2 && parsed.auditPolicy !== "unaudited-explicit");
   if (auditRequired && auditEntries.length === 0) {
     throw new Error("Acceptance blocked: Bundle auditPolicy 'required' is missing integrityAudit evidence.");
   }
+  if (parsed.auditPolicy === "unaudited-explicit" && auditEntries.length > 0) {
+    throw new Error("Bundle auditPolicy 'unaudited-explicit' cannot embed integrityAudit evidence.");
+  }
   for (const audit of auditEntries) {
     if (!audit || typeof audit !== "object" || typeof audit.path !== "string" || typeof audit.sha256 !== "string") {
       throw new Error("Invalid integrityAudit entry in bundle.");
+    }
+    if ((isV2 || audit.verdict !== undefined) && audit.verdict !== "CLEAN") {
+      throw new Error(`Integrity audit entry verdict '${audit.verdict}' is not CLEAN.`);
     }
     if (audit.targetSquad !== undefined && audit.targetSquad !== squadId) {
       throw new Error(`Integrity audit targetSquad '${audit.targetSquad}' does not match bundle squad '${squadId}'.`);
@@ -1036,11 +1048,36 @@ function verifyAndPruneBundle(root, relative, options = {}) {
   return { path: p, sha256: s, auditPolicy, reports, pruned };
 }
 
+function validateReportSlotPath(slotPath) {
+  if (typeof slotPath !== "string" || !slotPath) {
+    throw new Error(`Invalid report slot path '${slotPath}': expected '<reportRoot>/squad-<id>/(lead|specialist-<N>)/report.md'.`);
+  }
+  const match = /^(.+)\/squad-([^/\s]+)\/(?:lead|specialist-[1-9]\d*)\/report\.md$/.exec(slotPath);
+  if (!match) {
+    throw new Error(`Invalid report slot path '${slotPath}': expected '<reportRoot>/squad-<id>/(lead|specialist-<N>)/report.md'.`);
+  }
+  const rawRoot = match[1];
+  const rawSquadId = match[2];
+  if (rawRoot !== rawRoot.trim() || /^[a-zA-Z]:/.test(rawRoot) || !isValidRelativePrefix(rawRoot)) {
+    throw new Error(`Invalid report slot path '${slotPath}': invalid reportRoot prefix.`);
+  }
+  validateSquadId(rawSquadId);
+  const directory = `squad-${encodeURIComponent(rawSquadId)}`;
+  if (directory !== `squad-${rawSquadId}` || Buffer.byteLength(directory) > 255) {
+    throw new Error(`Invalid report slot path '${slotPath}': invalid squad directory name.`);
+  }
+  return {
+    reportRoot: rawRoot,
+    squadId: rawSquadId,
+    slotTail: slotPath.slice(rawRoot.length + 1)
+  };
+}
+
 function rebaseSlotReportRoot(slotPath, targetReportRoot) {
-  if (typeof slotPath !== "string" || !targetReportRoot) return slotPath;
-  const match = /^.+\/(squad-[^/\s]+\/(?:lead\/report\.md|specialist-[1-9]\d*\/report\.md))$/.exec(slotPath);
-  if (!match) return slotPath;
-  const rebased = `${targetReportRoot}/${match[1]}`;
+  const { slotTail } = validateReportSlotPath(slotPath);
+  if (!targetReportRoot) return slotPath;
+  const cleanTargetRoot = normalizeReportRoot(targetReportRoot);
+  const rebased = `${cleanTargetRoot}/${slotTail}`;
   if (Buffer.byteLength(`PARTIAL ${rebased} — `) + SWARM_MENTION_RESERVE_BYTES + MIN_OBSERVATION_BYTES > messageLimit) {
     throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including PARTIAL, /swarm @mention, and observation headroom): ${rebased}`);
   }
@@ -1119,7 +1156,7 @@ function collectReportSlots(root, options = {}) {
   const targetSlotSet = new Set();
   const inheritSlotSet = new Set();
   const addSlot = (slot, isInherit = false) => {
-    if (typeof slot !== "string") return;
+    validateReportSlotPath(slot);
     const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot;
     targetSlotSet.add(resolvedSlot);
     if (isInherit) {
@@ -1139,11 +1176,11 @@ function collectReportSlots(root, options = {}) {
     for (const w of plan.workers) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof w?.lead?.reportSlot === "string") {
+      if (w?.lead?.reportSlot !== undefined) {
         addSlot(w.lead.reportSlot, w.lead.swarmAdd?.workspace === "inherit");
       }
       for (const s of w?.specialists ?? []) {
-        if (typeof s?.reportSlot === "string") {
+        if (s?.reportSlot !== undefined) {
           addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
         }
       }
@@ -1151,13 +1188,13 @@ function collectReportSlots(root, options = {}) {
     for (const entry of plan.provenanceScaffold?.entries ?? []) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
-      if (typeof entry?.reportSlot === "string") {
+      if (entry?.reportSlot !== undefined) {
         addSlot(entry.reportSlot, plan.executionMode === "swarm" && entry?.slotType === "lead");
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
-      if (typeof audit?.reportSlot === "string") {
+      if (audit?.reportSlot !== undefined) {
         addSlot(audit.reportSlot, audit.swarmAdd?.workspace === "inherit");
       }
     }
@@ -1176,16 +1213,14 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix));
     for (const a of record.assignments ?? []) {
-      if (typeof a?.report === "string") addSlot(a.report);
+      if (a?.report !== undefined) addSlot(a.report);
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
-      if (typeof slot === "string") {
-        addSlot(slot);
-        hasExplicitAuditSlot = true;
-      }
+      addSlot(slot);
+      hasExplicitAuditSlot = true;
     }
-    if (typeof record.integrityReport === "string") {
+    if (record.integrityReport !== undefined) {
       addSlot(record.integrityReport);
       hasExplicitAuditSlot = true;
     }

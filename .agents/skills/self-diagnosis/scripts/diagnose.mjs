@@ -194,7 +194,7 @@ function splitMarkdownRow(line) {
 }
 
 function parseMarkdownTables(sectionText) {
-  const lines = sectionText.split(/\r?\n/);
+  const lines = stripFencedCodeBlocks(sectionText).split(/\r?\n/);
   const tables = [];
   for (let i = 0; i + 1 < lines.length; i += 1) {
     const hdrLine = lines[i].trim();
@@ -214,16 +214,68 @@ function parseMarkdownTables(sectionText) {
   return tables;
 }
 
+function stripFencedCodeBlocks(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  const kept = [];
+  let fenceChar = "";
+  let fenceLen = 0;
+  for (const line of lines) {
+    if (!fenceChar) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+      kept.push(line);
+    } else {
+      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
+      if (closeRe.test(line)) {
+        fenceChar = "";
+        fenceLen = 0;
+      }
+    }
+  }
+  return kept.join("\n");
+}
+
 function extractTopLevelSection(markdown, sectionNum) {
-  const headingRe = new RegExp(`^##\\s+${sectionNum}\\.\\s+.*$`, "m");
-  const match = headingRe.exec(markdown);
-  if (!match) return null;
-  const start = match.index;
-  const afterHeading = start + match[0].length;
-  const rest = markdown.slice(afterHeading);
-  const nextMatch = /^##\s+\d+\.\s+/m.exec(rest);
-  const body = nextMatch ? rest.slice(0, nextMatch.index) : rest;
-  return { heading: match[0].trim(), body };
+  const lines = markdown.split(/\r?\n/);
+  const targetRe = new RegExp(`^##\\s+${sectionNum}\\.\\s+.*$`);
+  let fenceChar = "";
+  let fenceLen = 0;
+  let heading = null;
+  const bodyLines = [];
+  for (const line of lines) {
+    if (!fenceChar) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        if (heading !== null) bodyLines.push(line);
+        continue;
+      }
+      if (heading === null) {
+        if (targetRe.test(line)) {
+          heading = line.trim();
+        }
+      } else {
+        if (/^##\s+\d+\.\s+/.test(line)) {
+          break;
+        }
+        bodyLines.push(line);
+      }
+    } else {
+      if (heading !== null) bodyLines.push(line);
+      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
+      if (closeRe.test(line)) {
+        fenceChar = "";
+        fenceLen = 0;
+      }
+    }
+  }
+  if (heading === null) return null;
+  return { heading, body: bodyLines.join("\n") };
 }
 
 const NON_FINDING_HYPHEN_TOKENS = new Set([
@@ -288,7 +340,7 @@ function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = fa
       ids.add(clean);
     }
   };
-  const stripped = markdown.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
+  const stripped = stripFencedCodeBlocks(markdown);
   for (const table of parseMarkdownTables(stripped)) {
     if (table.headers[0] !== "ID" && table.headers[0] !== "Finding ID") continue;
     for (const row of table.rows) {
@@ -428,7 +480,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     const sec = extractTopLevelSection(markdown, secNum);
     if (!sec) continue;
     // Track subsections so tables under "### 5.4 P3" inherit P3 rather than P2
-    const chunks = sec.body.split(/^(###\s+[^\r\n]+)$/m);
+    const chunks = stripFencedCodeBlocks(sec.body).split(/^(###\s+[^\r\n]+)$/m);
     let currentSubPrio = "P2";
     for (const chunk of chunks) {
       if (/^###\s+/.test(chunk)) {
@@ -440,10 +492,9 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
           validateFindingTable(table, `Section ${secNum}`, { section8Only: false, defaultPriority: currentSubPrio });
         }
       }
-      // Also inspect atomic "#### `ID` — Title | P1 | Open (Pre-Remediation)" heading records
-      const strippedChunk = chunk.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
+      // Also inspect atomic "#### `ID`: Title | P1 | Open (Pre-Remediation)" heading records
       const recRe = /^#{3,4}\s+[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*[^|\r\n]*\|\s*(P[0-3])\s*\|\s*([^\r\n|]+)$/gm;
-      for (const match of strippedChunk.matchAll(recRe)) {
+      for (const match of chunk.matchAll(recRe)) {
         const recId = match[1].trim();
         const recPrio = match[2].trim();
         const recStatus = match[3].replace(/[*`]/g, "").trim();
@@ -493,7 +544,7 @@ function validateTargetReviewLedger(targetLedger, { requireCohortSection = false
     }
   }
 
-  if (/^##\s+(?:1[0-9]|[2-9]\d)\.\s+/m.test(markdown)) {
+  if (/^##\s+(?:[1-9]\d+)\.\s+/m.test(stripFencedCodeBlocks(markdown))) {
     errors.push("Ad-hoc top-level sections beyond Section 9 are prohibited; consolidate all /self-diagnosis waves into Section 9.");
   }
 
@@ -946,9 +997,26 @@ const HISTORICAL_NOTICE_RE =
 function findSkillDriftMatches(markdown) {
   const matched = new Set();
   let activeHistoricalBlock = false;
+  let fenceChar = "";
+  let fenceLen = 0;
   for (const line of markdown.split(/\r?\n/)) {
-    if (/^\s*#{1,6}\s+/.test(line)) {
-      activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+    if (!fenceChar) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+      if (/^\s*#{1,6}\s+/.test(line)) {
+        activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+      }
+    } else {
+      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
+      if (closeRe.test(line)) {
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
     }
     if (activeHistoricalBlock) continue;
     const segments = line.trim().startsWith("|")
@@ -1128,12 +1196,17 @@ function auditSkills(ledgerArg) {
       });
     }
 
+    let refBrokenCount = 0;
+    let refBrokenIndex = 0;
     for (const f of allFiles.filter(file => file.endsWith(".md"))) {
       if (f === skillMd) continue;
       const refBroken = checkRelativeLinks(f, fs.readFileSync(f, "utf8"));
       if (refBroken.length) {
+        refBrokenCount += refBroken.length;
+        refBrokenIndex += 1;
+        const refSlug = path.basename(f, ".md").replace(/[^A-Za-z0-9_-]+/g, "-");
         findings.push({
-          id: `SKILL-REFLINKS-${entry.name}`,
+          id: `SKILL-REFLINKS-${entry.name}-${refSlug}-${refBrokenIndex}`,
           category: "SKILL",
           priority: "P2",
           summary: `Broken relative links in ${path.relative(repoRoot, f)}: ${refBroken.map(b => b.link).join(", ")}`
@@ -1166,7 +1239,7 @@ function auditSkills(ledgerArg) {
       markdownSkillBytes: markdownBytes,
       entryShareOfTotal: entryShare,
       proseShareOfMarkdown: proseShare,
-      brokenLinksCount: brokenLinks.length
+      brokenLinksCount: brokenLinks.length + refBrokenCount
     });
   }
 
@@ -1308,7 +1381,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
   const findings = [];
   const timings = {};
 
-  // 0. Check for lingering untorn-down self-diagnosis directories (L41)
+  // 0. Check for lingering untorn-down self-diagnosis directories
   const scratchSquadRoot = path.join(repoRoot, scratchSquadRel);
   if (fs.existsSync(scratchSquadRoot)) {
     const checkDirs = [
@@ -1329,7 +1402,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
           priority: allowActiveCohort ? "P3" : "P2",
           summary: allowActiveCohort
             ? `Active self-diagnosis cohort directory '${relDir}' present (--allow-active-cohort set; tear down via '--teardown' after final verification).`
-            : `Lingering self-diagnosis directory '${relDir}' was not torn down (L41). Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown' after bundle verification (or pass '--allow-active-cohort' during an in-flight cohort).`
+            : `Lingering self-diagnosis directory '${relDir}' was not torn down (deterministic scratch teardown required). Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown' after bundle verification (or pass '--allow-active-cohort' during an in-flight cohort).`
         });
       }
     }
@@ -1341,7 +1414,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
           priority: allowActiveCohort ? "P3" : "P2",
           summary: allowActiveCohort
             ? `Concurrent self-diagnosis canary directory '${scratchSquadRel}/${entry.name}' present (--allow-active-cohort set).`
-            : `Lingering self-diagnosis canary directory '${scratchSquadRel}/${entry.name}' was not torn down (L41).`
+            : `Lingering self-diagnosis canary directory '${scratchSquadRel}/${entry.name}' was not torn down (deterministic scratch teardown required).`
         });
       }
     }
@@ -1398,18 +1471,20 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
     !fs.existsSync(path.join(repoRoot, ".git")) &&
     !fs.existsSync(path.join(repoRoot, "tests")) &&
     !fs.existsSync(path.join(repoRoot, ".github"));
-  const isCheckoutOnlyPath = relPath => /^(?:tests|\.github|benchmarks)\//.test(relPath);
+  const isCheckoutOnlyPath = relPath => /^(?:tests|\.github|benchmarks|docs\/plans|docs\/reviews)\//.test(relPath);
   const packagedCheckoutOmissions = new Set();
   const topology = [];
   for (const [id, squad] of Object.entries(manifest.squads)) {
     const leadSpec = squad.lead ?? squad;
+    let leadScopeMissingIdx = 0;
     for (const file of leadSpec.scopeFiles ?? []) {
       if (!fs.existsSync(path.join(repoRoot, file))) {
         if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
           packagedCheckoutOmissions.add(file);
         } else {
+          leadScopeMissingIdx += 1;
           findings.push({
-            id: `RUN-LEADSCOPE-${id}`,
+            id: `RUN-LEADSCOPE-${id}-${leadScopeMissingIdx}`,
             category: "RUN",
             priority: "P2",
             summary: `Missing lead scopeFile '${file}' in self-diagnosis squad '${id}'.`
@@ -1420,8 +1495,12 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
     const specialists = squad.specialists ?? squad.children ?? [];
     const seen = new Set();
     const overlaps = new Set();
+    const readOnlyOverlaps = new Set();
     let writableTotalFiles = 0;
+    let readOnlyTotalFiles = 0;
     const writableScopes = [];
+    const readOnlyScopes = [];
+    let specScopeMissingIdx = 0;
     for (const sp of specialists) {
       for (const file of sp.scopeFiles) {
         seen.add(file);
@@ -1429,8 +1508,9 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
           if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
             packagedCheckoutOmissions.add(file);
           } else {
+            specScopeMissingIdx += 1;
             findings.push({
-              id: `RUN-SCOPE-${id}`,
+              id: `RUN-SCOPE-${id}-${specScopeMissingIdx}`,
               category: "RUN",
               priority: "P2",
               summary: `Missing specialist scopeFile '${file}' in self-diagnosis squad '${id}'.`
@@ -1441,6 +1521,9 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
       if (sp.readOnly !== true) {
         writableTotalFiles += sp.scopeFiles.length;
         writableScopes.push(sp.scopeFiles);
+      } else {
+        readOnlyTotalFiles += sp.scopeFiles.length;
+        readOnlyScopes.push(sp.scopeFiles);
       }
     }
     for (let i = 0; i < writableScopes.length; i += 1) {
@@ -1452,13 +1535,32 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
         }
       }
     }
+    for (let i = 0; i < readOnlyScopes.length; i += 1) {
+      for (let j = i + 1; j < readOnlyScopes.length; j += 1) {
+        for (const a of readOnlyScopes[i]) {
+          for (const b of readOnlyScopes[j]) {
+            if (scopesOverlap(a, b, repoRoot)) readOnlyOverlaps.add(`${a} <-> ${b}`);
+          }
+        }
+      }
+    }
     const overlapRatio = writableTotalFiles > 0 ? Number((overlaps.size / writableTotalFiles).toFixed(2)) : 0;
+    const readOnlyOverlapRatio =
+      readOnlyTotalFiles > 0 ? Number((readOnlyOverlaps.size / readOnlyTotalFiles).toFixed(2)) : 0;
     if (overlapRatio > 0.25) {
       findings.push({
         id: `ARCH-OVERLAP-${id}`,
         category: "ARCH",
+        priority: "P2",
+        summary: `Squad '${id}' has ${Math.round(overlapRatio * 100)}% writable scopeFiles overlap across specialists (${[...overlaps].join(", ")}).`
+      });
+    }
+    if (readOnlyOverlapRatio > 0.25) {
+      findings.push({
+        id: `ARCH-READ-OVERLAP-${id}`,
+        category: "ARCH",
         priority: "P3",
-        summary: `Squad '${id}' has ${overlapRatio * 100}% writable scopeFiles overlap across specialists (${[...overlaps].join(", ")}).`
+        summary: `Squad '${id}' has ${Math.round(readOnlyOverlapRatio * 100)}% read-only scopeFiles overlap across specialists (${[...readOnlyOverlaps].join(", ")}) (Advisory).`
       });
     }
     topology.push({
@@ -1466,7 +1568,9 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
       specialistsCount: specialists.length,
       uniqueScopeFiles: seen.size,
       overlappingScopeFiles: [...overlaps],
-      overlapRatio
+      overlapRatio,
+      readOnlyOverlappingScopeFiles: [...readOnlyOverlaps],
+      readOnlyOverlapRatio
     });
   }
   if (packagedCheckoutOmissions.size > 0) {
@@ -1530,7 +1634,7 @@ function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn
     }
   }
 
-  // 4. Execute isolated workspace-local Pointer-Over-Wire & squad_planner canary with deterministic teardown (L4, L41)
+  // 4. Execute isolated workspace-local Pointer-Over-Wire & squad_planner canary with deterministic scratch teardown
   const created = [];
   const canaryRel = `${scratchSquadRel}/self-diag-canary-${randomUUID()}`;
   const canaryDir = ensureDirectory(repoRoot, canaryRel, created);

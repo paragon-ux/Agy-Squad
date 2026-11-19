@@ -19,7 +19,7 @@ const usage = [
   "  agy-squad status [--json]                                              Check live integration and companion tool status across Antigravity",
   "  agy-squad uninstall [--restore-backups]                                Remove plugin link, MCP entry, and CLI shims",
   "  agy-squad restore-backups                                              Restore configuration backups (*.bak)",
-  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]",
+  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]",
   "  agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]       Compile invoke_subagent payload (subagent mode only)",
   "  agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) --from <worktree-dir>... [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]",
   "  agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id>] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [<file...>]",
@@ -34,7 +34,7 @@ const usage = [
 
 async function runPlanCommand(rest, root) {
   const usageLine =
-    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]";
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]";
   if (!rest.length) {
     throw new Error(usageLine);
   }
@@ -57,6 +57,8 @@ async function runPlanCommand(rest, root) {
     "workspace-isolation": { type: "string" },
     scope: { type: "string", multiple: true },
     role: { type: "string", multiple: true },
+    "read-only": { type: "boolean", default: false },
+    "role-scope": { type: "string", multiple: true },
     "no-integrity": { type: "boolean", default: false },
     "report-root": { type: "string" },
     "known-model": { type: "string", multiple: true },
@@ -64,6 +66,28 @@ async function runPlanCommand(rest, root) {
     "board-since": { type: "string" },
     "board-seq": { type: "string", multiple: true }
   });
+  let roleScopes;
+  if (values["role-scope"] !== undefined) {
+    roleScopes = Object.create(null);
+    for (const item of values["role-scope"]) {
+      const eqIdx = item.indexOf("=");
+      if (eqIdx <= 0 || eqIdx === item.length - 1) {
+        throw new Error(`Invalid --role-scope entry '${item}'; expected '<role>=<path>'.`);
+      }
+      const roleKey = item.slice(0, eqIdx).trim();
+      const rawPath = item.slice(eqIdx + 1).trim();
+      if (!roleKey || !rawPath) {
+        throw new Error(`Invalid --role-scope entry '${item}'; role and path must be nonempty.`);
+      }
+      if (roleKey === "__proto__" || roleKey === "constructor" || roleKey === "prototype") {
+        throw new Error(`Invalid --role-scope role '${roleKey}'.`);
+      }
+      if (!Object.hasOwn(roleScopes, roleKey)) {
+        roleScopes[roleKey] = [];
+      }
+      roleScopes[roleKey].push(normalizeWorkspaceCliPath(rawPath));
+    }
+  }
   const { planSquadCohort } = await import("../mcp/planner.mjs");
   const task = positionals.join(" ").trim();
   const planArgs = {
@@ -76,6 +100,8 @@ async function runPlanCommand(rest, root) {
     ...(values["workspace-isolation"] !== undefined ? { workspaceIsolation: values["workspace-isolation"] } : {}),
     ...(values.scope !== undefined ? { scopeFiles: values.scope.map(normalizeWorkspaceCliPath) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
+    ...(values["read-only"] ? { readOnly: true } : {}),
+    ...(roleScopes !== undefined ? { roleScopes } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
     ...(values["report-root"] !== undefined ? { reportRoot: normalizeWorkspaceCliPath(values["report-root"]) } : {}),
     ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {}),
@@ -613,7 +639,7 @@ async function main(args) {
     const bundleInput = {
       ...record,
       ...(values["allow-unaudited"]
-        ? { requireIntegrityAudit: false }
+        ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
         : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
       ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
       ...(values["allow-partial"] ? { allowPartial: true } : {}),

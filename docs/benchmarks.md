@@ -71,14 +71,14 @@ Both arms caught all six planted defect categories (`6 / 6`). Agy-Squad + Agy-Co
 | **Parent wakeups and injected bytes** | **`1` wakeup (`249 B`)** | **`5` wakeups (`4,940 B`)** | **`19.8x` fewer parent bytes (`95.0%` reduction)** |
 | **Artifact integrity verification** | **`20 ms`** (`handoffs.mjs verify` SHA-256 digests) | No separate SHA-256 source/report bundle check | Cryptographic input and report digest check |
 | **Semantic correctness verification** | Parent/lead direct code and test inspection (`32` lead steps) | `2` dedicated LLM review agents (`reviewer_1` + `auditor_1`, `174` steps, `228.6 KB`) | Direct lead verification vs. separate verifier fleet |
-| **Teardown policy and post-run Git status** | Explicit 3-scope teardown contract at the time of the run (`0` untracked Git files; `scratch/` gitignored; Phase 1, see note below) | No operator-facing teardown CLI documented (`41` untracked files, `207.9 KB` in `.agents/teamwork/`) | Governed lifecycle contract (`L41`) |
+| **Teardown policy and post-run Git status** | Explicit 3-scope teardown contract at the time of the run (`0` untracked Git files; `scratch/` gitignored; Phase 1, see note below) | No operator-facing teardown CLI documented (`41` untracked files, `207.9 KB` in `.agents/teamwork/`) | Governed deterministic teardown contract |
 
 ## Observed contributors to the difference
 
 1. **Task-proportional topology (`3` agents vs. `8`):** For a two-domain audit (`gateway/` and `worker/`), `dispatch_squad` launches one squad lead and two domain specialists from `manifest.json`. `/teamwork` spawns a wrapper agent, an internal orchestrator, three exploratory agents, a report writer (`worker_report_1`), a reviewer (`reviewer_1`), and a forensic auditor (`auditor_1`).
 2. **Scoped lead verification and `20 ms` SHA-256 bundling vs. separate LLM review fleet:** In `Agy-Squad`, the squad lead inspects cited source lines directly, writes its synthesis report, and runs the historical Phase 1 standalone `node mcp/handoffs.mjs` (`bundle`, `verify` in `20 ms` producing SHA-256 `418d7ccbade0a14a5b2e165b706adf45275e7b20604df1dfe03c41a012abc945`, and `prune`; now unified into `node bin/agy-squad.mjs`). Digest verification confirms that cited inputs and reports match their recorded hashes while the lead's code inspection checks semantic correctness. `/teamwork` delegates verification to `reviewer_1` and `auditor_1` (`174` combined steps, `228.6 KB` of transcript).
 3. **Single-line `Pointer-Over-Wire` receipt (`249 B`) vs. five parent wakeups (`4,940 B`):** `Agy-Squad` keeps intermediate coordination inside the squad and wakes the parent once with a `249`-byte `READY` receipt. `/teamwork` wakes the parent four times with intermediate Sentinel progress updates before sending a `3,218`-byte completion summary.
-4. **RTK command rewriting and governed teardown ([`L41`](plans/LEDGER.md)):** With `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) active, `Agy-Squad` specialists read scoped files through `rtk read` and prune loose specialist reports after bundling.
+4. **RTK command rewriting and governed teardown:** With `Agy-Context-Saver 1.8.1` (`rtk 0.51.0`) active, `Agy-Squad` specialists read scoped files through `rtk read` and prune loose specialist reports after bundling.
 
 ## Recorded session metrics and unit definitions
 
@@ -127,7 +127,7 @@ The fixture in `benchmarks/teamwork-vs-squad/fixture/` models a two-stage webhoo
 ## Documented teardown and evidence retention
 
 > [!NOTE]
-> **Historical comparison.** The November 8, 2026 run above used Agy-Squad's Phase 1 launcher (`agy-squad run --launch`, `bin/terminal.py`, `mcp/run-state.mjs`), which PR #5 retired ([`L17`](plans/LEDGER.md)). The run exercised the retained `dispatch_squad` staged compiler, `Pointer-Over-Wire` receipts, and `mcp/handoffs.mjs` (`bundle`/`verify`/`prune`). Managed CLI session cleanup from Phase 1 no longer exists because native `/swarm` owns worker lifecycles and `kill` cleanup. These numbers record the Phase 1 workflow and do not measure the current `squad_planner` + `/swarm` path.
+> **Historical comparison.** The November 8, 2026 run above used Agy-Squad's Phase 1 launcher (`agy-squad run --launch`, `bin/terminal.py`, `mcp/run-state.mjs`), which has since been retired. The run exercised the retained `dispatch_squad` staged compiler, `Pointer-Over-Wire` receipts, and `mcp/handoffs.mjs` (`bundle`/`verify`/`prune`). Managed CLI session cleanup from Phase 1 no longer exists because native `/swarm` owns worker lifecycles and `kill` cleanup. These numbers record the Phase 1 workflow and do not measure the current `squad_planner` + `/swarm` path.
 
 After Phase 2, **Agy-Squad's evidence-retention contract (handoff bundle and self-diagnosis scopes)** ([`docs/core-workflows.md`](core-workflows.md)) sits alongside native `/swarm` worker cleanup:
 

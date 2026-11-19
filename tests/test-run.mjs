@@ -506,7 +506,7 @@ try {
     }
     const freshRun = spawnSync(process.execPath, [freshDiag], { cwd: freshRepo, encoding: "utf8" });
     assert.equal(freshRun.status, 0, freshRun.stderr);
-    assert.equal(JSON.parse(freshRun.stdout).targetReviewLedger, "docs/reviews/v0.1.2-self-diagnosis-review.md");
+    assert.equal(JSON.parse(freshRun.stdout).targetReviewLedger, "docs/reviews/v0.1.3-self-diagnosis-review.md");
 
     for (const name of fs.readdirSync(path.join(freshRepo, "docs/reviews"))) {
       if (/^v\d+\./i.test(name) || /(?:remediation|fix-p[0-9]|self-diagnosis-review)/i.test(name)) {
@@ -773,7 +773,7 @@ try {
     );
     assert.equal(proseTeardown.status, 0, `COORD-DIAG-001/SD-SCRIPT-PROSE-FP: false-positive hyphenated prose tokens broke teardown: ${proseTeardown.stderr}`);
 
-    // SD-SCRIPT-LEDGER-SORT: semantic v0.1.2 ledger beats pr5 ledger under equal mtimes
+    // SD-SCRIPT-LEDGER-SORT: semantic vX.Y.Z ledger beats pr5 ledger under equal mtimes (v0.1.3 > v0.1.2 > pr5)
     const tEq = new Date(Date.now() + 10000);
     for (const f of fs.readdirSync(path.join(svcRepo, "docs/reviews"))) {
       if (f.endsWith(".md")) {
@@ -784,6 +784,9 @@ try {
     writeSvc("docs/reviews/v0.1.2-self-diagnosis-review.md", buildTestLedger({ bundleSha: flatBundled.sha256, includeFindingRow: true }));
     fs.utimesSync(path.join(svcRepo, "docs/reviews/pr5-reconciled-review.md"), tEq, tEq);
     fs.utimesSync(path.join(svcRepo, "docs/reviews/v0.1.2-self-diagnosis-review.md"), tEq, tEq);
+    const sortDiagV013 = JSON.parse(spawnSync(process.execPath, [svcDiag, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
+    assert.equal(sortDiagV013.targetReviewLedger, "docs/reviews/v0.1.3-self-diagnosis-review.md", "SD-SCRIPT-LEDGER-SORT: v0.1.3 must outrank v0.1.2 and pr5 on equal mtimes");
+    fs.rmSync(path.join(svcRepo, "docs/reviews/v0.1.3-self-diagnosis-review.md"), { force: true });
     const sortDiag = JSON.parse(spawnSync(process.execPath, [svcDiag, "--skip-mcp-spawn"], { cwd: svcRepo, encoding: "utf8" }).stdout);
     assert.equal(sortDiag.targetReviewLedger, "docs/reviews/v0.1.2-self-diagnosis-review.md", "SD-SCRIPT-LEDGER-SORT: versioned release ledger must outrank pr5 on equal mtimes");
 
@@ -904,6 +907,138 @@ try {
     assert.doesNotMatch(badDispatchRun.stderr, /^\s+at\s+/m, "SD2-SCRIPT-05: --print-dispatch must not leak raw JS stack trace");
   } finally {
     fs.rmSync(w2DiagRepo, { recursive: true, force: true });
+  }
+
+  // 7. v0.1.3 Remediation Regressions: SD-SCRIPT-01..03, S2-DEP-01..02
+  const v013Repo = path.join(temporary, "v013-diag-repo");
+  fs.mkdirSync(v013Repo, { recursive: true });
+  const v013Diag = copyIsolatedRepo(v013Repo);
+  try {
+    const writeV013 = (rel, body) => {
+      const abs = path.join(v013Repo, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body, "utf8");
+    };
+    const v013LedgerRel = "docs/reviews/v013-clean.md";
+    writeV013(v013LedgerRel, buildTestLedger({ includeFindingRow: true }));
+
+    // SD-SCRIPT-03: fenced ## 10. and fenced finding table inside ledger must NOT trigger errors; unfenced ## 10. and ## 100. MUST fail
+    const fencedSec10Ledger = buildTestLedger({ includeFindingRow: true })
+      .replace(
+        "## 6. Verification Record",
+        "## 6. Verification Record\n\n```markdown\n## 10. Quoted Example Heading\n```\n"
+      )
+      .replace(
+        "## 5. Atomic Finding Records",
+        "## 5. Atomic Finding Records\n\n```markdown\n| ID | Status |\n| --- | --- |\n| `FAKE-01` | Open (Pre-Remediation) |\n```\n"
+      );
+    writeV013("docs/reviews/v013-fenced-sec10.md", fencedSec10Ledger);
+    const fencedSec10Run = spawnSync(process.execPath, [v013Diag, "--ledger", "docs/reviews/v013-fenced-sec10.md", "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fencedSec10Run.status, 0, `SD-SCRIPT-03: fenced '## 10.' and fenced finding table must not fail schema: ${fencedSec10Run.stdout} ${fencedSec10Run.stderr}`);
+
+    for (const badHeading of ["## 10. Ad-Hoc Wave", "## 100. Ad-Hoc Wave"]) {
+      const realSecOver9Ledger = `${buildTestLedger({ includeFindingRow: true })}\n\n${badHeading}\n\nBad.\n`;
+      writeV013("docs/reviews/v013-real-sec10.md", realSecOver9Ledger);
+      const realSec10Run = spawnSync(process.execPath, [v013Diag, "--ledger", "docs/reviews/v013-real-sec10.md", "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+      assert.equal(realSec10Run.status, 1, `SD-SCRIPT-03: unfenced '${badHeading}' must fail schema`);
+      assert.ok(JSON.parse(realSec10Run.stdout).findings.some(f => f.id === "DOC-LEDGER-SCHEMA" && /beyond Section 9/.test(f.summary)));
+    }
+
+    // SD-SCRIPT-03: fenced bash '# deprecated' comment must NOT suppress drift below it, AND active retired CLI commands inside fenced bash blocks MUST still be detected
+    const fenceDriftRef = ".agents/skills/swarm-governance/references/v013-fence-drift.md";
+    writeV013(fenceDriftRef, "```bash\n# deprecated example\necho ok\n```\n\nRun `subagent_brief` now.\n");
+    const fenceDriftRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fenceDriftRun.status, 1, "SD-SCRIPT-03: bash '# deprecated' inside fence must not disable drift scanning");
+    assert.ok(JSON.parse(fenceDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance" && /subagent_brief/.test(f.summary)));
+    writeV013(fenceDriftRef, "## Quick Start\n\n```bash\nagy-squad run --manifest squad.json\n```\n");
+    const fenceCmdDriftRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(fenceCmdDriftRun.status, 1, "SD-SCRIPT-03: retired CLI command inside fenced bash block must still trigger SKILL-DRIFT");
+    assert.ok(JSON.parse(fenceCmdDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance" && /agy-squad run/.test(f.summary)));
+    fs.rmSync(path.join(v013Repo, fenceDriftRef), { force: true });
+
+    // SD-SCRIPT-02: multi-file broken ref links emit unique IDs and count refBroken in brokenLinksCount
+    const refBreakA = ".agents/skills/swarm-governance/references/v013-break-a.md";
+    const refBreakB = ".agents/skills/swarm-governance/references/v013-break-b.md";
+    writeV013(refBreakA, "See [missing A](./missing-a.md).\n");
+    writeV013(refBreakB, "See [missing B](./missing-b.md).\n");
+    const refBreakRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(refBreakRun.status, 1);
+    const refBreakJson = JSON.parse(refBreakRun.stdout);
+    const refLinkFindings = refBreakJson.findings.filter(f => f.id.startsWith("SKILL-REFLINKS-swarm-governance"));
+    assert.equal(refLinkFindings.length, 2, "SD-SCRIPT-02: expected 2 ref-link findings");
+    assert.equal(new Set(refLinkFindings.map(f => f.id)).size, 2, "SD-SCRIPT-02: SKILL-REFLINKS IDs must be unique");
+    const sgSkillStats = refBreakJson.skills.find(s => s.name === "swarm-governance");
+    assert.ok(sgSkillStats.brokenLinksCount >= 2, `SD-SCRIPT-02: brokenLinksCount must include refBroken (got ${sgSkillStats.brokenLinksCount})`);
+    fs.rmSync(path.join(v013Repo, refBreakA), { force: true });
+    fs.rmSync(path.join(v013Repo, refBreakB), { force: true });
+
+    // SD-SCRIPT-01 & SD-SCRIPT-02: writable overlap >25% is P2, readOnly overlap >25% is P3 Advisory, and missing scopeFiles emit unique IDs
+    const v013ManifestPath = ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json";
+    const origManifestText = fs.readFileSync(path.join(v013Repo, v013ManifestPath), "utf8");
+    const baseManifest = JSON.parse(origManifestText);
+    const sqKeys = Object.keys(baseManifest.squads);
+
+    // Subcase A: readOnly overlap > 25% -> P3 Advisory (HEALTHY exit 0)
+    const roOverlapManifest = structuredClone(baseManifest);
+    roOverlapManifest.squads[sqKeys[0]] = {
+      lead: { role: "Lead", readOnly: true, objective: "Lead", scopeFiles: ["README.md"] },
+      specialists: [
+        { role: "RO1", readOnly: true, objective: "Audit 1", scopeFiles: ["README.md"] },
+        { role: "RO2", readOnly: true, objective: "Audit 2", scopeFiles: ["README.md"] }
+      ]
+    };
+    writeV013(v013ManifestPath, JSON.stringify(roOverlapManifest));
+    const roOverlapRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(roOverlapRun.status, 0, `SD-SCRIPT-01: read-only overlap should be P3 Advisory (exit 0), got: ${roOverlapRun.stdout}`);
+    const roOverlapJson = JSON.parse(roOverlapRun.stdout);
+    const roFinding = roOverlapJson.findings.find(f => f.id === `ARCH-READ-OVERLAP-${sqKeys[0]}`);
+    assert.ok(roFinding && roFinding.priority === "P3", "SD-SCRIPT-01: read-only overlap >25% must emit P3 Advisory");
+
+    // Subcase B: writable overlap > 25% -> P2 blocking (exit 1) + unique RUN-LEADSCOPE / RUN-SCOPE IDs for multiple missing files
+    const rwOverlapManifest = structuredClone(baseManifest);
+    rwOverlapManifest.squads[sqKeys[0]] = {
+      lead: { role: "Lead", objective: "Lead", scopeFiles: ["missing-lead-1.txt", "missing-lead-2.txt"] },
+      specialists: [
+        { role: "W1", objective: "Write 1", scopeFiles: ["README.md", "package.json", "missing-spec-1.txt"] },
+        { role: "W2", objective: "Write 2", scopeFiles: ["README.md", "package.json", "missing-spec-2.txt"] }
+      ]
+    };
+    writeV013(v013ManifestPath, JSON.stringify(rwOverlapManifest));
+    const rwOverlapRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(rwOverlapRun.status, 1, "SD-SCRIPT-01: writable overlap >25% must be P2 blocking");
+    const rwOverlapJson = JSON.parse(rwOverlapRun.stdout);
+    const rwFinding = rwOverlapJson.findings.find(f => f.id === `ARCH-OVERLAP-${sqKeys[0]}`);
+    assert.ok(rwFinding && rwFinding.priority === "P2", "SD-SCRIPT-01: writable overlap >25% must emit P2");
+    const allIds = rwOverlapJson.findings.map(f => f.id);
+    assert.equal(new Set(allIds).size, allIds.length, `SD-SCRIPT-02: all finding IDs must be unique, got: ${JSON.stringify(allIds)}`);
+    assert.equal(rwOverlapJson.findings.filter(f => f.id.startsWith(`RUN-LEADSCOPE-${sqKeys[0]}-`)).length, 2);
+    assert.equal(rwOverlapJson.findings.filter(f => f.id.startsWith(`RUN-SCOPE-${sqKeys[0]}-`)).length, 2);
+    writeV013(v013ManifestPath, origManifestText);
+
+    // S2-DEP-01 & S2-DEP-02: release-preflight.mjs passes on baseline and fails if 'docs' or 'CHANGELOG.md' is dropped from package.json files
+    for (const extra of ["LICENSE", "SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "benchmarks"]) {
+      fs.cpSync(path.join(repoRoot, extra), path.join(v013Repo, extra), { recursive: true });
+    }
+    const preflightScript = path.join(v013Repo, "scripts/release-preflight.mjs");
+    const preflightBaseline = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.equal(preflightBaseline.status, 0, `Baseline release-preflight failed: ${preflightBaseline.stderr}`);
+    const origPkg = fs.readFileSync(path.join(v013Repo, "package.json"), "utf8");
+    const pkgNoDocs = JSON.parse(origPkg);
+    pkgNoDocs.files = pkgNoDocs.files.filter(f => f !== "docs");
+    writeV013("package.json", JSON.stringify(pkgNoDocs, null, 2) + "\n");
+    const preflightNoDocs = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.notEqual(preflightNoDocs.status, 0, "S2-DEP-01: release-preflight must fail when 'docs' is dropped from package.json files");
+    assert.match(preflightNoDocs.stderr, /docs\/tools\.md/);
+
+    const pkgNoChangelog = JSON.parse(origPkg);
+    pkgNoChangelog.files = pkgNoChangelog.files.filter(f => f !== "CHANGELOG.md");
+    writeV013("package.json", JSON.stringify(pkgNoChangelog, null, 2) + "\n");
+    const preflightNoChangelog = spawnSync(process.execPath, [preflightScript], { cwd: v013Repo, encoding: "utf8" });
+    assert.notEqual(preflightNoChangelog.status, 0, "S2-DEP-02: release-preflight must fail when 'CHANGELOG.md' is dropped from package.json files");
+    assert.match(preflightNoChangelog.stderr, /CHANGELOG\.md/);
+    writeV013("package.json", origPkg);
+  } finally {
+    fs.rmSync(v013Repo, { recursive: true, force: true });
   }
 
   console.log("✓ CLI planner/governance, retired run rejection, --print-dispatch, --teardown, and isolated self-diagnosis checks");

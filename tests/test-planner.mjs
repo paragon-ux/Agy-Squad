@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSubagentSpec } from "../mcp/briefs.mjs";
+import { buildSubagentSpec, superviseSwarmCohort, superviseSwarmLayeredLead } from "../mcp/briefs.mjs";
 import { handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -93,7 +93,7 @@ try {
   assert.doesNotMatch(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /or direct re-execution before CLEAN/);
   assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /coordinator-extracted sanitized transcript index in scratch\//);
   assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable/);
-  assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /L6 convention/);
+  assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /Transcript isolation/);
   assert.equal(overlapTask.provenanceScaffold.entries.length, 2);
   assert.ok(overlapTask.bundleRecordTemplates.task_squad.requireIntegrityAudit);
 
@@ -1043,7 +1043,157 @@ try {
     assert.match(compLeadBrief, /post <=500B READY/);
     assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent/);
 
-    console.log("✓ squad_planner model pinning, scope overlap checks, L6 provenance scaffold, and CLI plan");
+    // v0.1.3 Remediation Regressions: MCP-001, OPT-IO-6, OPT-BRIEF-03
+    // MCP-001: Subagent modelProvenance reflects per-worker manifest models (aliases and non-aliases) when top-level model is omitted or 'inherit'
+    const subagentPerWorkerAlias = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [{ role: "Pro Spec", objective: "Audit", scopeFiles: ["mcp"], model: "pro" }]
+          }
+        }
+      },
+      executionMode: "subagent"
+    }, root);
+    assert.equal(subagentPerWorkerAlias.workers[0].specialists[0].Subagent.Model, "pro");
+    assert.equal(subagentPerWorkerAlias.modelProvenance.requestedModel, "per-worker (pro)");
+    assert.equal(subagentPerWorkerAlias.modelProvenance.effectiveModel, "per-worker (pro)");
+    assert.equal(subagentPerWorkerAlias.modelProvenance.warning, undefined);
+
+    const subagentPerWorkerMixed = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            lead: { role: "Lead", objective: "Lead", scopeFiles: ["mcp"], readOnly: true, model: "pro" },
+            specialists: [{ role: "NonAlias Spec", objective: "Audit", scopeFiles: ["mcp/planner.mjs"], model: "gemini-4-neon-high" }]
+          }
+        }
+      },
+      executionMode: "subagent",
+      model: "inherit"
+    }, root);
+    assert.equal(subagentPerWorkerMixed.modelProvenance.requestedModel, "per-worker (pro, gemini-4-neon-high)");
+    assert.equal(subagentPerWorkerMixed.modelProvenance.effectiveModel, "per-worker (pro)");
+    assert.match(subagentPerWorkerMixed.modelProvenance.warning, /gemini-4-neon-high/);
+    assert.equal(subagentSpecWarn.modelProvenance.requestedModel, "per-worker (gemini-3.8-flash-high, gemini-2.5-pro)");
+    assert.equal(subagentSpecWarn.modelProvenance.effectiveModel, "inherit");
+
+    // OPT-IO-6: Partition siblingOverlaps vs leadSpecialistOverlaps and support --read-only / roleScopes on inline task
+    const benchPlan = planSquadCohort({
+      manifestPath: "benchmarks/teamwork-vs-squad/manifest.json",
+      topology: "layered",
+      includeIntegrityAuditor: false
+    }, repoRoot);
+    assert.equal(benchPlan.topology.scopeOverlaps.length, 3);
+    assert.equal(benchPlan.topology.siblingOverlaps.length, 1);
+    assert.equal(benchPlan.topology.leadSpecialistOverlaps.length, 2);
+    assert.ok(benchPlan.topology.siblingOverlaps.every(o => o.kind === "sibling"));
+    assert.ok(benchPlan.topology.leadSpecialistOverlaps.every(o => o.kind === "lead-specialist"));
+    assert.ok(
+      benchPlan.warnings.some(w => /Detected 1 writable sibling scopeFiles overlap/.test(w)),
+      `OPT-IO-6: expected 1 writable sibling overlap warning, got: ${JSON.stringify(benchPlan.warnings)}`
+    );
+    assert.ok(
+      benchPlan.notes.some(n => /Detected 2 same-squad lead-vs-specialist scopeFiles overlap/.test(n)),
+      `OPT-IO-6: expected 2 lead-vs-specialist overlap note, got: ${JSON.stringify(benchPlan.notes)}`
+    );
+    assert.equal(writableLeadOverlap.topology.siblingOverlaps.length, 0);
+    assert.equal(writableLeadOverlap.topology.leadSpecialistOverlaps.length, 1);
+    assert.ok(!writableLeadOverlap.warnings.some(w => /writable sibling scopeFiles overlap/.test(w)));
+
+    const readOnlyInlineTask = planSquadCohort({
+      task: "Read-only parallel audit",
+      roles: ["Auditor A", "Auditor B", "Auditor C"],
+      scopeFiles: ["mcp"],
+      readOnly: true,
+      includeIntegrityAuditor: false
+    }, root);
+    assert.deepEqual(readOnlyInlineTask.topology.scopeOverlaps, []);
+    assert.deepEqual(readOnlyInlineTask.topology.siblingOverlaps, []);
+    assert.ok(!readOnlyInlineTask.warnings.some(w => /scopeFiles overlap/.test(w)));
+
+    const cliReadOnlyTask = runCli(["plan", "--read-only", "--role", "A", "--role", "B", "--scope", "mcp", "--no-integrity", "Audit mcp"]);
+    assert.equal(cliReadOnlyTask.status, 0, cliReadOnlyTask.stderr);
+    const cliReadOnlyJson = JSON.parse(cliReadOnlyTask.stdout);
+    assert.deepEqual(cliReadOnlyJson.topology.scopeOverlaps, []);
+    assert.deepEqual(cliReadOnlyJson.topology.siblingOverlaps, []);
+
+    const cliRoleScopeTask = runCli([
+      "plan",
+      "--role", "A",
+      "--role", "B",
+      "--role-scope", "A=./mcp/planner.mjs",
+      "--role-scope", "B=./mcp/briefs.mjs",
+      "--no-integrity",
+      "Disjoint task"
+    ]);
+    assert.equal(cliRoleScopeTask.status, 0, cliRoleScopeTask.stderr);
+    const cliRoleScopeJson = JSON.parse(cliRoleScopeTask.stdout);
+    assert.deepEqual(cliRoleScopeJson.topology.scopeOverlaps, []);
+    assert.match(cliRoleScopeJson.workers[0].specialists[0].swarmAdd.brief, /^- mcp\/planner\.mjs$/m);
+    assert.match(cliRoleScopeJson.workers[0].specialists[1].swarmAdd.brief, /^- mcp\/briefs\.mjs$/m);
+
+    assert.throws(
+      () => planSquadCohort({ task: "Bad ro", readOnly: "yes" }, root),
+      /readOnly must be a boolean/
+    );
+    assert.throws(
+      () => planSquadCohort({ manifest: { squads: { s: { specialists: [{ role: "R", objective: "O", scopeFiles: ["a"] }] } } }, readOnly: true }, root),
+      /can only be passed with task/
+    );
+    assert.throws(
+      () => planSquadCohort({ task: "Bad roleScopes", roles: ["A"], roleScopes: { Unknown: ["a"] } }, root),
+      /Unknown roleScopes key/
+    );
+    const crossSquadLeadVsSpec = planSquadCohort({
+      manifest: {
+        squads: {
+          sqA: {
+            lead: { role: "Lead A", objective: "Edit", scopeFiles: ["mcp/planner.mjs"] },
+            specialists: [{ role: "Spec A", objective: "Edit", scopeFiles: ["mcp/briefs.mjs"] }]
+          },
+          sqB: {
+            lead: { role: "Lead B", objective: "Audit", readOnly: true, scopeFiles: ["mcp"] },
+            specialists: [{ role: "Spec B", objective: "Edit", scopeFiles: ["mcp/planner.mjs"] }]
+          }
+        }
+      },
+      topology: "layered",
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(crossSquadLeadVsSpec.topology.siblingOverlaps.length, 1, "OPT-IO-6: cross-squad lead vs other-squad specialist must classify as sibling");
+    assert.equal(crossSquadLeadVsSpec.topology.leadSpecialistOverlaps.length, 0);
+    assert.ok(crossSquadLeadVsSpec.warnings.some(w => /Detected 1 writable sibling scopeFiles overlap/.test(w)));
+    const defaultRoleScopeTask = planSquadCohort({
+      task: "Single default role with roleScopes",
+      roleScopes: { "Task Worker": ["mcp/planner.mjs"] },
+      includeIntegrityAuditor: false
+    }, root);
+    assert.match(defaultRoleScopeTask.workers[0].specialists[0].swarmAdd.brief, /^- mcp\/planner\.mjs$/m);
+
+    // OPT-BRIEF-03: superviseSwarmLayeredLead omits coordinator-only swarm add/kill directives & duplicate <cohortBaseSeq>, saving >= 226 B/lead
+    const layeredLeadCheckPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            lead: { role: "Layered Lead", objective: "Synthesize", scopeFiles: ["a"], readOnly: true },
+            specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["a"], readOnly: true }]
+          }
+        }
+      },
+      topology: "layered",
+      boardSince: 11
+    }, root);
+    const layeredLeadBrief = layeredLeadCheckPlan.workers[0].lead.swarmAdd.brief;
+    assert.doesNotMatch(layeredLeadBrief, /swarm add/);
+    assert.doesNotMatch(layeredLeadBrief, /kill finished workers/);
+    assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
+    assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} only/);
+    assert.match(layeredLeadBrief, /follow Board scope above/);
+    const leadTemplateSavings = Buffer.byteLength(superviseSwarmCohort, "utf8") - Buffer.byteLength(superviseSwarmLayeredLead, "utf8");
+    assert.ok(leadTemplateSavings >= 226, `OPT-BRIEF-03: expected >= 226 B/lead savings, got ${leadTemplateSavings} B`);
+
+    console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -62,6 +62,8 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("swarm"));
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
   assert.ok(planner.inputSchema.properties.boardSince && planner.inputSchema.properties.boardSeqs, "SQ-SWARM-BOARD-SCOPE schema fields exposed");
+  assert.equal(planner.inputSchema.properties.readOnly?.type, "boolean", "OPT-IO-6: readOnly schema field exposed");
+  assert.equal(planner.inputSchema.properties.roleScopes?.type, "object", "OPT-IO-6: roleScopes schema field exposed");
   assert.equal(planner.inputSchema.properties.scopeFiles.description, "Task paths.", "OPT-GAP-SCHEMA-WORD: scopeFiles description must use 'Task paths.'");
   const toolsListBytes = Buffer.byteLength(JSON.stringify(res), "utf8");
   assert.ok(toolsListBytes <= 3072, `W4 target: tools/list response must stay <= 3072 B (got ${toolsListBytes})`);
@@ -102,6 +104,22 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(planPayload.executionMode, "swarm");
   assert.equal(planPayload.modelProvenance.pinningSupported, true);
   assert.equal(planPayload.modelValidation.status, "checked-against-supplied-list");
+  const optIo6Res = await send("tools/call", {
+    name: "squad_planner",
+    arguments: {
+      task: "Audit server boundaries",
+      roles: ["Security", "Docs"],
+      readOnly: true,
+      roleScopes: { Security: ["mcp/index.js"], Docs: ["docs/tools.md"] }
+    }
+  });
+  assert.equal(Boolean(optIo6Res.result.isError), false, optIo6Res.result.content[0].text);
+  const optIo6Payload = JSON.parse(optIo6Res.result.content[0].text);
+  assert.equal(optIo6Payload.workers[0].specialists.length, 2);
+  assert.equal(optIo6Payload.topology.siblingOverlaps.length, 0);
+  assert.equal(optIo6Payload.topology.leadSpecialistOverlaps.length, 0);
+  assert.ok(optIo6Payload.workers[0].specialists[0].swarmAdd.brief.includes("mcp/index.js"));
+  assert.ok(optIo6Payload.workers[0].specialists[1].swarmAdd.brief.includes("docs/tools.md"));
   const manifestPlanRes = await send("tools/call", {
     name: "squad_planner",
     arguments: {

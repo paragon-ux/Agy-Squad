@@ -35,7 +35,7 @@
             "mcp/planner.mjs",
             "benchmarks/teamwork-vs-squad/README.md"
           ],
-          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's swarm planning and L41 teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's swarm planning and deterministic scratch teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
           "expectedDeliverable": "Markdown evidence report with comparative matrix, blast-radius analysis, and 5-axis ratings for the 3 coding agent harnesses."
         }
       ]

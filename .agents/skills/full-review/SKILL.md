@@ -37,7 +37,7 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 2. Confirm ambiguity once upfront without asking facts visible in git/evidence; on `/swarm`, delegate neutral Step 0 intake, `open_board`, `swarm_wait`, board scoping (`read_board{since|seqs}`), multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
 
 ### Steps 1–4: Pin, Batch-Ingest, Trace & Triage
-1. Populate [report-template.md](references/report-template.md) Sections 1–3 (Target, Session Provenance, Evidence manifest, coverage, architecture trace against `docs/plans/LEDGER.md`, `.github/workflows/ci.yml`, `ee10ebc`).
+1. Populate [report-template.md](references/report-template.md) Sections 1–3 (Target, Session Provenance, Evidence manifest, coverage, architecture trace against the target repository's architecture docs or ADRs if present and `.github/workflows/ci.yml`).
 2. Index large transcripts/logs once via batch reads ([evidence-intake.md](references/evidence-intake.md)), never step-by-step polling; separate claims, tool outputs, and gaps.
 3. Triage `ARCH`–`DEP` in Sections 4–6 and route all residual/deferred/by-design/informational items exclusively to Section 8.
 

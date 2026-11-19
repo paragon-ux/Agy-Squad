@@ -1475,6 +1475,145 @@ try {
         assert.notEqual(symPlanRes.status, 0, "OPT-GAP-L46-CLI: symlinked external --plan must be rejected");
         fs.rmSync(symOutsidePlan, { force: true });
       }
+
+      // v0.1.3 Remediation Regressions: RUN-001, RUN-003, SVC-001, SVC-002, S2-TEST-02
+      // RUN-001: collectReportSlots must reject arbitrary non-report files across plan, record, and reportRoot override
+      fs.mkdirSync(path.join(w2CliWt, "src"), { recursive: true });
+      fs.writeFileSync(path.join(w2CliWt, "src/arbitrary-non-slot.txt"), "do not copy into coord\n", "utf8");
+      const badSlotPlan = {
+        executionMode: "swarm",
+        workers: [{ squadId: "alpha", specialists: [{ reportSlot: "src/arbitrary-non-slot.txt" }] }]
+      };
+      assert.throws(
+        () => collectReportSlots(w2CliDir, { sources: [w2CliWt], plan: badSlotPlan }),
+        /Invalid report slot path/,
+        "RUN-001: non-report plan slot must be rejected fail-closed"
+      );
+      assert.throws(
+        () => collectReportSlots(w2CliDir, { sources: [w2CliWt], plan: badSlotPlan, reportRoot: "scratch/custom" }),
+        /Invalid report slot path/,
+        "RUN-001: non-report plan slot with reportRoot override must be rejected fail-closed"
+      );
+      assert.throws(
+        () => collectReportSlots(w2CliDir, {
+          sources: [w2CliWt],
+          record: {
+            squadId: "alpha",
+            assignments: [{ conversationId: "w1", report: "src/arbitrary-non-slot.txt" }]
+          }
+        }),
+        /Invalid report slot path/,
+        "RUN-001: non-report record assignment slot must be rejected fail-closed"
+      );
+      assert.throws(
+        () => collectReportSlots(w2CliDir, {
+          sources: [w2CliWt],
+          record: {
+            squadId: "alpha",
+            assignments: [],
+            integrityAuditSlots: ["scratch/agy-squad/squad-alpha/specialist-0/report.md"]
+          }
+        }),
+        /Invalid report slot path/,
+        "RUN-001: invalid specialist-0 slot must be rejected fail-closed"
+      );
+      for (const malformedSlot of [
+        " scratch/agy-squad/squad-alpha/lead/report.md",
+        "C:scratch/agy-squad/squad-alpha/lead/report.md"
+      ]) {
+        assert.throws(
+          () => collectReportSlots(w2CliDir, {
+            sources: [w2CliWt],
+            plan: { executionMode: "swarm", workers: [{ squadId: "alpha", lead: { reportSlot: malformedSlot } }] }
+          }),
+          /Invalid report slot path/,
+          `RUN-001: malformed reportRoot slot '${malformedSlot}' must be rejected fail-closed`
+        );
+      }
+      assert.equal(fs.existsSync(path.join(w2CliDir, "src/arbitrary-non-slot.txt")), false, "RUN-001: non-report file must never be copied into coordinator workspace");
+
+      // SVC-001, SVC-002, RUN-003 & S2-TEST-02: explicit integrityAuditSlots validated even when requireIntegrityAudit: false, and verifyBundle rejects non-CLEAN audit.verdict
+      const s2Squad = "svc_audit_check";
+      const s2Spec = reportPath(s2Squad, 1);
+      const s2Lead = reportPath(s2Squad);
+      const s2BadAudit = reportPath(`integrity_auditor-${s2Squad}`, 1);
+      const s2CleanAudit = reportPath(`integrity_auditor-${s2Squad}`, 2);
+      const s2Write = (rel, body) => {
+        const abs = path.join(w2CliDir, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, body, "utf8");
+      };
+      s2Write(s2Spec, "Evidence: ok.\n");
+      s2Write(s2Lead, "Content Verdict: PASS\nVerified.\n");
+      const s2Rec = {
+        squadId: s2Squad,
+        workspace: w2CliDir,
+        verdict: "PASS",
+        verifiedFiles: fingerprint(w2CliDir, ["src/w2.js"]),
+        assignments: [{ conversationId: "s1", report: s2Spec }],
+        handoffs: [{ sender: "s1", message: `READY ${s2Spec} — ok` }],
+        requireIntegrityAudit: false
+      };
+      const { evidenceDigest: s2Digest } = computeEvidenceDigest(w2CliDir, s2Rec);
+      s2Write(s2BadAudit, `Target Squad: ${s2Squad}\nEvidence Digest: ${s2Digest}\nIntegrity Verdict: INTEGRITY VIOLATION\nBad trace.\n`);
+      s2Write(s2CleanAudit, `Target Squad: ${s2Squad}\nEvidence Digest: ${s2Digest}\nIntegrity Verdict: CLEAN\nVerified traces.\n`);
+
+      assert.throws(
+        () => bundleReports(w2CliDir, { ...s2Rec, integrityAuditSlots: [s2BadAudit] }),
+        /INTEGRITY VIOLATION/,
+        "SVC-001: explicit integrityAuditSlots must fail closed even when requireIntegrityAudit is false"
+      );
+      const s2ExplicitClean = bundleReports(w2CliDir, { ...s2Rec, integrityAuditSlots: [s2CleanAudit] });
+      assert.equal(s2ExplicitClean.auditPolicy, "required", "SVC-001: explicit CLEAN integrityAuditSlots must record auditPolicy 'required'");
+      const s2Verified = verifyBundle(w2CliDir, s2ExplicitClean.path);
+      assert.equal(s2Verified.auditPolicy, "required");
+
+      // SVC-002: Mutating audit.verdict in report.sources.json to INTEGRITY VIOLATION (or removing verdict) must fail verifyBundle
+      const s2BundleAbs = path.join(w2CliDir, s2ExplicitClean.path);
+      const s2BundleObj = JSON.parse(fs.readFileSync(s2BundleAbs, "utf8"));
+      const tamperedViolation = {
+        ...s2BundleObj,
+        integrityAudit: { ...s2BundleObj.integrityAudit, verdict: "INTEGRITY VIOLATION" },
+        integrityAudits: s2BundleObj.integrityAudits.map(a => ({ ...a, verdict: "INTEGRITY VIOLATION" }))
+      };
+      fs.writeFileSync(s2BundleAbs, JSON.stringify(tamperedViolation, null, 2) + "\n", "utf8");
+      assert.throws(
+        () => verifyBundle(w2CliDir, s2ExplicitClean.path),
+        /is not CLEAN/,
+        "SVC-002: verifyBundle must reject integrityAudit entries whose verdict is not CLEAN"
+      );
+      const tamperedMissingVerdict = {
+        ...s2BundleObj,
+        integrityAudit: { ...s2BundleObj.integrityAudit, verdict: undefined },
+        integrityAudits: s2BundleObj.integrityAudits.map(({ verdict: _v, ...rest }) => rest)
+      };
+      fs.writeFileSync(s2BundleAbs, JSON.stringify(tamperedMissingVerdict, null, 2) + "\n", "utf8");
+      assert.throws(
+        () => verifyBundle(w2CliDir, s2ExplicitClean.path),
+        /is not CLEAN/,
+        "SVC-002: verifyBundle must reject v2 integrityAudit entries missing verdict"
+      );
+      const tamperedContradictoryPolicy = {
+        ...s2BundleObj,
+        auditPolicy: "unaudited-explicit"
+      };
+      fs.writeFileSync(s2BundleAbs, JSON.stringify(tamperedContradictoryPolicy, null, 2) + "\n", "utf8");
+      assert.throws(
+        () => verifyBundle(w2CliDir, s2ExplicitClean.path),
+        /unaudited-explicit.*cannot embed integrityAudit/,
+        "SVC-001/SVC-002: verifyBundle must reject v2 unaudited-explicit bundles embedding integrityAudit"
+      );
+      const { evidenceDigest: _dropDigest, ...auditMissingDigest } = s2BundleObj.integrityAudit;
+      fs.writeFileSync(
+        s2BundleAbs,
+        JSON.stringify({ ...s2BundleObj, integrityAudit: auditMissingDigest }, null, 2) + "\n",
+        "utf8"
+      );
+      assert.throws(
+        () => verifyBundle(w2CliDir, s2ExplicitClean.path),
+        /disagrees with integrityAudits\[0\]/,
+        "SVC-002: verifyBundle must reject v2 integrityAudit missing evidenceDigest relative to integrityAudits[0]"
+      );
     } finally {
       fs.rmSync(w2CliDir, { recursive: true, force: true });
       fs.rmSync(w2CliWt, { recursive: true, force: true });

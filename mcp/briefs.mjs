@@ -26,6 +26,12 @@ const superviseSwarmCohort = [
   "Execution Forensics: read_board{since|seqs} / swarm status, or single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'. Verify artifacts/tests via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
 ].join("\n");
 
+const superviseSwarmLayeredLead = [
+  "Park via swarm_wait and follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50). Reconcile one READY/PARTIAL/NO_REPORT post per specialist slot; avoid idle chatter.",
+  "Squad Lead Patrol & Alignment Gate: inspect swarm{action:\"status\"} and specialist reports; reject ungrounded/unexecuted leaf claims.",
+  "Execution Forensics: read_board{since|seqs} / swarm status, or single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'. Verify artifacts/tests via 'rtk read'/'rtk grep' or bounded <=150-line read_file slices (StartLine/EndLine); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
+].join("\n");
+
 const superviseSwarmIntegrityCohort = [
   "Before launch: record audit criteria, target squad, coordinator, workspace mode, unused slots, and worker/lead board seqs (#N). Never copy raw .system_generated/ transcripts into workspace files.",
   "Map worker names->slots; use read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} (never unfiltered read_board()) and swarm_wait; reconcile one post/slot.",
@@ -163,8 +169,8 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const integritySupervision = isSwarm ? superviseSwarmIntegrityCohort : superviseIntegrityCohort;
   const workingSupervision = isSwarm
     ? boardSince === 0 && !(Array.isArray(boardSeqs) && boardSeqs.length > 0)
-      ? superviseSwarmCohort.replace(", since: 0, or ", " or ")
-      : superviseSwarmCohort
+      ? superviseSwarmLayeredLead.replace(", since: 0, or ", " or ")
+      : superviseSwarmLayeredLead
     : superviseCohort;
   const leadIntro = isSwarm
     ? "Coordinate the planned /swarm specialists on the board."
@@ -234,5 +240,6 @@ export {
   superviseIntegrityCohort,
   superviseSwarmCohort,
   superviseSwarmIntegrityCohort,
+  superviseSwarmLayeredLead,
   validateScopeFiles
 };

@@ -699,6 +699,73 @@ try {
   fs.writeFileSync(cfgPath, savedValidCfg);
   fs.writeFileSync(mcpPath, JSON.stringify(afterMcp, null, 2) + "\n");
 
+  // v0.1.3 Remediation Regressions: S2-SCRIPT-01..03, S2-SCRIPT-05, S2-TEST-01
+  // S2-SCRIPT-05: formatWindowsCmdShim escapes % -> %% and rejects embedded quotes/CR/LF
+  const escapedWinShim = formatWindowsCmdShim("C:\\Users\\a%TEMP%b\\plugin", "C:\\Node%1\\node.exe");
+  assert.match(escapedWinShim, /a%%TEMP%%b/);
+  assert.match(escapedWinShim, /Node%%1\\node\.exe/);
+  assert.match(escapedWinShim, /%\*/);
+  assert.doesNotMatch(escapedWinShim, /a%TEMP%b/);
+  for (const badWinPath of ["", "   ", "C:\\bad\"quote\\plugin", "C:\\bad\r\\plugin", "C:\\bad\n\\plugin", "C:\\bad\0null\\plugin"]) {
+    assert.throws(() => formatWindowsCmdShim(badWinPath), /Invalid Windows CLI shim target path/);
+    assert.throws(() => formatWindowsCmdShim("C:\\safe\\plugin", badWinPath), /Invalid Windows CLI shim execPath/);
+  }
+
+  // S2-SCRIPT-01..03 & S2-TEST-01: Zero filesystem mutation on rejected setup (plugins: [], mcpServers: []) and setup --check rejects corrupt profiles
+  const noMutProf = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-nomut-")));
+  try {
+    const nmCfgDir = path.join(noMutProf, ".gemini", "config");
+    const nmPluginDir = path.join(nmCfgDir, "plugins", "agy-squad");
+    const nmCacheDir = path.join(noMutProf, ".gemini", "antigravity", "mcp", "agy-squad");
+    fs.mkdirSync(nmPluginDir, { recursive: true });
+    fs.mkdirSync(nmCacheDir, { recursive: true });
+    const nmSentinel = path.join(nmPluginDir, "sentinel.txt");
+    const nmCacheSentinel = path.join(nmCacheDir, "cache.json");
+    const nmCfgPath = path.join(nmCfgDir, "config.json");
+    const nmMcpPath = path.join(nmCfgDir, "mcp_config.json");
+    const nmMcpBakPath = path.join(nmCfgDir, "mcp_config.json.agy-squad.bak");
+    fs.writeFileSync(nmSentinel, "keep-untouched");
+    fs.writeFileSync(nmCacheSentinel, "{}");
+    const nmEnv = { ...testEnv, AGY_TEST_PROFILE_DIR: noMutProf };
+
+    // Case 1: config.json has plugins: [] while mcp_config.json has duplicate global entry -> setup fails with zero mutation, --check fails
+    const badCfgRaw = JSON.stringify({ plugins: [] }, null, 2) + "\n";
+    const dupMcpRaw = JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["old.js"] } } }, null, 2) + "\n";
+    fs.writeFileSync(nmCfgPath, badCfgRaw);
+    fs.writeFileSync(nmMcpPath, dupMcpRaw);
+    const badCfgCheck = spawnSync(process.execPath, [cli, "setup", "--check"], { cwd: repoRoot, env: nmEnv, encoding: "utf8" });
+    assert.notEqual(badCfgCheck.status, 0, "S2-SCRIPT-03: setup --check must reject config.json.plugins: []");
+    const badCfgSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: nmEnv, encoding: "utf8" });
+    assert.notEqual(badCfgSetup.status, 0, "S2-SCRIPT-01: setup must reject config.json.plugins: []");
+    assert.equal(fs.readFileSync(nmSentinel, "utf8"), "keep-untouched", "S2-SCRIPT-01: pluginDir must not be mutated before plugins validation");
+    assert.equal(fs.readFileSync(nmMcpPath, "utf8"), dupMcpRaw, "S2-SCRIPT-01: mcp_config.json must not be mutated before plugins validation");
+    assert.equal(fs.existsSync(nmMcpBakPath), false, "S2-SCRIPT-01: mcp_config.json backup must not be created on rejected setup");
+    assert.equal(fs.existsSync(nmCacheSentinel), true, "S2-SCRIPT-01: schema cache must not be swept on rejected setup");
+    assert.equal(fs.readFileSync(nmCfgPath, "utf8"), badCfgRaw);
+
+    // Case 2: valid config.json + mcp_config.json.mcpServers: [] -> setup fails with zero mutation, --check fails
+    const goodCfgRaw = JSON.stringify({ plugins: {} }, null, 2) + "\n";
+    const badMcpRaw = JSON.stringify({ mcpServers: [] }, null, 2) + "\n";
+    fs.writeFileSync(nmCfgPath, goodCfgRaw);
+    fs.writeFileSync(nmMcpPath, badMcpRaw);
+    const badMcpCheck = spawnSync(process.execPath, [cli, "setup", "--check"], { cwd: repoRoot, env: nmEnv, encoding: "utf8" });
+    assert.notEqual(badMcpCheck.status, 0, "S2-SCRIPT-03: setup --check must reject mcp_config.json.mcpServers: []");
+    const badMcpSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: nmEnv, encoding: "utf8" });
+    assert.notEqual(badMcpSetup.status, 0, "S2-SCRIPT-02: setup must reject mcp_config.json.mcpServers: []");
+    assert.match(badMcpSetup.stderr, /mcpServers/);
+    assert.equal(fs.readFileSync(nmSentinel, "utf8"), "keep-untouched", "S2-SCRIPT-02: pluginDir must not be mutated on rejected mcpServers");
+    assert.equal(fs.readFileSync(nmCfgPath, "utf8"), goodCfgRaw);
+    assert.equal(fs.readFileSync(nmMcpPath, "utf8"), badMcpRaw);
+
+    // Case 3: corrupt pluginDir/mcp_config.json -> setup --check fails
+    fs.writeFileSync(nmMcpPath, JSON.stringify({ mcpServers: {} }, null, 2) + "\n");
+    fs.writeFileSync(path.join(nmPluginDir, "mcp_config.json"), "{ corrupt plugin mcp");
+    const badPluginMcpCheck = spawnSync(process.execPath, [cli, "setup", "--check"], { cwd: repoRoot, env: nmEnv, encoding: "utf8" });
+    assert.notEqual(badPluginMcpCheck.status, 0, "S2-SCRIPT-03: setup --check must reject corrupt pluginDir/mcp_config.json");
+  } finally {
+    fs.rmSync(noMutProf, { recursive: true, force: true });
+  }
+
   // S2-TEST-003 (S2-SCRIPT-011): Dangling CLI shim symlink and broken subdir/repoSkills symlink removed by uninstall
   const danglingShimPath = path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad");
   let danglingShimCreated = false;

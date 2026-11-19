@@ -1,6 +1,6 @@
 # Getting started (Desktop IDE & CLI)
 
-Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows** (Node.js parity tested in CI on `ubuntu-latest`, `macos-latest`, and `windows-latest`; live host `agy` IDE/CLI execution verified on Linux/WSL2 with physical macOS/Windows `agy` gate tracked under [`L46`](plans/LEDGER.md)). It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
+Agy-Squad is a subagent planning, self-diagnosis, and review harness for **Antigravity Desktop (IDE)** and the **Antigravity CLI (`agy`)** across **Linux, macOS, and Windows** (Node.js parity tested in CI on `ubuntu-latest`, `macos-latest`, and `windows-latest`; live host `agy` IDE/CLI execution verified on Linux/WSL2, with physical macOS/Windows `agy` verification tracked as a remaining cross-platform parity gate). It pairs [`swarm-governance`](roles-and-workflows.md#swarm-governance) (Execution Modifier) with Task-Spec skills ([`self-diagnosis`](core-workflows.md#2-diagnose-and-optimize-the-harness-self-diagnosis), [`pr-review`](core-workflows.md#3-review-pull-requests-to-the-v140-standard), and [`full-review`](roles-and-workflows.md#full-review)) using `<= 500` byte `Pointer-Over-Wire` receipts, file-backed evidence slots, and SHA-256 bundle checks (`v1.4.0`).
 
 ## Host and companion compatibility matrix
 
@@ -64,7 +64,7 @@ In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` a
 
 ![Six-step swarm lifecycle and dual-verdict gate](assets/swarm-lifecycle.svg)
 
-For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `bin/agy-squad.mjs` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`) subcommands. Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in PR #5 ([`L17`, `L42`, `L43`](plans/LEDGER.md)).
+For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `bin/agy-squad.mjs` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`) subcommands. Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in favor of native `/swarm` planning and the unified `bin/agy-squad.mjs` governance CLI.
 
 ### Generate a `/swarm` plan and provenance scaffold
 
@@ -87,7 +87,7 @@ node bin/agy-squad.mjs plan \
 
 ## 4. What successful output looks like
 
-1. In Desktop IDE or CLI planning, `squad_planner` (or `dispatch_squad`) generates worker specs, report slots under `scratch/agy-squad/...`, model provenance metadata, and an `L6`-safe `provenanceScaffold`.
+1. In Desktop IDE or CLI planning, `squad_planner` (or `dispatch_squad`) generates worker specs, report slots under `scratch/agy-squad/...`, model provenance metadata, and a transcript-safe `provenanceScaffold`.
 2. Each worker writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and posts a single-line `<= 500` byte receipt:
    ```text
    READY scratch/agy-squad/squad-1/specialist-1/report.md — gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
@@ -109,7 +109,7 @@ node bin/agy-squad.mjs plan \
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `Unknown command ...` or `'agy-squad run' was retired` | Retired `agy-squad run` was invoked in Phase 2 ([`L17`](plans/LEDGER.md)) | Run `node bin/agy-squad.mjs plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
+| `Unknown command ...` or `'agy-squad run' was retired` | Retired `agy-squad run` PTY launcher was invoked | Run `node bin/agy-squad.mjs plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
 | Unbounded `read_file` denied by `Agy-Context-Saver` hook during live run | `Agy-Context-Saver` (`>= 2.0.1`) enforces the 3-tier Hybrid Slice Policy (`StartLine`/`EndLine` `<= 150` lines, or full-file `<= 800` lines & `<= 45 KiB`) | Pass bounded `StartLine`/`EndLine` (`<= 150` lines) to `read_file` or run `rtk read <file>` via `run_command`; run `agy-context setup` if `rtk` (`>= 1.1.0`) is missing |
 | `Requested explicit model ... cannot be pinned under executionMode 'subagent'` | `invoke_subagent` accepts only `inherit|flash|flash_lite|pro` | Set `executionMode: "swarm"` (`--mode swarm`) in `squad_planner` to explicitly pin and verify exact model IDs via `swarm status` |
 | Swarm UI shows old posts, retired workers, or loads slowly across waves | Antigravity keeps one append-only board per conversation (`killed: true` entries stay in history) and does not expose user-configurable channels when `swarm` lacks `action: "channel"` | Start a fresh Antigravity conversation per major `/swarm` wave for a clean board, or run follow-up cohorts via `invoke_subagent` ([Shared swarm board and channel limits](concepts.md#shared-swarm-board-and-channel-limits)) |

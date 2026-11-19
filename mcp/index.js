@@ -123,7 +123,7 @@ const TOOLS = [
   },
   {
     name: "squad_planner",
-    description: "Plan /swarm (primary) or subagent cohorts with pinning, overlap checks, L6 provenance, and audit slots.",
+    description: "Plan /swarm (primary) or subagent cohorts with pinning, overlap checks, transcript-safe provenance, and audit slots.",
     inputSchema: {
       type: "object",
       properties: {
@@ -143,6 +143,12 @@ const TOOLS = [
         workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation." },
         scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task paths." },
         roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task role titles." },
+        readOnly: { type: "boolean", description: "Read-only task workers." },
+        roleScopes: {
+          type: "object",
+          description: "Per-role task paths.",
+          additionalProperties: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
+        },
         includeIntegrityAuditor: { type: "boolean", description: "Include integrity audit." },
         reportRoot: { type: "string", minLength: 1, description: "Relative report root." },
         knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowed model IDs." },

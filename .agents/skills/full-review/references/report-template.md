@@ -73,7 +73,7 @@ For each behavior or claim:
 
 | Claim | Normative source | Architecture decision | Public contract | Implementation | Verification | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| `<claim>` | `<LEDGER ID / standard / user requirement>` | `<decision>` | `<schema/docs>` | `<code>` | `<test/run/evidence>` | `<satisfied / mismatch / unverified>` |
+| `<claim>` | `<architecture doc / ADR / standard / user requirement>` | `<decision>` | `<schema/docs>` | `<code>` | `<test/run/evidence>` | `<satisfied / mismatch / unverified>` |
 
 Narrative: `<what the trace establishes and what it does not>`
 
@@ -106,7 +106,7 @@ Repeat this seven-item record for `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SC
 
 ### 5.1 P0/P1/P2 finding records
 
-#### `<ID>` — `<title>` | P1 | Open (Pre-Remediation)
+#### `<ID>`: <title> | P1 | Open (Pre-Remediation)
 
 1. **Title, priority, status:** `<...>`
 2. **Contract provenance:** `<exact invariant / decision / contract / external norm>`

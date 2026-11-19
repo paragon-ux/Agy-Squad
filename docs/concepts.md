@@ -1,6 +1,6 @@
 # Concepts and terminology
 
-This guide defines the core terms used across Agy-Squad's CLI, MCP tools, skills, and architecture decision ledger.
+This guide defines the core terms used across Agy-Squad's CLI, MCP tools, skills, and verification workflow.
 
 ## Execution lifecycle
 
@@ -21,14 +21,14 @@ Agy-Squad splits content evaluation from execution-integrity auditing. The squad
 ## Core orchestration terms
 
 ### Parent session
-The top-level Antigravity conversation (started via native `/swarm` or in **Antigravity Desktop (IDE)**; legacy `node bin/agy-squad.mjs run` was retired in Phase 2 per `L17` and `L42`). The parent session owns user approvals, invokes `squad_planner`, `dispatch_squad`, or native `swarm`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
+The top-level Antigravity conversation (started via native `/swarm` or in **Antigravity Desktop (IDE)**; the legacy `node bin/agy-squad.mjs run` PTY launcher is retired). The parent session owns user approvals, invokes `squad_planner`, `dispatch_squad`, or native `swarm`, receives `<= 500` byte completion receipts, and makes the final acceptance decision.
 
 ### Shared swarm board and channel limits
 Antigravity attaches one persistent board to each parent conversation (`board: "local"`). Every `swarm{action: "add"}` call, `post_message`, and retired (`killed: true`) member appends sequentially to that conversation's board history. Running multiple `/swarm` cohorts in the same chat accumulates all prior posts and retired workers in one UI payload, which slows down the Swarm UI pane on open.
 
 - **Channels are host-gated, not user-configurable:** Antigravity's built-in `native_swarm` skill documents `swarm{action: "channel"}` conditionally (*"When the `swarm` tool offers the `channel` action..."*). When the host's `swarm` schema exposes only `status`, `models`, `add`, `model`, `kill`, and `title` (`post_message` accepts only `text`, and `read_board` has no `channel` filter), channels are disabled by the host runtime. Neither Antigravity settings nor Agy-Squad config can enable `channel` or `channels`.
 - **Channels partition wakeups, not board databases:** Even on hosts that expose `channel`, `main` remains shared by all members, archived channel history stays readable, and retired workers remain in conversation history.
-- **How to keep boards fast:** Start a fresh Antigravity conversation per major `/swarm` wave when you want a clean Swarm UI board (`#1`), or run repeated follow-up cohorts through `invoke_subagent` (`pr-review` / `self-diagnosis`), which does not append to the `/swarm` board. See [Stopping agents](stopping-agents.md) and [Native enforcement ledger (`NE-07`, `NE-11`)](plans/native-enforcement-ledger.md).
+- **How to keep boards fast:** Start a fresh Antigravity conversation per major `/swarm` wave when you want a clean Swarm UI board (`#1`), or run repeated follow-up cohorts through `invoke_subagent` (`pr-review` / `self-diagnosis`), which does not append to the `/swarm` board. See [Stopping agents](stopping-agents.md) and [Runtime closure checklist and hook boundary](roles-and-workflows.md#3-runtime-closure-checklist-and-hook-boundary).
 
 ### Squad lead
 An intermediate subagent compiled when `dispatch_squad` (`agy-squad dispatch`) runs with `squadId: "all_l1"` on a manifest defining one or more squads (or a `/swarm` lead in `Layered` mode). Each squad lead inspects its specialists' cited files, writes `scratch/agy-squad/.../lead/report.md` (`Content Verdict: PASS`, `FAIL`, or `BLOCKED`; bare `Verdict:` is accepted only as a legacy alias), pairs with an independent flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`), and bundles SHA-256 digests via `node bin/agy-squad.mjs bundle`.
@@ -73,9 +73,3 @@ Agy-Squad's harness diagnostic and optimization skill (`.agents/skills/self-diag
 
 ### PR Review Standard `v1.4.0` (`/pr-review`)
 The repository's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` finding records in `docs/reviews/`.
-
-### Decision ledger codes (`L1` through `L51`)
-Short identifiers referencing architectural decisions in [`docs/plans/LEDGER.md`](plans/LEDGER.md):
-
-- **Active architecture (`L1-L7, L21, L29-L31, L40-L51`):** Define host-enforced boundaries, the 500-byte receipt ceiling, and SHA-256 bundling (`L1, L2`), native stop controls (`L3, L5`), scratch isolation (`L4`), transcript boundaries (`L6`), zero real subagents in automated tests (`L7`), deny-by-default permissions (`L21, L40`), private distribution (`L29`), Zensical docs (`L30`), `Agy-Context-Saver` separation with `dispatch_squad` and `squad_planner` (`L31`), deterministic scratch teardown (`L41`), native `/swarm` governance and the SHA-256 verification CLI (`L42`), `squad_planner` explicit model pinning, writable `scopeFiles` overlap detection, and `L6`-safe provenance scaffolding (`L43`), `collect` / `bundle-init` and non-fatal companion probes (`L44`), `Agy-Context-Saver` lineage/sanitized export (`L45`), cross-platform macOS/Windows parity (`L46`), ecosystem and modifier composition (`L47`), doc/SVG parity (`L48`), manifest/CLI hardening (`L49`), package/CI hardening (`L50`), and `v0.1.3` remediation and token/latency optimization (`L51`).
-- **Retired historical IDs (`L8-L12, L16, L17, L18-L20, L22-L24, L28, L35-L39`):** Record earlier Windows/Docker trials, the retired `agy-squad run` CLI PTY launcher (`L17`), and WSL/migration records kept in [`docs/plans/LEDGER.md`](plans/LEDGER.md) for provenance.

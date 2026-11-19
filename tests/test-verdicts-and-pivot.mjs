@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -577,6 +577,121 @@ try {
     parseEvidenceDigest(`**__Evidence Digest:__** **__${"a".repeat(64)}__**.\n`),
     "a".repeat(64)
   );
+
+  // v0.1.3 Remediation Regressions: RUN-002, RUN-003, RUN-004, S2-SCRIPT-04, S2-TEST-02
+  // RUN-002: Balanced emphasis stripping in parseTargetSquad + reconciled trailing-dot rejection in SQUAD_ID_RE
+  for (const id of ["_auth", "auth_", "v1.0", "__auth_", "_auth__", "___"]) {
+    assert.equal(validateSquadId(id), id);
+    assert.equal(parseTargetSquad(`Target Squad: ${id}\nIntegrity Verdict: CLEAN\n`), id, `RUN-002: round-trip failed for '${id}'`);
+  }
+  assert.equal(parseTargetSquad("**Target Squad:** _auth\n"), "_auth");
+  assert.equal(parseTargetSquad("Target Squad: **auth_**\n"), "auth_");
+  assert.equal(parseTargetSquad("Target Squad: *_auth*\n"), "_auth");
+  assert.equal(parseTargetSquad("Target Squad: _alpha_.\n"), "alpha");
+  assert.equal(parseTargetSquad("Target Squad: v1.0.\n"), "v1.0");
+  assert.throws(() => validateSquadId("v1."), /Invalid squad ID/);
+  assert.throws(() => validateSquadId("_v1_."), /Invalid squad ID/);
+  assert.throws(() => parseTargetSquad("Target Squad: alpha..\n"), /Malformed Target Squad/);
+  assert.throws(() => parseTargetSquad("Target Squad: *alpha\n"), /Malformed Target Squad/);
+  assert.throws(() => parseTargetSquad("Target Squad: __proto__\n"), /Invalid reserved squad ID/);
+  assert.throws(() => parseTargetSquad("Target Squad: **__proto__**\n"), /Invalid reserved squad ID/);
+
+  // RUN-003: parseIntegrityVerdict and readIntegrityAudit reject role-conflated content verdicts and secondary INTEGRITY VIOLATION lines
+  write(first, "Evidence: node --test passed (exit 0).\n");
+  for (const badAuditMd of [
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nContent Verdict: PASS\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nVerdict: INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nAudit Status: INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nAudit is NOT CLEAN.\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\nNot CLEAN due to hash mismatch.\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n## INTEGRITY VIOLATION\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Audit Status | INTEGRITY VIOLATION |\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Content Verdict | PASS |\n`,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Squad | Content Verdict | Notes |\n| --- | --- | --- |\n| alpha | PASS | ok |\n`
+  ]) {
+    assert.throws(() => parseIntegrityVerdict(badAuditMd), /conflicting verdicts|role conflation|content verdict/i);
+    write(scopedIntAlpha, badAuditMd);
+    assert.throws(() => bundleReports(root, { ...record, replaceExisting: true }), /Integrity audit verdict is not CLEAN/);
+  }
+  assert.equal(
+    parseIntegrityVerdict(
+      `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: CLEAN\n| Field | Prior Baseline |\n| --- | --- |\n| Audit Status | INTEGRITY VIOLATION |\n`
+    ),
+    "CLEAN",
+    "RUN-003: historical 2-column baseline column must not falsely contradict CLEAN"
+  );
+  write(scopedIntAlpha, cleanAlphaAudit);
+
+  // RUN-004: parseContentVerdict avoids false positives on negative-test prose & historical leading bullets, and scans 2-column key-value verdict tables
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\nInvalid inputs do not pass.\nNegative tests for malformed records do not pass.\n"),
+    "PASS",
+    "RUN-004: normal negative-test prose with 'do not pass.' must not falsely contradict PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **FAIL:** Prior Wave 1 run failed on missing fixture.\n"),
+    "PASS",
+    "RUN-004: historical leading FAIL bullet must not contradict Content Verdict: PASS"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| Content Verdict | FAIL |\n"),
+    /conflicting content verdicts/,
+    "RUN-004: 2-column key-value verdict table contradicting PASS must throw"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| Prior Verdict | FAIL |\n"),
+    "PASS",
+    "RUN-004: historical 2-column key-value row must not contradict PASS"
+  );
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n| Field | Prior Baseline |\n| --- | --- |\n| Content Verdict | FAIL |\n"),
+    "PASS",
+    "RUN-004: historical 2-column baseline column must not contradict PASS"
+  );
+  for (const contradictingPassDoc of [
+    "Content Verdict: PASS\nInvalid inputs do not pass; verification does not PASS.\n",
+    "Content Verdict: PASS\nFixed invalid input handling; unit tests did not pass.\n",
+    "Content Verdict: PASS\nVerification checks for auth do not pass.\n",
+    "Content Verdict: PASS\nTests in `tests/test-run.mjs` did not pass.\n",
+    "Content Verdict: PASS\nUnit tests don't pass.\n",
+    "Content Verdict: PASS\nThe unit tests did not pass on Linux.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(contradictingPassDoc),
+      /conflicting content verdicts/,
+      `RUN-004: real failure negation must contradict PASS: ${JSON.stringify(contradictingPassDoc)}`
+    );
+  }
+
+  // S2-SCRIPT-04 & S2-TEST-02: CLI bundle --allow-unaudited reconciles record.integrityReport and record.integrityAuditSlots cleanly
+  const missingAuditRecPath = "unaudited-with-missing-report.json";
+  write(missingAuditRecPath, JSON.stringify({ ...record, integrityReport: "scratch/agy-squad/missing-audit.md" }));
+  const missingAuditCli = runCliFail(["bundle", missingAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(missingAuditCli.status, 0, `S2-SCRIPT-04: --allow-unaudited must override missing integrityReport: ${missingAuditCli.stderr}`);
+  const missingAuditRes = JSON.parse(missingAuditCli.stdout);
+  assert.equal(missingAuditRes.auditPolicy, "unaudited-explicit");
+  const missingAuditBundleJson = JSON.parse(fs.readFileSync(path.join(root, missingAuditRes.path), "utf8"));
+  assert.equal(missingAuditBundleJson.integrityAudit, undefined);
+  assert.equal(missingAuditBundleJson.integrityAudits, undefined);
+
+  const violatingAuditSlot = reportPath("integrity_auditor-alpha", 2);
+  write(violatingAuditSlot, `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nIntegrity Verdict: INTEGRITY VIOLATION\n`);
+  const badAuditRecPath = "unaudited-with-bad-report.json";
+  write(badAuditRecPath, JSON.stringify({ ...record, integrityReport: violatingAuditSlot }));
+  const badAuditOverrideCli = runCliFail(["bundle", badAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(badAuditOverrideCli.status, 0, `S2-SCRIPT-04: --allow-unaudited must override bad integrityReport: ${badAuditOverrideCli.stderr}`);
+  assert.equal(JSON.parse(badAuditOverrideCli.stdout).auditPolicy, "unaudited-explicit");
+
+  const cleanAuditRecPath = "unaudited-with-clean-report.json";
+  write(cleanAuditRecPath, JSON.stringify({ ...record, integrityReport: scopedIntAlpha, integrityAuditSlots: [scopedIntAlpha] }));
+  const cleanAuditOverrideCli = runCliFail(["bundle", cleanAuditRecPath, "--allow-unaudited", "--replace"]);
+  assert.equal(cleanAuditOverrideCli.status, 0, `S2-SCRIPT-04: --allow-unaudited with clean integrityReport/slots failed: ${cleanAuditOverrideCli.stderr}`);
+  const cleanOverrideRes = JSON.parse(cleanAuditOverrideCli.stdout);
+  assert.equal(cleanOverrideRes.auditPolicy, "unaudited-explicit");
+  const cleanOverrideBundleJson = JSON.parse(fs.readFileSync(path.join(root, cleanOverrideRes.path), "utf8"));
+  assert.equal(cleanOverrideBundleJson.integrityAudit, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudit");
+  assert.equal(cleanOverrideBundleJson.integrityAudits, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudits");
+  assert.equal(verifyBundle(root, cleanOverrideRes.path).auditPolicy, "unaudited-explicit");
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

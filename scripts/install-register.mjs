@@ -683,8 +683,20 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
   await safeWriteFileIfChanged(pluginMcpJson, pluginMcpContent);
 }
 
-export function formatWindowsCmdShim(targetRoot) {
+export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
+  if (typeof targetRoot !== "string" || !targetRoot.trim() || /["\r\n\0]/.test(targetRoot)) {
+    throw new Error(`Invalid Windows CLI shim target path: ${JSON.stringify(targetRoot)}`);
+  }
   const winTarget = path.join(targetRoot, "bin", "agy-squad.mjs");
+  if (typeof winTarget !== "string" || /["\r\n\0]/.test(winTarget)) {
+    throw new Error(`Invalid Windows CLI shim target path: ${JSON.stringify(winTarget)}`);
+  }
+  if (typeof execPath !== "string" || !execPath.trim() || /["\r\n\0]/.test(execPath)) {
+    throw new Error(`Invalid Windows CLI shim execPath: ${JSON.stringify(execPath)}`);
+  }
+  const escapeCmdPercent = (value) => value.replace(/%/g, "%%");
+  const escapedTarget = escapeCmdPercent(winTarget);
+  const escapedExecPath = escapeCmdPercent(execPath);
   return [
     "@echo off",
     "chcp 65001 >nul",
@@ -693,9 +705,9 @@ export function formatWindowsCmdShim(targetRoot) {
     "if errorlevel 1 goto :fallback",
     // A label-less GOTO ends the batch context. The queued executable can
     // delete this shim (and any managed node.cmd) and return its own status.
-    `(goto) 2>nul & node.exe "${winTarget}" %*`,
+    `(goto) 2>nul & node.exe "${escapedTarget}" %*`,
     ":fallback",
-    `(goto) 2>nul & "${process.execPath}" "${winTarget}" %*`,
+    `(goto) 2>nul & "${escapedExecPath}" "${escapedTarget}" %*`,
     ""
   ].join("\r\n");
 }
@@ -720,11 +732,11 @@ async function installCliShims({ targetRoot, log }) {
   const cmdShimPath = path.join(antigravityBinDir, "agy-squad.cmd");
 
   const posixContent = formatPosixShim(targetRoot);
-  const cmdContent = formatWindowsCmdShim(targetRoot);
 
   const posixChanged = await safeWriteFileIfChanged(posixShimPath, posixContent, 0o755);
   let cmdChanged = false;
   if (os.platform() === "win32") {
+    const cmdContent = formatWindowsCmdShim(targetRoot);
     cmdChanged = await safeWriteFileIfChanged(cmdShimPath, cmdContent);
   }
   const verb = posixChanged || cmdChanged ? "installed" : "verified";
@@ -756,6 +768,12 @@ export async function runCheckOnly(options = {}) {
   readAndValidateJsonFile(configJsonPath, "config.json");
 
   const status = detectExistingInstallation({ includeCompanions: false });
+  if (status.details.mcp.corrupt) {
+    throw new Error(`Corrupt MCP configuration detected: ${status.details.mcp.error}`);
+  }
+  if (status.details.config.corrupt) {
+    throw new Error(`Corrupt config.json detected: ${status.details.config.error}`);
+  }
   log(`[OK] Read-only check passed (currently installed: ${status.isInstalled ? "YES" : "NO"}).`);
   return status;
 }
@@ -777,6 +795,22 @@ export async function runInstall(options = {}) {
 
   const validatedMcp = readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   const validatedConfig = readAndValidateJsonFile(configJsonPath, "config.json");
+  if (
+    validatedMcp?.mcpServers !== undefined &&
+    (!validatedMcp.mcpServers || typeof validatedMcp.mcpServers !== "object" || Array.isArray(validatedMcp.mcpServers))
+  ) {
+    throw new Error(
+      `Existing mcp_config.json (${mcpJsonPath}) field 'mcpServers' must be a JSON object; aborting to preserve user configuration.`
+    );
+  }
+  if (
+    validatedConfig?.plugins !== undefined &&
+    (!validatedConfig.plugins || typeof validatedConfig.plugins !== "object" || Array.isArray(validatedConfig.plugins))
+  ) {
+    throw new Error(
+      `Existing config.json (${configJsonPath}) field 'plugins' must be a JSON object; aborting to preserve user configuration.`
+    );
+  }
   const existing = detectExistingInstallation({ includeCompanions: false });
 
   if (existing.isInstalled) {

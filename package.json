@@ -13,6 +13,8 @@
     "scripts",
     ".agents/skills",
     "docs",
+    "!docs/plans/**",
+    "!docs/plans",
     "!docs/reviews/**",
     "!docs/reviews",
     "plugin.json",
