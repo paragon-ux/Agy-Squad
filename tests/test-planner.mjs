@@ -686,16 +686,19 @@ try {
     assert.equal(overridePlan.workers[0].squadId, "alpha");
     assert.match(
       inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
-      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\)/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\).*spillovers\/task logs/
     );
+    assert.doesNotMatch(inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
     assert.match(
       overridePlan.workers[0].specialists[0].swarmAdd.brief,
-      /'rtk read'\/'rtk grep'.*bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
     );
+    assert.doesNotMatch(overridePlan.workers[0].specialists[0].swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
-      /bounded <=150-line read_file slices \(StartLine\/EndLine\) or 'rtk read'\/'rtk grep', never unbounded read_file/
+      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
     );
+    assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /or 'rtk read'\/'rtk grep'/);
 
     const symlinkAbsPlan = handleSquadPlanner({
       manifestPath: path.join(linkRoot, "plan-manifest.json"),
@@ -1192,6 +1195,130 @@ try {
     assert.match(layeredLeadBrief, /follow Board scope above/);
     const leadTemplateSavings = Buffer.byteLength(superviseSwarmCohort, "utf8") - Buffer.byteLength(superviseSwarmLayeredLead, "utf8");
     assert.ok(leadTemplateSavings >= 226, `OPT-BRIEF-03: expected >= 226 B/lead savings, got ${leadTemplateSavings} B`);
+
+    // UX-SQ-003 & UX-SQ-015: handleSquadPlanner ENOENT recommends global 'agy-squad plan' and verificationPipeline surfaces 'agy-squad finalize'
+    const missingPlanErr = handleSquadPlanner({ manifestPath: "missing-manifest.json" }, root);
+    assert.equal(missingPlanErr.isError, true);
+    assert.match(missingPlanErr.content[0].text, /agy-squad plan/);
+    assert.doesNotMatch(missingPlanErr.content[0].text, /node bin\/agy-squad\.mjs/);
+    assert.ok(
+      layeredLeadCheckPlan.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json>/.test(step)),
+      "UX-SQ-015: audited verificationPipeline must surface agy-squad finalize shorthand"
+    );
+    assert.ok(
+      defaultRoleScopeTask.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json> --allow-unaudited/.test(step)),
+      "UX-SQ-015: standalone (--no-integrity) verificationPipeline must surface finalize --allow-unaudited"
+    );
+
+    // UX-SQ-R2-001 & UX-SQ-R2-002: verificationPipeline bundle-init --digest includes --handoffs/--handoff, and README Quickstart plan runs warning-free with single-squad auditor slot
+    assert.ok(
+      layeredLeadCheckPlan.verificationPipeline.some(
+        step => /agy-squad bundle-init\b/.test(step) && /--digest\b/.test(step) && /--handoffs?\b/.test(step)
+      ),
+      `UX-SQ-R2-001: verificationPipeline bundle-init --digest must include --handoffs or --handoff, got: ${JSON.stringify(layeredLeadCheckPlan.verificationPipeline)}`
+    );
+    const readmeQuickstartPlan = runCli([
+      "plan",
+      "--mode", "swarm",
+      "--read-only",
+      "--scope", "src",
+      "--role", "Security",
+      "--role", "Test Audit",
+      "Audit authentication flow"
+    ]);
+    assert.equal(readmeQuickstartPlan.status, 0, `UX-SQ-R2-002: README Quickstart plan failed: ${readmeQuickstartPlan.stderr}`);
+    const readmeQuickstartJson = JSON.parse(readmeQuickstartPlan.stdout);
+    assert.deepEqual(
+      readmeQuickstartJson.warnings,
+      [],
+      `UX-SQ-R2-002: README Quickstart plan must emit 0 warnings, got: ${JSON.stringify(readmeQuickstartJson.warnings)}`
+    );
+    assert.equal(readmeQuickstartJson.workers.length, 1);
+    assert.equal(readmeQuickstartJson.workers[0].squadId, "task_squad");
+    assert.equal(
+      readmeQuickstartJson.integrityAuditPlan[0].reportSlot,
+      "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
+    );
+
+    // RAW-RUN-001: flat & task plans expose workers[i].synthesisSlot plus coordinator synthesis guidance (including custom --report-root)
+    assert.equal(readmeQuickstartJson.workers[0].lead, null);
+    assert.equal(
+      readmeQuickstartJson.workers[0].synthesisSlot,
+      "scratch/agy-squad/squad-task_squad/lead/report.md",
+      "RAW-RUN-001: flat task plan must expose synthesisSlot pointing to lead/report.md"
+    );
+    assert.ok(
+      readmeQuickstartJson.notes.some(n => n.includes("scratch/agy-squad/squad-task_squad/lead/report.md") && n.includes("Content Verdict: PASS")),
+      "RAW-RUN-001: flat task plan notes must explain coordinator synthesisSlot authorship"
+    );
+    assert.ok(
+      readmeQuickstartJson.verificationPipeline.some(step => step.includes("scratch/agy-squad/squad-task_squad/lead/report.md")),
+      "RAW-RUN-001: flat task verificationPipeline must surface coordinator synthesisSlot before bundle-init"
+    );
+    const customRootFlatPlan = planSquadCohort({
+      task: "Custom root flat audit",
+      roles: ["Security"],
+      reportRoot: "scratch/custom-flat",
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(customRootFlatPlan.workers[0].lead, null);
+    assert.equal(customRootFlatPlan.workers[0].synthesisSlot, "scratch/custom-flat/squad-task_squad/lead/report.md");
+    assert.ok(
+      customRootFlatPlan.notes.some(n => n.includes("scratch/custom-flat/squad-task_squad/lead/report.md")),
+      "RAW-RUN-001: custom reportRoot must propagate into flat synthesisSlot notes"
+    );
+    assert.equal(layeredLeadCheckPlan.workers[0].synthesisSlot, layeredLeadCheckPlan.workers[0].lead.reportSlot);
+    assert.equal(
+      layeredLeadCheckPlan.notes.some(n => /Coordinator synthesis slot\(s\) for flat squad/.test(n)),
+      false,
+      "RAW-RUN-001: layered plans should not emit flat coordinator synthesis note"
+    );
+
+    // RAW-SCRIPT-001 / RAW-TEST-001: Windows backslash and Tab-completion CLI path normalization in plan
+    const { normalizeScopeCliPath, normalizeWorkspaceCliPath } = await import("../bin/agy-squad.mjs");
+    assert.equal(normalizeWorkspaceCliPath(".\\", "win32"), ".");
+    assert.equal(normalizeWorkspaceCliPath("./", "linux"), ".");
+    assert.equal(normalizeWorkspaceCliPath(".\\src\\auth.js", "win32"), "src/auth.js");
+    assert.equal(normalizeWorkspaceCliPath("src\\auth.js", "win32"), "src/auth.js");
+    assert.equal(normalizeWorkspaceCliPath(".\\scratch\\win-root", "win32"), "scratch/win-root");
+    assert.equal(normalizeWorkspaceCliPath("\\\\server\\share\\src", "win32"), "\\\\server\\share\\src");
+    assert.equal(normalizeWorkspaceCliPath("C:\\repo\\src", "win32"), "C:\\repo\\src");
+    assert.equal(normalizeWorkspaceCliPath("src\\auth.js", "linux"), "src\\auth.js");
+    assert.equal(normalizeScopeCliPath(".\\src\\", "win32"), "src");
+    assert.equal(normalizeScopeCliPath("src/", "linux"), "src");
+    assert.equal(normalizeScopeCliPath(".\\", "win32"), ".");
+    assert.equal(normalizeScopeCliPath("./", "linux"), ".");
+    assert.equal(normalizeScopeCliPath("src//", "linux"), "src//");
+    assert.equal(normalizeScopeCliPath("/", "linux"), "/");
+    const tabCompletePlanRes = runCli([
+      "plan",
+      "--mode", "swarm",
+      "--read-only",
+      "--scope", "./",
+      "--role", "Security",
+      "--role-scope", "Security=src/",
+      "--no-integrity",
+      "Tab completion scope check"
+    ]);
+    assert.equal(tabCompletePlanRes.status, 0, `CLI plan must accept ./ and trailing-slash directory scopes: ${tabCompletePlanRes.stderr}`);
+    assert.match(JSON.parse(tabCompletePlanRes.stdout).workers[0].specialists[0].swarmAdd.brief, /^- src$/m);
+    if (process.platform === "win32") {
+      const winPlanRes = runCli([
+        "plan",
+        "--mode", "swarm",
+        "--read-only",
+        "--scope", ".\\src\\",
+        "--role", "Security",
+        "--role-scope", "Security=.\\mcp\\planner.mjs",
+        "--report-root", ".\\scratch\\win-plan-root",
+        "--no-integrity",
+        "Windows backslash plan check"
+      ]);
+      assert.equal(winPlanRes.status, 0, `RAW-SCRIPT-001: Windows backslash plan failed: ${winPlanRes.stderr}`);
+      const winPlanJson = JSON.parse(winPlanRes.stdout);
+      assert.equal(winPlanJson.workers[0].synthesisSlot, "scratch/win-plan-root/squad-task_squad/lead/report.md");
+      assert.match(winPlanJson.workers[0].specialists[0].swarmAdd.brief, /^- mcp\/planner\.mjs$/m);
+    }
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

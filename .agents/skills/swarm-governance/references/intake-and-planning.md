@@ -48,33 +48,35 @@ When launching `/swarm` and any of the four execution choices below are unspecif
 
 ## Planner and Dispatch Commands
 
-`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via `node bin/agy-squad.mjs` (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only). When installed via `setup`, plugin `skills/` and `docs/` rely on symlinks or junctions so `../../../docs/...` relative links inside skill files resolve against the plugin root rather than failing under fallback directory copies (`SKILL-DEP-01`).
+`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via the global `agy-squad` CLI shim (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only). Skill references use canonical hosted Zensical documentation URLs and skill-local `./references/` links so every reference resolves cleanly at any plugin mount depth and under Windows copy-fallback.
 
 ### Manifest & Task Planning (`squad_planner` / `agy-squad plan`)
 
 ```bash
 # Plan all working squads from a manifest, inheriting coordinator default model:
-node bin/agy-squad.mjs plan \
-  --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
+agy-squad plan \
+  --manifest swarm-manifest.json \
   --topology flat \
   --workspace-isolation inherit
 
 # Plan from a manifest while pinning an explicit user-requested model ID:
-node bin/agy-squad.mjs plan \
-  --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
+agy-squad plan \
+  --manifest swarm-manifest.json \
   --model gemini-4-hydrogen-high \
   --known-model gemini-4-hydrogen-high
 
-# Plan a freeform task with repeatable custom roles, scopes, and shared worktrees:
-node bin/agy-squad.mjs plan \
+# Plan a freeform task with custom roles, per-role scopes, read-only overlap exemption, or shared worktrees:
+agy-squad plan \
   --mode swarm \
+  --read-only \
   --scope src/app.js --scope docs/tools.md \
-  --role "Implementer" --role "Reviewer" \
-  --workspace-isolation share \
-  "Verify Phase 2 runtime fixes and update documentation."
+  --role "Security Reviewer" --role "Docs Checker" \
+  --role-scope "Security Reviewer=src/app.js" \
+  --role-scope "Docs Checker=docs/tools.md" \
+  "Audit authentication flow and update documentation."
 
 # Add a follow-up wave onto an already-active /swarm board without name collisions or full-board reads:
-node bin/agy-squad.mjs plan \
+agy-squad plan \
   --manifest docs/custom-manifest.json \
   --occupied-worker storage-lead --occupied-worker audit-storage \
   --board-since 60 \
@@ -83,17 +85,17 @@ node bin/agy-squad.mjs plan \
 
 - **Multi-squad vs. single-squad:** Omit `squadId` (`--squad`) to compile all non-audit squads in the manifest; never pass `all_l1` to `squad_planner` or `agy-squad plan`.
 - **Board message scoping (`boardSince` / `boardSeqs`):** Record the board sequence cursor (`<cohortBaseSeq>`) before spawning workers and pass `boardSince` (`--board-since`) or explicit `boardSeqs` (`--board-seq`) so compiled briefs instruct `read_board{since: ...}` or `read_board{seqs: [...]}` and forbid bare unfiltered `read_board()`.
-- **Custom per-worker roles, scopes, models, and `readOnly`:** Inline `task` shares one `scopeFiles` list across `--role` titles and compiles a flat `task_squad`. For distinct per-worker `scopeFiles`, custom `objective`/`instructions`, per-worker `model`, `readOnly: true` overlap exemptions, or domain `lead`s, use `manifest` (inline) or `--manifest <path>`. Never pass `roles` or `scopeFiles` alongside `manifest` or `manifestPath`.
-- **Hard planner/wire caps ([docs/tools.md](../../../../docs/tools.md#manifest-structure-rules)):** There is no hardcoded cap on squad count or workers per squad, but code enforces `MAX_SWARM_NAME_LENGTH = 24` chars (deduplicated with `-2`, `-3`, ...), `squad-<encodeURIComponent(id)>` directory names `<= 255` UTF-8 bytes, `reportPath()` headroom so `PARTIAL <path> — ` plus `SWARM_MENTION_RESERVE_BYTES = 26` and `MIN_OBSERVATION_BYTES = 16` stays `<= 500` UTF-8 bytes, and `10 MiB` (`AGY_MAX_STDIO_PAYLOAD_BYTES`) on MCP stdio.
+- **Custom per-worker roles, scopes, models, and `readOnly`:** Inline `task` compiles a flat `task_squad` (exposing `workers[0].synthesisSlot` for the coordinator-authored `lead/report.md`) and supports repeatable `--role` (`roles`), shared `--scope` (`scopeFiles`), `--read-only` (`readOnly: true` overlap exemptions), and repeatable `--role-scope <role=path>` (`roleScopes` per-role `scopeFiles` overrides). Use `manifest` (inline) or `--manifest <path>` when workers need custom per-worker `objective`/`instructions`, per-worker `model`, domain `lead`s, or multiple parallel squads. Never pass `roles`, `scopeFiles`, `readOnly`, or `roleScopes` alongside `manifest` or `manifestPath`.
+- **Hard planner/wire caps ([docs/tools.md](https://paragon-ux.github.io/Agy-Squad/tools/#manifest-structure-rules)):** There is no hardcoded cap on squad count or workers per squad, but code enforces `MAX_SWARM_NAME_LENGTH = 24` chars (deduplicated with `-2`, `-3`, ...), `squad-<encodeURIComponent(id)>` directory names `<= 255` UTF-8 bytes, `reportPath()` headroom so `PARTIAL <path> — ` plus `SWARM_MENTION_RESERVE_BYTES = 26` and `MIN_OBSERVATION_BYTES = 16` stays `<= 500` UTF-8 bytes, and `10 MiB` (`AGY_MAX_STDIO_PAYLOAD_BYTES`) on MCP stdio.
 
 ### `invoke_subagent` Fallback (`dispatch_squad` / `agy-squad dispatch`)
 
-Use `dispatch_squad` (MCP) or `node bin/agy-squad.mjs dispatch` only when explicitly targeting `invoke_subagent` (`executionMode: "subagent"`):
+Use `dispatch_squad` (MCP) or `agy-squad dispatch` only when explicitly targeting `invoke_subagent` (`executionMode: "subagent"`):
 
 ```bash
-node bin/agy-squad.mjs dispatch --squad all_l1 --manifest task-01-manifest.json
-node bin/agy-squad.mjs dispatch --squad storage --manifest task-01-manifest.json
-node bin/agy-squad.mjs dispatch --squad integrity_auditor:storage --manifest task-01-manifest.json
+agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
+agy-squad dispatch --squad storage --manifest task-01-manifest.json
+agy-squad dispatch --squad integrity_auditor:storage --manifest task-01-manifest.json
 ```
 
 ## Model Pinning and Subagent Caveats

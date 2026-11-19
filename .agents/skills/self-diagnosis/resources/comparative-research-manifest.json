@@ -10,7 +10,7 @@
           "benchmarks/teamwork-vs-squad/README.md",
           "docs/plans/comparative-harness-architecture-retest.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts via read_board{since|seqs}. Enforce the Squad Lead Patrol Gate: inspect specialist reports via bounded read_file or rtk read and tool traces via agy-context transcript. Verify specialists executed search_web and cited primary sources without parametric guessing or flattering bias. Write the unified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) at your assigned slot plus the complete dossier at docs/plans/comparative-harness-architecture-retest.md, and post <=500B READY.",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts via read_board{since|seqs}. Enforce the Squad Lead Patrol Gate: inspect specialist reports via bounded <=150-line read_file slices (reserve 'rtk read' for step spillovers/task logs) and tool traces via agy-context transcript. Verify specialists executed search_web and cited primary sources without parametric guessing or flattering bias. Write the unified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) at your assigned slot plus the complete dossier at docs/plans/comparative-harness-architecture-retest.md, and post <=500B READY.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, objective 5-Axis Rubric scores, and docs/plans/comparative-harness-architecture-retest.md."
       },
       "specialists": [

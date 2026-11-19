@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { handleRequest } from "../mcp/index.js";
+import { handleRequest, isDirectEntryPoint, isInstalledPluginDir, isNodeVersionSupported } from "../mcp/index.js";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../mcp/index.js");
 const proc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
@@ -645,6 +645,146 @@ console.log("Agy-Squad MCP server tests\n");
   }
 
   console.log("✓ explicit workspace arg, initialize URIs, multi-root resolution, fallback precedence, and env isolation work cleanly");
+
+  // RAW-MCP-001, RAW-MCP-002, RAW-DEP-001, RAW-TEST-001: refuse silent plugin-dir fallback, case-insensitive entry check, Node >= 22 guard
+  assert.equal(isNodeVersionSupported("20.18.0"), false);
+  assert.equal(isNodeVersionSupported("v20.19.1"), false);
+  assert.equal(isNodeVersionSupported("22.0.0"), true);
+  assert.equal(isNodeVersionSupported("22.0.0-rc.1"), true);
+  assert.equal(isNodeVersionSupported("v24.1.0"), true);
+  assert.equal(isNodeVersionSupported("junk 22.0.0"), false);
+  assert.equal(isNodeVersionSupported("22.0.0junk"), false);
+
+  assert.equal(isDirectEntryPoint("C:\\Users\\Dev\\mcp\\index.js", "c:\\users\\dev\\mcp\\index.js", "win32"), true);
+  assert.equal(isDirectEntryPoint("C:/Users/Dev/mcp/index.js", "c:\\users\\dev\\mcp\\index.js", "win32"), true);
+  assert.equal(isDirectEntryPoint("/Users/Dev/mcp/index.js", "/users/dev/mcp/index.js", "darwin"), true);
+  assert.equal(isDirectEntryPoint("/Users/Dev/mcp/index.js", "/users/dev/mcp/index.js", "linux"), false);
+  assert.equal(isInstalledPluginDir(repoRoot), false, "Source checkout with .git/tests must not be treated as an installed plugin directory");
+  assert.equal(isInstalledPluginDir(path.join(repoRoot, "mcp")), false, "Subdirectory inside source checkout must not be treated as an installed plugin directory");
+
+  const simHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-plugin-cwd-")));
+  const simPluginDir = path.join(simHome, ".gemini", "config", "plugins", "agy-squad");
+  const simCustomPkgPlugin = path.join(simHome, "custom-plugin-copy");
+  try {
+    fs.mkdirSync(simPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(simPluginDir, "package.json"), JSON.stringify({ name: "agy-squad", version: "0.1.3" }));
+    fs.writeFileSync(path.join(simPluginDir, "plugin.json"), JSON.stringify({ name: "agy-squad", version: "0.1.3" }));
+
+    fs.mkdirSync(path.join(simCustomPkgPlugin, "mcp"), { recursive: true });
+    fs.writeFileSync(path.join(simCustomPkgPlugin, "package.json"), JSON.stringify({ name: "agy-squad", version: "0.1.3" }));
+    fs.writeFileSync(path.join(simCustomPkgPlugin, "plugin.json"), JSON.stringify({ name: "agy-squad", version: "0.1.3" }));
+
+    const runInCwd = (cwd, requests) => {
+      const env = { ...process.env };
+      delete env.AGY_SQUAD_WORKSPACE;
+      const p = spawnSync(process.execPath, [server], {
+        cwd,
+        env,
+        input: requests.map((req) => JSON.stringify(req)).join("\n") + "\n",
+        encoding: "utf8"
+      });
+      assert.equal(p.status, 0, p.stderr);
+      return p.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    };
+
+    const pluginCwdResponses = runInCwd(simPluginDir, [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "squad_planner",
+          arguments: { task: "Review this repository", roles: ["Security", "Tests"], scopeFiles: ["src"] }
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "squad_planner",
+          arguments: {
+            manifest: { squads: { alpha: { specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["."] }] } } }
+          }
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "squad_planner",
+          arguments: { task: "Review this repository", roles: ["Security"], scopeFiles: ["mcp"], workspace: repoRoot }
+        }
+      }
+    ]);
+    assert.equal(pluginCwdResponses[1].result.isError, true, "RAW-MCP-001: task mode from plugin cwd without workspace must fail closed");
+    assert.match(pluginCwdResponses[1].result.content[0].text, /Refusing to target the installed Agy-Squad plugin directory/);
+    assert.match(pluginCwdResponses[1].result.content[0].text, /Pass 'workspace'/);
+    assert.equal(pluginCwdResponses[2].result.isError, true, "RAW-MCP-001: inline manifest from plugin cwd without workspace must fail closed");
+    assert.match(pluginCwdResponses[2].result.content[0].text, /Refusing to target the installed Agy-Squad plugin directory/);
+    assert.equal(Boolean(pluginCwdResponses[3].result.isError), false, pluginCwdResponses[3].result.content[0].text);
+    assert.equal(
+      JSON.parse(pluginCwdResponses[3].result.content[0].text).bundleRecordTemplates.task_squad.workspace,
+      repoRoot
+    );
+
+    const rootUriFallbackResponses = runInCwd(simPluginDir, [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2024-11-05", rootUri: pathToFileURL(repoRoot).href }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "squad_planner",
+          arguments: { task: "Review this repository", roles: ["Security"], scopeFiles: ["mcp"] }
+        }
+      }
+    ]);
+    assert.equal(
+      Boolean(rootUriFallbackResponses[1].result.isError),
+      false,
+      rootUriFallbackResponses[1].result.content[0].text
+    );
+    assert.equal(
+      JSON.parse(rootUriFallbackResponses[1].result.content[0].text).bundleRecordTemplates.task_squad.workspace,
+      repoRoot,
+      "RAW-MCP-001: initialize rootUri must supply workspace cleanly even when MCP cwd is installed plugin directory"
+    );
+
+    const customPluginResponses = runInCwd(simCustomPkgPlugin, [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { task: "Review repo", roles: ["Spec"] } }
+      }
+    ]);
+    assert.equal(customPluginResponses[1].result.isError, true, "RAW-MCP-001: packaged plugin copy without .git/tests must also fail closed");
+    assert.match(customPluginResponses[1].result.content[0].text, /Refusing to target the installed Agy-Squad plugin directory/);
+
+    const customPluginSubdirResponses = runInCwd(path.join(simCustomPkgPlugin, "mcp"), [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { task: "Review repo", roles: ["Spec"] } }
+      }
+    ]);
+    assert.equal(customPluginSubdirResponses[1].result.isError, true, "RAW-MCP-001: subdirectory of installed plugin copy must also fail closed");
+    assert.match(customPluginSubdirResponses[1].result.content[0].text, /Refusing to target the installed Agy-Squad plugin directory/);
+  } finally {
+    fs.rmSync(simHome, { recursive: true, force: true });
+  }
+  console.log("✓ global plugin cwd guard, case-insensitive entry detection, and Node >= 22 version check");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));

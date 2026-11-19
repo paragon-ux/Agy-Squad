@@ -128,6 +128,27 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     const noReport = /^NO_REPORT — \s*\S/.test(parsedMessage);
     // REVIEW: Compare to the exact assigned path. It may contain spaces or " — ".
     if (!noReport && (!status || !observation.trim())) {
+      const matchedVerb = parsedMessage.startsWith(`READY ${report}`)
+        ? "READY"
+        : parsedMessage.startsWith(`PARTIAL ${report}`)
+          ? "PARTIAL"
+          : undefined;
+      const afterSlot = matchedVerb ? parsedMessage.slice(`${matchedVerb} ${report}`.length) : "";
+      const afterSlotTrimmed = afterSlot.trim();
+      const afterNoReport = parsedMessage.startsWith("NO_REPORT") ? parsedMessage.slice("NO_REPORT".length) : "";
+      const afterNoReportTrimmed = afterNoReport.trim();
+      const delimiterMismatch =
+        (matchedVerb && !status && /^(?:\s|[-:–—])/.test(afterSlot) && Boolean(afterSlotTrimmed) && afterSlotTrimmed !== "—") ||
+        (!noReport &&
+          !parsedMessage.startsWith("NO_REPORT — ") &&
+          /^NO_REPORT(?:\s|[-:–—])/.test(parsedMessage) &&
+          Boolean(afterNoReportTrimmed) &&
+          afterNoReportTrimmed !== "—");
+      if (delimiterMismatch) {
+        throw new Error(
+          `Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason. Expected literal U+2014 em-dash delimiter: '${matchedVerb ? `${matchedVerb} ${report} — <observation>` : "NO_REPORT — <reason>"}' (ASCII '-' or '--' is not accepted).`
+        );
+      }
       throw new Error("Handoff must include the sender's assigned report and an observation, or a NO_REPORT reason.");
     }
     if (received.has(sender) && received.get(sender).message !== message) {

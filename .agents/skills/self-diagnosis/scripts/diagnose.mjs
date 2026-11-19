@@ -885,6 +885,8 @@ function parseFrontmatter(markdown) {
   return { name, hasDescription };
 }
 
+const HOSTED_DOCS_PREFIX = "https://paragon-ux.github.io/Agy-Squad/";
+
 function extractMarkdownLinks(sourceFile, markdown) {
   const dir = path.dirname(sourceFile);
   const stripped = markdown
@@ -897,11 +899,33 @@ function extractMarkdownLinks(sourceFile, markdown) {
     const rawTarget = match[1];
     const fragment = match[2] ?? "";
     if (!rawTarget && !fragment) continue;
+    if (rawTarget && rawTarget.startsWith(HOSTED_DOCS_PREFIX)) {
+      const slug = rawTarget.slice(HOSTED_DOCS_PREFIX.length).replace(/^\/+|\/+$/g, "");
+      if (slug && (slug.includes("..") || slug.includes("\\"))) {
+        links.push({
+          link: rawTarget,
+          fragment,
+          resolved: null,
+          isHostedDocs: true,
+          invalidReason: "malformed hosted docs URL"
+        });
+        continue;
+      }
+      const docSlug = slug ? slug.replace(/\.md$/i, "") : "index";
+      links.push({
+        link: rawTarget,
+        fragment,
+        resolved: path.join(repoRoot, "docs", `${docSlug}.md`),
+        isHostedDocs: true
+      });
+      continue;
+    }
     if (rawTarget && /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(rawTarget)) continue;
     links.push({
       link: rawTarget || `#${fragment}`,
       fragment,
-      resolved: rawTarget ? path.resolve(dir, rawTarget) : sourceFile
+      resolved: rawTarget ? path.resolve(dir, rawTarget) : sourceFile,
+      isHostedDocs: false
     });
   }
   return links;
@@ -963,7 +987,31 @@ function extractHeadingSection(markdown, headingRegex) {
 
 function checkRelativeLinks(skillFile, markdown) {
   const broken = [];
+  const skillsRootDir = path.join(repoRoot, ".agents", "skills");
+  const isInsideSkills =
+    skillFile === skillsRootDir || skillFile.startsWith(skillsRootDir + path.sep);
   for (const item of extractMarkdownLinks(skillFile, markdown)) {
+    if (item.invalidReason) {
+      broken.push({
+        link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (${item.invalidReason})`,
+        resolved: item.link
+      });
+      continue;
+    }
+    if (!item.isHostedDocs && isInsideSkills) {
+      const relFromSkills = path.relative(skillsRootDir, item.resolved);
+      if (
+        relFromSkills === ".." ||
+        relFromSkills.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relFromSkills)
+      ) {
+        broken.push({
+          link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (non-portable link escaping .agents/skills/; use hosted Zensical URL or intra-skill relative link)`,
+          resolved: path.relative(repoRoot, item.resolved)
+        });
+        continue;
+      }
+    }
     if (!fs.existsSync(item.resolved)) {
       broken.push({ link: item.link, resolved: path.relative(repoRoot, item.resolved) });
     } else if (item.fragment && item.resolved.endsWith(".md")) {
@@ -1225,7 +1273,7 @@ function auditSkills(ledgerArg) {
         id: `SKILL-ROLES-LINK-${entry.name}`,
         category: "SKILL",
         priority: "P2",
-        summary: `.agents/skills/${entry.name}/SKILL.md must contain a valid relative Markdown link to docs/roles-and-workflows.md (with valid #anchor if specified).`
+        summary: `.agents/skills/${entry.name}/SKILL.md must contain a valid Markdown link to docs/roles-and-workflows.md or https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/ (with valid #anchor if specified).`
       });
     }
 
@@ -2130,6 +2178,49 @@ if (cli.help) {
   console.log(USAGE);
   process.exit(0);
 }
+
+function assertAgySquadWorkspace() {
+  const rawCwd = process.cwd();
+  let dir;
+  try {
+    dir = fs.realpathSync(rawCwd);
+  } catch {
+    dir = path.resolve(rawCwd);
+  }
+  let foundPkgName = null;
+  let cursor = dir;
+  while (true) {
+    const pkgPath = path.join(cursor, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        if (parsed && typeof parsed.name === "string" && parsed.name === "agy-squad") {
+          return;
+        }
+        foundPkgName = typeof parsed?.name === "string" ? parsed.name : "(unnamed package)";
+      } catch {
+        foundPkgName = "(unreadable package.json)";
+      }
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  const detail = foundPkgName
+    ? ` (found package "${foundPkgName}")`
+    : ' (no package.json with name "agy-squad" found)';
+  console.error(
+    [
+      "Error: diagnose.mjs is an Agy-Squad repository maintainer profiler and must be run inside an Agy-Squad checkout.",
+      `Current working directory: ${rawCwd}${detail}`,
+      "To review or govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', or '/swarm-governance' instead."
+    ].join("\n")
+  );
+  process.exit(1);
+}
+
+assertAgySquadWorkspace();
 
 if (cli.teardown) {
   try {

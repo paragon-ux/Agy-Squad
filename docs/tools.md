@@ -78,14 +78,14 @@ Agy-Squad exposes two MCP tools (`dispatch_squad` in `mcp/dispatch.mjs` and `squ
 4. **Yield for Reactive Wakeup:** Wait via Reactive Wakeup, then inspect `/agents` (or `swarm{action: "status"}`) at the evidence checkpoint (10 minutes by default, longer when work requires it). Extend work showing progress, allow for approval waits, and redirect or stop work stuck on identical output. Record agent termination and command cleanup separately.
 5. **Enforce the Squad Lead Patrol Gate:** After workers finish or stop, the parent or squad lead audits execution traces, rejects ungrounded or sycophantic reports (`FAIL` or `PARTIAL`), and checks material claims against final files (`Subagent Alignment Policy`: guessing from memory is prohibited; every claim cites an executed tool or primary source line). The lead records its verdict (`Content Verdict: PASS`, `FAIL`, or `BLOCKED`; bare `Verdict:` is accepted only as a legacy alias) and verified file hashes, rechecking changed inputs.
 6. **Run the Independent Integrity Auditor (`audit-<id>` / `integrity_auditor`):** After working squads finish and before acceptance, run the flat integrity auditor:
-   - **Canonical Flat Integrity Auditor:** On `/swarm`, spawn `audit-<id>` (`scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md` for single-squad manifests, flat or layered, or `scratch/agy-squad/squad-integrity_auditor-<targetSquad>/specialist-1/report.md` for multi-squad manifests, flat or layered) via `squad_planner`. On `invoke_subagent`, call `dispatch_squad({ squadId: "integrity_auditor:<targetSquad>" })` (or `integrity_auditor` for single-squad manifests). Compute `node bin/agy-squad.mjs digest <record.json>` first so each auditor records `Target Squad: <targetSquad>`, `Evidence Digest: <64-hex>`, and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` auto-discovery have been removed.
-   - **Acceptance gate:** `node bin/agy-squad.mjs bundle <record.json>` enforces `requireIntegrityAudit: true` by default (pass `--allow-unaudited` or `requireIntegrityAudit: false` to opt out). `bundleReports` in `mcp/handoffs.mjs` hashes all matching integrity audit reports (`integrityAudits` + `integrityAudit`), persists `schemaVersion: 2` and `auditPolicy` (`"required"` | `"unaudited-explicit"`), and guards against silent overwrites (`--replace` / `--predecessor <sha256>`). `verify` enforces the persisted `auditPolicy` and confirms matching `Evidence Digest`, `Target Squad`, `Integrity Verdict: CLEAN`, and `verifiedFiles` digests.
+   - **Canonical Flat Integrity Auditor:** On `/swarm`, spawn `audit-<id>` (`scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md` for single-squad manifests, flat or layered, or `scratch/agy-squad/squad-integrity_auditor-<targetSquad>/specialist-1/report.md` for multi-squad manifests, flat or layered) via `squad_planner`. On `invoke_subagent`, call `dispatch_squad({ squadId: "integrity_auditor:<targetSquad>" })` (or `integrity_auditor` for single-squad manifests). Compute `agy-squad digest <record.json>` (or `agy-squad bundle-init --digest`) first so each auditor records `Target Squad: <targetSquad>`, `Evidence Digest: <64-hex>`, and strictly `Integrity Verdict: CLEAN` or `Integrity Verdict: INTEGRITY VIOLATION` (never a content `PASS`). Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` auto-discovery have been removed.
+   - **Acceptance gate:** `agy-squad bundle <record.json>` (and `agy-squad finalize <record.json>`) enforces `requireIntegrityAudit: true` by default (pass `--allow-unaudited` or `requireIntegrityAudit: false` to opt out). `bundleReports` in `mcp/handoffs.mjs` hashes all matching integrity audit reports (`integrityAudits` + `integrityAudit`), persists `schemaVersion: 2` and `auditPolicy` (`"required"` | `"unaudited-explicit"`), and guards against silent overwrites (`--replace` / `--predecessor <sha256>`). `verify` enforces the persisted `auditPolicy` and confirms matching `Evidence Digest`, `Target Squad`, `Integrity Verdict: CLEAN`, and `verifiedFiles` digests.
 
 File scope in a brief describes the worker's assigned target paths; host-level write enforcement remains controlled by Antigravity permissions and workspace isolation.
 
-## Governance CLI & report cleanup (`bin/agy-squad.mjs`, `mcp/handoffs.mjs`, `mcp/verdicts.mjs`)
+## Governance CLI & report cleanup (`agy-squad`, `mcp/handoffs.mjs`, `mcp/verdicts.mjs`)
 
-Run `node bin/agy-squad.mjs` from the shared workspace root (`mcp/handoffs.mjs` is the underlying JS library module; its standalone CLI entrypoint was removed in PR #5). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) are normalized uniformly across downstream CLI verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`, `verdict`, and `collect`). Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
+Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Squad` source checkout, you may also run `node bin/agy-squad.mjs <command>`; run `agy-squad help [<command>]` or `agy-squad <command> --help` for focused flags and examples; `mcp/handoffs.mjs` is the underlying JS library module whose standalone CLI entrypoint was removed in PR #5). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) and Windows `\` relative paths on `win32` (for example, `.\scratch\record.json`) are normalized uniformly at the CLI boundary across downstream verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`, and `collect`), while internal JSON/API contracts keep canonical POSIX `/` paths. Flat and `task` plans also emit `workers[i].synthesisSlot` pointing to the coordinator-authored `lead/report.md` path. Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
 
 ### CLI subcommands
 
@@ -105,7 +105,58 @@ Run `node bin/agy-squad.mjs` from the shared workspace root (`mcp/handoffs.mjs` 
 | `digest <record.json> [--allow-non-passing] [--allow-partial]` | Computes the deterministic 64-hex `Evidence Digest` binding `squadId`, `verifiedFiles`, `lead/report.md`, and specialist reports before `audit-<id>` signs `CLEAN` (opt-in `--allow-non-passing` / `--allow-partial` for non-`PASS` or `PARTIAL`/`NO_REPORT` failure bundles). |
 | `bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>]` | Requires `squadId`, synthesizer `verdict: "PASS"` (unless `--allow-non-passing` for `FAIL`/`BLOCKED`), `verifiedFiles` hashes, unambiguous matching verdict in `lead/report.md`, and matching `Evidence Digest: <64-hex>` + `Integrity Verdict: CLEAN` across all matching auditor slots (unless `--allow-unaudited`). Writes v2 `lead/report.sources.json` and requires `--replace` or `--predecessor <sha256>` to overwrite a different existing bundle. |
 | `verify <report.sources.json> [--prune [--keep-reports]]` | Enforces persisted `auditPolicy`, archived Markdown verdicts, every `integrityAudit` / `integrityAudits` digest and `Evidence Digest`, `verifiedFiles` hashes, and any remaining loose reports (and optionally prunes loose reports in the same process when `--prune` is passed). |
+| `finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]` | Ergonomic one-step wrapper that runs `inspect` -> `bundle` -> `verify` (plus optional `--prune [--keep-reports]`) deterministically and emits `{ inspected, bundled, verified, pruned }` JSON while keeping every granular subcommand intact. |
 | `prune <report.sources.json> <accepted-sha256> [--keep-reports]` | Safely unlinks only verified loose specialist reports (re-verifying inode identity and SHA-256) after `bundle` and `verify` pass, unless `--keep-reports` or `retainReports: true` is set. |
+| `help [<command>]` | Print top-level CLI usage or focused help for a specific subcommand (equivalent to `--help` / `<command> --help`). |
+
+### Bundle record and handoffs schemas
+
+`agy-squad bundle-init --plan <plan.json> ...` generates a `<bundle-record.json>` pre-populated from `bundleRecordTemplates.<squadId>`, `provenanceScaffold`, and fingerprinted `verifiedFiles`. Pass specialist receipts via `--handoffs <handoffs.json>` (a JSON array of `{ sender, message }` objects) or repeatable `--handoff "<sender>=<message>"` flags.
+
+**`--handoffs <handoffs.json>` schema (`mcp/handoffs.mjs`):**
+
+```json
+[
+  {
+    "sender": "storage-wal-reviewer",
+    "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
+  }
+]
+```
+
+Each entry requires nonempty `sender` (matching `assignments[].conversationId`, which is the compiled `workerName` in `/swarm` mode) and a single-line `<= 500` UTF-8 byte `message` using the literal `U+2014` em-dash (`—`) separator (`READY <slot> — <observation>`, `PARTIAL <slot> — <observation>`, or `NO_REPORT — <reason>`, with optional leading `@mention` prefixes).
+
+**`<bundle-record.json>` schema (`inspect`, `digest`, `bundle`, `finalize`):**
+
+```json
+{
+  "squadId": "storage",
+  "workspace": "/absolute/path/to/your-repo",
+  "reportRoot": "scratch/agy-squad",
+  "verdict": "PASS",
+  "verifiedFiles": {
+    "src/storage.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "assignments": [
+    {
+      "conversationId": "storage-wal-reviewer",
+      "report": "scratch/agy-squad/squad-storage/specialist-1/report.md"
+    }
+  ],
+  "handoffs": [
+    {
+      "sender": "storage-wal-reviewer",
+      "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
+    }
+  ],
+  "requireIntegrityAudit": true,
+  "integrityAuditSlots": [
+    "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
+  ]
+}
+```
+
+Optional boolean flags `allowNonPassing: true` and `allowPartial: true` mirror `--allow-non-passing` and `--allow-partial`. All workspace paths inside JSON records must use canonical POSIX `/` separators.
 
 ### `agy-squad` flags reference
 
@@ -134,12 +185,12 @@ Run `node bin/agy-squad.mjs` from the shared workspace root (`mcp/handoffs.mjs` 
 | `--overwrite` / `--dry-run` / `--strict` / `--allow-empty` | `collect` | Overwrite differing coordinator slots, preview copies without writing, fail on missing slots, or allow zero found slots. |
 | `--provenance <path>` / `--verdict <v>` / `--file <path>` | `bundle-init` | Merge external provenance entries, supply an explicit verdict (`PASS\|FAIL\|BLOCKED`), and add repeatable verified file inputs. |
 | `--id-map <worker=id>` / `--handoffs <json>` / `--handoff <sender=msg>` | `bundle-init` | Map worker names to runtime IDs and inject handoff receipts from JSON or inline `sender=message` pairs. |
-| `--digest` | `bundle-init` | Compute and output `evidenceDigest` alongside the initialized record (`--out` optional). |
+| `--digest` | `bundle-init` | Compute and output `evidenceDigest` alongside the initialized record (requires `--handoffs` or `--handoff`; `--out` optional). |
 | `--out <path>` | `bundle-init` | Write the initialized `<record.json>` to disk instead of printing only to stdout. |
 | `--integrity` | `verdict` | Parse `Integrity Verdict: CLEAN\|INTEGRITY VIOLATION` instead of a content verdict. |
-| `--allow-unaudited` | `bundle`, `bundle-init` | Opt out of the default `requireIntegrityAudit: true` gate. |
-| `--allow-non-passing` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
-| `--allow-partial` | `digest`, `bundle`, `bundle-init` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
-| `--replace` | `bundle`, `bundle-init` | Allow overwriting an existing `lead/report.sources.json` bundle or `--out` record file. |
-| `--predecessor <sha256>` | `bundle` | Require the existing `lead/report.sources.json` bundle's SHA-256 to match `<sha256>` before overwriting. |
-| `--prune` / `--keep-reports` | `verify`, `prune` | `--prune` (on `verify`) prunes verified loose `specialist-<N>/report.md` files in the same process; `--keep-reports` retains loose reports after verification passes. |
+| `--allow-unaudited` | `bundle`, `finalize`, `bundle-init` | Opt out of the default `requireIntegrityAudit: true` gate. |
+| `--allow-non-passing` | `digest`, `bundle`, `finalize`, `bundle-init` | Allow archiving/digesting a `FAIL` or `BLOCKED` cohort (`allowNonPassing: true`). |
+| `--allow-partial` | `digest`, `bundle`, `finalize`, `bundle-init` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
+| `--replace` | `bundle`, `finalize`, `bundle-init` | Allow overwriting an existing `lead/report.sources.json` bundle or `--out` record file. |
+| `--predecessor <sha256>` | `bundle`, `finalize` | Require the existing `lead/report.sources.json` bundle's SHA-256 to match `<sha256>` before overwriting. |
+| `--prune` / `--keep-reports` | `verify`, `finalize`, `prune` | `--prune` (on `verify` or `finalize`) prunes verified loose `specialist-<N>/report.md` files in the same process; `--keep-reports` retains loose reports after verification passes. |

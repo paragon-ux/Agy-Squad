@@ -1614,6 +1614,346 @@ try {
         /disagrees with integrityAudits\[0\]/,
         "SVC-002: verifyBundle must reject v2 integrityAudit missing evidenceDigest relative to integrityAudits[0]"
       );
+
+      // UX-SQ-015: agy-squad finalize <record.json> runs inspect -> bundle -> verify (+ optional --prune [--keep-reports]) in one call
+      const finDir = path.join(w2Root, "..", `ux-finalize-${process.pid}`);
+      fs.mkdirSync(finDir, { recursive: true });
+      try {
+        const finWrite = (rel, content) => {
+          const dest = path.join(finDir, rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, content, "utf8");
+        };
+        finWrite("src/auth.js", "export function verifyToken(t) { return Boolean(t); }\n");
+        const finS1 = reportPath("auth", 1);
+        const finLead = reportPath("auth");
+        const finAudit = reportPath("integrity_auditor", 1);
+        finWrite(finS1, "# Auth Specialist\nVerified src/auth.js:1.\n");
+        finWrite(finLead, "# Auth Lead\nContent Verdict: PASS\nVerified src/auth.js.\n");
+        const finRec = {
+          squadId: "auth",
+          workspace: finDir,
+          verdict: "PASS",
+          requireIntegrityAudit: true,
+          verifiedFiles: fingerprint(finDir, ["src/auth.js"]),
+          assignments: [{ conversationId: "auth-spec-1", report: finS1 }],
+          handoffs: [{ sender: "auth-spec-1", message: `@coordinator READY ${finS1} — src/auth.js:1 verified` }]
+        };
+        finWrite("scratch/fin-record.json", JSON.stringify(finRec, null, 2) + "\n");
+
+        // 1. Fail closed when integrity audit is missing (no --allow-unaudited)
+        const finMissingAudit = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-record.json"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finMissingAudit.status, 0, "UX-SQ-015: finalize must fail closed when integrity audit is missing");
+        assert.equal(fs.existsSync(path.join(finDir, "scratch/agy-squad/squad-auth/lead/report.sources.json")), false);
+
+        // 2. Fail closed when handoff receipt is malformed (before writing any bundle)
+        const badHandoffRec = { ...finRec, handoffs: [{ sender: "auth-spec-1", message: "bad receipt" }] };
+        finWrite("scratch/fin-bad-handoff.json", JSON.stringify(badHandoffRec, null, 2) + "\n");
+        const finBadHandoff = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-bad-handoff.json", "--allow-unaudited"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finBadHandoff.status, 0, "UX-SQ-015: finalize must fail closed on invalid handoff receipt");
+        assert.equal(fs.existsSync(path.join(finDir, "scratch/agy-squad/squad-auth/lead/report.sources.json")), false);
+
+        // 3. Reject --keep-reports without --prune
+        const finBadFlags = spawnSync(process.execPath, [agySquadCli, "finalize", "scratch/fin-record.json", "--keep-reports"], { cwd: finDir, encoding: "utf8" });
+        assert.notEqual(finBadFlags.status, 0, "UX-SQ-015: finalize --keep-reports without --prune must fail");
+        assert.match(finBadFlags.stderr, /--keep-reports.*requires '--prune'/);
+
+        // 4. Write valid CLEAN integrity audit with matching Evidence Digest and finalize cleanly (no prune)
+        const finDigest = computeEvidenceDigest(finDir, finRec).evidenceDigest;
+        finWrite(finAudit, `# Integrity Audit\nTarget Squad: auth\nEvidence Digest: ${finDigest}\nIntegrity Verdict: CLEAN\n`);
+        const finOk = spawnSync(process.execPath, [agySquadCli, "finalize", "./scratch/fin-record.json"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(finOk.status, 0, `UX-SQ-015: audited finalize failed: ${finOk.stderr}`);
+        const finOkJson = JSON.parse(finOk.stdout);
+        assert.equal(finOkJson.inspected.length, 1);
+        assert.equal(finOkJson.inspected[0].status, "READY");
+        assert.equal(finOkJson.bundled.auditPolicy, "required");
+        assert.equal(finOkJson.verified.sha256, finOkJson.bundled.sha256);
+        assert.equal(finOkJson.verified.auditPolicy, "required");
+        assert.equal(finOkJson.pruned, null);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), true, "Without --prune, loose specialist report stays on disk");
+
+        // 5. Finalize with --allow-unaudited --replace --prune --keep-reports
+        const finKeep = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-record.json", "--allow-unaudited", "--replace", "--prune", "--keep-reports"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finKeep.status, 0, `UX-SQ-015: finalize --allow-unaudited --prune --keep-reports failed: ${finKeep.stderr}`);
+        const finKeepJson = JSON.parse(finKeep.stdout);
+        assert.equal(finKeepJson.verified.auditPolicy, "unaudited-explicit");
+        assert.deepEqual(finKeepJson.pruned.removed, []);
+        assert.deepEqual(finKeepJson.pruned.retained, [finS1]);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), true);
+
+        // 6. Finalize audited with --replace --prune removes verified loose specialist report
+        const finPrune = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-record.json", "--replace", "--prune"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finPrune.status, 0, `UX-SQ-015: finalize --replace --prune failed: ${finPrune.stderr}`);
+        const finPruneJson = JSON.parse(finPrune.stdout);
+        assert.equal(finPruneJson.verified.auditPolicy, "required");
+        assert.deepEqual(finPruneJson.pruned.removed, [finS1]);
+        assert.equal(fs.existsSync(path.join(finDir, finS1)), false, "With --prune, loose specialist report must be unlinked");
+
+        // 7. Fail closed when lead verdict is FAIL without --allow-non-passing
+        finWrite(finS1, "# Auth Specialist\nVerified src/auth.js:1.\n");
+        finWrite(finLead, "# Auth Lead\nContent Verdict: FAIL\nBlocker found.\n");
+        const finFailRec = { ...finRec, verdict: "FAIL" };
+        finWrite("scratch/fin-fail-record.json", JSON.stringify(finFailRec, null, 2) + "\n");
+        const finFailVerdict = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-fail-record.json", "--allow-unaudited", "--replace"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(finFailVerdict.status, 0, "UX-SQ-015: finalize must reject FAIL verdict unless --allow-non-passing");
+
+        // 8. Round-2 Section 4.9 gap: finalize positive --allow-non-passing, --predecessor match & mismatch, and positive --allow-partial
+        const finAllowNonPass = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-fail-record.json", "--allow-unaudited", "--allow-non-passing", "--replace"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finAllowNonPass.status, 0, `Round-2 gap: finalize --allow-non-passing failed: ${finAllowNonPass.stderr}`);
+        const finAllowNonPassJson = JSON.parse(finAllowNonPass.stdout);
+        const currentBundleSha = finAllowNonPassJson.bundled.sha256;
+        assert.equal(finAllowNonPassJson.verified.sha256, currentBundleSha);
+
+        const wrongPredecessor = "0".repeat(64);
+        const finPredMismatch = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-fail-record.json", "--allow-unaudited", "--allow-non-passing", "--replace", "--predecessor", wrongPredecessor],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(finPredMismatch.status, 0, "Round-2 gap: finalize --predecessor mismatch must fail closed");
+        assert.match(finPredMismatch.stderr, /predecessor|sha-?256|changed|mismatch/i);
+
+        const finPredMatch = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-fail-record.json", "--allow-unaudited", "--allow-non-passing", "--replace", "--predecessor", currentBundleSha],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finPredMatch.status, 0, `Round-2 gap: finalize --predecessor match failed: ${finPredMatch.stderr}`);
+
+        const partialRec = {
+          ...finRec,
+          verdict: "PASS",
+          handoffs: [{ sender: "auth-spec-1", message: `@coordinator PARTIAL ${finS1} — Blocked by missing fixture` }]
+        };
+        finWrite(finLead, "# Auth Lead\nContent Verdict: PASS\nAccepted partial coverage.\n");
+        finWrite("scratch/fin-partial-record.json", JSON.stringify(partialRec, null, 2) + "\n");
+        const finPartialRejected = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-partial-record.json", "--allow-unaudited", "--replace"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(finPartialRejected.status, 0, "Round-2 gap: finalize must reject PARTIAL handoff without --allow-partial");
+
+        const finPartialOk = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/fin-partial-record.json", "--allow-unaudited", "--allow-partial", "--replace"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(finPartialOk.status, 0, `Round-2 gap: finalize --allow-partial failed: ${finPartialOk.stderr}`);
+        assert.equal(JSON.parse(finPartialOk.stdout).inspected[0].status, "PARTIAL");
+
+        // 9. UX-SQ-R2-001 & UX-SQ-R2-002: end-to-end Quickstart plan -> bundle-init --digest (fail on empty handoffs, succeed with --handoff) -> finalize
+        const qsPlanRes = spawnSync(
+          process.execPath,
+          [agySquadCli, "plan", "--mode", "swarm", "--read-only", "--scope", "src", "--role", "Security", "--role", "Test Audit", "Audit authentication flow"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(qsPlanRes.status, 0, qsPlanRes.stderr);
+        finWrite("scratch/qs-plan.json", qsPlanRes.stdout);
+        const qsPlan = JSON.parse(qsPlanRes.stdout);
+        assert.deepEqual(qsPlan.warnings, []);
+        const qsSpec1 = qsPlan.workers[0].specialists[0];
+        const qsSpec2 = qsPlan.workers[0].specialists[1];
+        const qsLeadSlot = reportPath("task_squad");
+        const qsAuditSlot = qsPlan.integrityAuditPlan[0].reportSlot;
+        assert.equal(qsAuditSlot, "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md");
+        finWrite(qsSpec1.reportSlot, "# Security Reviewer\nVerified src/auth.js.\n");
+        finWrite(qsSpec2.reportSlot, "# Test Reviewer\nVerified src/auth.js tests.\n");
+        finWrite(qsLeadSlot, "# Lead\nContent Verdict: PASS\nBoth reviewers verified src/auth.js.\n");
+
+        const emptyHandoffsDigest = spawnSync(
+          process.execPath,
+          [agySquadCli, "bundle-init", "--plan", "scratch/qs-plan.json", "--digest", "--out", "scratch/qs-rec.json", "src/auth.js"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(emptyHandoffsDigest.status, 0, "UX-SQ-R2-001: bundle-init --digest without handoffs must fail closed");
+        assert.match(emptyHandoffsDigest.stderr, /--handoffs <file\.json>/);
+        assert.match(emptyHandoffsDigest.stderr, /--handoff <worker=READY \.\.\.>/);
+        assert.equal(fs.existsSync(path.join(finDir, "scratch/qs-rec.json")), false);
+
+        const qsInitOk = spawnSync(
+          process.execPath,
+          [
+            agySquadCli,
+            "bundle-init",
+            "--plan", "scratch/qs-plan.json",
+            "--handoff", `${qsSpec1.workerName}=@coordinator READY ${qsSpec1.reportSlot} — src/auth.js security checked`,
+            "--handoff", `${qsSpec2.workerName}=@coordinator READY ${qsSpec2.reportSlot} — src/auth.js test coverage checked`,
+            "--digest",
+            "--out", "scratch/qs-rec.json",
+            "src/auth.js"
+          ],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(qsInitOk.status, 0, `UX-SQ-R2-001: bundle-init --digest with --handoff failed: ${qsInitOk.stderr}`);
+        const qsInitJson = JSON.parse(qsInitOk.stdout);
+        assert.match(qsInitJson.evidenceDigest, /^[0-9a-f]{64}$/);
+        finWrite(qsAuditSlot, `# Audit\nTarget Squad: task_squad\nEvidence Digest: ${qsInitJson.evidenceDigest}\nIntegrity Verdict: CLEAN\n`);
+
+        const qsFinalize = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "scratch/qs-rec.json", "--replace", "--prune"],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.equal(qsFinalize.status, 0, `UX-SQ-R2-001/002: Quickstart finalize failed: ${qsFinalize.stderr}`);
+        const qsFinalizeJson = JSON.parse(qsFinalize.stdout);
+        assert.equal(qsFinalizeJson.verified.auditPolicy, "required");
+        assert.deepEqual(qsFinalizeJson.pruned.removed, [qsSpec1.reportSlot, qsSpec2.reportSlot]);
+
+        // 10. RAW-SCRIPT-001, RAW-SCRIPT-003, RAW-SCRIPT-004, RAW-SVC-001, RAW-TEST-001 regressions
+        const {
+          assertNodeVersion: assertCliNodeVersion,
+          isNodeVersionSupported: isCliNodeVersionSupported,
+          normalizeBundleOutCliPath,
+          normalizeWorkspaceCliPath
+        } = await import("../bin/agy-squad.mjs");
+        assert.equal(isCliNodeVersionSupported("20.18.0"), false);
+        assert.equal(isCliNodeVersionSupported("22.0.0"), true);
+        assert.equal(isCliNodeVersionSupported("22.0.0-rc.1"), true);
+        assert.equal(isCliNodeVersionSupported("22.0.0junk"), false);
+        assert.throws(() => assertCliNodeVersion("20.18.0"), /requires Node\.js >= 22\.0\.0 \(found v20\.18\.0\)/);
+        assert.throws(() => assertCliNodeVersion(""), /requires Node\.js >= 22\.0\.0 \(found unknown\)/);
+
+        assert.equal(normalizeWorkspaceCliPath(".\\", "win32"), ".");
+        assert.equal(normalizeWorkspaceCliPath("./", "linux"), ".");
+        assert.equal(normalizeWorkspaceCliPath(".\\scratch\\record.json", "win32"), "scratch/record.json");
+        assert.equal(normalizeWorkspaceCliPath(".\\.\\src\\auth.js", "win32"), "src/auth.js");
+        assert.equal(normalizeWorkspaceCliPath("C:src\\auth.js", "win32"), "C:src\\auth.js");
+        assert.equal(normalizeWorkspaceCliPath("\\\\server\\share\\record.json", "win32"), "\\\\server\\share\\record.json");
+        assert.equal(normalizeWorkspaceCliPath("src\\auth.js", "linux"), "src\\auth.js");
+        assert.equal(normalizeBundleOutCliPath(".\\scratch\\record.json", "win32"), "scratch/record.json");
+        assert.equal(normalizeBundleOutCliPath("scratch\\sub\\record.json", "win32"), "scratch/sub/record.json");
+        for (const badOut of ["\\\\server\\share\\rec.json", "C:\\rec.json", "C:rec.json", "..\\rec.json", "scratch\\rec.txt", "scratch\\.json"]) {
+          assert.throws(() => normalizeBundleOutCliPath(badOut, "win32"), /--out must be a workspace-relative \.json path/);
+        }
+        assert.throws(() => normalizeBundleOutCliPath("scratch\\record.json", "linux"), /--out must be a workspace-relative \.json path/);
+
+        if (process.platform === "win32") {
+          finWrite(qsSpec1.reportSlot, "# Security Reviewer\nVerified src/auth.js.\n");
+          finWrite(qsSpec2.reportSlot, "# Test Reviewer\nVerified src/auth.js tests.\n");
+          const winInitRes = spawnSync(
+            process.execPath,
+            [
+              agySquadCli,
+              "bundle-init",
+              "--plan", ".\\scratch\\qs-plan.json",
+              "--handoff", `${qsSpec1.workerName}=@coordinator READY ${qsSpec1.reportSlot} — src/auth.js win check`,
+              "--handoff", `${qsSpec2.workerName}=@coordinator READY ${qsSpec2.reportSlot} — src/auth.js win test`,
+              "--allow-unaudited",
+              "--digest",
+              "--out", ".\\scratch\\win-rec.json",
+              ".\\src\\auth.js"
+            ],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winInitRes.status, 0, `RAW-SCRIPT-001: Windows bundle-init backslash paths failed: ${winInitRes.stderr}`);
+          const winVerdictRes = spawnSync(
+            process.execPath,
+            [agySquadCli, "verdict", `.\\${qsLeadSlot.replace(/\//g, "\\")}`],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winVerdictRes.status, 0, `RAW-SCRIPT-001: Windows verdict backslash path failed: ${winVerdictRes.stderr}`);
+          const winFinalizeRes = spawnSync(
+            process.execPath,
+            [agySquadCli, "finalize", ".\\scratch\\win-rec.json", "--allow-unaudited", "--replace"],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winFinalizeRes.status, 0, `RAW-SCRIPT-001: Windows finalize backslash path failed: ${winFinalizeRes.stderr}`);
+        }
+
+        // RAW-SCRIPT-003: bundle-init --help Example 2 includes <file> and --digest with zero verifiedFiles emits targeted hint
+        const bundleInitHelp = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(bundleInitHelp.status, 0, bundleInitHelp.stderr);
+        assert.match(bundleInitHelp.stdout, /--squad auth --handoffs scratch\/handoffs\.json src\/auth\.js/);
+
+        finWrite(qsSpec1.reportSlot, "# Security Reviewer\nVerified src/auth.js.\n");
+        finWrite(qsSpec2.reportSlot, "# Test Reviewer\nVerified src/auth.js tests.\n");
+        const emptyFilesDigest = spawnSync(
+          process.execPath,
+          [
+            agySquadCli,
+            "bundle-init",
+            "--plan", "scratch/qs-plan.json",
+            "--handoff", `${qsSpec1.workerName}=READY ${qsSpec1.reportSlot} — ok`,
+            "--handoff", `${qsSpec2.workerName}=READY ${qsSpec2.reportSlot} — ok`,
+            "--digest"
+          ],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(emptyFilesDigest.status, 0, "RAW-SCRIPT-003: bundle-init --digest without verifiedFiles must fail closed");
+        assert.match(emptyFilesDigest.stderr, /requires at least one verified workspace file/);
+        assert.match(emptyFilesDigest.stderr, /--file <path> or trailing <file\.\.\.>/);
+
+        // RAW-SCRIPT-004: agy-squad help and agy-squad help <command>
+        const helpTop = spawnSync(process.execPath, [agySquadCli, "help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpTop.status, 0, helpTop.stderr);
+        assert.match(helpTop.stdout, /agy-squad help \[<command>\]/);
+        const helpPlan = spawnSync(process.execPath, [agySquadCli, "help", "plan"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpPlan.status, 0, helpPlan.stderr);
+        assert.match(helpPlan.stdout, /Usage: agy-squad plan/);
+        const helpSelf = spawnSync(process.execPath, [agySquadCli, "help", "help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpSelf.status, 0, helpSelf.stderr);
+        const helpFlag = spawnSync(process.execPath, [agySquadCli, "help", "--help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpFlag.status, 0, helpFlag.stderr);
+        const helpRun = spawnSync(process.execPath, [agySquadCli, "help", "run"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpRun.status, 1);
+        assert.match(helpRun.stderr, /retired in Phase 2/);
+        const helpBogus = spawnSync(process.execPath, [agySquadCli, "help", "bogus"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpBogus.status, 1);
+        assert.match(helpBogus.stderr, /Unknown command 'bogus'/);
+        const helpBadFlag = spawnSync(process.execPath, [agySquadCli, "help", "--bogus"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpBadFlag.status, 1);
+        assert.match(helpBadFlag.stderr, /Conflicting flags/);
+
+        // RAW-SVC-001: U+2014 delimiter mismatch hint on READY / PARTIAL / NO_REPORT, without false-positive on blank reason after U+2014
+        const baseDelimRec = {
+          workspace: finDir,
+          assignments: [{ conversationId: "w1", report: qsSpec1.reportSlot }]
+        };
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `READY ${qsSpec1.reportSlot} - ASCII dash` }] }),
+          /Expected literal U\+2014 em-dash delimiter.*READY .* — <observation>/
+        );
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `PARTIAL ${qsSpec1.reportSlot} -- double dash` }] }),
+          /Expected literal U\+2014 em-dash delimiter.*PARTIAL .* — <observation>/
+        );
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: "NO_REPORT -- timed out" }] }),
+          /Expected literal U\+2014 em-dash delimiter.*NO_REPORT — <reason>/
+        );
+        for (const nonMismatchMsg of [
+          "NO_REPORT —   ",
+          "NO_REPORT —",
+          "NO_REPORT   ",
+          `READY ${qsSpec1.reportSlot} —`,
+          `READY ${qsSpec1.reportSlot}   `
+        ]) {
+          assert.throws(
+            () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: nonMismatchMsg }] }),
+            (err) => /Handoff must include/.test(err.message) && !/Expected literal U\+2014/.test(err.message),
+            `RAW-SVC-001: '${nonMismatchMsg}' must not emit false-positive U+2014 delimiter mismatch hint`
+          );
+        }
+      } finally {
+        fs.rmSync(finDir, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(w2CliDir, { recursive: true, force: true });
       fs.rmSync(w2CliWt, { recursive: true, force: true });

@@ -11,7 +11,7 @@ Posting 50 KB Markdown reports directly to the `/swarm` board forces every waiti
    - `@<target> READY <report-path> — <1-line concrete observation>`
    - `@<target> PARTIAL <report-path> — <observation and blocker>`
    - `@<target> NO_REPORT — <reason>`
-3. **Record raw posts verbatim in `<bundle-record.json>`:** When populating `handoffs[].message` for `inspectHandoffs` (`node bin/agy-squad.mjs inspect <record.json>`), copy the exact raw board post verbatim (including any leading `@coordinator` or compiled `@<leadWorkerName>` mention prefix; `mcp/handoffs.mjs` parses leading `@mention` tokens natively while rejecting mismatches against the sender's assigned slot).
+3. **Record raw posts verbatim in `<bundle-record.json>`:** When populating `handoffs[].message` for `inspectHandoffs` (`agy-squad inspect <record.json>`), copy the exact raw board post verbatim (including any leading `@coordinator` or compiled `@<leadWorkerName>` mention prefix; `mcp/handoffs.mjs` parses leading `@mention` tokens natively while rejecting mismatches against the sender's assigned slot).
 4. **Scope board reads (`SQ-SWARM-BOARD-SCOPE`):** Always pass `since: <cohortBaseSeq>` (recorded before `swarm add` or via `boardSince` / `cohortBaseSeq`) or exact `seqs: [...]` (`boardSeqs`) to `read_board`; never call unfiltered `read_board()` across multi-wave conversations.
 
 > [!NOTE]
@@ -44,19 +44,22 @@ On Antigravity native `/swarm`, `Agy-Context-Saver` (`>= 2.0.1`) `PreToolUse` ho
 
 **What a bundle attests, and what it does not:** `bundle` and `verify` bind SHA-256 digests of the verified workspace files, worker reports, and integrity-audit reports to a `<bundle-record.json>`, and `verify` fails if any input or report changes afterward. The coordinator assembles `assignments`, `handoffs`, and `sender` (`workerName` in `/swarm`) from the board. Treat a verified bundle (`lead/report.sources.json`) as cryptographic **file-integrity evidence** for a coordinator-assembled record, **not** as host attestation of worker authorship or truth of unverified claims.
 
-Run all commands from the shared workspace root via `node bin/agy-squad.mjs` (`requireIntegrityAudit: true` by default; `mcp/handoffs.mjs` hashes inputs and audit reports programmatically rather than asking LLMs to copy-paste 64-hex SHA-256 digests):
+Run all commands from the shared workspace root via `agy-squad` (`requireIntegrityAudit: true` by default; `mcp/handoffs.mjs` hashes inputs and audit reports programmatically rather than asking LLMs to copy-paste 64-hex SHA-256 digests):
 
 ```bash
-node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...   # only when workspaceIsolation != inherit
-node bin/agy-squad.mjs verdict scratch/agy-squad/squad-<id>/lead/report.md
-node bin/agy-squad.mjs fingerprint <verified-file-1> <verified-file-2>
-node bin/agy-squad.mjs bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> ... | --handoffs <file.json>] [--id-map <worker=id>] <verified-file-1> <verified-file-2> --out <bundle-record.json> [--digest]
-node bin/agy-squad.mjs inspect <bundle-record.json>
-node bin/agy-squad.mjs digest <bundle-record.json>   # or pass --digest to bundle-init above
-node bin/agy-squad.mjs verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-node bin/agy-squad.mjs bundle <bundle-record.json>
-node bin/agy-squad.mjs verify scratch/agy-squad/squad-<id>/lead/report.sources.json [--prune [--keep-reports]]   # or run standalone prune:
-node bin/agy-squad.mjs prune scratch/agy-squad/squad-<id>/lead/report.sources.json <accepted-sha256> [--keep-reports]
+agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only when workspaceIsolation != inherit
+agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
+agy-squad bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> ... | --handoffs <file.json>] [--id-map <worker=id>] <verified-file-1> <verified-file-2> --out <bundle-record.json> --digest
+agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
+agy-squad finalize <bundle-record.json> [--replace] [--prune [--keep-reports]]   # shorthand for inspect -> bundle -> verify (+ optional prune)
+
+# Or run the granular verification steps individually:
+agy-squad fingerprint <verified-file-1> <verified-file-2>
+agy-squad inspect <bundle-record.json>
+agy-squad digest <bundle-record.json>
+agy-squad bundle <bundle-record.json>
+agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json [--prune [--keep-reports]]
+agy-squad prune scratch/agy-squad/squad-<id>/lead/report.sources.json <accepted-sha256> [--keep-reports]
 ```
 
 ### `<bundle-record.json>` Schema & Concrete Wire-Format Example
@@ -66,7 +69,7 @@ Start from `agy-squad bundle-init --plan <plan.json> [--squad <id>]` (or `squad_
 ```json
 {
   "squadId": "storage",
-  "workspace": "/home/paragon-ux/Antigravity/Agy-Squad",
+  "workspace": "/path/to/your-repo",
   "verdict": "PASS",
   "requireIntegrityAudit": true,
   "verifiedFiles": {
@@ -87,6 +90,6 @@ Start from `agy-squad bundle-init --plan <plan.json> [--squad <id>]` (or `squad_
 }
 ```
 
-- Pass `--allow-unaudited` to `bundle` only when explicitly opting out of `requireIntegrityAudit: true` (persists `auditPolicy: "unaudited-explicit"` inside v2 `lead/report.sources.json`).
-- Pass `--replace` or `--predecessor <sha256>` to `bundle` when overwriting an existing `lead/report.sources.json` from a prior run.
-- Omit `--keep-reports` on `prune` to unlink verified loose `specialist-<N>/report.md` files (re-verifying inode identity and SHA-256), or pass `--keep-reports` when preserving loose scratch files per Step 0.
+- Pass `--allow-unaudited` to `bundle` or `finalize` only when explicitly opting out of `requireIntegrityAudit: true` (persists `auditPolicy: "unaudited-explicit"` inside v2 `lead/report.sources.json`).
+- Pass `--replace` or `--predecessor <sha256>` to `bundle` or `finalize` when overwriting an existing `lead/report.sources.json` from a prior run.
+- Omit `--keep-reports` on `prune` (or `finalize --prune` / `verify --prune`) to unlink verified loose `specialist-<N>/report.md` files (re-verifying inode identity and SHA-256), or pass `--keep-reports` when preserving loose scratch files per Step 0.

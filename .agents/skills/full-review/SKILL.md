@@ -3,21 +3,22 @@ name: full-review
 description: >-
   [Task Spec: non-diff triage, evidence bundles & Direction decisions; pair with
   swarm-governance on /swarm] Use when the user asks for a full review, triage,
-  diagnosis, or direction recommendation on Agy-Squad using repository state or
-  supplied evidence (transcripts, logs, CI output, review ledgers, diffs),
-  including work that is not a pull request. Applies the Agy-Squad PR Review
-  Standard v1.4.0 with cited, commit-pinned evidence and 1-ID-per-row findings.
+  diagnosis, or direction recommendation on the active repository using
+  repository state or supplied evidence (transcripts, logs, CI output, review
+  ledgers, diffs), including work that is not a pull request. Applies the
+  Agy-Squad PR Review Standard v1.4.0 with cited, commit-pinned evidence and
+  1-ID-per-row findings.
 ---
 
 # Agy-Squad Full Review Skill (Standard v1.4.0)
 
-Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs and `self-diagnosis` for automated harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`node bin/agy-squad.mjs plan`) for `/swarm` or `dispatch_squad` (`node bin/agy-squad.mjs dispatch`) for `invoke_subagent`.
+Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs and `self-diagnosis` for maintainer harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`agy-squad plan`) for `/swarm` or `dispatch_squad` (`agy-squad dispatch`) for `invoke_subagent`.
 
-The governing report contract is [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](../../../docs/roles-and-workflows.md#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
+The governing report contract is [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
 
 ## Use this skill when
 
-- The user asks for a review, audit, triage, or root cause of Agy-Squad, a commit range, subsystem, skill, or document beyond a single PR diff.
+- The user asks for a review, audit, triage, or root cause of the active repository, a commit range, subsystem, skill, or document beyond a single PR diff.
 - The user supplies non-diff evidence (transcripts, logs, CI runs, ledgers, benchmarks) or asks a direction question (merge/rework, keep/close, option selection, sequencing).
 - A PR review needs multi-artifact evidence or a Direction decision section.
 
@@ -45,4 +46,4 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 Add Section 7.2 (**Decision question**, **Constraints**, **Options** table including status quo & minimal option, **Recommendation** with load-bearing evidence, **Falsifiers**, ordered **Immediate next actions**, **What not to do**). Never recommend merging while material categories are unreviewed or P1/P2 blockers stay open.
 
 ### Step 6: Write, Recheck, and Close
-Save under `docs/reviews/<review-slug>.md` via [report-template.md](references/report-template.md) (omit Section 9 unless `/self-diagnosis` cohorts ran; `None (0 open residuals, 0 deferred items)` when Section 8 is empty), recheck fixes across affected categories at the fixed revision, and pass [quality gates](references/report-template.md#quality-gates).
+Format via [report-template.md](references/report-template.md) (omit Section 9 unless `/self-diagnosis` cohorts ran; `None (0 open residuals, 0 deferred items)` when Section 8 is empty), saving under `docs/reviews/<review-slug>.md` when the repository already has `docs/reviews/` or the user explicitly requests an in-repo ledger (otherwise deliver the report in chat or the Antigravity artifact directory without creating an untracked `docs/reviews/` folder). Recheck fixes across affected categories at the fixed revision, and pass [quality gates](references/report-template.md#quality-gates).

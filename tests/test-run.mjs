@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function copyIsolatedRepo(targetDir) {
-  for (const rel of ["bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
+  for (const rel of ["assets", "bin", "mcp", "scripts", ".agents", "docs", "tests", "package.json", "plugin.json", "README.md", "CHANGELOG.md", "install.sh", "install.ps1", "zensical.toml"]) {
     fs.cpSync(path.join(repoRoot, rel), path.join(targetDir, rel), { recursive: true });
   }
   return path.join(targetDir, ".agents/skills/self-diagnosis/scripts/diagnose.mjs");
@@ -279,7 +279,7 @@ try {
     );
     fs.writeFileSync(
       prSkillPath,
-      origPrSkill.replace("roles-and-workflows.md#pr-review", "roles-and-workflows.md#nonexistent-anchor")
+      origPrSkill.replace("roles-and-workflows/#pr-review", "roles-and-workflows/#nonexistent-anchor")
     );
     fs.writeFileSync(
       stoppingDocPath,
@@ -485,7 +485,7 @@ try {
   // Remove any newer ledger in isoCopy so rebuild-wsl-dispatch-review* precedence is isolated cleanly
   for (const name of fs.readdirSync(path.join(isoRepo, "docs/reviews"))) {
     if (!name.startsWith("rebuild-wsl-dispatch-review")) {
-      fs.rmSync(path.join(isoRepo, "docs/reviews", name));
+      fs.rmSync(path.join(isoRepo, "docs/reviews", name), { recursive: true, force: true });
     }
   }
   const isoDiagRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
@@ -510,7 +510,7 @@ try {
 
     for (const name of fs.readdirSync(path.join(freshRepo, "docs/reviews"))) {
       if (/^v\d+\./i.test(name) || /(?:remediation|fix-p[0-9]|self-diagnosis-review)/i.test(name)) {
-        fs.rmSync(path.join(freshRepo, "docs/reviews", name));
+        fs.rmSync(path.join(freshRepo, "docs/reviews", name), { recursive: true, force: true });
       }
     }
     const freshPrRun = spawnSync(process.execPath, [freshDiag, "--skip-mcp-spawn"], { cwd: freshRepo, encoding: "utf8" });
@@ -1037,6 +1037,125 @@ try {
     assert.notEqual(preflightNoChangelog.status, 0, "S2-DEP-02: release-preflight must fail when 'CHANGELOG.md' is dropped from package.json files");
     assert.match(preflightNoChangelog.stderr, /CHANGELOG\.md/);
     writeV013("package.json", origPkg);
+
+    // UX-SQ-004 & UX-SQ-R2-005: diagnose.mjs rejects cross-root links escaping .agents/skills/ and malformed hosted docs URLs
+    const crossRootSkill = path.join(v013Repo, ".agents/skills/pr-review/SKILL.md");
+    const savedPrSkill = fs.readFileSync(crossRootSkill, "utf8");
+    for (const [label, badLink] of [
+      ["cross-root ../../../docs/", "../../../docs/tools.md"],
+      ["non-docs escape ../../../README.md", "../../../README.md"],
+      ["malformed hosted .. URL", "https://paragon-ux.github.io/Agy-Squad/../README.md"],
+      ["malformed hosted backslash URL", "https://paragon-ux.github.io/Agy-Squad/tools\\bad"]
+    ]) {
+      fs.writeFileSync(crossRootSkill, `${savedPrSkill}\nSee [bad link](${badLink}).\n`);
+      const badLinkRun = spawnSync(process.execPath, [v013Diag, "--ledger", v013LedgerRel, "--skip-mcp-spawn"], { cwd: v013Repo, encoding: "utf8" });
+      fs.writeFileSync(crossRootSkill, savedPrSkill);
+      assert.equal(badLinkRun.status, 1, `UX-SQ-004/UX-SQ-R2-005: ${label} in SKILL.md must fail diagnose.mjs`);
+      assert.ok(JSON.parse(badLinkRun.stdout).findings.some(f => f.id === "SKILL-LINKS-pr-review"), `Expected SKILL-LINKS-pr-review for ${label}`);
+    }
+
+    // UX-SQ-008: diagnose.mjs exits cleanly (code 1, friendly message, no stack trace) when run outside an Agy-Squad checkout
+    const unrelatedEmpty = path.join(temporary, "unrelated-empty");
+    const unrelatedApp = path.join(temporary, "my-react-app");
+    fs.mkdirSync(unrelatedEmpty, { recursive: true });
+    fs.mkdirSync(unrelatedApp, { recursive: true });
+    fs.writeFileSync(path.join(unrelatedApp, "package.json"), JSON.stringify({ name: "my-react-app", version: "1.0.0" }) + "\n");
+    for (const [label, dir] of [["empty dir", unrelatedEmpty], ["unrelated repo", unrelatedApp]]) {
+      const outsideRun = spawnSync(process.execPath, [v013Diag, "--skip-mcp-spawn"], { cwd: dir, encoding: "utf8" });
+      assert.equal(outsideRun.status, 1, `UX-SQ-008: diagnose.mjs must exit 1 from ${label}`);
+      assert.match(outsideRun.stderr, /maintainer profiler.*Agy-Squad checkout/i);
+      assert.doesNotMatch(outsideRun.stderr, /at\s+.*diagnose\.mjs:/, `UX-SQ-008: ${label} must not print raw stack trace`);
+    }
+    const outsideHelp = spawnSync(process.execPath, [v013Diag, "--help"], { cwd: unrelatedApp, encoding: "utf8" });
+    assert.equal(outsideHelp.status, 0, "UX-SQ-008: diagnose.mjs --help must still exit 0 from any cwd");
+
+    // UX-SQ-010 & UX-SQ-013: grouped top-level --help (<= 100 chars/line) and focused per-subcommand --help
+    const topHelp = spawnSync(process.execPath, [cli, "--help"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(topHelp.status, 0, topHelp.stderr);
+    assert.match(topHelp.stdout, /Lifecycle Commands:/);
+    assert.match(topHelp.stdout, /Planning Commands:/);
+    assert.match(topHelp.stdout, /Verification & Bundling Commands:/);
+    assert.match(topHelp.stdout, /--version,\s*-v/);
+    assert.match(topHelp.stdout, /\bfinalize\b/);
+    const longHelpLines = topHelp.stdout.split(/\r?\n/).filter(line => line.length > 100);
+    assert.deepEqual(longHelpLines, [], `UX-SQ-010: top-level --help lines must be <= 100 chars, got: ${JSON.stringify(longHelpLines)}`);
+
+    for (const sub of [
+      "setup", "install", "status", "uninstall", "restore-backups",
+      "plan", "dispatch", "collect", "bundle-init", "fingerprint",
+      "inspect", "digest", "bundle", "verify", "finalize", "prune", "verdict"
+    ]) {
+      const subHelp = spawnSync(process.execPath, [cli, sub, "--help"], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(subHelp.status, 0, `UX-SQ-013: '${sub} --help' failed: ${subHelp.stderr}`);
+      const expectedUsageName = sub === "install" ? "setup" : sub;
+      assert.match(subHelp.stdout, new RegExp(`Usage: agy-squad ${expectedUsageName}\\b`), `UX-SQ-013: '${sub} --help' must print focused Usage`);
+      assert.match(subHelp.stdout, /Examples:/, `UX-SQ-013: '${sub} --help' must include Examples`);
+      assert.doesNotMatch(subHelp.stdout, /Lifecycle Commands:/, `UX-SQ-013: '${sub} --help' must not dump full top-level usage`);
+    }
+    const conflictSubHelp = spawnSync(process.execPath, [cli, "plan", "--help", "--topology", "flat"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(conflictSubHelp.status, 1, "UX-SQ-013: conflicting flags with --help must remain rejected");
+    assert.match(conflictSubHelp.stderr, /Conflicting flags/);
+
+    // UX-SQ-R2-001 & UX-SQ-R2-004: bundle-init --help --digest example includes --handoffs/--handoff, and bundled short/inline help conflicts fail closed
+    const bundleInitHelp = spawnSync(process.execPath, [cli, "bundle-init", "--help"], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(bundleInitHelp.status, 0, bundleInitHelp.stderr);
+    const digestHelpLine = bundleInitHelp.stdout.split(/\r?\n/).find(line => /agy-squad bundle-init\b/.test(line) && /--digest\b/.test(line));
+    assert.ok(digestHelpLine && /--handoffs?\b/.test(digestHelpLine), `UX-SQ-R2-001: bundle-init --help --digest example must include --handoffs/--handoff, got: ${bundleInitHelp.stdout}`);
+
+    for (const badHelpArgs of [
+      ["setup", "-ch"],
+      ["plan", "-xh"],
+      ["plan", "--help=false"]
+    ]) {
+      const badHelpRes = spawnSync(process.execPath, [cli, ...badHelpArgs], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(badHelpRes.status, 1, `UX-SQ-R2-004: '${badHelpArgs.join(" ")}' must fail closed instead of exiting 0`);
+      assert.match(badHelpRes.stderr, /Conflicting flags/);
+    }
+
+    // UX-SQ-R2-003 & UX-SQ-R2-006: hosted docs align with opt-in docs/reviews/ and CHANGELOG [0.1.3] documents finalize without internal ledger codes
+    const rolesDocText = fs.readFileSync(path.join(repoRoot, "docs/roles-and-workflows.md"), "utf8");
+    const conceptsDocText = fs.readFileSync(path.join(repoRoot, "docs/concepts.md"), "utf8");
+    assert.match(rolesDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    assert.match(conceptsDocText, /delivered in chat, an Antigravity artifact, or `docs\/reviews\/<slug>\.md` when requested or already adopted/i);
+    const changelogText = fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
+    const v013Section = changelogText.slice(changelogText.indexOf("## [0.1.3]"), changelogText.indexOf("## [0.1.2]"));
+    assert.match(v013Section, /\bagy-squad finalize\b/);
+    assert.doesNotMatch(v013Section, /docs\/plans\/LEDGER\.md|\bL51\b|\bL56\b/);
+
+    // UX-SQ-001, UX-SQ-002, UX-SQ-003, UX-SQ-004, UX-SQ-009, UX-SQ-011: portable skill & plugin.json hygiene checks
+    const walkMd = (dir) => {
+      const out = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) out.push(...walkMd(full));
+        else if (entry.isFile() && entry.name.endsWith(".md")) out.push(full);
+      }
+      return out;
+    };
+    const allSkillMdFiles = walkMd(path.join(repoRoot, ".agents/skills"));
+    for (const mdFile of allSkillMdFiles) {
+      const rel = path.relative(repoRoot, mdFile).replace(/\\/g, "/");
+      const text = fs.readFileSync(mdFile, "utf8");
+      assert.doesNotMatch(text, /\/home\/paragon-ux/i, `UX-SQ-003: hardcoded author path in ${rel}`);
+      assert.doesNotMatch(text, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: broken relative ../../../docs/ link in ${rel}`);
+      if (!rel.startsWith(".agents/skills/self-diagnosis/")) {
+        assert.doesNotMatch(text, /node bin\/agy-squad\.mjs/, `UX-SQ-003: checkout-only 'node bin/agy-squad.mjs' in portable skill ${rel}`);
+      }
+    }
+    const prSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/pr-review/SKILL.md"), "utf8");
+    const fullSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/full-review/SKILL.md"), "utf8");
+    const reportTplText = fs.readFileSync(path.join(repoRoot, ".agents/skills/full-review/references/report-template.md"), "utf8");
+    const swarmSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/swarm-governance/SKILL.md"), "utf8");
+    const selfDiagSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/self-diagnosis/SKILL.md"), "utf8");
+    assert.doesNotMatch(prSkillText, /branch review in Agy-Squad/i, "UX-SQ-001: pr-review must target the active repository");
+    assert.doesNotMatch(fullSkillText, /recommendation on Agy-Squad/i, "UX-SQ-001: full-review must target the active repository");
+    assert.match(reportTplText, /\| Repository \| `<owner\/repo>` \|/, "UX-SQ-001: report-template.md must use <owner/repo>");
+    assert.doesNotMatch(swarmSkillText, /\b(?:antislop|permissioned-github)\b/i, "UX-SQ-011: swarm-governance/SKILL.md must not front-load third-party skills");
+    assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
+
+    const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
+    assert.doesNotMatch(pluginMeta.description, /Pointer-Over-Wire/i, "UX-SQ-009: plugin.json description must be plain English");
+    assert.ok(pluginMeta.suggestedPrompts.every(p => !/integrity_auditor/i.test(p)), "UX-SQ-009: suggestedPrompts must be Day-1 runnable");
   } finally {
     fs.rmSync(v013Repo, { recursive: true, force: true });
   }

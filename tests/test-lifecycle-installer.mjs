@@ -75,6 +75,17 @@ try {
     });
     assert.notEqual(pluginNegPreflight.status, 0);
     assert.match(pluginNegPreflight.stderr, /plugin\.json/);
+
+    // Missing logo target in plugin.json must fail preflight
+    const logoNegPlugin = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
+    logoNegPlugin.logo = "assets/does-not-exist.svg";
+    fs.writeFileSync(negPluginPath, JSON.stringify(logoNegPlugin, null, 2) + "\n");
+    const logoNegPreflight = spawnSync(process.execPath, [path.join(negRoot, "scripts", "release-preflight.mjs")], {
+      cwd: negRoot,
+      encoding: "utf8"
+    });
+    assert.notEqual(logoNegPreflight.status, 0);
+    assert.match(logoNegPreflight.stderr, /plugin\.json logo target does not exist/);
   } finally {
     fs.rmSync(negRoot, { recursive: true, force: true });
   }
@@ -185,6 +196,35 @@ try {
   assert.match(statusRes.stdout, /Plugin Docs & Links: READY/);
   assert.match(statusRes.stdout, /Companion CLI \(agy-context >= 2\.0\.1\):/);
   assert.match(statusRes.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\):/);
+  assert.equal(
+    fs.existsSync(path.join(tmpProfile, ".gemini", "config", "plugins", "agy-squad", "assets", "logo.svg")),
+    true,
+    "Installed plugin directory must expose assets/logo.svg referenced by plugin.json"
+  );
+  // Redirected assets symlink in linked install must be detected as pointsElsewhere
+  const installedAssetsPath = path.join(tmpProfile, ".gemini", "config", "plugins", "agy-squad", "assets");
+  if (fs.lstatSync(installedAssetsPath).isSymbolicLink()) {
+    const altAssetsDir = path.join(tmpProfile, "alt-assets");
+    fs.mkdirSync(altAssetsDir, { recursive: true });
+    fs.copyFileSync(path.join(repoRoot, "assets", "logo.svg"), path.join(altAssetsDir, "logo.svg"));
+    fs.unlinkSync(installedAssetsPath);
+    fs.symlinkSync(altAssetsDir, installedAssetsPath, os.platform() === "win32" ? "junction" : "dir");
+    const redirectedAssetsStatus = spawnSync(process.execPath, [cli, "status", "--json"], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.equal(redirectedAssetsStatus.status, 1, "Redirected assets symlink must fail health status");
+    const redirectedAssetsParsed = JSON.parse(redirectedAssetsStatus.stdout);
+    assert.equal(redirectedAssetsParsed.details.plugin.pointsElsewhere, true);
+    assert.equal(redirectedAssetsParsed.isComplete, false);
+    const repairAssetsRes = spawnSync(process.execPath, [cli, "setup"], {
+      cwd: repoRoot,
+      env: testEnv,
+      encoding: "utf8"
+    });
+    assert.equal(repairAssetsRes.status, 0, repairAssetsRes.stderr || repairAssetsRes.stdout);
+  }
 
   const posixShimBody = fs.readFileSync(path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad"), "utf8");
   assert.ok(posixShimBody.startsWith("#!/bin/sh\n"), "POSIX shim must use #!/bin/sh so fallback works when PATH lacks sh");
@@ -298,6 +338,10 @@ try {
   assert.equal(outdatedCompanionStatus.status, 0, "Outdated companions must remain non-fatal");
   assert.match(outdatedCompanionStatus.stdout, /Companion CLI \(agy-context >= 2\.0\.1\): OUTDATED/);
   assert.match(outdatedCompanionStatus.stdout, /Companion Optimizer \(rtk >= 1\.1\.0\): OUTDATED/);
+  assert.doesNotMatch(outdatedCompanionStatus.stdout, /\u2014/, "UX-SQ-R2-007: OUTDATED companion status output must not contain prose U+2014 em dashes");
+  assert.match(outdatedCompanionStatus.stdout, /non-fatal:/);
+  assert.match(outdatedCompanionStatus.stdout, /2\.0\.4\+/);
+  assert.match(outdatedCompanionStatus.stdout, /--no-integrity.*--allow-unaudited/);
 
   writeFakeVersionBinary(companionBinDir, "agy-context", "2.0.1");
   writeFakeVersionBinary(fakePathBinDir, "rtk", "rtk 1.1.0");
@@ -385,6 +429,7 @@ try {
   assert.match(cmdShimText, /setlocal/);
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
+  assert.match(cmdShimText, /Math\.min\(parseInt\(process\.versions\.node,10\),22\)===22/);
   assert.match(cmdShimText, /:fallback/);
   assert.match(cmdShimText, /\(goto\) 2>nul & node\.exe /);
   assert.doesNotMatch(cmdShimText, /if %errorlevel% equ 0 \(/i);
@@ -863,6 +908,20 @@ try {
       ok(status);
       assert.equal(JSON.parse(status.stdout).isComplete, true);
 
+      // Missing assets/logo.svg in installed copy must fail runtimeReady / isComplete until restored
+      const installedLogo = path.join(installed, "assets", "logo.svg");
+      const logoBackup = fs.readFileSync(installedLogo, "utf8");
+      fs.unlinkSync(installedLogo);
+      const missingLogoStatus = shim(installedShim, "status", "--json");
+      assert.equal(missingLogoStatus.status, 1, "Missing assets/logo.svg must fail status check");
+      const missingLogoParsed = JSON.parse(missingLogoStatus.stdout);
+      assert.equal(missingLogoParsed.details.plugin.runtimeReady, false);
+      assert.equal(missingLogoParsed.isComplete, false);
+      fs.writeFileSync(installedLogo, logoBackup, "utf8");
+      const restoredLogoStatus = shim(installedShim, "status", "--json");
+      ok(restoredLogoStatus);
+      assert.equal(JSON.parse(restoredLogoStatus.stdout).isComplete, true);
+
       // The shim must propagate real failures and leave the working install intact.
       fs.writeFileSync(mcp, "{ malformed");
       const rejected = shim(installedShim, "uninstall");
@@ -900,6 +959,265 @@ try {
       }
     } finally {
       fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+  }
+
+  // UX-SQ-004, UX-SQ-005, UX-SQ-012, UX-SQ-014: PATH & companion onboarding in setup/status, NOT INSTALLED hint, copy-fallback skill link safety
+  {
+    const uxProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ux-onboarding-")));
+    const uxEmptyPath = path.join(uxProfile, "empty-bin");
+    fs.mkdirSync(uxEmptyPath, { recursive: true });
+    const uxBaseEnv = withEnvPath(uxEmptyPath, { ...process.env, AGY_TEST_PROFILE_DIR: uxProfile });
+    try {
+      // UX-SQ-014: NOT INSTALLED prints actionable setup hint in human mode, while --json stays pure JSON
+      const preStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(preStatusHuman.status, 1);
+      assert.match(preStatusHuman.stdout, /Overall Status: NOT INSTALLED/);
+      assert.match(preStatusHuman.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+
+      const preStatusJson = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(preStatusJson.status, 1);
+      const parsedPreJson = JSON.parse(preStatusJson.stdout);
+      assert.equal(parsedPreJson.isInstalled, false);
+      assert.doesNotMatch(preStatusJson.stdout, /Next step:/);
+
+      // UX-SQ-005 & UX-SQ-012: setup on clean profile without PATH entry or companions emits PATH guidance, [NEXT STEP] companion notice, and IDE reload guidance
+      const uxSetup = spawnSync(process.execPath, [cli, "setup"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(uxSetup.status, 0, uxSetup.stderr || uxSetup.stdout);
+      assert.match(uxSetup.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+      assert.match(uxSetup.stdout, /npx --package=agy-squad agy-squad status/);
+      assert.match(uxSetup.stdout, /\[NEXT STEP\] Optional companion tools not ready/);
+      assert.match(uxSetup.stdout, /npx --package=agy-context-saver agy-context setup/);
+      assert.match(uxSetup.stdout, /--no-integrity.*--allow-unaudited/);
+      assert.match(uxSetup.stdout, /Next steps: reload or restart Antigravity Desktop IDE/);
+
+      // UX-SQ-005 & UX-SQ-R2-007: status shows (not on PATH) + guidance, zero prose em dashes, 2.0.4+ recommendation, and standalone opt-out flags
+      const statusOffPath = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(statusOffPath.status, 0, statusOffPath.stderr || statusOffPath.stdout);
+      assert.match(statusOffPath.stdout, /CLI Shim \(agy-squad\): INSTALLED \(not on PATH\)/);
+      assert.match(statusOffPath.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+      assert.doesNotMatch(statusOffPath.stdout, /\u2014/, "UX-SQ-R2-007: MISSING companion status output must not contain prose U+2014 em dashes");
+      assert.match(statusOffPath.stdout, /MISSING \(non-fatal:/);
+      assert.match(statusOffPath.stdout, /2\.0\.4\+/);
+      assert.match(statusOffPath.stdout, /--no-integrity.*--allow-unaudited/);
+
+      const uxBinDir = path.join(uxProfile, ".gemini", "antigravity", "bin");
+      const statusOnPath = spawnSync(process.execPath, [cli, "status"], {
+        cwd: repoRoot,
+        env: withEnvPath(`${uxBinDir}${path.delimiter}${uxEmptyPath}`, { ...process.env, AGY_TEST_PROFILE_DIR: uxProfile }),
+        encoding: "utf8"
+      });
+      assert.equal(statusOnPath.status, 0, statusOnPath.stderr || statusOnPath.stdout);
+      assert.match(statusOnPath.stdout, /CLI Shim \(agy-squad\): INSTALLED \(on PATH\)/);
+      assert.doesNotMatch(statusOnPath.stdout, /\[WARN\] CLI bin directory is not on your PATH:/);
+
+      // UX-SQ-005: cross-platform isDirOnPath helper check (POSIX & Windows delimiters)
+      assert.equal(installerMod.isDirOnPath("/home/dev/.gemini/antigravity/bin", "/usr/bin:/home/dev/.gemini/antigravity/bin", "linux"), true);
+      assert.equal(installerMod.isDirOnPath("/home/dev/.gemini/antigravity/bin", "/usr/bin:/usr/local/bin", "linux"), false);
+      assert.equal(installerMod.isDirOnPath("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "C:\\Windows;c:\\users\\dev\\.gemini\\antigravity\\bin\\", "win32"), true);
+      assert.equal(installerMod.isDirOnPath("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "C:\\Windows;C:\\Tools", "win32"), false);
+
+      // UX-SQ-014: PARTIAL INSTALLATION also prints actionable setup hint
+      fs.rmSync(path.join(uxProfile, ".gemini", "config", "plugins", "agy-squad", "mcp_config.json"), { force: true });
+      const partialStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(partialStatus.status, 1);
+      assert.match(partialStatus.stdout, /Overall Status: PARTIAL INSTALLATION/);
+      assert.match(partialStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+
+      // UX-SQ-004: forceCopyFallback installed skills contain zero ../../../docs/ or ../../../../docs/ links
+      process.env.AGY_TEST_PROFILE_DIR = uxProfile;
+      await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+      const copiedSkillsRoot = path.join(uxProfile, ".gemini", "config", "plugins", "agy-squad", "skills");
+      const walkCopiedMd = (dir) => {
+        const res = [];
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) res.push(...walkCopiedMd(full));
+          else if (entry.isFile() && entry.name.endsWith(".md")) res.push(full);
+        }
+        return res;
+      };
+      const copiedMdFiles = walkCopiedMd(copiedSkillsRoot);
+      assert.ok(copiedMdFiles.length >= 4, "UX-SQ-004: expected copied skill markdown files under forceCopyFallback");
+      for (const file of copiedMdFiles) {
+        const body = fs.readFileSync(file, "utf8");
+        assert.doesNotMatch(body, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: relative ../../../docs/ link leaked into copy-fallback skill ${file}`);
+      }
+
+      // RAW-DEP-001, RAW-DEP-002, RAW-SCRIPT-002: Node >= 22 runtime guard, MCP GUI PATH launcher fallback, and dangling skills symlink recovery
+      assert.equal(installerMod.isNodeVersionSupported("20.18.0"), false);
+      assert.equal(installerMod.isNodeVersionSupported("v20.19.0"), false);
+      assert.equal(installerMod.isNodeVersionSupported("22.0.0"), true);
+      assert.equal(installerMod.isNodeVersionSupported("v24.0.1"), true);
+      assert.equal(installerMod.isNodeVersionSupported("22.0.0-rc.1"), true);
+      assert.equal(installerMod.isNodeVersionSupported("garbage 22.0.0"), false);
+      assert.equal(installerMod.isNodeVersionSupported("22.0.0junk"), false);
+      assert.throws(() => installerMod.assertNodeVersion("20.18.0"), /requires Node\.js >= 22\.0\.0 \(found v20\.18\.0\)/);
+      assert.throws(() => installerMod.assertNodeVersion(""), /requires Node\.js >= 22\.0\.0 \(found unknown\)/);
+
+      const unsupportedStatusLines = [];
+      const unsupportedStatus = installerMod.printStatus({
+        includeCompanions: false,
+        nodeVersion: "20.18.0",
+        log: (line) => unsupportedStatusLines.push(line)
+      });
+      assert.equal(unsupportedStatus.details.runtime.supported, false);
+      assert.equal(unsupportedStatus.isComplete, false);
+      assert.ok(
+        unsupportedStatusLines.some((l) => l.includes("Overall Status: UNSUPPORTED NODE.JS RUNTIME")),
+        `RAW-DEP-001: status under Node < 22 must report UNSUPPORTED NODE.JS RUNTIME, got: ${unsupportedStatusLines.join("\n")}`
+      );
+      assert.ok(
+        unsupportedStatusLines.some((l) => l.includes("upgrade Node.js to >= 22.0.0 (found v20.18.0)")),
+        "RAW-DEP-001: status under Node < 22 must instruct upgrading Node.js rather than re-running setup on Node 20"
+      );
+
+      const prefixedVersionLines = [];
+      installerMod.printStatus({
+        includeCompanions: false,
+        nodeVersion: "v20.18.0",
+        log: (line) => prefixedVersionLines.push(line)
+      });
+      assert.ok(
+        prefixedVersionLines.some((l) => l.includes("UNSUPPORTED (v20.18.0 < 22.0.0; upgrade Node.js)")),
+        `printStatus must not double-prefix v-prefixed nodeVersion, got: ${prefixedVersionLines.join("\n")}`
+      );
+
+      const emptyVersionLines = [];
+      installerMod.printStatus({
+        includeCompanions: false,
+        nodeVersion: "",
+        log: (line) => emptyVersionLines.push(line)
+      });
+      assert.ok(
+        emptyVersionLines.some((l) => l.includes("UNSUPPORTED (unknown < 22.0.0; upgrade Node.js)")),
+        `printStatus must normalize empty nodeVersion to unknown, got: ${emptyVersionLines.join("\n")}`
+      );
+
+      const runtimeStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
+      assert.equal(runtimeStatusHuman.status, 0, runtimeStatusHuman.stderr || runtimeStatusHuman.stdout);
+      assert.match(runtimeStatusHuman.stdout, /Node\.js Runtime \(>= 22\.0\.0\): SUPPORTED/);
+      const runtimeStatusJson = JSON.parse(
+        spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" }).stdout
+      );
+      assert.equal(runtimeStatusJson.details.runtime.supported, true);
+      assert.equal(runtimeStatusJson.details.runtime.minNodeVersion, "22.0.0");
+
+      const formattedMcpLauncher = installerMod.formatPosixMcpLauncher('/opt/node "24" `bt` $v/node');
+      assert.ok(formattedMcpLauncher.startsWith("#!/bin/sh\n"));
+      assert.match(formattedMcpLauncher, /-ge 22/);
+      assert.ok(
+        formattedMcpLauncher.includes('exec "/opt/node \\"24\\" \\`bt\\` \\$v/node" "$@"'),
+        "RAW-DEP-002: formatPosixMcpLauncher must escape quotes, backticks, and $ in execPath fallback"
+      );
+
+      const uxPluginDir = path.join(uxProfile, ".gemini", "config", "plugins", "agy-squad");
+      const uxPluginMcp = JSON.parse(fs.readFileSync(path.join(uxPluginDir, "mcp_config.json"), "utf8"));
+      const uxMcpEntry = uxPluginMcp.mcpServers["agy-squad"];
+      if (process.platform === "win32") {
+        assert.equal(uxMcpEntry.command, process.execPath, "RAW-DEP-002: Windows plugin mcp_config.json must pin process.execPath");
+        assert.deepEqual(uxMcpEntry.args, ["./mcp/index.js"]);
+      } else {
+        assert.equal(uxMcpEntry.command, "/bin/sh", "RAW-DEP-002: POSIX plugin mcp_config.json must invoke /bin/sh ./mcp-launch.sh");
+        assert.deepEqual(uxMcpEntry.args, ["./mcp-launch.sh", "./mcp/index.js"]);
+        const launcherFile = path.join(uxPluginDir, "mcp-launch.sh");
+        assert.equal(fs.existsSync(launcherFile), true, "RAW-DEP-002: mcp-launch.sh must exist in installed plugin directory");
+
+        // Verify minimal non-login GUI PATH still launches MCP server via process.execPath fallback
+        const initReq = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } }) + "\n";
+        const guiLaunch = spawnSync(uxMcpEntry.command, uxMcpEntry.args, {
+          cwd: uxPluginDir,
+          env: { PATH: "/usr/bin:/bin" },
+          input: initReq,
+          encoding: "utf8"
+        });
+        assert.equal(guiLaunch.status, 0, `RAW-DEP-002: minimal-PATH MCP launcher failed: ${guiLaunch.stderr}`);
+        assert.match(guiLaunch.stdout, /"name":"agy-squad"/);
+
+        // Missing or non-file mcp-launch.sh must be detected as incomplete registration
+        fs.unlinkSync(launcherFile);
+        const missingLauncherDetect = detectExistingInstallation({ includeCompanions: false });
+        assert.equal(missingLauncherDetect.details.mcp.pluginRegistered, false);
+        assert.equal(missingLauncherDetect.isComplete, false);
+        fs.mkdirSync(launcherFile);
+        const dirLauncherDetect = detectExistingInstallation({ includeCompanions: false });
+        assert.equal(dirLauncherDetect.details.mcp.pluginRegistered, false, "Directory at mcp-launch.sh must not count as valid launcher");
+        fs.rmSync(launcherFile, { recursive: true, force: true });
+        await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+        assert.equal(fs.existsSync(launcherFile), true);
+
+        // Outdated Node 18 on PATH must be skipped in favor of process.execPath by both mcp-launch.sh and POSIX agy-squad CLI shim
+        const staleNodeDir = path.join(uxProfile, "stale-node18-bin");
+        fs.mkdirSync(staleNodeDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(staleNodeDir, "node"),
+          '#!/bin/sh\nif [ "$1" = "-p" ]; then echo 18.20.0; exit 0; fi\necho STALE_NODE18 >&2\nexit 42\n',
+          { mode: 0o755 }
+        );
+        const staleNodeEnv = { ...uxBaseEnv, PATH: `${staleNodeDir}:/usr/bin:/bin` };
+        const staleMcpLaunch = spawnSync(uxMcpEntry.command, uxMcpEntry.args, {
+          cwd: uxPluginDir,
+          env: staleNodeEnv,
+          input: initReq,
+          encoding: "utf8"
+        });
+        assert.equal(staleMcpLaunch.status, 0, `RAW-DEP-002: mcp-launch.sh failed when PATH had Node 18: ${staleMcpLaunch.stderr}`);
+        assert.match(staleMcpLaunch.stdout, /"name":"agy-squad"/);
+        const installedPosixShim = path.join(uxProfile, ".gemini", "antigravity", "bin", "agy-squad");
+        const staleShimRun = spawnSync(installedPosixShim, ["--version"], {
+          cwd: repoRoot,
+          env: staleNodeEnv,
+          encoding: "utf8"
+        });
+        assert.equal(staleShimRun.status, 0, `RAW-DEP-002: POSIX CLI shim must skip Node 18 on PATH and use process.execPath: ${staleShimRun.stderr}`);
+        assert.match(staleShimRun.stdout.trim(), /^\d+\.\d+\.\d+/);
+
+        // Broken node on PATH must cause install.sh to print '(found unknown)' instead of '(found vunknown)'
+        const brokenNodeDir = path.join(uxProfile, "broken-node-bin");
+        fs.mkdirSync(brokenNodeDir, { recursive: true });
+        fs.writeFileSync(path.join(brokenNodeDir, "node"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        const brokenInstallSh = spawnSync("bash", [path.join(repoRoot, "install.sh"), "--check"], {
+          cwd: repoRoot,
+          env: { ...uxBaseEnv, PATH: `${brokenNodeDir}:/usr/bin:/bin` },
+          encoding: "utf8"
+        });
+        assert.equal(brokenInstallSh.status, 1);
+        assert.match(brokenInstallSh.stderr, /requires Node\.js >= 22\.0\.0 \(found unknown\)/);
+      }
+
+      // Missing pinned absolute command in plugin mcp_config.json (e.g., relocated Windows node.exe) must be flagged
+      const origPluginMcpRaw = fs.readFileSync(path.join(uxPluginDir, "mcp_config.json"), "utf8");
+      fs.writeFileSync(
+        path.join(uxPluginDir, "mcp_config.json"),
+        JSON.stringify({ mcpServers: { "agy-squad": { command: path.join(uxProfile, "missing-node-bin"), args: ["./mcp/index.js"] } } }, null, 2) + "\n"
+      );
+      const missingPinnedDetect = detectExistingInstallation({ includeCompanions: false });
+      assert.equal(missingPinnedDetect.details.mcp.pluginRegistered, false, "Missing pinned absolute MCP command must mark plugin unregistered");
+      assert.equal(missingPinnedDetect.isComplete, false);
+      fs.writeFileSync(path.join(uxPluginDir, "mcp_config.json"), origPluginMcpRaw);
+
+      // RAW-SCRIPT-002: dangling skills symlink inside installed plugin dir is unlinked cleanly on in-place repeat setup (installedSource === true)
+      const uxSkillsDest = path.join(uxPluginDir, "skills");
+      fs.rmSync(uxSkillsDest, { recursive: true, force: true });
+      let createdDanglingLink = false;
+      try {
+        fs.symlinkSync(path.join(uxPluginDir, "does-not-exist-skills-target"), uxSkillsDest, process.platform === "win32" ? "junction" : "dir");
+        createdDanglingLink = true;
+      } catch {}
+      if (createdDanglingLink) {
+        assert.equal(fs.existsSync(uxSkillsDest), false);
+        assert.equal(fs.lstatSync(uxSkillsDest).isSymbolicLink(), true);
+        const inPlaceSetup = spawnSync(process.execPath, [path.join(uxPluginDir, "bin", "agy-squad.mjs"), "setup"], {
+          cwd: repoRoot,
+          env: uxBaseEnv,
+          encoding: "utf8"
+        });
+        assert.equal(inPlaceSetup.status, 0, `RAW-SCRIPT-002: in-place repeat setup failed on dangling skills symlink: ${inPlaceSetup.stderr || inPlaceSetup.stdout}`);
+        assert.equal(fs.existsSync(path.join(uxSkillsDest, "pr-review", "SKILL.md")), true, "RAW-SCRIPT-002: dangling skills symlink must be replaced cleanly on repeat setup");
+      }
+    } finally {
+      process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
+      fs.rmSync(uxProfile, { recursive: true, force: true });
     }
   }
 

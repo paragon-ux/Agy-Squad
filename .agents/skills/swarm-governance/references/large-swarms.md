@@ -11,9 +11,9 @@ Standalone reference for running larger `/swarm` cohorts (`8+` workers, concurre
 
 `swarm{action: "kill"}` permanently deletes worker `share` and `branch` copies along with any unmerged code edits or uncollected `report.md` slots inside them. During normal completion of a `share` or `branch` swarm (for example, 10–20 concurrent workers), complete all four steps **in order** before calling `kill`:
 
-1. **Collect report slots (`agy-squad collect`):** Run `node bin/agy-squad.mjs collect --plan <plan.json> --from <worktree-dir>...` (or `--record`/`--squad`) to stage every `scratch/agy-squad/squad-<id>/specialist-<N>/report.md`, `lead/report.md`, and `audit-<id>` slot from each worker's `share` or `branch` copy into the coordinator workspace.
+1. **Collect report slots (`agy-squad collect`):** Run `agy-squad collect --plan <plan.json> --from <worktree-dir>...` (or `--record`/`--squad`) to stage every `scratch/agy-squad/squad-<id>/specialist-<N>/report.md`, `lead/report.md`, and `audit-<id>` slot from each worker's `share` or `branch` copy into the coordinator workspace.
 2. **Collect and merge code diffs:** Inspect and cherry-pick, patch, or merge any verified worker code modifications into the coordinator workspace before terminating workers.
-3. **Verify and bundle:** From the coordinator workspace, run `node bin/agy-squad.mjs fingerprint`, `bundle-init`, `inspect`, `digest`, flat `audit-<id>`, `verdict --integrity`, `bundle`, and `verify`, confirming `report.sources.json` validates against the final collected files.
+3. **Verify and bundle:** From the coordinator workspace, run `agy-squad bundle-init --digest` (or `fingerprint`, `bundle-init`, `inspect`, `digest`), flat `audit-<id>`, `verdict --integrity`, and `agy-squad finalize <record.json> [--prune]` (or separate `bundle` and `verify`), confirming `report.sources.json` validates against the final collected files.
 4. **Kill workers only after bundle verification:** Call `swarm{action: "kill"}` on specialists, leads, auditors, and `monitor` only after `verify` passes (or after saving partial evidence on an early coordinator abort).
 
 ## Shared Board `O(N^2)` Broadcast and Zero Mid-Flight Chatter
@@ -25,10 +25,10 @@ Antigravity attaches one persistent append-only board (`board: "local"`) per con
 - Keep coordinator acknowledgments off the board unless waking a worker for clarification or a follow-up cycle.
 - Start a **fresh Antigravity conversation** between major waves if the persistent board accumulates enough retired workers or messages to slow down the Swarm UI pane.
 
-## Name Truncation, `474` B Path Budget, and Multi-Squad Bundling Loop
+## Name Truncation, `458` B Prefix Budget, and Multi-Squad Bundling Loop
 
 - **24-character worker name truncation (`mcp/planner.mjs`):** `MAX_SWARM_NAME_LENGTH = 24` lowercases `[a-z0-9-]+` slugs and truncates long worker names. Similar role titles (such as `frontend-security-reviewer` and `frontend-session-reviewer`) or long `squadId` values truncate to 24 chars and collide, causing `allocateWorkerName` to append `-2`, `-3`, ... suffixes. Keep `squadId` short, give roles distinct leading words, and pass existing roster names via `occupiedWorkerNames` across sequential `squad_planner` calls on the same board.
-- **`474`-byte report path budget (`mcp/handoffs.mjs`):** `reportPath()` reserves `SWARM_MENTION_RESERVE_BYTES = 26` bytes (`@<24-char-name> `) inside the `500`-byte `messageLimit`, leaving `< 474` UTF-8 bytes for `READY <reportRoot>/squad-<encodeURIComponent(id)>/<slot>/report.md — `. Deep custom `reportRoot` paths paired with long `squadId` strings throw at compile time; keep both short.
+- **`458`-byte report prefix budget (`mcp/handoffs.mjs`):** `reportPath()` reserves `SWARM_MENTION_RESERVE_BYTES = 26` bytes (`@<24-char-name> `) plus `MIN_OBSERVATION_BYTES = 16` bytes (`42` bytes total) inside the `500`-byte `messageLimit`, leaving `<= 458` UTF-8 bytes for `PARTIAL <reportRoot>/squad-<encodeURIComponent(id)>/<slot>/report.md — `. Deep custom `reportRoot` paths paired with long `squadId` strings throw at compile time; keep both short.
 - **Multi-squad audit and bundle loop:** Multi-squad manifests spawn **one flat `audit-<squadId>` per working squad**, writing to `scratch/agy-squad/squad-integrity_auditor-<squadId>/specialist-1/report.md`. Because `squad_planner` emits one entry per squad under `bundleRecordTemplates.<squadId>`, execute `fingerprint` -> `bundle-init --squad <squadId> [--handoff ... | --handoffs ...]` -> `inspect` -> `digest` -> `audit-<squadId>` -> `bundle` -> `verify` **independently per working squad** using separate `<bundle-record.json>` files rather than merging multiple squads into a single bundle record.
 
 ## Host Model Quota Exhaustion Recovery

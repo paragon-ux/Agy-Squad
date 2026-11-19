@@ -5,6 +5,21 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIN_NODE_MAJOR = 22;
+
+function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
+  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
+}
+
+function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (!isNodeVersionSupported(versionStr, minMajor)) {
+    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
+    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
+    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
+  }
+}
+
 function readPkgVersion() {
   try {
     return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.3";
@@ -14,23 +29,291 @@ function readPkgVersion() {
 }
 
 const usage = [
-  "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm):",
-  "  agy-squad setup|install [--check]                                      Install or synchronize plugin, skills, MCP server, and CLI shim",
-  "  agy-squad status [--json]                                              Check live integration and companion tool status across Antigravity",
-  "  agy-squad uninstall [--restore-backups]                                Remove plugin link, MCP entry, and CLI shims",
-  "  agy-squad restore-backups                                              Restore configuration backups (*.bak)",
-  "  agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]",
-  "  agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]       Compile invoke_subagent payload (subagent mode only)",
-  "  agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) --from <worktree-dir>... [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]",
-  "  agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id>] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [<file...>]",
-  "  agy-squad fingerprint <file...>                                        Compute SHA-256 fingerprints for verifiedFiles",
-  "  agy-squad inspect <record.json>                                        Reconcile handoff readiness for a cohort",
-  "  agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]  Compute canonical Evidence Digest for integrity audit binding",
-  "  agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>]  Create a SHA-256 verified proof bundle",
-  "  agy-squad verify <report.sources.json> [--prune [--keep-reports]]      Verify bundle integrity, and optionally prune loose reports",
-  "  agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports] Prune loose reports after verification",
-  "  agy-squad verdict [--integrity] <report.md>                            Strictly parse a content or integrity verdict"
+  "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm)",
+  "",
+  "Usage:",
+  "  agy-squad <command> [options]",
+  "  agy-squad help [<command>] | agy-squad <command> --help",
+  "  agy-squad --help | -h | --version | -v",
+  "",
+  "Lifecycle Commands:",
+  "  setup | install [--check]       Install or sync plugin, skills, MCP server, and CLI shim",
+  "  status [--json]                 Check plugin, MCP, shim, PATH, and companion tool health",
+  "  uninstall [--restore-backups]   Remove plugin link, MCP entry, and CLI shims",
+  "  restore-backups                 Restore configuration backups (*.bak)",
+  "",
+  "Planning Commands:",
+  "  plan (--manifest <path> | \"<task>\") [options]",
+  "                                  Compile flat or layered /swarm (or subagent) cohort plans",
+  "  dispatch (--squad <id> | <id>) [--manifest <path>]",
+  "                                  Compile invoke_subagent stage payload (subagent fallback)",
+  "",
+  "Verification & Bundling Commands:",
+  "  collect --plan|--record|--squad --from <dir>... [options]",
+  "                                  Collect report slots from share/branch worktrees",
+  "  bundle-init --plan <plan.json> [options] [<file>...]",
+  "                                  Build a bundle record JSON from a plan and verified files",
+  "  fingerprint <file...>           Compute SHA-256 digests for verifiedFiles",
+  "  inspect <record.json>           Reconcile Pointer-Over-Wire handoff receipts",
+  "  digest <record.json> [options]  Compute canonical Evidence Digest for integrity auditing",
+  "  bundle <record.json> [options]  Create a SHA-256 verified proof bundle (.sources.json)",
+  "  verify <report.sources.json> [--prune [--keep-reports]]",
+  "                                  Verify bundle integrity and optionally prune loose reports",
+  "  finalize <record.json> [options]",
+  "                                  Run inspect -> bundle -> verify (+ optional --prune) in one call",
+  "  prune <report.sources.json> <accepted-sha256> [--keep-reports]",
+  "                                  Prune verified loose specialist reports",
+  "  verdict [--integrity] <report.md>",
+  "                                  Strictly parse a content or integrity verdict",
+  "",
+  "Global Options:",
+  "  --help, -h                      Show this help message (or subcommand help)",
+  "  --version, -v                   Print the installed agy-squad CLI version",
+  "",
+  "Run 'agy-squad <command> --help' (e.g. 'agy-squad plan --help') for full flags and examples."
 ].join("\n");
+
+const SETUP_HELP = [
+  "Usage: agy-squad setup [--check]",
+  "Alias: agy-squad install [--check]",
+  "",
+  "Install or synchronize the Agy-Squad plugin, skills, plugin MCP server, and CLI shims.",
+  "",
+  "Options:",
+  "  --check, -c          Run read-only preflight validation without writing files",
+  "",
+  "Examples:",
+  "  agy-squad setup",
+  "  agy-squad setup --check"
+].join("\n");
+
+const SUBCOMMAND_HELP = {
+  setup: SETUP_HELP,
+  install: SETUP_HELP,
+  status: [
+    "Usage: agy-squad status [--json]",
+    "",
+    "Check plugin link/copy, skills, MCP registration, CLI shim, PATH, and companions.",
+    "",
+    "Options:",
+    "  --json               Emit machine-readable JSON status output",
+    "",
+    "Examples:",
+    "  agy-squad status",
+    "  agy-squad status --json"
+  ].join("\n"),
+  uninstall: [
+    "Usage: agy-squad uninstall [--restore-backups]",
+    "",
+    "Remove the Agy-Squad plugin link/copy, MCP entry, CLI shims, and schema caches.",
+    "",
+    "Options:",
+    "  --restore-backups    Restore saved *.agy-squad.bak configuration backups after removal",
+    "",
+    "Examples:",
+    "  agy-squad uninstall",
+    "  agy-squad uninstall --restore-backups"
+  ].join("\n"),
+  "restore-backups": [
+    "Usage: agy-squad restore-backups",
+    "",
+    "Restore saved pre-install configuration backups (*.agy-squad.bak / legacy *.bak).",
+    "",
+    "Examples:",
+    "  agy-squad restore-backups"
+  ].join("\n"),
+  plan: [
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [options]",
+    "",
+    "Compile a flat or layered /swarm (or invoke_subagent) cohort plan and provenance scaffold.",
+    "",
+    "Options:",
+    "  --manifest <path>                Load squads from a workspace manifest JSON file",
+    "  --squad <id>                     Compile one squad (omit to compile all manifest squads)",
+    "  --topology flat|layered          Override topology (no default bias; ask if unspecified)",
+    "  --mode swarm|subagent            Target native /swarm (default) or invoke_subagent",
+    "  --model <id>                     Pin an explicit model ID (verified via --known-model)",
+    "  --known-model <id>               Repeatable allowed model ID from swarm{action:\"models\"}",
+    "  --workspace-isolation inherit|share|branch",
+    "                                   Worker workspace copy mode (default: inherit)",
+    "  --scope <path>                   Repeatable workspace-relative scope path (task mode)",
+    "  --role <title>                   Repeatable specialist role title (task mode)",
+    "  --read-only                      Mark inline task specialists readOnly: true",
+    "  --role-scope <role=path>         Repeatable per-role scope override (task mode)",
+    "  --no-integrity                   Omit flat audit-<id> stage for standalone runs",
+    "  --report-root <path>             Custom workspace-relative root (default: scratch/agy-squad)",
+    "  --occupied-worker <name>         Repeatable existing roster name to avoid collisions",
+    "  --board-since <seq>              Scope read_board{since: <seq>} for working members",
+    "  --board-seq <seq>                Repeatable board seq for read_board{seqs: [...]}",
+    "",
+    "Examples:",
+    "  agy-squad plan --mode swarm --scope src --role \"Implementer\" --role \"Reviewer\" \"Audit auth\"",
+    "  agy-squad plan --manifest swarm-manifest.json --topology flat --workspace-isolation inherit"
+  ].join("\n"),
+  dispatch: [
+    "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]",
+    "",
+    "Compile one invoke_subagent stage payload (subagent fallback mode only).",
+    "",
+    "Options:",
+    "  --squad <id>                     Target squad ID, all_l1, or integrity_auditor[:<id>]",
+    "  --manifest <path>                Workspace manifest JSON path (optional auto-discovery)",
+    "",
+    "Examples:",
+    "  agy-squad dispatch --squad all_l1 --manifest swarm-manifest.json",
+    "  agy-squad dispatch integrity_auditor:storage --manifest swarm-manifest.json"
+  ].join("\n"),
+  collect: [
+    "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>)",
+    "                         --from <worktree-dir>... [options]",
+    "",
+    "Copy worker, lead, and auditor report slots from share/branch worktrees into workspace.",
+    "",
+    "Options:",
+    "  --plan <plan.json>               Planner JSON output defining expected report slots",
+    "  --record <record.json>           Bundle record JSON defining expected report slots",
+    "  --squad <id>                     Collect slots for one squad ID",
+    "  --from <worktree-dir>            Repeatable source worktree directory",
+    "  --workspace <dir>                Target coordinator workspace root (default: cwd)",
+    "  --report-root <path>             Custom workspace-relative report root",
+    "  --overwrite                      Overwrite differing existing slots in workspace",
+    "  --dry-run                        Preview copies without writing files",
+    "  --strict                         Fail if any declared slot is missing",
+    "  --allow-empty                    Succeed even when zero matching slots are found",
+    "",
+    "Examples:",
+    "  agy-squad collect --plan scratch/plan.json --from ../wt-worker-1 --from ../wt-worker-2",
+    "  agy-squad collect --squad auth --from ../wt-auth --dry-run"
+  ].join("\n"),
+  "bundle-init": [
+    "Usage: agy-squad bundle-init --plan <plan.json> [options] [<file>...]",
+    "",
+    "Initialize a bundle record JSON from squad_planner output and verified workspace files.",
+    "",
+    "Options:",
+    "  --plan <plan.json>               Required planner JSON output (or '-' for stdin)",
+    "  --provenance <scaffold.json>     Optional provenanceScaffold JSON override",
+    "  --squad <id>                     Target squad ID (required for multi-squad plans)",
+    "  --workspace <dir>                Coordinator workspace root (default: cwd)",
+    "  --report-root <path>             Custom workspace-relative report root",
+    "  --verdict PASS|FAIL|BLOCKED      Explicit lead verdict override",
+    "  --file <path>                    Repeatable verified workspace file path",
+    "  --id-map <worker=id>             Repeatable runtime conversationId mapping",
+    "  --handoffs <file.json>           JSON array of { sender, message } handoff receipts",
+    "  --handoff <sender=message>       Repeatable inline handoff receipt entry",
+    "  --allow-unaudited                Set requireIntegrityAudit: false for standalone runs",
+    "  --allow-non-passing              Allow FAIL/BLOCKED synthesis verdicts",
+    "  --allow-partial                  Allow PARTIAL/NO_REPORT specialist handoffs",
+    "  --digest                         Compute and output canonical Evidence Digest",
+    "  --out <record.json>              Write record to a workspace-relative .json file",
+    "  --replace                        Overwrite an existing --out file",
+    "",
+    "Examples:",
+    "  agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json --digest --out scratch/rec.json src/app.js",
+    "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json src/auth.js"
+  ].join("\n"),
+  fingerprint: [
+    "Usage: agy-squad fingerprint <file...>",
+    "",
+    "Compute SHA-256 digests for workspace-relative files used in verifiedFiles.",
+    "",
+    "Examples:",
+    "  agy-squad fingerprint src/auth.js src/session.js",
+    "  agy-squad fingerprint README.md docs/tools.md"
+  ].join("\n"),
+  inspect: [
+    "Usage: agy-squad inspect <record.json>",
+    "",
+    "Reconcile <= 500 byte Pointer-Over-Wire receipts and verify slot readability.",
+    "",
+    "Examples:",
+    "  agy-squad inspect scratch/bundle-record.json"
+  ].join("\n"),
+  digest: [
+    "Usage: agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]",
+    "",
+    "Compute the deterministic 64-hex Evidence Digest for integrity auditor binding.",
+    "",
+    "Options:",
+    "  --allow-non-passing              Allow FAIL or BLOCKED lead verdicts",
+    "  --allow-partial                  Allow PARTIAL or NO_REPORT specialist handoffs",
+    "",
+    "Examples:",
+    "  agy-squad digest scratch/bundle-record.json",
+    "  agy-squad digest scratch/bundle-record.json --allow-non-passing --allow-partial"
+  ].join("\n"),
+  bundle: [
+    "Usage: agy-squad bundle <record.json> [options]",
+    "",
+    "Write a SHA-256 verified v2 proof bundle (lead/report.sources.json).",
+    "",
+    "Options:",
+    "  --allow-unaudited                Opt out of requireIntegrityAudit: true (standalone runs)",
+    "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
+    "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
+    "  --replace                        Overwrite an existing differing report.sources.json",
+    "  --predecessor <sha256>           Require existing bundle digest to match before overwrite",
+    "",
+    "Examples:",
+    "  agy-squad bundle scratch/bundle-record.json --replace",
+    "  agy-squad bundle scratch/bundle-record.json --allow-unaudited"
+  ].join("\n"),
+  verify: [
+    "Usage: agy-squad verify <report.sources.json> [--prune [--keep-reports]]",
+    "",
+    "Verify bundle SHA-256 digests, auditPolicy, verdicts, and optional loose report pruning.",
+    "",
+    "Options:",
+    "  --prune                          Unlink verified loose specialist reports after verify",
+    "  --keep-reports                   With --prune, retain loose specialist reports on disk",
+    "",
+    "Examples:",
+    "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json",
+    "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json --prune"
+  ].join("\n"),
+  finalize: [
+    "Usage: agy-squad finalize <record.json> [options]",
+    "",
+    "Run inspect -> bundle -> verify (+ optional --prune) in one deterministic call.",
+    "",
+    "Options:",
+    "  --allow-unaudited                Opt out of requireIntegrityAudit: true (standalone runs)",
+    "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
+    "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
+    "  --replace                        Overwrite an existing differing report.sources.json",
+    "  --predecessor <sha256>           Require existing bundle digest to match before overwrite",
+    "  --prune                          Unlink verified loose specialist reports after verify",
+    "  --keep-reports                   With --prune, retain loose specialist reports on disk",
+    "",
+    "Examples:",
+    "  agy-squad finalize scratch/bundle-record.json --replace --prune",
+    "  agy-squad finalize scratch/bundle-record.json --allow-unaudited --prune --keep-reports"
+  ].join("\n"),
+  prune: [
+    "Usage: agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports]",
+    "",
+    "Safely remove verified loose specialist reports matching the accepted bundle SHA-256.",
+    "",
+    "Options:",
+    "  --keep-reports                   Verify bundle and retain loose reports on disk",
+    "",
+    "Examples:",
+    "  agy-squad prune scratch/agy-squad/squad-auth/lead/report.sources.json <64-hex-sha256>",
+    "  agy-squad prune scratch/agy-squad/squad-auth/lead/report.sources.json <sha256> --keep-reports"
+  ].join("\n"),
+  verdict: [
+    "Usage: agy-squad verdict [--integrity] <report.md>",
+    "",
+    "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED) or Integrity Verdict.",
+    "",
+    "Options:",
+    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION)",
+    "",
+    "Examples:",
+    "  agy-squad verdict scratch/agy-squad/squad-auth/lead/report.md",
+    "  agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
+  ].join("\n")
+};
 
 async function runPlanCommand(rest, root) {
   const usageLine =
@@ -85,7 +368,7 @@ async function runPlanCommand(rest, root) {
       if (!Object.hasOwn(roleScopes, roleKey)) {
         roleScopes[roleKey] = [];
       }
-      roleScopes[roleKey].push(normalizeWorkspaceCliPath(rawPath));
+      roleScopes[roleKey].push(normalizeScopeCliPath(rawPath));
     }
   }
   const { planSquadCohort } = await import("../mcp/planner.mjs");
@@ -98,7 +381,7 @@ async function runPlanCommand(rest, root) {
     ...(values.mode !== undefined ? { executionMode: values.mode } : {}),
     ...(values.model !== undefined ? { model: values.model } : {}),
     ...(values["workspace-isolation"] !== undefined ? { workspaceIsolation: values["workspace-isolation"] } : {}),
-    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(normalizeWorkspaceCliPath) } : {}),
+    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(p => normalizeScopeCliPath(p)) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["read-only"] ? { readOnly: true } : {}),
     ...(roleScopes !== undefined ? { roleScopes } : {}),
@@ -160,8 +443,10 @@ const KNOWN_COMMANDS = new Set([
   "digest",
   "bundle",
   "verify",
+  "finalize",
   "prune",
   "verdict",
+  "help",
   "run"
 ]);
 
@@ -255,14 +540,70 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFi
   }
 }
 
-function normalizeWorkspaceCliPath(inputPath) {
+function normalizeWorkspaceCliPath(inputPath, platform = process.platform) {
   if (typeof inputPath !== "string") return inputPath;
   const trimmed = inputPath.trim();
-  if (!trimmed || /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed) || trimmed.includes("\\") || path.isAbsolute(trimmed)) {
+  if (
+    !trimmed ||
+    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed) ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\") ||
+    /^[a-zA-Z]:/.test(trimmed) ||
+    path.isAbsolute(trimmed)
+  ) {
     return trimmed;
   }
-  const stripped = trimmed.replace(/^(?:\.\/)+/, "");
-  return stripped || trimmed;
+  if (platform !== "win32" && trimmed.includes("\\")) {
+    return trimmed;
+  }
+  const normalized = platform === "win32" ? trimmed.replace(/\\/g, "/") : trimmed;
+  if (/^(?:\.\/)+$/.test(normalized)) {
+    return ".";
+  }
+  const stripped = normalized.replace(/^(?:\.\/)+/, "");
+  return stripped || normalized;
+}
+
+function normalizeScopeCliPath(inputPath, platform = process.platform) {
+  const normalized = normalizeWorkspaceCliPath(inputPath, platform);
+  if (
+    typeof normalized === "string" &&
+    normalized.length > 1 &&
+    !normalized.startsWith("/") &&
+    normalized.endsWith("/") &&
+    !normalized.endsWith("//")
+  ) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function normalizeBundleOutCliPath(inputOut, platform = process.platform) {
+  const trimmedOut = typeof inputOut === "string" ? inputOut.trim() : "";
+  if (
+    !trimmedOut ||
+    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmedOut) ||
+    trimmedOut.startsWith("/") ||
+    trimmedOut.startsWith("\\") ||
+    path.isAbsolute(trimmedOut) ||
+    /^[a-zA-Z]:/.test(trimmedOut)
+  ) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  if (platform !== "win32" && trimmedOut.includes("\\")) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  const normalizedOut = platform === "win32" ? trimmedOut.replace(/\\/g, "/") : trimmedOut;
+  const outRel = normalizedOut.replace(/^(?:\.\/)+/, "");
+  if (
+    !outRel ||
+    outRel.split("/").some(p => !p || p === "." || p === "..") ||
+    !outRel.toLowerCase().endsWith(".json") ||
+    path.posix.basename(outRel).toLowerCase() === ".json"
+  ) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  return outRel;
 }
 
 function parseKeyValuePairs(items, flagName) {
@@ -352,17 +693,45 @@ async function main(args) {
   }
   const [command, ...rest] = args;
   if (!KNOWN_COMMANDS.has(command)) {
-    throw new Error(`Unknown command '${command}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, prune, or verdict.`);
+    throw new Error(`Unknown command '${command}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, finalize, prune, verdict, or help.`);
+  }
+  if (command === "help") {
+    if (rest.length === 0) {
+      console.log(usage);
+      return 0;
+    }
+    if (rest.length > 1) {
+      throw new Error("Usage: agy-squad help [<command>]");
+    }
+    const target = rest[0];
+    if (target === "--help" || target === "-h" || target === "help") {
+      console.log(usage);
+      return 0;
+    }
+    if (target.startsWith("-")) {
+      throw new Error("Conflicting flags: help takes at most one command name (e.g. 'agy-squad help plan').");
+    }
+    if (target === "run") {
+      throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
+    }
+    if (!Object.hasOwn(SUBCOMMAND_HELP, target)) {
+      throw new Error(`Unknown command '${target}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, finalize, prune, verdict, or help.`);
+    }
+    console.log(SUBCOMMAND_HELP[target]);
+    return 0;
   }
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
   if (hasHelpFlag(rest)) {
-    if (rest.length > 1) {
+    if (rest.length > 1 || (rest[0] !== "--help" && rest[0] !== "-h")) {
       throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
     }
-    console.log(usage);
+    console.log(SUBCOMMAND_HELP[command] ?? usage);
     return 0;
+  }
+  if (command !== "status") {
+    assertNodeVersion();
   }
 
   if (command === "setup" || command === "install") {
@@ -533,7 +902,7 @@ async function main(args) {
       handoffs = [...(handoffs ?? []), ...parseHandoffPairEntries(values.handoff)];
     }
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
-    const files = [...(values.file ?? []), ...positionals].map(normalizeWorkspaceCliPath);
+    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p));
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
       provenance,
@@ -547,20 +916,19 @@ async function main(args) {
       allowNonPassing: values["allow-non-passing"],
       allowPartial: values["allow-partial"]
     });
+    if (values.digest && (!Array.isArray(record.handoffs) || record.handoffs.length === 0)) {
+      throw new Error(
+        "bundle-init --digest requires specialist handoff receipts. Pass --handoffs <file.json> or --handoff <worker=READY ...>, or omit --digest until handoffs are recorded."
+      );
+    }
+    if (values.digest && Object.keys(record.verifiedFiles ?? {}).length === 0) {
+      throw new Error(
+        "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
+      );
+    }
     const digestResult = values.digest ? handoffsMod.computeEvidenceDigest(targetRoot, record) : undefined;
     if (values.out !== undefined) {
-      const trimmedOut = typeof values.out === "string" ? values.out.trim() : "";
-      if (!trimmedOut || trimmedOut.includes("\\") || path.isAbsolute(trimmedOut) || /^[a-zA-Z]:/.test(trimmedOut)) {
-        throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
-      }
-      const outRel = trimmedOut.replace(/^(?:\.\/)+/, "");
-      if (
-        outRel.split("/").some(p => !p || p === "." || p === "..") ||
-        !outRel.toLowerCase().endsWith(".json") ||
-        path.posix.basename(outRel).toLowerCase() === ".json"
-      ) {
-        throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
-      }
+      const outRel = normalizeBundleOutCliPath(values.out);
       const parentDir = path.posix.dirname(outRel);
       if (parentDir && parentDir !== ".") {
         handoffsMod.ensureDirectory(targetRoot, parentDir, [], new Set());
@@ -586,7 +954,7 @@ async function main(args) {
     const { positionals } = parseSubcommandArgs(rest, usageLine);
     if (!positionals.length) throw new Error(usageLine);
     const { fingerprint } = await import("../mcp/handoffs.mjs");
-    console.log(JSON.stringify(fingerprint(root, positionals.map(normalizeWorkspaceCliPath)), null, 2));
+    console.log(JSON.stringify(fingerprint(root, positionals.map(p => normalizeWorkspaceCliPath(p))), null, 2));
     return 0;
   }
   if (command === "inspect") {
@@ -669,6 +1037,62 @@ async function main(args) {
     }
     return 0;
   }
+  if (command === "finalize") {
+    const usageLine =
+      "Usage: agy-squad finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      "allow-unaudited": { type: "boolean", default: false },
+      "allow-non-passing": { type: "boolean", default: false },
+      "allow-partial": { type: "boolean", default: false },
+      replace: { type: "boolean", default: false },
+      predecessor: { type: "string" },
+      prune: { type: "boolean", default: false },
+      "keep-reports": { type: "boolean", default: false }
+    });
+    if (positionals.length !== 1) throw new Error(usageLine);
+    if (values["keep-reports"] && !values.prune) {
+      throw new Error(`Flag '--keep-reports' requires '--prune' on 'agy-squad finalize'.\n${usageLine}`);
+    }
+    const {
+      bundleReports,
+      decodeUtf8,
+      inspectHandoffs,
+      readFile,
+      verifyAndPruneBundle,
+      verifyBundle
+    } = await import("../mcp/handoffs.mjs");
+    const recPath = normalizeWorkspaceCliPath(positionals[0]);
+    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error("Provide a valid bundle record.");
+    }
+    const inspected = inspectHandoffs(root, record);
+    const bundleInput = {
+      ...record,
+      ...(values["allow-unaudited"]
+        ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
+        : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
+      ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
+      ...(values["allow-partial"] ? { allowPartial: true } : {}),
+      ...(values.replace ? { replaceExisting: true } : {}),
+      ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
+    };
+    const bundled = bundleReports(root, bundleInput);
+    let verified;
+    let pruned = null;
+    if (values.prune) {
+      const vp = verifyAndPruneBundle(root, bundled.path, {
+        acceptedHash: bundled.sha256,
+        keepReports: values["keep-reports"]
+      });
+      pruned = vp.pruned;
+      verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports };
+    } else {
+      verified = verifyBundle(root, bundled.path, bundled.sha256);
+    }
+    console.log(JSON.stringify({ inspected, bundled, verified, pruned }, null, 2));
+    return 0;
+  }
   if (command === "prune") {
     const usageLine = "Usage: agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
@@ -699,10 +1123,32 @@ async function main(args) {
   }
 }
 
-main(process.argv.slice(2)).then(
-  code => { process.exitCode = code; },
-  error => {
-    console.error(error.message);
-    process.exitCode = 1;
-  }
-);
+function isDirectExecution(argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) {
+  if (!argv1) return false;
+  const tryRealpath = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const normalizeForPlatform = (p) => {
+    const resolved = tryRealpath(p);
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalizeForPlatform(path.resolve(argv1)) === normalizeForPlatform(fileURLToPath(selfUrl));
+}
+
+if (isDirectExecution()) {
+  main(process.argv.slice(2)).then(
+    code => { process.exitCode = code; },
+    error => {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  );
+}
+
+export { assertNodeVersion, isDirectExecution, isNodeVersionSupported, normalizeBundleOutCliPath, normalizeScopeCliPath, normalizeWorkspaceCliPath };
