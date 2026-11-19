@@ -6,6 +6,7 @@ import { text } from "node:stream/consumers";
 const REQUIRED = [
   "package.json",
   "plugin.json",
+  "assets/logo.svg",
   "README.md",
   "CHANGELOG.md",
   "LICENSE",
@@ -49,10 +50,7 @@ const REQUIRED = [
   "docs/assets/manifest-and-modes.svg",
   "docs/assets/role-and-verdict-gate.svg",
   "docs/assets/skill-role-workflows.svg",
-  "docs/assets/swarm-lifecycle.svg",
-  "docs/plans/LEDGER.md",
-  "docs/plans/native-enforcement-ledger.md",
-  "docs/plans/wsl-cli-verification.md"
+  "docs/assets/swarm-lifecycle.svg"
 ];
 
 const RETIRED_DENYLIST = [
@@ -78,15 +76,29 @@ function validate(packages) {
   );
   assert.deepEqual(unsafe, [], `Unsafe package paths: ${unsafe.join(", ")}`);
 
-  const hasBadSubpath = (name) =>
-    name.endsWith(".tgz") || name.endsWith(".log") || /(?:^|\/)scratch(?:\/|$)/.test(name);
+  const hasBadSubpath = (name) => {
+    const lower = name.toLowerCase();
+    const segments = lower.split("/");
+    return (
+      lower.endsWith(".tgz") ||
+      lower.endsWith(".log") ||
+      lower.endsWith(".bak") ||
+      lower.endsWith(".tmp") ||
+      segments.some(seg => seg === ".env" || seg.startsWith(".env.") || seg === ".ds_store") ||
+      /(?:^|\/)scratch(?:\/|$)/.test(lower) ||
+      lower === "docs/plans" ||
+      lower.startsWith("docs/plans/") ||
+      lower === "docs/reviews" ||
+      lower.startsWith("docs/reviews/")
+    );
+  };
   const allowed = names.filter(name =>
     !hasBadSubpath(name) &&
     (name === "package.json" || name === "plugin.json" ||
       name === "README.md" || name === "CHANGELOG.md" ||
       name === "install.sh" || name === "install.ps1" ||
       name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
-      name.startsWith("bin/") || name.startsWith("mcp/") ||
+      name.startsWith("assets/") || name.startsWith("bin/") || name.startsWith("mcp/") ||
       name.startsWith("scripts/") ||
       name.startsWith(".agents/skills/") || name.startsWith("docs/"))
   );
@@ -103,21 +115,36 @@ function validate(packages) {
 
 function selfTest() {
   const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
-  assert.equal(validate(fixture(["docs/plans/pr3-option-b-fixes.md"])), REQUIRED.length + 1);
-  for (const bad of [
+  assert.equal(validate(fixture(["docs/extra-guide.md"])), REQUIRED.length + 1);
+  const badCases = [
     "tests/leaked.mjs",
     "benchmarks/private.json",
     "scratch/trace.log",
     "docs/scratch/leak.md",
+    "docs/plans",
+    "docs/plans/LEDGER.md",
+    "docs/plans/pr3-option-b-fixes.md",
+    "docs/reviews",
+    "docs/reviews/pr5-reconciled-review.md",
     "docs/package.tgz",
     "mcp/debug.log",
+    "mcp/.env",
+    "mcp/.ENV",
+    "mcp/.env/secret",
+    "scripts/.env.local",
+    "docs/.DS_Store",
+    "docs/.ds_store",
+    "scripts/foo.bak",
+    "scripts/FOO.BAK",
+    "bin/bar.tmp",
     ".agents/teamwork/session.json",
     "other/private.txt",
     "../outside.txt",
     "bin/terminal.py",
     "mcp/run-state.mjs",
     "mcp/subagent-brief.mjs"
-  ]) {
+  ];
+  for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
       /Forbidden npm package contents|Unsafe package paths/,
       `Expected synthetic package with ${bad} to be rejected`);
@@ -125,7 +152,7 @@ function selfTest() {
   assert.throws(() => validate([{ files: REQUIRED
     .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log("Package verifier self-test passed (positive + 13 negatives)");
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 1} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

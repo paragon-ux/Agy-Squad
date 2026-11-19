@@ -1,6 +1,6 @@
 {
   "name": "agy-squad",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Swarm planning, Pointer-Over-Wire governance, integrity auditing, and SHA-256 verification for Google Antigravity.",
   "main": "mcp/index.js",
   "bin": {
@@ -8,11 +8,16 @@
     "agy-squad-mcp": "mcp/index.js"
   },
   "files": [
+    "assets",
     "bin",
     "mcp",
     "scripts",
     ".agents/skills",
     "docs",
+    "!docs/plans/**",
+    "!docs/plans",
+    "!docs/reviews/**",
+    "!docs/reviews",
     "plugin.json",
     "install.sh",
     "install.ps1",

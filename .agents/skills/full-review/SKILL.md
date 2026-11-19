@@ -3,21 +3,22 @@ name: full-review
 description: >-
   [Task Spec: non-diff triage, evidence bundles & Direction decisions; pair with
   swarm-governance on /swarm] Use when the user asks for a full review, triage,
-  diagnosis, or direction recommendation on Agy-Squad using repository state or
-  supplied evidence (transcripts, logs, CI output, review ledgers, diffs),
-  including work that is not a pull request. Applies the Agy-Squad PR Review
-  Standard v1.4.0 with cited, commit-pinned evidence and 1-ID-per-row findings.
+  diagnosis, or direction recommendation on the active repository using
+  repository state or supplied evidence (transcripts, logs, CI output, review
+  ledgers, diffs), including work that is not a pull request. Applies the
+  Agy-Squad PR Review Standard v1.4.0 with cited, commit-pinned evidence and
+  1-ID-per-row findings.
 ---
 
 # Agy-Squad Full Review Skill (Standard v1.4.0)
 
-Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs and `self-diagnosis` for automated harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`node bin/agy-squad.mjs plan`) for `/swarm` or `dispatch_squad` (`node bin/agy-squad.mjs dispatch`) for `invoke_subagent`.
+Review a repository target, change, or evidence bundle and answer the question the user asked. This skill is a **Task Spec** for non-diff reviews, evidence triage, and direction decisions (distinct from `pr-review` for branch/PR diffs and `self-diagnosis` for maintainer harness self-audits). When executed as a team or `/swarm`, compose it with the `swarm-governance` **Execution Modifier** and choose `squad_planner` (`agy-squad plan`) for `/swarm` or `dispatch_squad` (`agy-squad dispatch`) for `invoke_subagent`.
 
-The governing report contract is [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](../../../docs/roles-and-workflows.md#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
+The governing report contract is [Agy-Squad PR Review Standard v1.4.0](../pr-review/references/pr-review-standard.md); see [Roles & skill workflows](https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/#full-review) for the composition matrix, MCP/CLI surface map, and 4-check runtime closure gate. Passing tests, docs, prior approvals, and transcripts are inputs, not proof of architecture or claimed verification.
 
 ## Use this skill when
 
-- The user asks for a review, audit, triage, or root cause of Agy-Squad, a commit range, subsystem, skill, or document beyond a single PR diff.
+- The user asks for a review, audit, triage, or root cause of the active repository, a commit range, subsystem, skill, or document beyond a single PR diff.
 - The user supplies non-diff evidence (transcripts, logs, CI runs, ledgers, benchmarks) or asks a direction question (merge/rework, keep/close, option selection, sequencing).
 - A PR review needs multi-artifact evidence or a Direction decision section.
 
@@ -25,65 +26,24 @@ For a standard PR/branch diff without non-diff direction framing, prefer `pr-rev
 
 ## Invariants (Non-negotiables)
 
-1. **Read the standard first.** Its ten categories, category records, finding schema, status enums, evidence rules, and report structure are mandatory; this skill adds non-PR intake and Direction decisions.
-2. **Pin target and evidence.** Record revisions, SHA-256 hashes, dirty state, access status, and unexamined scope.
-3. **Architecture before runtime.** Trace `design thesis / invariant -> architecture decision -> public contract -> implementation -> verification` before judging behavior; record contract mismatches as findings.
-4. **All ten categories, all three triage buckets.** Every category (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`) records scope, coverage, P1, P2, P3, verification, and verdict (`Not applicable` or `None identified within reviewed scope` or `Not assessed`; never silent skips).
-5. **`1 ID = 1 Row`.** One stable ID per independently remediable defect (no umbrella ranges or silent drops). One canonical status per row; `Informational` applies only to non-defects in Section 8.
-6. **Cite exact locators and label evidence.** Cite commit-pinned line ranges, transcript steps/timestamps, exact commands + exit codes, or dated URLs. Separate observed execution from `Source-derived inference`.
-7. **Do not inherit prior verdicts or waive findings from pass counts.** Revalidate prior items explicitly (accept, revise, or reject).
-8. **Separate content acceptance from integrity audit.** Content reviewer/lead owns `PASS`/`FAIL`/`BLOCKED` (or `APPROVE`/`REQUEST_CHANGES`); an independent auditor (`audit-<id>` on `/swarm` or `integrity_auditor[:<target>]` via slot) owns `CLEAN`/`INTEGRITY VIOLATION` and cannot waive content defects. Lead re-reviews after `CLEAN`. See [review roles](references/review-roles.md).
-9. **Enforce report readability.** Reserve inline backticks for code identifiers, file paths, flags, CLI commands, and verdict enums. Write plain numbers, counts, English statuses, labels, and quoted sentences as clean prose (no backtick-pill clutter).
-
-### Citation contract
-
-- **Code:** commit-pinned `path#Lx-Ly` with `HEAD`/tree pinned in Section 1.
-- **Transcript:** manifest SHA-256 hash, `step N @ ISO timestamp`, and verbatim quote.
-- **Command:** working directory, exact command, exit code, and observed output excerpt.
-- **External source:** title, URL, version/date, access date; label inference as `Source-derived inference`.
-- **Prior review:** prior report + finding ID + explicit status (`accepted`, `revised`, or `rejected`).
+1. **Read the standard first.** Enforce [pr-review-standard.md](../pr-review/references/pr-review-standard.md) Sections 1–9 (categories, schema, evidence rules, `1 ID = 1 Row`, exclusive Section 8 statuses); this skill adds non-PR evidence intake and Direction decisions.
+2. **Pin & trace before runtime.** Record revisions, SHA-256s, dirty state, access status, and exclusions; trace `invariant -> architecture decision -> public contract -> implementation -> verification` before judging behavior.
+3. **Ten categories, zero quotas & strict role separation.** Populate all ten categories (`ARCH`–`DEP`) with scope, coverage, P1/P2/P3 buckets, verification, and verdict (Not applicable for `DB` on filesystem-only state). Content lead owns `Content Verdict: PASS | FAIL | BLOCKED`; flat Integrity Auditor (`audit-<id>` / `integrity_auditor[:<target>]`) owns `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` ([review roles](references/review-roles.md)); lead re-reviews after CLEAN.
+4. **Cite exact locators & enforce readability.** Separate observed execution from `Source-derived inference` (commit-pinned `path#Lx-Ly`, transcript `SHA-256 + step N @ ISO`, command + cwd + exit code, URL + date, prior review ID + `accepted/revised/rejected`). Reserve backticks for identifiers, paths, flags, commands, and literal machine-parsed verdict lines only (never plain numbers or standalone status/disposition labels).
 
 ## Workflow
 
-### Step 0: Frame the request and execution mode
+### Step 0: Frame Request & `/swarm` Intake
+1. State the review/direction question in one sentence, name the target type, and pin minimum evidence per [references/evidence-intake.md](references/evidence-intake.md).
+2. Confirm ambiguity once upfront without asking facts visible in git/evidence; on `/swarm`, delegate neutral Step 0 intake, `open_board`, `swarm_wait`, board scoping (`read_board{since|seqs}`), multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
 
-1. State the decision/review question in one sentence, name the target type (`PR/branch`, `working tree`, `commit range`, `repository/subsystem`, `evidence bundle`, `direction question`, or `incident/regression`), and pin minimum evidence per [references/evidence-intake.md](references/evidence-intake.md).
-2. Check ambiguity once upfront without asking for facts already visible in git/evidence:
-   - If stacked on an unmerged PR base, confirm base branch and merge order.
-   - If running on `/swarm`, delegate Step 0 intake (neutral `Flat` vs `Layered` topology, `workspaceIsolation`, retention, coordinator-default model), `open_board`, `swarm_wait`, pointer receipts, multi-cycle continuation, and shutdown to [`swarm-governance`](../swarm-governance/SKILL.md#step-0-pre-flight-intake-ask-when-unspecified) and [swarm intake & UI lifecycle](../swarm-governance/references/intake-and-planning.md#step-0-intake-question-templates).
+### Steps 1–4: Pin, Batch-Ingest, Trace & Triage
+1. Populate [report-template.md](references/report-template.md) Sections 1–3 (Target, Session Provenance, Evidence manifest, coverage, architecture trace against the target repository's architecture docs or ADRs if present and `.github/workflows/ci.yml`).
+2. Index large transcripts/logs once via batch reads ([evidence-intake.md](references/evidence-intake.md)), never step-by-step polling; separate claims, tool outputs, and gaps.
+3. Triage `ARCH`–`DEP` in Sections 4–6 and route all residual/deferred/by-design/informational items exclusively to Section 8.
 
-### Step 1: Pin the review
+### Step 5: Direction Decision (when requested)
+Add Section 7.2 (**Decision question**, **Constraints**, **Options** table including status quo & minimal option, **Recommendation** with load-bearing evidence, **Falsifiers**, ordered **Immediate next actions**, **What not to do**). Never recommend merging while material categories are unreviewed or P1/P2 blockers stay open.
 
-Populate Section 1 of [references/report-template.md](references/report-template.md): repository, target, base, date, reviewer, standard version, executed trees, **Session Provenance** table, **Evidence manifest**, artifact inventory, and explicit scope/exclusions. For a new `HEAD`, invalidate affected prior conclusions and state which prior findings carry forward.
-
-### Step 2: Ingest evidence in batches
-
-Index large transcripts/logs once and read targeted windows (never poll step-by-step):
-1. Record size, SHA-256 hash, format, and entry count.
-2. Extract skeleton first (user turns, final messages, tool names/failures, step/time index).
-3. Inspect targeted windows around decision points, reversals, constraints, verdicts, and quoted claims.
-4. Separate user assertions, model claims, tool outputs, and external claims; log skipped or truncated ranges.
-
-See [references/evidence-intake.md](references/evidence-intake.md) for batch extraction and hashing commands.
-
-### Step 3: Trace architecture before runtime
-
-Trace `design thesis / invariant -> architecture decision -> public contract -> implementation -> verification` using normative records (`docs/plans/LEDGER.md`, `.github/workflows/ci.yml`, historical `docs/plans/wsl-cli-verification.md`, commit `ee10ebc`). Distinguish historical design records from active contracts and note compatibility impacts of intentional changes.
-
-### Step 4: Review the ten categories & record findings
-
-Map each artifact to one primary category and cross-reference secondary impacts without double-counting. Record concise 10-field blocks for `P0`/`P1`/`P2` and `1 ID = 1 Row` table entries for `P3` per [pr-review-standard.md](../pr-review/references/pr-review-standard.md). Use Section 8 (`Post-Remediation Residuals & Deferred Dispositions`) as the mandatory sink for residuals, deferred proposals, by-design closures, and informational items. A zero-finding ("No findings") result is valid; finding quotas are prohibited.
-
-### Step 5: Answer direction questions (when requested)
-
-Add a **Direction decision** subsection to Section 7 containing:
-1. One-sentence **Decision question**.
-2. Cited **Constraints** (hard constraints vs preferences).
-3. **Options** (including status quo and a minimal/do-less option) with preserved invariants, costs, dependencies, reversibility, blast radius, and pros/cons evidence.
-4. **Recommendation** with load-bearing evidence, **Falsifiers**, ordered **Immediate next actions** (each with an acceptance test), and **What not to do**.
-
-Keep coverage and disposition separate: do not recommend merging while material categories are unreviewed or P1/P2 blockers stay open.
-
-### Step 6: Write, recheck, and close
-
-Save under `docs/reviews/<review-slug>.md` using [references/report-template.md](references/report-template.md) (omit Section 9 unless `/self-diagnosis` cohorts ran; write `None (0 open residuals, 0 deferred items)` if Section 8 is empty). Recheck fixes against primary and cross-referenced categories at the fixed revision (a fix commit alone is not closure). Before delivering, verify all checks in [references/report-template.md](references/report-template.md#quality-gates).
+### Step 6: Write, Recheck, and Close
+Format via [report-template.md](references/report-template.md) (omit Section 9 unless `/self-diagnosis` cohorts ran; `None (0 open residuals, 0 deferred items)` when Section 8 is empty), saving under `docs/reviews/<review-slug>.md` when the repository already has `docs/reviews/` or the user explicitly requests an in-repo ledger (otherwise deliver the report in chat or the Antigravity artifact directory without creating an untracked `docs/reviews/` folder). Recheck fixes across affected categories at the fixed revision, and pass [quality gates](references/report-template.md#quality-gates).

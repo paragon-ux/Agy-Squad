@@ -3,7 +3,7 @@
 **Status:** Proposed patch plan (not applied in this session)
 **Target:** `feat/squad-alignment` at `f2ad744a553f1a938ee8128a2f5d1dfad1d9a9b8`
 **Base:** `rebuild/wsl-dispatch` at `6708c35fabf3254ea8a8109c51511b7237fe6e28`
-**Governing review:** [`docs/reviews/pr3-squad-alignment-full-review.md`](../reviews/pr3-squad-alignment-full-review.md) (Revision 2, Addendum A)
+**Governing review:** `docs/reviews/pr3-squad-alignment-full-review.md` (Revision 2, Addendum A)
 **Governing standard:** Agy-Squad PR Review Standard `v1.3.0`
 
 This document is the implementation plan for the review's **Option B**: keep the layered adversarial coverage, but correct the roles, verdicts, lifecycle, enforcement, and audit coverage. It is written for a follow-up DSH/WSL2 session. Apply the patches in order; do not merge PR #3 until the acceptance test in §11 passes.
@@ -41,9 +41,9 @@ The plan is deliberately split into **code patches** (P1–P6), **documentation/
 
 | Patch | Files | Fixes | Depends on | Risk |
 | --- | --- | --- | --- | --- |
-| P1 | `mcp/verdicts.mjs` (new), `mcp/handoffs.mjs` import/readers | `RUN-PR3-01`, `ARCH-PR3-05` | — | Low; new module |
+| P1 | `mcp/verdicts.mjs` (new), `mcp/handoffs.mjs` import/readers | `RUN-PR3-01`, `ARCH-PR3-05` | none | Low; new module |
 | P2 | `mcp/handoffs.mjs` bundle/verify/prune | `SVC-PR3-01`, `SVC-PR3-03`, `RUN-PR3-02`, `ARCH-PR3-03`, `SVC-PR3-02` | P1 | High; changes bundle schema |
-| P3 | `mcp/briefs.mjs` | `ARCH-PR3-05`, `SKILL-PR3-03`, `RUN-PR3-05` | — | Medium; prompt budgets |
+| P3 | `mcp/briefs.mjs` | `ARCH-PR3-05`, `SKILL-PR3-03`, `RUN-PR3-05` | none | Medium; prompt budgets |
 | P4 | `mcp/dispatch.mjs` | `ARCH-PR3-05`, `MCP-PR3-01` | P3 | Medium |
 | P5 | `bin/agy-squad.mjs`, `mcp/handoffs.mjs` CLI | `SCRIPT-PR3-01`, `MCP-PR3-02`, `SVC-PR3-02` | P2 | Medium |
 | P6 | `tests/` | `TEST-PR3-01`, `TEST-PR3-03` | P1–P5 | Medium |

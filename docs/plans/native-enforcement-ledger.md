@@ -2,7 +2,7 @@
 
 **Status:** Draft v0.1 (scoping ledger; no enforcement is implemented or verified by this document)
 **Date:** 2026-11-13
-**Origin:** PR #5 independent review residuals `PR5-ARCH-05`, `PR5-SCRIPT-02`, `PR5-ARCH-06` ([`docs/reviews/pr5-independent-review.md`](../reviews/pr5-independent-review.md))
+**Origin:** PR #5 independent review residuals `PR5-ARCH-05`, `PR5-SCRIPT-02`, `PR5-ARCH-06` (`docs/reviews/pr5-independent-review.md`, git checkout only)
 **Supersedes (as a direction):** the retired Docker per-agent container and spawn-gate design (`docs/plans/LEDGER.md` L8–L12, L35, L36, L38; plan text at commit `ee10ebc`)
 
 ## 1. Purpose
