@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/agy-squad.svg)](https://www.npmjs.com/package/agy-squad)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-Zensical-purple.svg)](https://paragon-ux.github.io/Agy-Squad/)
-[![Tests](https://img.shields.io/badge/tests-100%25%20passing-brightgreen.svg)](https://github.com/paragon-ux/Agy-Squad/actions)
+[![CI](https://github.com/paragon-ux/Agy-Squad/actions/workflows/ci.yml/badge.svg)](https://github.com/paragon-ux/Agy-Squad/actions/workflows/ci.yml)
 
 ![Agy-Squad, Antigravity, and Agy-Context-Saver architecture](docs/assets/architecture-overview.svg)
 
@@ -11,7 +11,7 @@ Agy-Squad is a multi-agent swarm planner, code-review harness, and SHA-256 proof
 
 ## Quickstart
 
-Requires Node.js 22 or newer and Google Antigravity 2.0+. Pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.0.1+, 2.0.4+ recommended) enables live integrity trace audits; standalone runs work without it.
+Requires Node.js 22 or newer and Google Antigravity Desktop IDE or CLI (agy) with native swarm or subagent support. Pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.0.1+, 2.0.4+ recommended) enables live integrity trace audits; standalone runs work without it.
 
 ```bash
 # Install the plugin, skills, MCP server, and agy-squad CLI

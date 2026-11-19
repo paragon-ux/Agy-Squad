@@ -7,7 +7,23 @@ import { handleSquadPlanner } from "./planner.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-const isEntryPoint = Boolean(process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(__filename));
+function isDirectEntryPoint(argv1 = process.argv[1], selfPath = __filename, platform = process.platform) {
+  if (!argv1) return false;
+  const normalizeForPlatform = (p) => {
+    const resolved = realOrSelf(p);
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalizeForPlatform(argv1) === normalizeForPlatform(selfPath);
+}
+const isEntryPoint = isDirectEntryPoint();
+
+const MIN_NODE_MAJOR = 22;
+function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
+  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
+}
 
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
@@ -56,6 +72,48 @@ function workspacesFromInitializeParams(params) {
   return resolved;
 }
 
+function isPackagedPluginRoot(dir) {
+  try {
+    const pkgPath = path.join(dir, "package.json");
+    if (!fs.existsSync(pkgPath)) return null;
+    const dirPkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    if (dirPkg?.name !== SERVER_NAME) return null;
+    if (fs.existsSync(path.join(dir, ".git")) || fs.existsSync(path.join(dir, "tests"))) {
+      return false;
+    }
+    return fs.existsSync(path.join(dir, "plugin.json")) || fs.existsSync(path.join(dir, "mcp_config.json"));
+  } catch {
+    return null;
+  }
+}
+
+function isInstalledPluginDir(dir) {
+  if (typeof dir !== "string" || !dir.trim()) return false;
+  const resolved = path.resolve(dir);
+  const candidates = [resolved];
+  try {
+    const real = fs.realpathSync(resolved);
+    if (real !== resolved) candidates.push(real);
+  } catch {}
+  for (const candidate of candidates) {
+    const normalized = candidate.replace(/\\/g, "/");
+    if (/(?:^|\/)\.gemini\/config\/plugins\/agy-squad(?:\/|$)/i.test(normalized)) {
+      return true;
+    }
+  }
+  for (const candidate of candidates) {
+    let cur = candidate;
+    while (true) {
+      const verdict = isPackagedPluginRoot(cur);
+      if (verdict !== null) return verdict;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  }
+  return false;
+}
+
 function resolveDefaultWorkspaceForCall(args, envWorkspace) {
   if (typeof args?.workspace === "string" && args.workspace.trim()) {
     return args.workspace.trim();
@@ -97,13 +155,21 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
       );
     }
   }
-  return sessionWorkspaces[0] || envWorkspace || process.cwd();
+  if (sessionWorkspaces[0]) return sessionWorkspaces[0];
+  if (envWorkspace) return envWorkspace;
+  const fallbackCwd = process.cwd();
+  if (isInstalledPluginDir(fallbackCwd)) {
+    throw new Error(
+      `Refusing to target the installed Agy-Squad plugin directory (${fallbackCwd}) as the workspace. Pass 'workspace' set to your active repository root (or configure MCP workspace roots / AGY_SQUAD_WORKSPACE).`
+    );
+  }
+  return fallbackCwd;
 }
 
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active workspace directory."
+  description: "Active repo root path (pass explicitly from global plugin installs)."
 };
 
 const TOOLS = [
@@ -248,6 +314,12 @@ async function handleRequest(request) {
 }
 
 if (isEntryPoint) {
+  if (!isNodeVersionSupported()) {
+    process.stderr.write(
+      `Agy-Squad MCP server requires Node.js >= ${MIN_NODE_MAJOR}.0.0 (found v${process.versions.node}). Please upgrade Node.js.\n`
+    );
+    process.exit(1);
+  }
   const rawMaxBytes = process.env.AGY_MAX_STDIO_PAYLOAD_BYTES;
   const parsedMaxBytes = rawMaxBytes === undefined ? NaN : Number(rawMaxBytes);
   const MAX_STDIO_PAYLOAD_BYTES = Number.isInteger(parsedMaxBytes) && parsedMaxBytes > 0
@@ -442,4 +514,4 @@ if (isEntryPoint) {
   }
 }
 
-export { TOOLS, handleRequest };
+export { TOOLS, handleRequest, isDirectEntryPoint, isInstalledPluginDir, isNodeVersionSupported };

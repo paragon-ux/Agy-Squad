@@ -85,7 +85,7 @@ File scope in a brief describes the worker's assigned target paths; host-level w
 
 ## Governance CLI & report cleanup (`agy-squad`, `mcp/handoffs.mjs`, `mcp/verdicts.mjs`)
 
-Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Squad` source checkout, you may also run `node bin/agy-squad.mjs <command>`; run `agy-squad <command> --help` for focused flags and examples; `mcp/handoffs.mjs` is the underlying JS library module whose standalone CLI entrypoint was removed in PR #5). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) are normalized uniformly across downstream CLI verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`, and `collect`). Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
+Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Squad` source checkout, you may also run `node bin/agy-squad.mjs <command>`; run `agy-squad help [<command>]` or `agy-squad <command> --help` for focused flags and examples; `mcp/handoffs.mjs` is the underlying JS library module whose standalone CLI entrypoint was removed in PR #5). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) and Windows `\` relative paths on `win32` (for example, `.\scratch\record.json`) are normalized uniformly at the CLI boundary across downstream verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`, and `collect`), while internal JSON/API contracts keep canonical POSIX `/` paths. Flat and `task` plans also emit `workers[i].synthesisSlot` pointing to the coordinator-authored `lead/report.md` path. Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
 
 ### CLI subcommands
 
@@ -107,6 +107,56 @@ Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Sq
 | `verify <report.sources.json> [--prune [--keep-reports]]` | Enforces persisted `auditPolicy`, archived Markdown verdicts, every `integrityAudit` / `integrityAudits` digest and `Evidence Digest`, `verifiedFiles` hashes, and any remaining loose reports (and optionally prunes loose reports in the same process when `--prune` is passed). |
 | `finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]` | Ergonomic one-step wrapper that runs `inspect` -> `bundle` -> `verify` (plus optional `--prune [--keep-reports]`) deterministically and emits `{ inspected, bundled, verified, pruned }` JSON while keeping every granular subcommand intact. |
 | `prune <report.sources.json> <accepted-sha256> [--keep-reports]` | Safely unlinks only verified loose specialist reports (re-verifying inode identity and SHA-256) after `bundle` and `verify` pass, unless `--keep-reports` or `retainReports: true` is set. |
+| `help [<command>]` | Print top-level CLI usage or focused help for a specific subcommand (equivalent to `--help` / `<command> --help`). |
+
+### Bundle record and handoffs schemas
+
+`agy-squad bundle-init --plan <plan.json> ...` generates a `<bundle-record.json>` pre-populated from `bundleRecordTemplates.<squadId>`, `provenanceScaffold`, and fingerprinted `verifiedFiles`. Pass specialist receipts via `--handoffs <handoffs.json>` (a JSON array of `{ sender, message }` objects) or repeatable `--handoff "<sender>=<message>"` flags.
+
+**`--handoffs <handoffs.json>` schema (`mcp/handoffs.mjs`):**
+
+```json
+[
+  {
+    "sender": "storage-wal-reviewer",
+    "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
+  }
+]
+```
+
+Each entry requires nonempty `sender` (matching `assignments[].conversationId`, which is the compiled `workerName` in `/swarm` mode) and a single-line `<= 500` UTF-8 byte `message` using the literal `U+2014` em-dash (`—`) separator (`READY <slot> — <observation>`, `PARTIAL <slot> — <observation>`, or `NO_REPORT — <reason>`, with optional leading `@mention` prefixes).
+
+**`<bundle-record.json>` schema (`inspect`, `digest`, `bundle`, `finalize`):**
+
+```json
+{
+  "squadId": "storage",
+  "workspace": "/absolute/path/to/your-repo",
+  "reportRoot": "scratch/agy-squad",
+  "verdict": "PASS",
+  "verifiedFiles": {
+    "src/storage.js": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "assignments": [
+    {
+      "conversationId": "storage-wal-reviewer",
+      "report": "scratch/agy-squad/squad-storage/specialist-1/report.md"
+    }
+  ],
+  "handoffs": [
+    {
+      "sender": "storage-wal-reviewer",
+      "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md — src/storage.js:42 fsync guard verified (npm test exit 0)"
+    }
+  ],
+  "requireIntegrityAudit": true,
+  "integrityAuditSlots": [
+    "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
+  ]
+}
+```
+
+Optional boolean flags `allowNonPassing: true` and `allowPartial: true` mirror `--allow-non-passing` and `--allow-partial`. All workspace paths inside JSON records must use canonical POSIX `/` separators.
 
 ### `agy-squad` flags reference
 

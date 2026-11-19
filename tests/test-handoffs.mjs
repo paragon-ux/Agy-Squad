@@ -1815,6 +1815,142 @@ try {
         const qsFinalizeJson = JSON.parse(qsFinalize.stdout);
         assert.equal(qsFinalizeJson.verified.auditPolicy, "required");
         assert.deepEqual(qsFinalizeJson.pruned.removed, [qsSpec1.reportSlot, qsSpec2.reportSlot]);
+
+        // 10. RAW-SCRIPT-001, RAW-SCRIPT-003, RAW-SCRIPT-004, RAW-SVC-001, RAW-TEST-001 regressions
+        const {
+          assertNodeVersion: assertCliNodeVersion,
+          isNodeVersionSupported: isCliNodeVersionSupported,
+          normalizeBundleOutCliPath,
+          normalizeWorkspaceCliPath
+        } = await import("../bin/agy-squad.mjs");
+        assert.equal(isCliNodeVersionSupported("20.18.0"), false);
+        assert.equal(isCliNodeVersionSupported("22.0.0"), true);
+        assert.equal(isCliNodeVersionSupported("22.0.0-rc.1"), true);
+        assert.equal(isCliNodeVersionSupported("22.0.0junk"), false);
+        assert.throws(() => assertCliNodeVersion("20.18.0"), /requires Node\.js >= 22\.0\.0 \(found v20\.18\.0\)/);
+        assert.throws(() => assertCliNodeVersion(""), /requires Node\.js >= 22\.0\.0 \(found unknown\)/);
+
+        assert.equal(normalizeWorkspaceCliPath(".\\", "win32"), ".");
+        assert.equal(normalizeWorkspaceCliPath("./", "linux"), ".");
+        assert.equal(normalizeWorkspaceCliPath(".\\scratch\\record.json", "win32"), "scratch/record.json");
+        assert.equal(normalizeWorkspaceCliPath(".\\.\\src\\auth.js", "win32"), "src/auth.js");
+        assert.equal(normalizeWorkspaceCliPath("C:src\\auth.js", "win32"), "C:src\\auth.js");
+        assert.equal(normalizeWorkspaceCliPath("\\\\server\\share\\record.json", "win32"), "\\\\server\\share\\record.json");
+        assert.equal(normalizeWorkspaceCliPath("src\\auth.js", "linux"), "src\\auth.js");
+        assert.equal(normalizeBundleOutCliPath(".\\scratch\\record.json", "win32"), "scratch/record.json");
+        assert.equal(normalizeBundleOutCliPath("scratch\\sub\\record.json", "win32"), "scratch/sub/record.json");
+        for (const badOut of ["\\\\server\\share\\rec.json", "C:\\rec.json", "C:rec.json", "..\\rec.json", "scratch\\rec.txt", "scratch\\.json"]) {
+          assert.throws(() => normalizeBundleOutCliPath(badOut, "win32"), /--out must be a workspace-relative \.json path/);
+        }
+        assert.throws(() => normalizeBundleOutCliPath("scratch\\record.json", "linux"), /--out must be a workspace-relative \.json path/);
+
+        if (process.platform === "win32") {
+          finWrite(qsSpec1.reportSlot, "# Security Reviewer\nVerified src/auth.js.\n");
+          finWrite(qsSpec2.reportSlot, "# Test Reviewer\nVerified src/auth.js tests.\n");
+          const winInitRes = spawnSync(
+            process.execPath,
+            [
+              agySquadCli,
+              "bundle-init",
+              "--plan", ".\\scratch\\qs-plan.json",
+              "--handoff", `${qsSpec1.workerName}=@coordinator READY ${qsSpec1.reportSlot} — src/auth.js win check`,
+              "--handoff", `${qsSpec2.workerName}=@coordinator READY ${qsSpec2.reportSlot} — src/auth.js win test`,
+              "--allow-unaudited",
+              "--digest",
+              "--out", ".\\scratch\\win-rec.json",
+              ".\\src\\auth.js"
+            ],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winInitRes.status, 0, `RAW-SCRIPT-001: Windows bundle-init backslash paths failed: ${winInitRes.stderr}`);
+          const winVerdictRes = spawnSync(
+            process.execPath,
+            [agySquadCli, "verdict", `.\\${qsLeadSlot.replace(/\//g, "\\")}`],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winVerdictRes.status, 0, `RAW-SCRIPT-001: Windows verdict backslash path failed: ${winVerdictRes.stderr}`);
+          const winFinalizeRes = spawnSync(
+            process.execPath,
+            [agySquadCli, "finalize", ".\\scratch\\win-rec.json", "--allow-unaudited", "--replace"],
+            { cwd: finDir, encoding: "utf8" }
+          );
+          assert.equal(winFinalizeRes.status, 0, `RAW-SCRIPT-001: Windows finalize backslash path failed: ${winFinalizeRes.stderr}`);
+        }
+
+        // RAW-SCRIPT-003: bundle-init --help Example 2 includes <file> and --digest with zero verifiedFiles emits targeted hint
+        const bundleInitHelp = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(bundleInitHelp.status, 0, bundleInitHelp.stderr);
+        assert.match(bundleInitHelp.stdout, /--squad auth --handoffs scratch\/handoffs\.json src\/auth\.js/);
+
+        finWrite(qsSpec1.reportSlot, "# Security Reviewer\nVerified src/auth.js.\n");
+        finWrite(qsSpec2.reportSlot, "# Test Reviewer\nVerified src/auth.js tests.\n");
+        const emptyFilesDigest = spawnSync(
+          process.execPath,
+          [
+            agySquadCli,
+            "bundle-init",
+            "--plan", "scratch/qs-plan.json",
+            "--handoff", `${qsSpec1.workerName}=READY ${qsSpec1.reportSlot} — ok`,
+            "--handoff", `${qsSpec2.workerName}=READY ${qsSpec2.reportSlot} — ok`,
+            "--digest"
+          ],
+          { cwd: finDir, encoding: "utf8" }
+        );
+        assert.notEqual(emptyFilesDigest.status, 0, "RAW-SCRIPT-003: bundle-init --digest without verifiedFiles must fail closed");
+        assert.match(emptyFilesDigest.stderr, /requires at least one verified workspace file/);
+        assert.match(emptyFilesDigest.stderr, /--file <path> or trailing <file\.\.\.>/);
+
+        // RAW-SCRIPT-004: agy-squad help and agy-squad help <command>
+        const helpTop = spawnSync(process.execPath, [agySquadCli, "help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpTop.status, 0, helpTop.stderr);
+        assert.match(helpTop.stdout, /agy-squad help \[<command>\]/);
+        const helpPlan = spawnSync(process.execPath, [agySquadCli, "help", "plan"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpPlan.status, 0, helpPlan.stderr);
+        assert.match(helpPlan.stdout, /Usage: agy-squad plan/);
+        const helpSelf = spawnSync(process.execPath, [agySquadCli, "help", "help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpSelf.status, 0, helpSelf.stderr);
+        const helpFlag = spawnSync(process.execPath, [agySquadCli, "help", "--help"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpFlag.status, 0, helpFlag.stderr);
+        const helpRun = spawnSync(process.execPath, [agySquadCli, "help", "run"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpRun.status, 1);
+        assert.match(helpRun.stderr, /retired in Phase 2/);
+        const helpBogus = spawnSync(process.execPath, [agySquadCli, "help", "bogus"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpBogus.status, 1);
+        assert.match(helpBogus.stderr, /Unknown command 'bogus'/);
+        const helpBadFlag = spawnSync(process.execPath, [agySquadCli, "help", "--bogus"], { cwd: finDir, encoding: "utf8" });
+        assert.equal(helpBadFlag.status, 1);
+        assert.match(helpBadFlag.stderr, /Conflicting flags/);
+
+        // RAW-SVC-001: U+2014 delimiter mismatch hint on READY / PARTIAL / NO_REPORT, without false-positive on blank reason after U+2014
+        const baseDelimRec = {
+          workspace: finDir,
+          assignments: [{ conversationId: "w1", report: qsSpec1.reportSlot }]
+        };
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `READY ${qsSpec1.reportSlot} - ASCII dash` }] }),
+          /Expected literal U\+2014 em-dash delimiter.*READY .* — <observation>/
+        );
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `PARTIAL ${qsSpec1.reportSlot} -- double dash` }] }),
+          /Expected literal U\+2014 em-dash delimiter.*PARTIAL .* — <observation>/
+        );
+        assert.throws(
+          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: "NO_REPORT -- timed out" }] }),
+          /Expected literal U\+2014 em-dash delimiter.*NO_REPORT — <reason>/
+        );
+        for (const nonMismatchMsg of [
+          "NO_REPORT —   ",
+          "NO_REPORT —",
+          "NO_REPORT   ",
+          `READY ${qsSpec1.reportSlot} —`,
+          `READY ${qsSpec1.reportSlot}   `
+        ]) {
+          assert.throws(
+            () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: nonMismatchMsg }] }),
+            (err) => /Handoff must include/.test(err.message) && !/Expected literal U\+2014/.test(err.message),
+            `RAW-SVC-001: '${nonMismatchMsg}' must not emit false-positive U+2014 delimiter mismatch hint`
+          );
+        }
       } finally {
         fs.rmSync(finDir, { recursive: true, force: true });
       }

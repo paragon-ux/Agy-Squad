@@ -9,7 +9,7 @@ flowchart LR
   P["Parent Session (agy)"] -->|"1. squad_planner / dispatch_squad"| C["Compiled Stage (Lead, Specialists, or /swarm)"]
   C -->|"2. swarm add / invoke_subagent"| S["Specialists Write report.md Slots"]
   S -->|"3. <= 500B READY Receipt"| L["Lead / Parent + integrity_auditor Verify & Bundle SHA-256"]
-  L -->|"4. Ledger Update + --teardown"| D["Durable docs/reviews/ Record"]
+  L -->|"4. finalize --prune & kill"| D["Verified Bundle (+ Optional docs/reviews/ Ledger)"]
 ```
 
 ### Role separation and dual-verdict gate

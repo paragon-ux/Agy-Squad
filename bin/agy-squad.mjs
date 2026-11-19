@@ -5,6 +5,21 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIN_NODE_MAJOR = 22;
+
+function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
+  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
+}
+
+function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (!isNodeVersionSupported(versionStr, minMajor)) {
+    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
+    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
+    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
+  }
+}
+
 function readPkgVersion() {
   try {
     return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.1.3";
@@ -18,7 +33,7 @@ const usage = [
   "",
   "Usage:",
   "  agy-squad <command> [options]",
-  "  agy-squad <command> --help",
+  "  agy-squad help [<command>] | agy-squad <command> --help",
   "  agy-squad --help | -h | --version | -v",
   "",
   "Lifecycle Commands:",
@@ -195,7 +210,7 @@ const SUBCOMMAND_HELP = {
     "",
     "Examples:",
     "  agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json --digest --out scratch/rec.json src/app.js",
-    "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json"
+    "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json src/auth.js"
   ].join("\n"),
   fingerprint: [
     "Usage: agy-squad fingerprint <file...>",
@@ -353,7 +368,7 @@ async function runPlanCommand(rest, root) {
       if (!Object.hasOwn(roleScopes, roleKey)) {
         roleScopes[roleKey] = [];
       }
-      roleScopes[roleKey].push(normalizeWorkspaceCliPath(rawPath));
+      roleScopes[roleKey].push(normalizeScopeCliPath(rawPath));
     }
   }
   const { planSquadCohort } = await import("../mcp/planner.mjs");
@@ -366,7 +381,7 @@ async function runPlanCommand(rest, root) {
     ...(values.mode !== undefined ? { executionMode: values.mode } : {}),
     ...(values.model !== undefined ? { model: values.model } : {}),
     ...(values["workspace-isolation"] !== undefined ? { workspaceIsolation: values["workspace-isolation"] } : {}),
-    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(normalizeWorkspaceCliPath) } : {}),
+    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(p => normalizeScopeCliPath(p)) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["read-only"] ? { readOnly: true } : {}),
     ...(roleScopes !== undefined ? { roleScopes } : {}),
@@ -431,6 +446,7 @@ const KNOWN_COMMANDS = new Set([
   "finalize",
   "prune",
   "verdict",
+  "help",
   "run"
 ]);
 
@@ -524,14 +540,70 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFi
   }
 }
 
-function normalizeWorkspaceCliPath(inputPath) {
+function normalizeWorkspaceCliPath(inputPath, platform = process.platform) {
   if (typeof inputPath !== "string") return inputPath;
   const trimmed = inputPath.trim();
-  if (!trimmed || /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed) || trimmed.includes("\\") || path.isAbsolute(trimmed)) {
+  if (
+    !trimmed ||
+    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed) ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("\\") ||
+    /^[a-zA-Z]:/.test(trimmed) ||
+    path.isAbsolute(trimmed)
+  ) {
     return trimmed;
   }
-  const stripped = trimmed.replace(/^(?:\.\/)+/, "");
-  return stripped || trimmed;
+  if (platform !== "win32" && trimmed.includes("\\")) {
+    return trimmed;
+  }
+  const normalized = platform === "win32" ? trimmed.replace(/\\/g, "/") : trimmed;
+  if (/^(?:\.\/)+$/.test(normalized)) {
+    return ".";
+  }
+  const stripped = normalized.replace(/^(?:\.\/)+/, "");
+  return stripped || normalized;
+}
+
+function normalizeScopeCliPath(inputPath, platform = process.platform) {
+  const normalized = normalizeWorkspaceCliPath(inputPath, platform);
+  if (
+    typeof normalized === "string" &&
+    normalized.length > 1 &&
+    !normalized.startsWith("/") &&
+    normalized.endsWith("/") &&
+    !normalized.endsWith("//")
+  ) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function normalizeBundleOutCliPath(inputOut, platform = process.platform) {
+  const trimmedOut = typeof inputOut === "string" ? inputOut.trim() : "";
+  if (
+    !trimmedOut ||
+    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmedOut) ||
+    trimmedOut.startsWith("/") ||
+    trimmedOut.startsWith("\\") ||
+    path.isAbsolute(trimmedOut) ||
+    /^[a-zA-Z]:/.test(trimmedOut)
+  ) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  if (platform !== "win32" && trimmedOut.includes("\\")) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  const normalizedOut = platform === "win32" ? trimmedOut.replace(/\\/g, "/") : trimmedOut;
+  const outRel = normalizedOut.replace(/^(?:\.\/)+/, "");
+  if (
+    !outRel ||
+    outRel.split("/").some(p => !p || p === "." || p === "..") ||
+    !outRel.toLowerCase().endsWith(".json") ||
+    path.posix.basename(outRel).toLowerCase() === ".json"
+  ) {
+    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
+  }
+  return outRel;
 }
 
 function parseKeyValuePairs(items, flagName) {
@@ -621,7 +693,32 @@ async function main(args) {
   }
   const [command, ...rest] = args;
   if (!KNOWN_COMMANDS.has(command)) {
-    throw new Error(`Unknown command '${command}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, finalize, prune, or verdict.`);
+    throw new Error(`Unknown command '${command}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, finalize, prune, verdict, or help.`);
+  }
+  if (command === "help") {
+    if (rest.length === 0) {
+      console.log(usage);
+      return 0;
+    }
+    if (rest.length > 1) {
+      throw new Error("Usage: agy-squad help [<command>]");
+    }
+    const target = rest[0];
+    if (target === "--help" || target === "-h" || target === "help") {
+      console.log(usage);
+      return 0;
+    }
+    if (target.startsWith("-")) {
+      throw new Error("Conflicting flags: help takes at most one command name (e.g. 'agy-squad help plan').");
+    }
+    if (target === "run") {
+      throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
+    }
+    if (!Object.hasOwn(SUBCOMMAND_HELP, target)) {
+      throw new Error(`Unknown command '${target}'. Expected setup, install, status, uninstall, restore-backups, plan, dispatch, collect, bundle-init, fingerprint, inspect, digest, bundle, verify, finalize, prune, verdict, or help.`);
+    }
+    console.log(SUBCOMMAND_HELP[target]);
+    return 0;
   }
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
@@ -632,6 +729,9 @@ async function main(args) {
     }
     console.log(SUBCOMMAND_HELP[command] ?? usage);
     return 0;
+  }
+  if (command !== "status") {
+    assertNodeVersion();
   }
 
   if (command === "setup" || command === "install") {
@@ -802,7 +902,7 @@ async function main(args) {
       handoffs = [...(handoffs ?? []), ...parseHandoffPairEntries(values.handoff)];
     }
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
-    const files = [...(values.file ?? []), ...positionals].map(normalizeWorkspaceCliPath);
+    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p));
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
       provenance,
@@ -821,20 +921,14 @@ async function main(args) {
         "bundle-init --digest requires specialist handoff receipts. Pass --handoffs <file.json> or --handoff <worker=READY ...>, or omit --digest until handoffs are recorded."
       );
     }
+    if (values.digest && Object.keys(record.verifiedFiles ?? {}).length === 0) {
+      throw new Error(
+        "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
+      );
+    }
     const digestResult = values.digest ? handoffsMod.computeEvidenceDigest(targetRoot, record) : undefined;
     if (values.out !== undefined) {
-      const trimmedOut = typeof values.out === "string" ? values.out.trim() : "";
-      if (!trimmedOut || trimmedOut.includes("\\") || path.isAbsolute(trimmedOut) || /^[a-zA-Z]:/.test(trimmedOut)) {
-        throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
-      }
-      const outRel = trimmedOut.replace(/^(?:\.\/)+/, "");
-      if (
-        outRel.split("/").some(p => !p || p === "." || p === "..") ||
-        !outRel.toLowerCase().endsWith(".json") ||
-        path.posix.basename(outRel).toLowerCase() === ".json"
-      ) {
-        throw new Error(`--out must be a workspace-relative .json path: ${values.out}`);
-      }
+      const outRel = normalizeBundleOutCliPath(values.out);
       const parentDir = path.posix.dirname(outRel);
       if (parentDir && parentDir !== ".") {
         handoffsMod.ensureDirectory(targetRoot, parentDir, [], new Set());
@@ -860,7 +954,7 @@ async function main(args) {
     const { positionals } = parseSubcommandArgs(rest, usageLine);
     if (!positionals.length) throw new Error(usageLine);
     const { fingerprint } = await import("../mcp/handoffs.mjs");
-    console.log(JSON.stringify(fingerprint(root, positionals.map(normalizeWorkspaceCliPath)), null, 2));
+    console.log(JSON.stringify(fingerprint(root, positionals.map(p => normalizeWorkspaceCliPath(p))), null, 2));
     return 0;
   }
   if (command === "inspect") {
@@ -1029,10 +1123,32 @@ async function main(args) {
   }
 }
 
-main(process.argv.slice(2)).then(
-  code => { process.exitCode = code; },
-  error => {
-    console.error(error.message);
-    process.exitCode = 1;
-  }
-);
+function isDirectExecution(argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) {
+  if (!argv1) return false;
+  const tryRealpath = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const normalizeForPlatform = (p) => {
+    const resolved = tryRealpath(p);
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalizeForPlatform(path.resolve(argv1)) === normalizeForPlatform(fileURLToPath(selfUrl));
+}
+
+if (isDirectExecution()) {
+  main(process.argv.slice(2)).then(
+    code => { process.exitCode = code; },
+    error => {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  );
+}
+
+export { assertNodeVersion, isDirectExecution, isNodeVersionSupported, normalizeBundleOutCliPath, normalizeScopeCliPath, normalizeWorkspaceCliPath };
