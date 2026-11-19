@@ -30,6 +30,8 @@ const PACKAGE_VERSION = (() => {
 })();
 
 const PLUGIN_KEY = "agy-squad";
+const MIN_NODE_MAJOR = 22;
+const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
 const MIN_AGY_CONTEXT_VERSION = "2.0.1";
 const MIN_RTK_VERSION = "1.1.0";
 
@@ -79,6 +81,20 @@ function isVersionAtLeast(semver, minMajor, minMinor, minPatch = 0) {
   if (semver.major !== minMajor) return semver.major > minMajor;
   if (semver.minor !== minMinor) return semver.minor > minMinor;
   return semver.patch >= minPatch;
+}
+
+export function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (typeof versionStr !== "string") return false;
+  const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
+}
+
+export function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (!isNodeVersionSupported(versionStr, minMajor)) {
+    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
+    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
+    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
+  }
 }
 
 export function buildWindowsProbeInvocation(target, args = ["--version"]) {
@@ -352,8 +368,14 @@ export function detectExistingInstallation(options = {}) {
     antigravityBinDir
   } = resolveProfilePaths();
   const includeCompanions = options.includeCompanions !== false;
+  const nodeVersion = typeof options.nodeVersion === "string" ? options.nodeVersion : process.versions.node;
   const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
+    runtime: {
+      nodeVersion,
+      minNodeVersion: MIN_NODE_VERSION,
+      supported: isNodeVersionSupported(nodeVersion)
+    },
     plugin: {
       exists: false,
       skillsReady: false,
@@ -417,6 +439,7 @@ export function detectExistingInstallation(options = {}) {
         }
       } else {
         const linkedDirs = [
+          ["assets", "assets"],
           ["bin", "bin"],
           ["docs", "docs"],
           ["mcp", "mcp"],
@@ -497,10 +520,22 @@ export function detectExistingInstallation(options = {}) {
         fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
       );
       details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
+      let logoTarget = "assets/logo.svg";
+      try {
+        const installedPlugin = JSON.parse(fs.readFileSync(path.join(pluginDest, "plugin.json"), "utf8"));
+        if (typeof installedPlugin?.logo === "string" && installedPlugin.logo.trim()) {
+          logoTarget = installedPlugin.logo.trim();
+        }
+      } catch {}
+      const resolvedLogoPath = path.resolve(pluginDest, logoTarget);
+      const logoInsidePlugin =
+        resolvedLogoPath === pluginDest || resolvedLogoPath.startsWith(pluginDest + path.sep);
       details.plugin.runtimeReady =
         fs.existsSync(path.join(pluginDest, "package.json")) &&
         fs.existsSync(path.join(pluginDest, "plugin.json")) &&
         Boolean(details.plugin.version) &&
+        logoInsidePlugin &&
+        fs.existsSync(resolvedLogoPath) &&
         fs.existsSync(path.join(pluginDest, "bin", "agy-squad.mjs")) &&
         fs.existsSync(path.join(pluginDest, "mcp", "index.js"));
     } else if (pluginLst && pluginLst.isSymbolicLink()) {
@@ -548,8 +583,22 @@ export function detectExistingInstallation(options = {}) {
       appendMcpError("plugin mcp_config.json field 'mcpServers' must be a JSON object");
     } else {
       const entry = pluginMcpCheck.data.mcpServers?.[PLUGIN_KEY];
-      if (entry && typeof entry.command === "string" && Array.isArray(entry.args) && entry.args.length > 0) {
-        details.mcp.pluginRegistered = true;
+      if (entry && typeof entry.command === "string" && entry.command.trim() && Array.isArray(entry.args) && entry.args.length > 0) {
+        const isRegularFile = (filePath) => {
+          try {
+            return fs.statSync(filePath).isFile();
+          } catch {
+            return false;
+          }
+        };
+        const usesLocalLauncher = entry.command === "/bin/sh" && entry.args[0] === "./mcp-launch.sh";
+        const isAbsoluteCmd = path.isAbsolute(entry.command) || /^[a-zA-Z]:[\\/]/.test(entry.command);
+        const commandReady = usesLocalLauncher
+          ? isRegularFile(path.join(pluginDest, "mcp-launch.sh"))
+          : !isAbsoluteCmd || isRegularFile(entry.command);
+        if (commandReady) {
+          details.mcp.pluginRegistered = true;
+        }
       }
     }
   }
@@ -661,6 +710,7 @@ export function detectExistingInstallation(options = {}) {
     details.cliShim.exists;
 
   const isComplete =
+    details.runtime.supported &&
     details.plugin.exists &&
     !details.plugin.pointsElsewhere &&
     !details.plugin.versionMismatch &&
@@ -686,6 +736,7 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
   }
   const isWin = os.platform() === "win32";
   const linkMappings = [
+    ["assets", path.join(sourceRoot, "assets")],
     ["bin", path.join(sourceRoot, "bin")],
     ["docs", path.join(sourceRoot, "docs")],
     ["mcp", path.join(sourceRoot, "mcp")],
@@ -711,10 +762,38 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
   }
   await ensurePluginSkillsAndMcpManifest(targetPluginDir);
 }
+export function formatPosixMcpLauncher(execPath = process.execPath) {
+  if (typeof execPath !== "string" || !execPath.trim() || /[\r\n\0]/.test(execPath)) {
+    throw new Error(`Invalid POSIX MCP launcher execPath: ${JSON.stringify(execPath)}`);
+  }
+  const escapedExecPath = normalizeSlash(execPath).replace(/(["\\$`])/g, "\\$1");
+  return [
+    "#!/bin/sh",
+    "if command -v node >/dev/null 2>&1; then",
+    '  NODE_MAJOR="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
+    '  NODE_MAJOR="${NODE_MAJOR%%[!0-9]*}"',
+    `  if [ "\${NODE_MAJOR:-0}" -ge ${MIN_NODE_MAJOR} ] 2>/dev/null; then`,
+    '    exec node "$@"',
+    "  fi",
+    "fi",
+    `if [ -x "${escapedExecPath}" ]; then`,
+    `  exec "${escapedExecPath}" "$@"`,
+    "fi",
+    'exec node "$@"',
+    ""
+  ].join("\n");
+}
+
 async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
   const dotAgentsSkills = path.join(targetPluginDir, ".agents", "skills");
   const skillsDest = path.join(targetPluginDir, "skills");
   if (!fs.existsSync(skillsDest) && fs.existsSync(dotAgentsSkills)) {
+    try {
+      const linkStat = fs.lstatSync(skillsDest);
+      if (linkStat.isSymbolicLink()) {
+        await fsPromises.unlink(skillsDest);
+      }
+    } catch {}
     try {
       const isWin = os.platform() === "win32";
       fs.symlinkSync(
@@ -727,14 +806,27 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
     }
   }
 
+  const isWin = os.platform() === "win32";
+  let mcpEntry;
+  if (isWin) {
+    mcpEntry = {
+      command: process.execPath,
+      args: ["./mcp/index.js"]
+    };
+  } else {
+    const launcherPath = path.join(targetPluginDir, "mcp-launch.sh");
+    await safeWriteFileIfChanged(launcherPath, formatPosixMcpLauncher(process.execPath), 0o755);
+    mcpEntry = {
+      command: "/bin/sh",
+      args: ["./mcp-launch.sh", "./mcp/index.js"]
+    };
+  }
+
   const pluginMcpJson = path.join(targetPluginDir, "mcp_config.json");
   const pluginMcpContent = JSON.stringify(
     {
       mcpServers: {
-        [PLUGIN_KEY]: {
-          command: "node",
-          args: ["./mcp/index.js"]
-        }
+        [PLUGIN_KEY]: mcpEntry
       }
     },
     null,
@@ -763,6 +855,8 @@ export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
     "setlocal",
     "where node.exe >nul 2>nul",
     "if errorlevel 1 goto :fallback",
+    `node.exe -e "process.exit(Math.min(parseInt(process.versions.node,10),${MIN_NODE_MAJOR})===${MIN_NODE_MAJOR}?0:1)" >nul 2>nul`,
+    "if errorlevel 1 goto :fallback",
     // A label-less GOTO ends the batch context. The queued executable can
     // delete this shim (and any managed node.cmd) and return its own status.
     `(goto) 2>nul & node.exe "${escapedTarget}" %*`,
@@ -778,9 +872,16 @@ export function formatPosixShim(targetRoot, execPath = process.execPath) {
   return [
     "#!/bin/sh",
     "if command -v node >/dev/null 2>&1; then",
-    `  exec node "${cliTarget}" "$@"`,
+    '  NODE_MAJOR="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
+    '  NODE_MAJOR="${NODE_MAJOR%%[!0-9]*}"',
+    `  if [ "\${NODE_MAJOR:-0}" -ge ${MIN_NODE_MAJOR} ] 2>/dev/null; then`,
+    `    exec node "${cliTarget}" "$@"`,
+    "  fi",
     "fi",
-    `exec "${escapedExecPath}" "${cliTarget}" "$@"`,
+    `if [ -x "${escapedExecPath}" ]; then`,
+    `  exec "${escapedExecPath}" "${cliTarget}" "$@"`,
+    "fi",
+    `exec node "${cliTarget}" "$@"`,
     ""
   ].join("\n");
 }
@@ -804,6 +905,7 @@ async function installCliShims({ targetRoot, log }) {
 }
 
 export async function runCheckOnly(options = {}) {
+  assertNodeVersion();
   const { mcpJsonPath, configJsonPath } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
   log("Running Agy-Squad read-only preflight check (--check)...");
@@ -839,6 +941,7 @@ export async function runCheckOnly(options = {}) {
 }
 
 export async function runInstall(options = {}) {
+  assertNodeVersion();
   const {
     pluginsDir,
     pluginDest,
@@ -1040,7 +1143,7 @@ export async function runInstall(options = {}) {
   }
   if (missingCompanions.length > 0) {
     log(`[NEXT STEP] Optional companion tools not ready (${missingCompanions.join(", ")}):`);
-    log("            - For full live integrity trace audits, install Agy-Context-Saver: npx --package=agy-context-saver agy-context setup");
+    log("            - For full live integrity trace audits, install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended): npx --package=agy-context-saver agy-context setup");
     log("            - For standalone usage without live trace audits, pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize'.");
   }
 
@@ -1200,14 +1303,17 @@ function formatCompanionLine(label, info, note) {
     return `- ${label}: AVAILABLE (${info.rawVersion || info.version} at ${info.path})`;
   }
   if (info?.installed && !info?.compatible) {
-    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal — ${note})`;
+    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal: ${note})`;
   }
-  return `- ${label}: MISSING (non-fatal — ${note})`;
+  return `- ${label}: MISSING (non-fatal: ${note})`;
 }
 
 export function printStatus(options = {}) {
-  const log = options.silent ? () => {} : console.log;
-  const status = detectExistingInstallation({ includeCompanions: true });
+  const log = typeof options.log === "function" ? options.log : (options.silent ? () => {} : console.log);
+  const status = detectExistingInstallation({
+    includeCompanions: options.includeCompanions !== false,
+    ...(typeof options.nodeVersion === "string" ? { nodeVersion: options.nodeVersion } : {})
+  });
   const plug = status.details.plugin;
   const pluginNote = !plug.exists
     ? (plug.isSymlink
@@ -1223,6 +1329,16 @@ export function printStatus(options = {}) {
             ? `ACTIVE COPY (${plug.path})`
             : `ACTIVE (${plug.path})`;
   log("Checking Agy-Squad installation status...\n");
+  const rt = status.details.runtime;
+  const cleanedNode = typeof rt.nodeVersion === "string" ? rt.nodeVersion.trim().replace(/^v/i, "") : "";
+  const foundNode = cleanedNode ? `v${cleanedNode}` : "unknown";
+  log(
+    `- Node.js Runtime (>= ${rt.minNodeVersion}): ${
+      rt.supported
+        ? `SUPPORTED (${foundNode})`
+        : `UNSUPPORTED (${foundNode} < ${rt.minNodeVersion}; upgrade Node.js)`
+    }`
+  );
   log(`- Native Plugin Link: ${pluginNote}`);
   log(
     `- Governance Skills (pr-review, full-review, self-diagnosis, swarm-governance): ${
@@ -1268,17 +1384,21 @@ export function printStatus(options = {}) {
   log(formatCompanionLine("Companion CLI (agy-context >= 2.0.1)", agyContext, "needed for integrity trace audits"));
   log(formatCompanionLine("Companion Optimizer (rtk >= 1.1.0)", rtk, "needed by Agy-Context-Saver hooks"));
   if (!agyContext?.available || !rtk?.available) {
-    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1) + RTK (>= 1.1.0) for full live integrity audits.");
+    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended) + RTK (>= 1.1.0) for full live integrity audits, or pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize' for standalone runs.");
   }
   const overallLabel = status.isComplete
     ? "HEALTHY & ACTIVE"
     : status.details.mcp.corrupt || status.details.config.corrupt
       ? "CORRUPT CONFIGURATION"
-      : status.isInstalled
-        ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
-        : "NOT INSTALLED";
+      : !status.details.runtime.supported
+        ? (status.isInstalled ? "UNSUPPORTED NODE.JS RUNTIME" : "NOT INSTALLED (UNSUPPORTED NODE.JS)")
+        : status.isInstalled
+          ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
+          : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
-  if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
+  if (!status.details.runtime.supported) {
+    log(`Next step: upgrade Node.js to >= ${rt.minNodeVersion} (found ${foundNode}), then run 'npx --package=agy-squad@latest agy-squad setup'.`);
+  } else if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
     log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
   }
   return status;

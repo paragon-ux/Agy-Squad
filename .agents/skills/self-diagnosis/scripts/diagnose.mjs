@@ -901,7 +901,16 @@ function extractMarkdownLinks(sourceFile, markdown) {
     if (!rawTarget && !fragment) continue;
     if (rawTarget && rawTarget.startsWith(HOSTED_DOCS_PREFIX)) {
       const slug = rawTarget.slice(HOSTED_DOCS_PREFIX.length).replace(/^\/+|\/+$/g, "");
-      if (slug && (slug.includes("..") || slug.includes("\\"))) continue;
+      if (slug && (slug.includes("..") || slug.includes("\\"))) {
+        links.push({
+          link: rawTarget,
+          fragment,
+          resolved: null,
+          isHostedDocs: true,
+          invalidReason: "malformed hosted docs URL"
+        });
+        continue;
+      }
       const docSlug = slug ? slug.replace(/\.md$/i, "") : "index";
       links.push({
         link: rawTarget,
@@ -982,12 +991,26 @@ function checkRelativeLinks(skillFile, markdown) {
   const isInsideSkills =
     skillFile === skillsRootDir || skillFile.startsWith(skillsRootDir + path.sep);
   for (const item of extractMarkdownLinks(skillFile, markdown)) {
-    if (!item.isHostedDocs && isInsideSkills && /(?:^|\/)\.\.\/\.\.\/\.\.\/docs(?:\/|$)/.test(item.link)) {
+    if (item.invalidReason) {
       broken.push({
-        link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (non-portable cross-root docs link; use hosted Zensical URL)`,
-        resolved: path.relative(repoRoot, item.resolved)
+        link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (${item.invalidReason})`,
+        resolved: item.link
       });
       continue;
+    }
+    if (!item.isHostedDocs && isInsideSkills) {
+      const relFromSkills = path.relative(skillsRootDir, item.resolved);
+      if (
+        relFromSkills === ".." ||
+        relFromSkills.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relFromSkills)
+      ) {
+        broken.push({
+          link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (non-portable link escaping .agents/skills/; use hosted Zensical URL or intra-skill relative link)`,
+          resolved: path.relative(repoRoot, item.resolved)
+        });
+        continue;
+      }
     }
     if (!fs.existsSync(item.resolved)) {
       broken.push({ link: item.link, resolved: path.relative(repoRoot, item.resolved) });

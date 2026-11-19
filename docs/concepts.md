@@ -9,7 +9,7 @@ flowchart LR
   P["Parent Session (agy)"] -->|"1. squad_planner / dispatch_squad"| C["Compiled Stage (Lead, Specialists, or /swarm)"]
   C -->|"2. swarm add / invoke_subagent"| S["Specialists Write report.md Slots"]
   S -->|"3. <= 500B READY Receipt"| L["Lead / Parent + integrity_auditor Verify & Bundle SHA-256"]
-  L -->|"4. Ledger Update + --teardown"| D["Durable docs/reviews/ Record"]
+  L -->|"4. finalize --prune & kill"| D["Verified Bundle (+ Optional docs/reviews/ Ledger)"]
 ```
 
 ### Role separation and dual-verdict gate
@@ -72,4 +72,4 @@ The command-line companion binary (`>= 1.1.0`) provisioned by `Agy-Context-Saver
 Agy-Squad's harness diagnostic and optimization skill (`.agents/skills/self-diagnosis/SKILL.md`). It provides a zero-subagent local profiler (`diagnose.mjs`) and three targeted specialist cohorts that audit skills, runtime contracts, and token budgets under operator supervision.
 
 ### PR Review Standard `v1.4.0` (`/pr-review`)
-The repository's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` finding records in `docs/reviews/`.
+Agy-Squad's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across ten categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`), and `1 ID = 1 Row` structured reports delivered in chat, an Antigravity artifact, or `docs/reviews/<slug>.md` when requested or already adopted in the repository.

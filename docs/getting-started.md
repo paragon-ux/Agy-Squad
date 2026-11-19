@@ -29,19 +29,22 @@ agy-squad status
   - **Windows (PowerShell):** `$env:PATH = "$HOME\.gemini\antigravity\bin;$env:PATH"`
   - **Zero-PATH fallback:** `npx --package=agy-squad agy-squad status` (works for any subcommand without modifying `PATH`).
 - **Standalone usage without `Agy-Context-Saver`:** `setup` prints a `[NEXT STEP]` notice if `agy-context` or `rtk` is absent. Install `Agy-Context-Saver` (`npx --package=agy-context-saver agy-context setup`) for full live integrity trace audits, or pass `--no-integrity` to `agy-squad plan` and `--allow-unaudited` to `agy-squad bundle` or `agy-squad finalize` for standalone runs.
+- **Upgrade an existing install:** Run `npx --package=agy-squad@latest agy-squad setup` when updating to a newer release so npm does not reuse a cached `_npx` package version.
 
-### Local repository checkout (optional)
+### Local repository checkout and development (optional)
 
-If you are developing `Agy-Squad` from source, clone the repository and run `npm run setup && npm test` (source checkouts may also invoke the CLI directly via `node bin/agy-squad.mjs`):
+If you are developing `Agy-Squad` from source, clone the repository and run the setup, preflight, test, and package-boundary checks (source checkouts may also invoke the CLI directly via `node bin/agy-squad.mjs`):
 
 ```bash
 git clone https://github.com/paragon-ux/Agy-Squad.git
 cd Agy-Squad
 npm run setup
+node scripts/release-preflight.mjs
 npm test
+npm run verify:package
 ```
 
-`npm test` runs locally in Node.js without spawning live subagents. It exercises the lifecycle installer (`setup`, `status`, `--check`, `uninstall`), MCP server, `dispatch_squad` compiler, `squad_planner` planner, handoff bundler, `/self-diagnosis` profiler, and benchmark fixture.
+Runs all 10 test suites (`tests/test-verdicts-and-pivot.mjs`, `tests/test-dispatch.mjs`, `tests/test-planner.mjs`, `tests/test-handoffs.mjs`, `tests/test-run.mjs`, `tests/test-server.mjs`, `tests/test-comparative-dossier.mjs`, `tests/test-lifecycle-installer.mjs`, `benchmarks/teamwork-vs-squad/verify-benchmark.mjs`, and `tests/verify-package.mjs`) locally in isolated temporary directories without spawning live subagents or mutating your live `~/.gemini` configuration.
 
 ### Uninstall & Rollback
 
@@ -91,17 +94,46 @@ In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` a
 
 For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `agy-squad` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) subcommands (run `agy-squad <command> --help` for full options and examples). Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in favor of native `/swarm` planning and the unified `agy-squad` governance CLI.
 
-### Generate a `/swarm` plan and provenance scaffold
+### Generate a `/swarm` plan, audit, and proof bundle
 
-Plan a self-contained `/swarm` cohort directly in any repository:
+Plan a self-contained read-only `/swarm` cohort in any repository, write the coordinator synthesis report (`synthesisSlot` in `scratch/plan.json`, required for flat `task` cohorts that have no separate lead worker), record the worker receipts in `scratch/handoffs.json`, and seal the SHA-256 bundle in one step:
 
 ```bash
-agy-squad plan \
-  --mode swarm \
-  --scope src \
-  --role "Implementer" --role "Reviewer" \
-  "Audit authentication flow"
+# 1. Plan a read-only /swarm cohort in any repository and save the plan JSON
+mkdir -p scratch && agy-squad plan --mode swarm --read-only --scope src \
+  --role "Security" --role "Test Audit" \
+  "Audit authentication flow" > scratch/plan.json
+
+# 2. After specialists finish, author the flat-mode synthesis report at
+#    workers[0].synthesisSlot (scratch/agy-squad/squad-task_squad/lead/report.md)
+#    containing a strict single line: "Content Verdict: PASS" (or FAIL / BLOCKED),
+#    then verify it and initialize the bundle record + Evidence Digest:
+agy-squad verdict scratch/agy-squad/squad-task_squad/lead/report.md
+agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json \
+  --digest --out scratch/record.json src/auth.js
+
+# 3. Verify the integrity auditor verdict (single-squad slot; multi-squad uses squad-integrity_auditor-<id>)
+#    and finalize (inspect -> bundle -> verify + prune) in one step
+agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md
+agy-squad finalize scratch/record.json --replace --prune
 ```
+
+`scratch/handoffs.json` is a JSON array pairing each compiled `workerName` from `scratch/plan.json` with its exact single-line `<= 500` byte receipt (using the literal `U+2014` em-dash `—` delimiter; you can also pass repeatable `--handoff "<workerName>=READY ..."` flags inline instead of a file):
+
+```json
+[
+  {
+    "sender": "task-squad-security",
+    "message": "@coordinator READY scratch/agy-squad/squad-task_squad/specialist-1/report.md — src/auth.js:42 token check verified"
+  },
+  {
+    "sender": "task-squad-test-audit",
+    "message": "@coordinator READY scratch/agy-squad/squad-task_squad/specialist-2/report.md — auth unit tests cover expiry edge cases"
+  }
+]
+```
+
+See [Bundle record and handoffs schemas](tools.md#bundle-record-and-handoffs-schemas) for the full `<bundle-record.json>` and `--handoffs` contracts.
 
 Or compile a multi-squad cohort from a workspace manifest file:
 
@@ -138,6 +170,7 @@ agy-squad plan \
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `Unknown command ...` or `'agy-squad run' was retired` | Retired `agy-squad run` PTY launcher was invoked | Run `agy-squad plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
+| Desktop IDE fails to start `agy-squad` MCP (`spawn node ENOENT`, Node `< 22`, or tools missing after reload) | GUI app launched with a minimal non-login `PATH` lacking Homebrew/`nvm`/`fnm`/`volta` Node `>= 22`, or Node moved since `setup` ran | Re-run `npx --package=agy-squad@latest agy-squad setup` from a shell with Node `>= 22.0.0` (writes `~/.gemini/config/plugins/agy-squad/mcp-launch.sh` on POSIX or records `process.execPath` on Windows in `~/.gemini/config/plugins/agy-squad/mcp_config.json`), verify with `agy-squad status`, and reload Antigravity Desktop IDE |
 | Unbounded `read_file` denied by `Agy-Context-Saver` hook during live run | `Agy-Context-Saver` (`>= 2.0.1`, `2.0.4+` recommended) enforces the 3-tier Hybrid Slice Policy (`StartLine`/`EndLine` `<= 150` lines, or full-file `<= 800` lines & `<= 45 KiB`) | Locate symbols with `rtk grep`/`rtk find` and pass bounded `StartLine`/`EndLine` (`<= 150` lines) to `read_file` for workspace source files (reserve `rtk read` strictly for step spillovers and completed task logs); run `agy-context setup` if `rtk` (`>= 1.1.0`) is missing |
 | `Requested explicit model ... cannot be pinned under executionMode 'subagent'` | `invoke_subagent` accepts only `inherit|flash|flash_lite|pro` | Set `executionMode: "swarm"` (`--mode swarm`) in `squad_planner` to explicitly pin and verify exact model IDs via `swarm status` |
 | Swarm UI shows old posts, retired workers, or loads slowly across waves | Antigravity keeps one append-only board per conversation (`killed: true` entries stay in history) and does not expose user-configurable channels when `swarm` lacks `action: "channel"` | Start a fresh Antigravity conversation per major `/swarm` wave for a clean board, or run follow-up cohorts via `invoke_subagent` ([Shared swarm board and channel limits](concepts.md#shared-swarm-board-and-channel-limits)) |

@@ -758,6 +758,7 @@ function planSquadCohort(
 
     workers.push({
       squadId: id,
+      synthesisSlot: leadSlot,
       lead: compiledLead
         ? {
             workerName: leadWorkerName,
@@ -946,6 +947,7 @@ function planSquadCohort(
 
   const hasLead = workers.some(w => Boolean(w.lead));
   const hasFlat = workers.some(w => !w.lead);
+  const flatSynthesisSlots = workers.filter(w => !w.lead).map(w => w.synthesisSlot);
   const compiledPattern = hasLead && hasFlat ? "mixed" : hasLead ? "layered" : "flat";
   const notes = [];
   if (executionMode === "swarm" && compiledPattern === "mixed") {
@@ -959,6 +961,11 @@ function planSquadCohort(
   } else if (executionMode === "swarm") {
     notes.push(
       "Flat plan: specialists report directly to the swarm coordinator without per-squad leads. Compared with layered plans, flat plans use fewer coordination hops when a single synthesis suffices. Neither topology is forced as default; ask the user which topology they want if unspecified."
+    );
+  }
+  if (flatSynthesisSlots.length > 0) {
+    notes.push(
+      `Coordinator synthesis slot(s) for flat squad(s): write ${flatSynthesisSlots.join(", ")} with a strict single-line 'Content Verdict: PASS' (or FAIL/BLOCKED) before running 'agy-squad bundle-init --digest' or 'agy-squad finalize'.`
     );
   }
   if (executionMode === "swarm") {
@@ -1009,7 +1016,10 @@ function planSquadCohort(
       ...(workspaceIsolation !== "inherit"
         ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
         : []),
-      "agy-squad bundle-init --plan <plan.json> --digest --out <bundle-record.json> <verified-files...>",
+      ...(flatSynthesisSlots.length > 0
+        ? [`# Write coordinator synthesis report ('Content Verdict: PASS|FAIL|BLOCKED') at: ${flatSynthesisSlots.join(", ")}`]
+        : []),
+      "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> <verified-files...>",
       ...(includeIntegrityAuditor
         ? ["agy-squad verdict --integrity <integrity-report.md>"]
         : []),
