@@ -52,7 +52,7 @@ Conform strictly to [PR Review Standard v1.5.0](../../pr-review/references/pr-re
 - Explicit **4-Tier Day-1 Ship Verdict** in Section 7:
   - **`SHIP NOW`**: `0` open P0/P1/P2/P3 actionable in-repo defects (only tracked Section 8 residuals, upstream deferrals, or informational notes remain, if any).
   - **`SHIP WITH MINOR POLISH`**: `0` P0/P1/SEC blockers and at most `<= 2` small, localized P2/P3 polish items with zero broken consumer install, compile, SDK, or core-command contracts.
-  - **`FIX BEFORE RELEASE`**: `0` P0/P1/SEC blockers, but **`>= 3` open P2s**, any P2 breaking consumer compilation, installation, or core documented workflows, or unresolved in-repo P3 defects.
+  - **`FIX BEFORE RELEASE`**: `0` P0/P1/SEC blockers, but **`>= 3` open P2/P3 items** or any P2 breaking consumer compilation, installation, or core documented workflows (under Stage 3, all concrete in-repo P0-P3 defects are fixed automatically to reach `SHIP NOW`).
   - **`HOLD BEFORE PUBLIC RELEASE`**: Any open P0/P1 blocker, any unresolved `SEC` vulnerability, or any unreviewed material category.
 
 ---
