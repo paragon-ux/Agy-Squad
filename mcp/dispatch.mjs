@@ -304,11 +304,19 @@ function formatNotFoundError(args, fallbackWorkspace) {
   return `Manifest or workspace not found (workspace: '${attemptedWorkspace}'${manifestDetail}). Pass 'workspace' set to your active repository root, set AGY_SQUAD_WORKSPACE, or run 'agy-squad plan' / 'agy-squad dispatch' from the repository root.`;
 }
 
-function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
+function handleDispatchSquad(
+  args = {},
+  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd(),
+  options = {}
+) {
   try {
     if (!args || typeof args !== "object" || Array.isArray(args) ||
         Object.keys(args).some(key => !ALLOWED_DISPATCH_KEYS.has(key))) {
       throw new Error("Only squadId, manifestPath, and workspace are supported.");
+    }
+    const includeTranscriptAccessDirectives = options?.includeTranscriptAccessDirectives ?? false;
+    if (typeof includeTranscriptAccessDirectives !== "boolean") {
+      throw new Error("includeTranscriptAccessDirectives must be a boolean.");
     }
     const { squadId, manifestPath, workspace: argWorkspace } = args;
     if (typeof squadId !== "string" || !squadId.trim()) {
@@ -348,6 +356,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
       buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
         isIntegrityAuditor,
         workspace: delegateWorkspace,
+        includeTranscriptAccessDirectives,
         validateOnly,
         ...(emitWarnings ? { warnings } : {})
       });

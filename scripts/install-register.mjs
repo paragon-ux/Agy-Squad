@@ -10,7 +10,6 @@
  * - Provisions executable agy-squad CLI shims in ~/.gemini/antigravity/bin/
  */
 
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,8 +31,6 @@ const PACKAGE_VERSION = (() => {
 const PLUGIN_KEY = "agy-squad";
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
-const MIN_AGY_CONTEXT_VERSION = "2.0.1";
-const MIN_RTK_VERSION = "1.1.0";
 
 function resolveProfilePaths() {
   const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
@@ -64,25 +61,6 @@ function resolveProfilePaths() {
   };
 }
 
-function parseSemver(versionStr) {
-  if (!versionStr || typeof versionStr !== "string") return null;
-  const match = versionStr.match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) return null;
-  return {
-    major: Number.parseInt(match[1], 10),
-    minor: Number.parseInt(match[2], 10),
-    patch: Number.parseInt(match[3], 10),
-    version: `${match[1]}.${match[2]}.${match[3]}`
-  };
-}
-
-function isVersionAtLeast(semver, minMajor, minMinor, minPatch = 0) {
-  if (!semver) return false;
-  if (semver.major !== minMajor) return semver.major > minMajor;
-  if (semver.minor !== minMinor) return semver.minor > minMinor;
-  return semver.patch >= minPatch;
-}
-
 export function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
   if (typeof versionStr !== "string") return false;
   const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
@@ -95,159 +73,6 @@ export function assertNodeVersion(versionStr = process.versions.node, minMajor =
     const foundLabel = cleaned ? `v${cleaned}` : "unknown";
     throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
   }
-}
-
-export function buildWindowsProbeInvocation(target, args = ["--version"]) {
-  if (typeof target !== "string" || !target.trim() || /["&|<>^%!\r\n]/.test(target)) {
-    return null;
-  }
-  const isBareCommand = !target.includes("/") && !target.includes("\\");
-  if (isBareCommand && /[()\s]/.test(target)) {
-    return null;
-  }
-  if (!Array.isArray(args)) return null;
-  const quotedArgs = [];
-  for (const arg of args) {
-    if (typeof arg !== "string" || /["&|<>^%!()\r\n]/.test(arg)) {
-      return null;
-    }
-    quotedArgs.push(`"${arg}"`);
-  }
-  const cmdLine = [`"${target}"`, ...quotedArgs].join(" ");
-  const comspec =
-    process.env.ComSpec ||
-    process.env.COMSPEC ||
-    path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "cmd.exe");
-  return {
-    comspec,
-    args: ["/d", "/s", "/c", `"${cmdLine}"`],
-    cmdLine
-  };
-}
-
-function probeBinaryVersion(target, args = ["--version"]) {
-  const isWin = os.platform() === "win32";
-  const isBareCommand = typeof target === "string" && !target.includes("/") && !target.includes("\\");
-  const useCmdShell = isWin && (isBareCommand || /\.(?:cmd|bat)$/i.test(target));
-  try {
-    let res;
-    if (useCmdShell) {
-      const winInv = buildWindowsProbeInvocation(target, args);
-      if (!winInv) return null;
-      res = spawnSync(winInv.comspec, winInv.args, {
-        encoding: "utf8",
-        timeout: 3000,
-        windowsHide: true,
-        windowsVerbatimArguments: true,
-        stdio: ["ignore", "pipe", "pipe"]
-      });
-    } else {
-      res = spawnSync(target, args, {
-        encoding: "utf8",
-        timeout: 3000,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"]
-      });
-    }
-    if (res.error || res.status !== 0) return null;
-    const raw = (res.stdout || "").trim() || (res.stderr || "").trim();
-    const semver = parseSemver(raw);
-    if (!semver) return null;
-    return { raw, semver };
-  } catch {
-    return null;
-  }
-}
-
-export function detectCompanionDependencies() {
-  const isWin = os.platform() === "win32";
-  const { antigravityBinDir: activeBinDir, pluginsDir: activePluginsDir } = resolveProfilePaths();
-
-  const agyContextCandidates = isWin
-    ? [
-        path.join(activeBinDir, "agy-context.cmd"),
-        path.join(activeBinDir, "agy-context.exe"),
-        "agy-context"
-      ]
-    : [path.join(activeBinDir, "agy-context"), "agy-context"];
-
-  let agyContext = {
-    available: false,
-    installed: false,
-    compatible: false,
-    version: null,
-    rawVersion: null,
-    path: null,
-    minVersion: MIN_AGY_CONTEXT_VERSION
-  };
-  for (const candidate of agyContextCandidates) {
-    const isBare = !candidate.includes("/") && !candidate.includes("\\");
-    if (!isBare && !fs.existsSync(candidate)) continue;
-    const probed = probeBinaryVersion(candidate);
-    if (!probed) continue;
-    const compatible = isVersionAtLeast(probed.semver, 2, 0, 1);
-    const entry = {
-      available: compatible,
-      installed: true,
-      compatible,
-      version: probed.semver.version,
-      rawVersion: probed.raw,
-      path: candidate,
-      minVersion: MIN_AGY_CONTEXT_VERSION
-    };
-    if (compatible) {
-      agyContext = entry;
-      break;
-    }
-    if (!agyContext.installed) agyContext = entry;
-  }
-
-  const rtkCandidates = isWin
-    ? [
-        "rtk",
-        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk.exe"),
-        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk.cmd"),
-        path.join(activeBinDir, "rtk.exe"),
-        path.join(activeBinDir, "rtk.cmd")
-      ]
-    : [
-        "rtk",
-        path.join(activePluginsDir, "agy-context-saver", "bin", "rtk"),
-        path.join(activeBinDir, "rtk")
-      ];
-
-  let rtk = {
-    available: false,
-    installed: false,
-    compatible: false,
-    version: null,
-    rawVersion: null,
-    path: null,
-    minVersion: MIN_RTK_VERSION
-  };
-  for (const candidate of rtkCandidates) {
-    const isBare = !candidate.includes("/") && !candidate.includes("\\");
-    if (!isBare && !fs.existsSync(candidate)) continue;
-    const probed = probeBinaryVersion(candidate);
-    if (!probed) continue;
-    const compatible = isVersionAtLeast(probed.semver, 1, 1, 0);
-    const entry = {
-      available: compatible,
-      installed: true,
-      compatible,
-      version: probed.semver.version,
-      rawVersion: probed.raw,
-      path: candidate,
-      minVersion: MIN_RTK_VERSION
-    };
-    if (compatible) {
-      rtk = entry;
-      break;
-    }
-    if (!rtk.installed) rtk = entry;
-  }
-
-  return { agyContext, rtk };
 }
 
 function normalizeSlash(p) {
@@ -327,12 +152,19 @@ async function safeWriteFileIfChanged(filePath, content, mode) {
     }
   } catch {}
   await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fsPromises.writeFile(tmpPath, content, "utf8");
-  if (mode !== undefined && os.platform() !== "win32") {
-    await fsPromises.chmod(tmpPath, mode);
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    await fsPromises.writeFile(tmpPath, content, "utf8");
+    if (mode !== undefined && os.platform() !== "win32") {
+      await fsPromises.chmod(tmpPath, mode);
+    }
+    await fsPromises.rename(tmpPath, filePath);
+  } catch (err) {
+    try {
+      await fsPromises.unlink(tmpPath);
+    } catch {}
+    throw err;
   }
-  await fsPromises.rename(tmpPath, filePath);
   return true;
 }
 
@@ -367,7 +199,6 @@ export function detectExistingInstallation(options = {}) {
     antigravityMcpRootDir,
     antigravityBinDir
   } = resolveProfilePaths();
-  const includeCompanions = options.includeCompanions !== false;
   const nodeVersion = typeof options.nodeVersion === "string" ? options.nodeVersion : process.versions.node;
   const pluginMcpJsonPath = path.join(pluginDest, "mcp_config.json");
   const details = {
@@ -400,8 +231,7 @@ export function detectExistingInstallation(options = {}) {
       globalPath: mcpJsonPath
     },
     cliShim: { exists: false, onPath: isDirOnPath(antigravityBinDir), path: antigravityBinDir },
-    config: { enabled: false, corrupt: false, error: null, path: configJsonPath },
-    companions: null
+    config: { enabled: false, corrupt: false, error: null, path: configJsonPath }
   };
 
   const isLocalCheckout =
@@ -698,10 +528,6 @@ export function detectExistingInstallation(options = {}) {
     details.config.enabled = hasInstalledArtifacts ? pluginDefaultEnabled : false;
   }
 
-  if (includeCompanions) {
-    details.companions = detectCompanionDependencies();
-  }
-
   const isInstalled =
     details.plugin.exists ||
     Boolean(pluginLst) ||
@@ -930,7 +756,7 @@ export async function runCheckOnly(options = {}) {
   readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   readAndValidateJsonFile(configJsonPath, "config.json");
 
-  const status = detectExistingInstallation({ includeCompanions: false });
+  const status = detectExistingInstallation();
   if (status.details.mcp.corrupt) {
     throw new Error(`Corrupt MCP configuration detected: ${status.details.mcp.error}`);
   }
@@ -975,7 +801,7 @@ export async function runInstall(options = {}) {
       `Existing config.json (${configJsonPath}) field 'plugins' must be a JSON object; aborting to preserve user configuration.`
     );
   }
-  const existing = detectExistingInstallation({ includeCompanions: false });
+  const existing = detectExistingInstallation();
 
   if (existing.isInstalled) {
     log("Existing Agy-Squad installation detected:");
@@ -1060,7 +886,7 @@ export async function runInstall(options = {}) {
       try {
         const currentRaw = fs.readFileSync(mcpJsonPath, "utf8");
         if (currentRaw !== nextMcpRaw) {
-          await fsPromises.copyFile(mcpJsonPath, mcpBakPath);
+          await safeWriteFileIfChanged(mcpBakPath, currentRaw);
           log(`[OK] Created configuration backup: ${mcpBakPath}`);
         }
       } catch (err) {
@@ -1107,7 +933,8 @@ export async function runInstall(options = {}) {
   if (!prevPluginEntry || typeof prevPluginEntry !== "object" || Array.isArray(prevPluginEntry) || prevPluginEntry.enabled !== true) {
     if (fs.existsSync(configJsonPath) && !fs.existsSync(configBakPath)) {
       try {
-        await fsPromises.copyFile(configJsonPath, configBakPath);
+        const currentCfgRaw = fs.readFileSync(configJsonPath, "utf8");
+        await safeWriteFileIfChanged(configBakPath, currentCfgRaw);
       } catch {}
     }
     nextConfig.plugins = {
@@ -1134,26 +961,98 @@ export async function runInstall(options = {}) {
     }
   }
 
-  const companions = detectCompanionDependencies();
-  const missingCompanions = [];
-  if (!companions.agyContext?.available) {
-    missingCompanions.push(`agy-context >= ${MIN_AGY_CONTEXT_VERSION}`);
-  }
-  if (!companions.rtk?.available) {
-    missingCompanions.push(`rtk >= ${MIN_RTK_VERSION}`);
-  }
-  if (missingCompanions.length > 0) {
-    log(`[NEXT STEP] Optional companion tools not ready (${missingCompanions.join(", ")}):`);
-    log("            - For full live integrity trace audits, install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended): npx --package=agy-context-saver agy-context setup");
-    log("            - For standalone usage without live trace audits, pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize'.");
-  }
-
   const elapsed = (performance.now() - startTime).toFixed(1);
   log(`\nAgy-Squad installation ${existing.isInstalled ? "synchronized & up-to-date" : "completed"} in ${elapsed}ms!`);
   log("Next steps: reload or restart Antigravity Desktop IDE (if open) so the registered 'agy-squad' MCP server and skills load, then run 'agy-squad status' (or 'npx --package=agy-squad agy-squad status').\n");
-  const finalStatus = detectExistingInstallation({ includeCompanions: false });
-  finalStatus.details.companions = companions;
+  const finalStatus = detectExistingInstallation();
   return { ...finalStatus, isInstalled: true, elapsedMs: elapsed };
+}
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isOwnMcpServerKey(key) {
+  return key === PLUGIN_KEY || key.startsWith(PLUGIN_KEY);
+}
+
+async function mergeRestoreJsonSection({
+  targetPath,
+  targetLabel,
+  backupPath,
+  legacyBackupPath,
+  sectionKey,
+  keyFilter,
+  log
+}) {
+  const hasPrimary = fs.existsSync(backupPath);
+  const hasLegacy = !hasPrimary && fs.existsSync(legacyBackupPath);
+  if (!hasPrimary && !hasLegacy) return false;
+
+  let backupData;
+  if (hasPrimary) {
+    backupData = readAndValidateJsonFile(backupPath, `${targetLabel} backup`);
+    if (backupData[sectionKey] !== undefined && !isPlainObject(backupData[sectionKey])) {
+      throw new Error(
+        `Backup ${targetLabel} (${backupPath}) field '${sectionKey}' must be a JSON object; aborting restore to preserve user configuration.`
+      );
+    }
+  } else {
+    try {
+      backupData = readAndValidateJsonFile(legacyBackupPath, `legacy ${targetLabel} backup`);
+    } catch {
+      return false;
+    }
+    if (!isPlainObject(backupData?.[sectionKey])) {
+      return false;
+    }
+    const hasOwnLegacyKey = Object.keys(backupData[sectionKey]).some(keyFilter);
+    if (!hasOwnLegacyKey) {
+      return false;
+    }
+  }
+
+  const currentData = readAndValidateJsonFile(targetPath, targetLabel);
+  if (currentData && currentData[sectionKey] !== undefined && !isPlainObject(currentData[sectionKey])) {
+    throw new Error(
+      `Existing ${targetLabel} (${targetPath}) field '${sectionKey}' must be a JSON object; aborting restore to preserve user configuration.`
+    );
+  }
+
+  const backupSection = isPlainObject(backupData?.[sectionKey]) ? backupData[sectionKey] : {};
+  const ownBackupKeys = Object.keys(backupSection).filter(keyFilter);
+
+  if (!currentData && ownBackupKeys.length === 0) {
+    if (hasPrimary) {
+      await fsPromises.unlink(backupPath);
+      log(`[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}`);
+    }
+    return true;
+  }
+
+  const nextDoc = currentData ? { ...currentData } : {};
+  const hasCurrentSection = isPlainObject(nextDoc[sectionKey]);
+  if (hasCurrentSection || ownBackupKeys.length > 0) {
+    const nextSection = hasCurrentSection ? { ...nextDoc[sectionKey] } : {};
+    for (const existingKey of Object.keys(nextSection)) {
+      if (keyFilter(existingKey) && !Object.hasOwn(backupSection, existingKey)) {
+        delete nextSection[existingKey];
+      }
+    }
+    for (const ownKey of ownBackupKeys) {
+      nextSection[ownKey] = backupSection[ownKey];
+    }
+    nextDoc[sectionKey] = nextSection;
+  }
+
+  await safeWriteFileIfChanged(targetPath, JSON.stringify(nextDoc, null, 2) + "\n");
+  if (hasPrimary) {
+    await fsPromises.unlink(backupPath);
+    log(`[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`);
+  } else {
+    log(`[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`);
+  }
+  return true;
 }
 
 export async function runRestoreBackups(options = {}) {
@@ -1168,44 +1067,32 @@ export async function runRestoreBackups(options = {}) {
   const log = options.silent ? () => {} : console.log;
   let restoredCount = 0;
 
-  if (fs.existsSync(mcpBakPath)) {
-    await fsPromises.copyFile(mcpBakPath, mcpJsonPath);
-    await fsPromises.unlink(mcpBakPath);
-    log(`[OK] Restored backup: ${mcpBakPath} -> ${mcpJsonPath}`);
+  if (
+    await mergeRestoreJsonSection({
+      targetPath: mcpJsonPath,
+      targetLabel: "mcp_config.json",
+      backupPath: mcpBakPath,
+      legacyBackupPath: legacyMcpBakPath,
+      sectionKey: "mcpServers",
+      keyFilter: isOwnMcpServerKey,
+      log
+    })
+  ) {
     restoredCount += 1;
-  } else if (fs.existsSync(legacyMcpBakPath)) {
-    try {
-      const legacyMcp = JSON.parse(fs.readFileSync(legacyMcpBakPath, "utf8"));
-      if (
-        legacyMcp &&
-        typeof legacyMcp === "object" &&
-        !Array.isArray(legacyMcp) &&
-        legacyMcp.mcpServers &&
-        typeof legacyMcp.mcpServers === "object" &&
-        !Array.isArray(legacyMcp.mcpServers) &&
-        PLUGIN_KEY in legacyMcp.mcpServers
-      ) {
-        await fsPromises.copyFile(legacyMcpBakPath, mcpJsonPath);
-        log(`[OK] Restored legacy backup (read-only fallback): ${legacyMcpBakPath} -> ${mcpJsonPath}`);
-        restoredCount += 1;
-      }
-    } catch {}
   }
 
-  if (fs.existsSync(configBakPath)) {
-    await fsPromises.copyFile(configBakPath, configJsonPath);
-    await fsPromises.unlink(configBakPath);
-    log(`[OK] Restored backup: ${configBakPath} -> ${configJsonPath}`);
+  if (
+    await mergeRestoreJsonSection({
+      targetPath: configJsonPath,
+      targetLabel: "config.json",
+      backupPath: configBakPath,
+      legacyBackupPath: legacyConfigBakPath,
+      sectionKey: "plugins",
+      keyFilter: (key) => key === PLUGIN_KEY,
+      log
+    })
+  ) {
     restoredCount += 1;
-  } else if (fs.existsSync(legacyConfigBakPath)) {
-    try {
-      const legacyCfg = JSON.parse(fs.readFileSync(legacyConfigBakPath, "utf8"));
-      if (legacyCfg && typeof legacyCfg === "object" && !Array.isArray(legacyCfg)) {
-        await fsPromises.copyFile(legacyConfigBakPath, configJsonPath);
-        log(`[OK] Restored legacy backup (read-only fallback): ${legacyConfigBakPath} -> ${configJsonPath}`);
-        restoredCount += 1;
-      }
-    } catch {}
   }
 
   if (restoredCount === 0) {
@@ -1296,23 +1183,12 @@ export async function runUninstall(options = {}) {
   }
 
   log("\nAgy-Squad uninstallation complete.");
-  return detectExistingInstallation({ includeCompanions: false });
-}
-
-function formatCompanionLine(label, info, note) {
-  if (info?.available) {
-    return `- ${label}: AVAILABLE (${info.rawVersion || info.version} at ${info.path})`;
-  }
-  if (info?.installed && !info?.compatible) {
-    return `- ${label}: OUTDATED (${info.rawVersion || info.version} < ${info.minVersion} at ${info.path}; non-fatal: ${note})`;
-  }
-  return `- ${label}: MISSING (non-fatal: ${note})`;
+  return detectExistingInstallation();
 }
 
 export function printStatus(options = {}) {
   const log = typeof options.log === "function" ? options.log : (options.silent ? () => {} : console.log);
   const status = detectExistingInstallation({
-    includeCompanions: options.includeCompanions !== false,
     ...(typeof options.nodeVersion === "string" ? { nodeVersion: options.nodeVersion } : {})
   });
   const plug = status.details.plugin;
@@ -1381,12 +1257,6 @@ export function printStatus(options = {}) {
           : "DISABLED"
     }`
   );
-  const { agyContext, rtk } = status.details.companions || {};
-  log(formatCompanionLine("Companion CLI (agy-context >= 2.0.1)", agyContext, "needed for integrity trace audits"));
-  log(formatCompanionLine("Companion Optimizer (rtk >= 1.1.0)", rtk, "needed by Agy-Context-Saver hooks"));
-  if (!agyContext?.available || !rtk?.available) {
-    log("[INFO] Companion tools are non-fatal for offline bundle/verify; install Agy-Context-Saver (>= 2.0.1, 2.0.4+ recommended) + RTK (>= 1.1.0) for full live integrity audits, or pass --no-integrity to 'agy-squad plan' and --allow-unaudited to 'agy-squad bundle' or 'agy-squad finalize' for standalone runs.");
-  }
   const overallLabel = status.isComplete
     ? "HEALTHY & ACTIVE"
     : status.details.mcp.corrupt || status.details.config.corrupt
@@ -1413,7 +1283,7 @@ Usage:
   node scripts/install-register.mjs [command/option]
 
 Commands & Options:
-  --status, status [--json]    Check live integration status (plugin, skills, MCP server, CLI shim, companions)
+  --status, status [--json]    Check live integration status (plugin, skills, MCP server, CLI shim, PATH)
   --check, -c                  Run read-only pre-flight validation check without writing changes
   --uninstall, uninstall       Remove plugin link, MCP entry, CLI shims, and schema caches
   --restore-backups            Restore original configuration backup files (*.bak)

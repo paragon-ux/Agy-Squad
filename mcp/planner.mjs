@@ -524,6 +524,11 @@ function planSquadCohort(
   }
   const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
+  const includeTranscriptAccessDirectives = options?.includeTranscriptAccessDirectives ?? false;
+  if (typeof includeTranscriptAccessDirectives !== "boolean") {
+    throw new Error("includeTranscriptAccessDirectives must be a boolean.");
+  }
+
   const root = resolveWorkspaceRoot(argWorkspace, workspace);
   const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
   let loadedSquads;
@@ -597,7 +602,7 @@ function planSquadCohort(
         effectiveModel: effectiveSubagentModel,
         pinningSupported: false,
         perChildModelExposed: false,
-        verificationMethod: "invoke_subagent inherits or aliases ('inherit'|'flash'|'flash_lite'|'pro'); neither 'agy-context transcript read' nor manage_subagents exposes per-child resolved model IDs.",
+        verificationMethod: "invoke_subagent inherits or aliases ('inherit'|'flash'|'flash_lite'|'pro'); neither session transcripts nor manage_subagents exposes per-child resolved model IDs.",
         ...(requestedModel && !SUBAGENT_MODEL_ALIASES.has(requestedModel)
           ? {
               warning: `Requested explicit model '${requestedModel}' cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`
@@ -690,7 +695,8 @@ function planSquadCohort(
           isIntegrityAuditor: false,
           precompiledSpecialists: true,
           leadWorkerName,
-          boardSince
+          boardSince,
+          includeTranscriptAccessDirectives
         }
       );
     }
@@ -730,7 +736,8 @@ function planSquadCohort(
           workspaceIsolation,
           isIntegrityAuditor: false,
           leadWorkerName,
-          boardSince
+          boardSince,
+          includeTranscriptAccessDirectives
         }
       );
       const slot = reportPath(id, number, normalizedReportRoot);
@@ -854,7 +861,7 @@ function planSquadCohort(
             manifestPathForBrief,
             auditItem.number,
             normalizedReportRoot,
-            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs }
+            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs, includeTranscriptAccessDirectives }
           );
           const rawAuditName =
             auditSpecs.length > 1

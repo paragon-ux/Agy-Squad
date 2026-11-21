@@ -251,7 +251,7 @@ try {
   assert.equal(delegatedSpecialists.isError, undefined, delegatedSpecialists.content[0].text);
   assert.equal(JSON.parse(delegatedSpecialists.content[0].text).Subagents[0].Role, "First");
 
-  assert.match(leaves[0].Prompt, /bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/);
+  assert.match(leaves[0].Prompt, /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/);
 
   const emptyWs = path.join(testDir, "empty-ws");
   fs.mkdirSync(emptyWs);
@@ -421,19 +421,83 @@ try {
   assert.match(missingRes.content[0].text, /agy-squad plan.*agy-squad dispatch/);
   assert.doesNotMatch(missingRes.content[0].text, /node bin\/agy-squad\.mjs/);
 
-  // UX-SQ-006: compiled briefs align with Agy-Context-Saver v2.0.4 (rtk grep/find + bounded <=150-line read_file; rtk read for spillovers/task logs only)
+  // Decoupled native fungibility: briefs use native search/read guidance (zero hardcoded rtk/<=150-line), omit foreign hook tags by default, support opt-in directives, and include standalone native JSONL traces on auditors
   const uxSpecBrief = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1).Prompt;
   const uxLeadBrief = buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json").Prompt;
   const uxAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1).Prompt;
+  const uxSwarmAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1, undefined, { executionMode: "swarm" }).Prompt;
   for (const [label, promptText] of [
     ["specialist", uxSpecBrief],
     ["lead", uxLeadBrief],
-    ["auditor", uxAuditBrief]
+    ["auditor", uxAuditBrief],
+    ["swarm-auditor", uxSwarmAuditBrief]
   ]) {
-    assert.match(promptText, /'rtk grep'\/'rtk find'/, `UX-SQ-006: ${label} brief must recommend rtk grep/find`);
-    assert.match(promptText, /<=150-line read_file slices \(StartLine\/EndLine\)/, `UX-SQ-006: ${label} brief must recommend bounded read_file slices`);
-    assert.doesNotMatch(promptText, /via 'rtk read'\/'rtk grep'|or 'rtk read'\/'rtk grep'/, `UX-SQ-006: ${label} brief must not recommend rtk read for workspace files`);
+    assert.match(
+      promptText,
+      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/,
+      `${label} brief must use native search/read guidance`
+    );
+    assert.doesNotMatch(
+      promptText,
+      /rtk grep|rtk find|rtk read|<=150-line/,
+      `${label} brief must not hardcode rtk or <=150-line rules`
+    );
+    assert.doesNotMatch(
+      promptText,
+      /^\[agy-transcript-access:/m,
+      `${label} brief must not inject [agy-transcript-access: ...] by default in standalone mode`
+    );
+    assert.ok(promptText.startsWith("Role: "), `${label} default prompt should begin directly with Role:`);
   }
+  assert.match(
+    uxAuditBrief,
+    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
+    "subagent Integrity Auditor brief must include standalone native JSONL trace path"
+  );
+  assert.match(
+    uxSwarmAuditBrief,
+    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
+    "swarm Integrity Auditor brief must include standalone native JSONL trace path"
+  );
+  assert.match(
+    uxSwarmAuditBrief,
+    /sender=<coordId> \+ @<workerName>/,
+    "swarm Integrity Auditor brief must explain standalone Step 0/1 worker trace matching"
+  );
+  // Explicit opt-in for Agy-Context-Saver transcript access directives
+  assert.ok(
+    buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
+      includeTranscriptAccessDirectives: true
+    }).Prompt.startsWith("[agy-transcript-access: deny]\nRole: ")
+  );
+  assert.ok(
+    buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json", undefined, undefined, {
+      includeTranscriptAccessDirectives: true
+    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
+  );
+  assert.ok(
+    buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1, undefined, {
+      includeTranscriptAccessDirectives: true
+    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
+  );
+  assert.ok(
+    buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
+      transcriptAccessDirective: "allow"
+    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
+  );
+  assert.throws(
+    () => buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
+      transcriptAccessDirective: "bogus"
+    }),
+    /Unsupported transcriptAccessDirective/
+  );
+  const optInDispatch = handleDispatchSquad(
+    { squadId: "alpha", manifestPath: "swarm-manifest.json" },
+    workspace,
+    { includeTranscriptAccessDirectives: true }
+  );
+  assert.equal(optInDispatch.isError, undefined);
+  assert.ok(JSON.parse(optInDispatch.content[0].text).Subagents[0].Prompt.startsWith("[agy-transcript-access: deny]\n"));
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {

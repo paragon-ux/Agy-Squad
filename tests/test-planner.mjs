@@ -686,19 +686,43 @@ try {
     assert.equal(overridePlan.workers[0].squadId, "alpha");
     assert.match(
       inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
-      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\).*spillovers\/task logs/
+      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
     );
-    assert.doesNotMatch(inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
+    assert.doesNotMatch(inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
     assert.match(
       overridePlan.workers[0].specialists[0].swarmAdd.brief,
-      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
+      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
     );
-    assert.doesNotMatch(overridePlan.workers[0].specialists[0].swarmAdd.brief, /via 'rtk read'\/'rtk grep'/);
+    assert.doesNotMatch(overridePlan.workers[0].specialists[0].swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
-      /'rtk grep'\/'rtk find' \+ bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file.*spillovers\/task logs/
+      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
     );
-    assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /or 'rtk read'\/'rtk grep'/);
+    assert.match(
+      overridePlan.integrityAuditPlan[0].swarmAdd.brief,
+      /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl.*sender=<coordId> \+ @<workerName>/
+    );
+    assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
+
+    const optInSwarmPlan = planSquadCohort(
+      {
+        manifest: {
+          squads: {
+            alpha: {
+              lead: { role: "Alpha Lead", objective: "Lead", scopeFiles: ["a"], readOnly: true },
+              specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["a"], readOnly: true }]
+            }
+          }
+        },
+        workspace: root,
+        executionMode: "swarm"
+      },
+      altDir,
+      { includeTranscriptAccessDirectives: true }
+    );
+    assert.ok(optInSwarmPlan.workers[0].lead.swarmAdd.brief.startsWith("[agy-transcript-access: allow]\n"));
+    assert.ok(optInSwarmPlan.workers[0].specialists[0].swarmAdd.brief.startsWith("[agy-transcript-access: deny]\n"));
+    assert.ok(optInSwarmPlan.integrityAuditPlan[0].swarmAdd.brief.startsWith("[agy-transcript-access: allow]\n"));
 
     const symlinkAbsPlan = handleSquadPlanner({
       manifestPath: path.join(linkRoot, "plan-manifest.json"),
@@ -765,9 +789,11 @@ try {
     assert.ok(emittedNames.every(n => !reservedNames.has(n)), `Expected no reserved swarm names, got: ${emittedNames.join(", ")}`);
     assert.equal(new Set(emittedNames).size, 4);
 
-    // SQ-MCP-002: Subagent provenance and integrity briefs must not mention retired read_transcript / query_transcript
+    // SQ-MCP-002 & decoupled subagent modelProvenance: must not mention retired transcript tools or hardcode agy-context transcript read
     const subProvPlan = planSquadCohort({ task: "Check provenance", executionMode: "subagent" }, root);
     assert.doesNotMatch(JSON.stringify(subProvPlan), /query_transcript|read_transcript/);
+    assert.match(subProvPlan.modelProvenance.verificationMethod, /session transcripts/);
+    assert.doesNotMatch(subProvPlan.modelProvenance.verificationMethod, /agy-context transcript read/);
 
     // SQ-RUN-007: Planner preserves resolveIntegrityAuditor warning when custom integrity_auditor defines a lead alongside specialists
     const customAuditWarnPlan = planSquadCohort({
@@ -1041,10 +1067,17 @@ try {
     assert.deepEqual(compPlan.topology.scopeOverlaps, [], "SD2-SKILL-01: comparative-research-manifest specialists must be readOnly: true");
     const compLeadBrief = compPlan.workers[0].lead.swarmAdd.brief;
     assert.match(compLeadBrief, /read_board\{since\|seqs\}/);
+    assert.match(compLeadBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
     assert.match(compLeadBrief, /agy-context transcript/);
     assert.match(compLeadBrief, /Content Verdict/);
     assert.match(compLeadBrief, /post <=500B READY/);
-    assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent/);
+    assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line/);
+
+    const selfDiagDecoupledPlan = planSquadCohort(
+      { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" },
+      repoRoot
+    );
+    assert.doesNotMatch(JSON.stringify(selfDiagDecoupledPlan), /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
     // v0.1.3 Remediation Regressions: MCP-001, OPT-IO-6, OPT-BRIEF-03
     // MCP-001: Subagent modelProvenance reflects per-worker manifest models (aliases and non-aliases) when top-level model is omitted or 'inherit'
