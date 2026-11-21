@@ -547,7 +547,7 @@ runner.run("Tier 4 (Structural & Citations)", "Codebase Verification: Referenced
   for (const file of referencedFiles) {
     const fullPath = path.resolve(process.cwd(), file);
     assert.ok(fs.existsSync(fullPath), `Referenced codebase file '${file}' must physically exist in workspace.`);
-    assert.match(content, new RegExp(file.replace(/\./g, "\\."), "i"),
+    assert.ok(content.toLowerCase().includes(file.toLowerCase()),
       `Dossier must cite implementation file '${file}'.`);
   }
 });
