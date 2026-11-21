@@ -1,6 +1,6 @@
 {
   "name": "agy-squad",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Structured multi-agent /swarm code reviews, non-overlapping file scopes, tiny handoffs, and SHA-256 proof bundles for Google Antigravity.",
   "main": "mcp/index.js",
   "bin": {

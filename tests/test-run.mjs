@@ -1208,6 +1208,29 @@ try {
     const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
     assert.doesNotMatch(pluginMeta.description, /Pointer-Over-Wire/i, "UX-SQ-009: plugin.json description must be plain English");
     assert.ok(pluginMeta.suggestedPrompts.every(p => !/integrity_auditor/i.test(p)), "UX-SQ-009: suggestedPrompts must be Day-1 runnable");
+
+    // v0.2.1: day-one-review 4-tier verdicts, upfront cadence intake, P0-P3 auto-fix vs Section 8 residuals, hook anti-anchoring, CPU serialization & CodeQL SEC checks
+    const dayOneSkillText = fs.readFileSync(path.join(repoRoot, ".agents/skills/day-one-review/SKILL.md"), "utf8");
+    const dayOneProtoText = fs.readFileSync(path.join(repoRoot, ".agents/skills/day-one-review/references/day-one-protocol.md"), "utf8");
+    const dayOneDocText = fs.readFileSync(path.join(repoRoot, "docs/skills/day-one-review.md"), "utf8");
+    const stdText = fs.readFileSync(path.join(repoRoot, ".agents/skills/pr-review/references/pr-review-standard.md"), "utf8");
+    for (const [label, txt] of [
+      ["day-one-review/SKILL.md", dayOneSkillText],
+      ["day-one-protocol.md", dayOneProtoText],
+      ["docs/skills/day-one-review.md", dayOneDocText]
+    ]) {
+      assert.doesNotMatch(txt, /SHIP WITH QUICK FIXES/, `v0.2.1: legacy verdict label must be removed from ${label}`);
+      for (const verdict of ["SHIP NOW", "SHIP WITH MINOR POLISH", "FIX BEFORE RELEASE", "HOLD BEFORE PUBLIC RELEASE"]) {
+        assert.ok(txt.includes(verdict), `v0.2.1: ${label} must include 4-tier verdict '${verdict}'`);
+      }
+      assert.match(txt, /\[agy-transcript-access: deny\]/, `v0.2.1: ${label} must mandate hook-enforced anti-anchoring`);
+      assert.match(txt, /skipLibCheck:\s*false/, `v0.2.1: ${label} must mandate strict consumer typecheck`);
+      assert.match(txt, /Section 8/, `v0.2.1: ${label} must separate Section 8 residuals from auto-fixed P0-P3`);
+      assert.match(txt, /ReDoS/i, `v0.2.1: ${label} must include CodeQL-class ReDoS check`);
+      assert.doesNotMatch(txt, /[\u2013\u2014]/, `v0.2.1: ${label} must not contain prose em/en dashes`);
+    }
+    assert.match(stdText, /ReDoS/i, "v0.2.1: 4.11 SEC in pr-review-standard.md must include ReDoS");
+    assert.match(stdText, /permissions:/, "v0.2.1: 4.11 SEC in pr-review-standard.md must include CI workflow permissions");
   } finally {
     fs.rmSync(v013Repo, { recursive: true, force: true });
   }

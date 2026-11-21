@@ -1320,6 +1320,21 @@ try {
       assert.match(winPlanJson.workers[0].specialists[0].swarmAdd.brief, /^- mcp\/planner\.mjs$/m);
     }
 
+    // CodeQL #2/#3/#4: planner slugifyName/allocateWorkerName stay linear-time on pathological repeated dashes
+    const evilRole = "a" + "-".repeat(50_000) + "b";
+    const tSlug = performance.now();
+    const slugPlan = planSquadCohort({
+      workspace: root,
+      task: "Linear slug test",
+      executionMode: "swarm",
+      readOnly: true,
+      roles: [evilRole],
+      occupiedWorkerNames: [evilRole],
+      includeIntegrityAuditor: false
+    });
+    assert.ok(performance.now() - tSlug < 200, "planSquadCohort worker name allocation must stay linear-time on repeated dashes");
+    assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "task-squad-a-b");
+
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

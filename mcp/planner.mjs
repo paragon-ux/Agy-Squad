@@ -51,31 +51,48 @@ const AGENT_ALIAS_PAIRS = [
   ["workspace", "Workspace"]
 ];
 
+function trimEdgeDashes(value) {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "-") start++;
+  while (end > start && value[end - 1] === "-") end--;
+  return value.slice(start, end);
+}
+
+function trimTrailingDashes(value) {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "-") end--;
+  return value.slice(0, end);
+}
+
 function slugifyName(value, fallback) {
-  const slug = String(value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_SWARM_NAME_LENGTH)
-    .replace(/-+$/, "");
+  const slug = trimTrailingDashes(
+    trimEdgeDashes(
+      String(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+    ).slice(0, MAX_SWARM_NAME_LENGTH)
+  );
   if (slug) return slug;
-  const fallbackSlug = String(fallback ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_SWARM_NAME_LENGTH)
-    .replace(/-+$/, "");
+  const fallbackSlug = trimTrailingDashes(
+    trimEdgeDashes(
+      String(fallback ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+    ).slice(0, MAX_SWARM_NAME_LENGTH)
+  );
   return fallbackSlug || "worker";
 }
 
 function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracker) {
-  const cleanRawSlug = String(rawValue ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const cleanRawSlug = trimEdgeDashes(
+    String(rawValue ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+  );
   const rawBase = slugifyName(rawValue, fallback);
   const base = RESERVED_SWARM_NAMES.has(rawBase)
-    ? `w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH).replace(/-+$/, "")
+    ? trimTrailingDashes(`w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH))
     : rawBase;
   const recordIfTruncated = (candidate) => {
     if (
@@ -95,8 +112,8 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracke
     const suffix = `-${counter}`;
     const maxPrefixLen = Math.max(1, MAX_SWARM_NAME_LENGTH - suffix.length);
     const prefix =
-      base.slice(0, maxPrefixLen).replace(/-+$/, "") ||
-      safeFallback.slice(0, maxPrefixLen).replace(/-+$/, "") ||
+      trimTrailingDashes(base.slice(0, maxPrefixLen)) ||
+      trimTrailingDashes(safeFallback.slice(0, maxPrefixLen)) ||
       "w";
     const candidate = `${prefix}${suffix}`;
     if (!usedWorkerNames.has(candidate) && !RESERVED_SWARM_NAMES.has(candidate)) {
