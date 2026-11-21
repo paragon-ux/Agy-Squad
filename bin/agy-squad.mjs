@@ -38,7 +38,7 @@ const usage = [
   "",
   "Lifecycle Commands:",
   "  setup | install [--check]       Install or sync plugin, skills, MCP server, and CLI shim",
-  "  status [--json]                 Check plugin, MCP, shim, PATH, and companion tool health",
+  "  status [--json]                 Check plugin, skills, MCP server, CLI shim, and PATH health",
   "  uninstall [--restore-backups]   Remove plugin link, MCP entry, and CLI shims",
   "  restore-backups                 Restore configuration backups (*.bak)",
   "",
@@ -93,7 +93,7 @@ const SUBCOMMAND_HELP = {
   status: [
     "Usage: agy-squad status [--json]",
     "",
-    "Check plugin link/copy, skills, MCP registration, CLI shim, PATH, and companions.",
+    "Check plugin link/copy, skills, MCP registration, CLI shim, and PATH.",
     "",
     "Options:",
     "  --json               Emit machine-readable JSON status output",

@@ -203,7 +203,9 @@ try {
   assert.match(payload.Subagents[0].Prompt, /squad-integrity_auditor-alpha\/specialist-1\/report\.md/);
   assert.match(payload.Subagents[0].Prompt, /Integrity Verdict: CLEAN/);
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(payload.Subagents[0].Prompt, /agy-context transcript query --id <id> --summary/);
+  assert.match(payload.Subagents[0].Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
+  assert.match(payload.Subagents[0].Prompt, /agy-context transcript list --parent <id> --lineage.*query --id <id> --summary/);
+  assert.doesNotMatch(payload.Subagents[0].Prompt, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
   // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "squads.json" }, root).isError, true);
@@ -248,7 +250,9 @@ try {
     { executionMode: "swarm" }
   );
   assert.doesNotMatch(swarmAuditSpec.Prompt, /or direct workspace artifact\/command re-execution/);
-  assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript/);
+  assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript|rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
+  assert.match(swarmAuditSpec.Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
+  assert.match(swarmAuditSpec.Prompt, /sender=<coordId> \+ @<workerName>/);
   assert.match(swarmAuditSpec.Prompt, /coordinator-extracted sanitized transcript index in scratch\//);
   assert.match(swarmAuditSpec.Prompt, /report 'Integrity Verdict: INTEGRITY VIOLATION' \(never CLEAN\)/);
 

@@ -74,7 +74,7 @@ Use one batch pass to produce:
 - tool call counts by name and error counts;
 - a step/time index around quoted evidence.
 
-A compact Node recipe for user-supplied or exported JSONL files (for internal Antigravity `.system_generated/` transcripts, direct shell reads are hook-blocked under transcript isolation; run `agy-context transcript list --parent <id> --lineage`, `agy-context transcript query --id <id> --summary`, `agy-context transcript read --id <id> --last-turns 10`, or coordinator `agy-context transcript export --parent <id> --sanitized --out scratch/...` in one batch pass via `run_command` if `/swarm` workers lack transcript access):
+A compact Node recipe for user-supplied, exported, or standalone native Antigravity `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` / `transcript_full.jsonl` files (read directly in one batch pass without copying raw JSONL into workspace/scratch files when `agy-context` is absent; when `Agy-Context-Saver` is installed and direct `.system_generated/` shell reads are hook-guarded, run single-pass `agy-context transcript list --parent <id> --lineage`, `agy-context transcript query --id <id> --summary`, `agy-context transcript read --id <id> --last-turns 10`, or coordinator `agy-context transcript export --parent <id> --sanitized --out scratch/...` via `run_command`):
 
 ```bash
 node -e '
