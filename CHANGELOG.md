@@ -5,6 +5,15 @@ All notable changes to `Agy-Squad` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-11-20
+
+### Changed
+- **Calibrated `day-one-review` 4-Tier Ship Verdicts, Upfront Cadence Intake & Auto-Fix P0-P3 Boundary (`.agents/skills/day-one-review/SKILL.md`, `references/day-one-protocol.md`, `.agents/skills/pr-review/references/pr-review-standard.md`, `docs/skills/day-one-review.md`, `docs/roles-and-workflows.md`, `package.json`, `plugin.json`, `bin/agy-squad.mjs`, `scripts/install-register.mjs`, `tests/test-run.mjs`)**:
+  - **Stage 1 cadence intake (zero anti-anchoring bleed):** Requires confirming review cadence (`r1` only, multi-round `r1 -> remediate -> r2`, or full public-launch gate adding an unanchored live `raw-final`) upfront strictly without asking for or injecting bug hypotheses.
+  - **4-tier Ship Verdict rubric:** Replaced the unbounded `SHIP WITH QUICK FIXES` bucket with explicit thresholds: `SHIP NOW` (`0` open P0-P3 in-repo defects), `SHIP WITH MINOR POLISH` (`0` P0/P1/SEC blockers and `<= 2` small localized P2/P3 polish items with zero broken install/compile/SDK/core contracts), `FIX BEFORE RELEASE` (`0` P0/P1/SEC blockers, but `>= 3` open P2/P3 items or any contract-breaking P2), and `HOLD BEFORE PUBLIC RELEASE`.
+  - **P0-P3 auto-remediation vs. Section 8 residual gate:** Clarified that concrete in-repo P3 findings are user-facing launch defects and MUST be remediated automatically alongside P0-P2 without asking; reserved Section 8 (`Post-Remediation Residuals & Deferred Dispositions`) as the explicit user decision gate for upstream dependencies, intentional behavior/contract trade-offs, policy-gated files (such as benchmark definitions), and subjective suggestions.
+  - **Live-run hardening optimizations:** Mandated packed-artifact consumer installation (normal + `--ignore-scripts`), strict `skipLibCheck: false` public typechecking, and live CLI/SDK/MCP dogfooding during `r1`; required `[agy-transcript-access: deny]` on line 1 of `r1` and `raw-final` subagent prompts when `Agy-Context-Saver` is installed; defaulted Stage 3 remediation to a single coding subagent for repos using native indexers, local daemons, or DB locks; and added CodeQL-class linear-time regex (ReDoS) and least-privilege GitHub Actions `permissions:` / `concurrency:` checks to `4.11 SEC` and Stage 3 verification.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

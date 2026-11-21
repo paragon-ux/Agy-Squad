@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -1962,6 +1962,13 @@ try {
   } finally {
     fs.rmSync(w2Root, { recursive: true, force: true });
   }
+
+  // CodeQL #1: normalizeReportRoot trims trailing slashes in linear time without polynomial backtracking
+  assert.equal(normalizeReportRoot("scratch/agy-squad///"), "scratch/agy-squad");
+  const evilRoot = "/".repeat(50_000) + "a";
+  const tNorm = performance.now();
+  assert.throws(() => normalizeReportRoot(evilRoot), /workspace-relative reportRoot/);
+  assert.ok(performance.now() - tNorm < 50, "normalizeReportRoot must stay linear-time on repeated slashes");
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {

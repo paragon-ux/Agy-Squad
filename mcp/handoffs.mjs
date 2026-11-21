@@ -19,8 +19,15 @@ function isValidRelativePrefix(prefix) {
   );
 }
 
+function trimTrailingSlashes(value) {
+  const s = value.trim();
+  let end = s.length;
+  while (end > 0 && s[end - 1] === "/") end--;
+  return s.slice(0, end);
+}
+
 function defaultScratchBase() {
-  const raw = (process.env.AGY_SQUAD_SCRATCH_ROOT || "scratch").trim().replace(/\/+$/, "");
+  const raw = trimTrailingSlashes(process.env.AGY_SQUAD_SCRATCH_ROOT || "scratch");
   if (!isValidRelativePrefix(raw)) {
     throw new Error(`Invalid AGY_SQUAD_SCRATCH_ROOT: ${raw}`);
   }
@@ -28,7 +35,7 @@ function defaultScratchBase() {
 }
 
 function normalizeReportRoot(reportRoot) {
-  const trimmed = typeof reportRoot === "string" ? reportRoot.trim().replace(/\/+$/, "") : "";
+  const trimmed = typeof reportRoot === "string" ? trimTrailingSlashes(reportRoot) : "";
   if (!isValidRelativePrefix(trimmed)) {
     throw new Error(`Expected a workspace-relative reportRoot: ${reportRoot}`);
   }
