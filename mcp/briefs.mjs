@@ -9,34 +9,34 @@ const superviseCohort = [
   "Before launch: record acceptance criteria, evidence, operator, shared workspace, unused slots, and checkpoint (default 10m). Use the shared workspace; map returned conversationId+workspace to each slot (unexpected workspace = blocker; new slots on retry).",
   "Yield via Reactive Wakeup; reconcile one READY/PARTIAL/NO_REPORT per slot (ignore exact dupes, flag conflicts/gaps, avoid idle wakeups). At checkpoint operator checks /agents (log stop vs cleanup; stop own children only).",
   "Squad Lead Patrol & Alignment Gate: audit leaf runs and reject ungrounded/flattering/unexecuted claims (FAIL/PARTIAL).",
-  "Batch transcript forensics: single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', or 'read --id <id> --last-turns 10' (never 1-2 step loops).",
-  "Verify claims against final artifacts/tests via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine) (reserve 'rtk read' for step spillovers/task logs). Base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED when checks fail or evidence is missing."
+  "Batch transcript forensics (never 1-2 step loops): inspect child ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (and transcript_full.jsonl when needed) in one pass via recorded conversationIds when standalone, or use single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', or 'read --id <id> --last-turns 10' when agy-context is installed.",
+  "Verify claims against final artifacts/tests via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files). Base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED when checks fail or evidence is missing."
 ].join("\n");
 
 const superviseIntegrityCohort = [
-  "Before launch: record audit criteria, target squad, operator, shared workspace, and unused slots. Never copy raw .system_generated/ transcripts into workspace files. Pass brief verbatim, map conversationId->slot, yield via Reactive Wakeup, reconcile one handoff/slot.",
-  "Audit Execution Forensics via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'; never 1-2 step loops).",
-  "Verify artifacts/hashes via 'rtk grep'/'rtk find' + <=150-line read_file slices (StartLine/EndLine), never unbounded read_file ('rtk read' for spillovers/task logs only); recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Before launch: record audit criteria, target squad, operator, shared workspace, and unused slots. Never copy raw .system_generated/ transcripts into workspace/scratch files. Pass brief verbatim, map conversationId->slot, yield via Reactive Wakeup, reconcile one handoff/slot.",
+  "Audit Execution Forensics in one batch pass (never 1-2 step loops): inspect child ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (and transcript_full.jsonl when needed) via recorded conversationIds when standalone, or use single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10' when agy-context is installed.",
+  "Verify artifacts/hashes via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>' and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 const superviseSwarmCohort = [
   "Before launch: record criteria, coordinator, workspace mode, unused slots, checkpoint (default 10m), and swarm{action:\"status\"} head as cohortBaseSeq. Match briefs, map worker names->slots, and record swarm add note seqs (#N).",
   "Park via swarm_wait. Reconcile one READY/PARTIAL/NO_REPORT post per slot via read_board{since: <cohortBaseSeq>} or read_board{seqs: [...]} (never unfiltered read_board(), since: 0, or limit: 50); avoid idle chatter.",
   "At checkpoint inspect read_board{since: <cohortBaseSeq>} & swarm{action:\"status\"}; kill finished workers only after collecting isolated copies. Squad Lead Patrol & Alignment Gate: reject ungrounded/unexecuted leaf claims.",
-  "Execution Forensics: read_board{since|seqs} / swarm status, or single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'. Verify artifacts/tests via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine) ('rtk read' for spillovers/task logs only); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
+  "Execution Forensics: read_board{since|seqs} / swarm status, plus single-pass batch inspection of child ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching Step 0/1 sender=<coordId> + @<workerName>, plus transcript_full.jsonl when needed) when standalone, or 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10' when agy-context is installed. Verify artifacts/tests via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
   "Park via swarm_wait and follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50). Reconcile one READY/PARTIAL/NO_REPORT post per specialist slot; avoid idle chatter.",
   "Squad Lead Patrol & Alignment Gate: inspect swarm{action:\"status\"} and specialist reports; reject ungrounded/unexecuted leaf claims.",
-  "Execution Forensics: read_board{since|seqs} / swarm status, or single-pass 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10'. Verify artifacts/tests via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine) ('rtk read' for spillovers/task logs only); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
+  "Execution Forensics: read_board{since|seqs} / swarm status, plus single-pass batch inspection of child ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching Step 0/1 sender=<coordId> + @<workerName>, plus transcript_full.jsonl when needed) when standalone, or 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10' when agy-context is installed. Verify artifacts/tests via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); base PASS on verified proof, recheck changed inputs, preserve gaps, use FAIL/BLOCKED on missing/failing checks."
 ].join("\n");
 
 const superviseSwarmIntegrityCohort = [
-  "Before launch: record audit criteria, target squad, coordinator, workspace mode, unused slots, and worker/lead board seqs (#N). Never copy raw .system_generated/ transcripts into workspace files.",
+  "Before launch: record audit criteria, target squad, coordinator, workspace mode, unused slots, and worker/lead board seqs (#N). Never copy raw .system_generated/ transcripts into workspace/scratch files.",
   "Map worker names->slots; use read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} (never unfiltered read_board()) and swarm_wait; reconcile one post/slot.",
-  "Audit Execution Forensics: read_board/status verify handoffs/roster/models only. Before CLEAN, audit traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'; re-execution alone cannot satisfy CLEAN); fail closed with 'Integrity Verdict: INTEGRITY VIOLATION' if missing.",
-  "Verify artifacts/hashes via 'rtk grep'/'rtk find' + <=150-line read_file slices (StartLine/EndLine), never unbounded read_file ('rtk read' for spillovers/task logs only); recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+  "Audit Execution Forensics: read_board/status verify handoffs/roster/models only. Before CLEAN, verify child traces via single-pass batch inspection of ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching Step 0/1 sender=<coordId> + @<workerName>, plus transcript_full.jsonl when needed) when standalone, or via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or coordinator 'export --parent <id> --sanitized --out scratch/...' when agy-context is installed (re-execution alone cannot satisfy CLEAN); fail closed with 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable via the active path or tampering is found.",
+  "Verify artifacts/hashes via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); recheck changed inputs, preserve contradictions, never emit a content PASS: record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -68,6 +68,8 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     leadWorkerName,
     boardSince,
     boardSeqs,
+    includeTranscriptAccessDirectives = false,
+    transcriptAccessDirective,
     validateOnly = false
   } = options;
   if (executionMode !== "subagent" && executionMode !== "swarm") {
@@ -149,9 +151,9 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
   const alignmentLine = isIntegrityAuditor
     ? isSwarm
-      ? "Integrity Auditor Policy: read_board/status verify handoffs & roster only; inspect workspace files via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file ('rtk read' for spillovers/task logs only). Before CLEAN, verify traces via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or a coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...'; re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable, or report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN) on tampering). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-      : "Integrity Auditor Policy: Audit traces via single-pass batch queries ('agy-context transcript list --parent <id> --lineage', 'agy-context transcript query --id <id> --summary', 'agy-context transcript read --id <id> --last-turns 10') and artifacts/hashes via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file or copying .system_generated/ into scratch ('rtk read' for spillovers/task logs only). Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
-    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed commands/searches or source lines, never guesses or unverified flattery. Inspect workspace files via 'rtk grep'/'rtk find' + bounded <=150-line read_file slices (StartLine/EndLine), never unbounded read_file ('rtk read' for spillovers/task logs only). Stay self-contained (don't probe phantom acronyms). Retry when inputs change, failures are transient, or diagnostics differ; otherwise switch approach or report partial+blocker.`;
+      ? "Integrity Auditor Policy: read_board/status verify handoffs & roster only; inspect workspace files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), never copying raw .system_generated/ transcripts into workspace/scratch files. Before CLEAN, verify child traces via single-pass batch inspection of ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching Step 0/1 sender=<coordId> + @<workerName>, plus transcript_full.jsonl when needed) when standalone, or via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10', or a coordinator-extracted sanitized transcript index in scratch/ ('export --parent <id> --sanitized --out scratch/...') when agy-context is installed (re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable via the active path, or report 'Integrity Verdict: INTEGRITY VIOLATION' (never CLEAN) on tampering). Record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+      : "Integrity Auditor Policy: Audit child traces in one batch pass via ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (and transcript_full.jsonl when needed, using recorded conversationIds) when standalone, or via 'agy-context transcript list --parent <id> --lineage', 'query --id <id> --summary', 'read --id <id> --last-turns 10' when agy-context is installed, and verify artifacts/hashes via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), never copying raw .system_generated/ transcripts into workspace/scratch files. Never emit a content PASS; record 'Target Squad: <id>', 'Evidence Digest: <sha256>', and 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'."
+    : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed commands/searches or source lines, never guesses or unverified flattery. Inspect workspace files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files). Stay self-contained (don't probe phantom acronyms). Retry when inputs change, failures are transient, or diagnostics differ; otherwise switch approach or report partial+blocker.`;
 
   const hasManifestFile =
     typeof manifestPath === "string" &&
@@ -208,15 +210,26 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? `Pointer-Over-Wire: one post_message line <= ${messageLimit} UTF-8 bytes (prefix ${swarmRecipient} on /swarm): READY ${artifact} — <concrete observation>, PARTIAL <slot> — <blocker>, or NO_REPORT — <reason>. Confirm readability, then wait via swarm_wait or end turn.`
     : `Pointer-Over-Wire: one native send_message line <= ${messageLimit} UTF-8 bytes: READY ${artifact} — <concrete observation>, PARTIAL <slot> — <blocker>, or NO_REPORT — <reason>. Confirm readability, then end turn.`;
 
-  const transcriptAccessDirective =
-    isIntegrityAuditor || isLead
-      ? "[agy-transcript-access: allow]"
-      : "[agy-transcript-access: deny]";
+  let resolvedTranscriptDirective = null;
+  if (transcriptAccessDirective !== undefined && transcriptAccessDirective !== false && transcriptAccessDirective !== null) {
+    if (transcriptAccessDirective === "allow" || transcriptAccessDirective === "deny") {
+      resolvedTranscriptDirective = `[agy-transcript-access: ${transcriptAccessDirective}]`;
+    } else {
+      throw new Error(`Unsupported transcriptAccessDirective '${transcriptAccessDirective}'; expected 'allow' or 'deny'.`);
+    }
+  } else if (includeTranscriptAccessDirectives === true) {
+    resolvedTranscriptDirective =
+      isIntegrityAuditor || isLead
+        ? "[agy-transcript-access: allow]"
+        : "[agy-transcript-access: deny]";
+  } else if (includeTranscriptAccessDirectives !== false) {
+    throw new Error("includeTranscriptAccessDirectives must be a boolean.");
+  }
 
   return {
     ...payload,
     Prompt: [
-      transcriptAccessDirective,
+      ...(resolvedTranscriptDirective ? [resolvedTranscriptDirective] : []),
       `Role: ${role}`,
       `Objective: ${objective.trim()}`,
       "Work within these files or directories:",

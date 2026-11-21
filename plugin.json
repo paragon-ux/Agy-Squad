@@ -21,6 +21,6 @@
   "suggestedPrompts": [
     "Plan a parallel /swarm review of this repository with non-overlapping file scopes using squad_planner",
     "Run a structured PR review of my current branch against main using /pr-review",
-    "Check my Agy-Squad plugin, MCP server, and companion tool health with agy-squad status"
+    "Check my Agy-Squad plugin, skills, and MCP server health with agy-squad status"
   ]
 }
