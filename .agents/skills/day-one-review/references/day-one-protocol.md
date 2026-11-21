@@ -77,7 +77,7 @@ Conform strictly to [PR Review Standard v1.5.0](../../pr-review/references/pr-re
 
 1. **Follow-up reviews build on the initial review (`r2`, `r3`, ...):**
    - Save `<auditDir>/day-one-review-r2.md` (and `r3`, ...) in the same designated directory, explicitly linking `Prior review: day-one-review-r1.md` in Section 1.1 and appending the new session row to Section 1.2 (`Session Provenance`).
-   - Carry forward **every prior finding ID** in the closure table with its updated canonical status (`Closed`, `Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`); never silently drop or renumber an ID.
+   - Carry forward **every prior finding ID** in the Section 7 closure table with its updated Section 4-7 status (`Open (Pre-Remediation)` or `Closed`), and route all post-remediation residual/deferred/by-design statuses (`Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`) exclusively to Section 8 per PR Review Standard v1.5.0; never silently drop or renumber an ID.
    - Re-verify each fix in its primary category and all affected categories at the new commit, and record any newly discovered defects or regressions with fresh atomic IDs (`R2-...`).
    - Route every post-remediation decision-gate residual or upstream deferral exclusively to Section 8; any concrete in-repo P0-P3 defect newly found in `r2` is fixed automatically before moving to `raw-final` or merge.
 2. **Unanchored Live Final Pass (`day-one-review-raw-final.md`):**

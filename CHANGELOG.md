@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **P0-P3 auto-remediation vs. Section 8 residual gate:** Clarified that concrete in-repo P3 findings are user-facing launch defects and MUST be remediated automatically alongside P0-P2 without asking; reserved Section 8 (`Post-Remediation Residuals & Deferred Dispositions`) as the explicit user decision gate for upstream dependencies, intentional behavior/contract trade-offs, policy-gated files (such as benchmark definitions), and subjective suggestions.
   - **Live-run hardening optimizations:** Mandated packed-artifact consumer installation (normal + `--ignore-scripts`), strict `skipLibCheck: false` public typechecking, and live CLI/SDK/MCP dogfooding during `r1`; required `[agy-transcript-access: deny]` on line 1 of `r1` and `raw-final` subagent prompts when `Agy-Context-Saver` is installed; defaulted Stage 3 remediation to a single coding subagent for repos using native indexers, local daemons, or DB locks; and added CodeQL-class linear-time regex (ReDoS) and least-privilege GitHub Actions `permissions:` / `concurrency:` checks to `4.11 SEC` and Stage 3 verification.
 
+### Security
+- **Linear-Time Path/Slug Trimming & Regex Escaping (`mcp/handoffs.mjs`, `mcp/planner.mjs`, `tests/test-comparative-dossier.mjs`, `tests/test-handoffs.mjs`, `tests/test-planner.mjs`)**: Replaced polynomial trailing-slash and edge-dash regexes in `normalizeReportRoot()` and slug helpers with linear-time string scans and eliminated incomplete backslash escaping in `tests/test-comparative-dossier.mjs` (resolving GitHub CodeQL alerts `#1`-`#5`).
+
 ## [0.2.0] - 2026-11-19
 
 ### Added
