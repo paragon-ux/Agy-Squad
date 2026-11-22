@@ -106,10 +106,13 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
       let exists = false;
       try { exists = fs.existsSync(candidate); } catch {}
       if (exists) {
+        let canonicalCandidate = candidate;
+        try { canonicalCandidate = fs.realpathSync(candidate); } catch {}
         matching = sessionWorkspaces.filter((root) => {
           try {
             if (isContained(root, candidate)) return true;
-            return isContained(fs.realpathSync(root), candidate);
+            const canonicalRoot = fs.realpathSync(root);
+            return isContained(canonicalRoot, candidate) || isContained(canonicalRoot, canonicalCandidate);
           } catch {
             return false;
           }
