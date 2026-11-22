@@ -2,30 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PACKAGE_VERSION,
+  assertNodeVersion,
+  isDirectEntryPoint,
+  isNodeVersionSupported
+} from "../scripts/install-register.mjs";
 import { defaultManifests, handleDispatchSquad } from "./dispatch.mjs";
+import { isExpectedRealPath } from "./handoffs.mjs";
 import { handleSquadPlanner } from "./planner.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-function isDirectEntryPoint(argv1 = process.argv[1], selfPath = __filename, platform = process.platform) {
-  if (!argv1) return false;
-  const normalizeForPlatform = (p) => {
-    const resolved = realOrSelf(p);
-    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
-    if (platform === "darwin") return resolved.toLowerCase();
-    return resolved;
-  };
-  return normalizeForPlatform(argv1) === normalizeForPlatform(selfPath);
-}
-const isEntryPoint = isDirectEntryPoint();
-
-const MIN_NODE_MAJOR = 22;
-function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
-  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
-}
-
-const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+const isEntryPoint = isDirectEntryPoint(process.argv[1], import.meta.url);
 
 const SERVER_NAME = "agy-squad";
 let sessionWorkspaces = [];
@@ -37,12 +24,11 @@ function workspacesFromInitializeParams(params) {
     params.rootUri
   ];
   const resolved = [];
-  const seen = new Set();
-  const normalizeKey = (localPath) => {
+  const addUnique = (localPath) => {
     const canonical = path.resolve(localPath);
-    return process.platform === "win32" || process.platform === "darwin"
-      ? canonical.toLowerCase()
-      : canonical;
+    if (!resolved.some((existing) => isExpectedRealPath(existing, canonical))) {
+      resolved.push(canonical);
+    }
   };
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
@@ -51,23 +37,13 @@ function workspacesFromInitializeParams(params) {
     try {
       const parsedUrl = new URL(trimmed);
       if (!parsedUrl.pathname || parsedUrl.pathname === "/") continue;
-      const canonical = path.resolve(fileURLToPath(parsedUrl));
-      const key = normalizeKey(canonical);
-      if (!seen.has(key)) {
-        seen.add(key);
-        resolved.push(canonical);
-      }
+      addUnique(fileURLToPath(parsedUrl));
     } catch {
       continue;
     }
   }
   if (typeof params.rootPath === "string" && params.rootPath.trim()) {
-    const canonicalRootPath = path.resolve(params.rootPath.trim());
-    const key = normalizeKey(canonicalRootPath);
-    if (!seen.has(key)) {
-      seen.add(key);
-      resolved.push(canonicalRootPath);
-    }
+    addUnique(params.rootPath.trim());
   }
   return resolved;
 }
@@ -93,7 +69,7 @@ function isInstalledPluginDir(dir) {
   const candidates = [resolved];
   try {
     const real = fs.realpathSync(resolved);
-    if (real !== resolved) candidates.push(real);
+    if (!isExpectedRealPath(resolved, real)) candidates.push(real);
   } catch {}
   for (const candidate of candidates) {
     const normalized = candidate.replace(/\\/g, "/");
@@ -264,7 +240,7 @@ async function handleRequest(request) {
       id,
       result: {
         protocolVersion: "2024-11-05",
-        serverInfo: { name: SERVER_NAME, version: pkg.version },
+        serverInfo: { name: SERVER_NAME, version: PACKAGE_VERSION },
         capabilities: { tools: {} }
       }
     };
@@ -314,10 +290,10 @@ async function handleRequest(request) {
 }
 
 if (isEntryPoint) {
-  if (!isNodeVersionSupported()) {
-    process.stderr.write(
-      `Agy-Squad MCP server requires Node.js >= ${MIN_NODE_MAJOR}.0.0 (found v${process.versions.node}). Please upgrade Node.js.\n`
-    );
+  try {
+    assertNodeVersion();
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
   const rawMaxBytes = process.env.AGY_MAX_STDIO_PAYLOAD_BYTES;

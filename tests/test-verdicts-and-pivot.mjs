@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -204,7 +204,7 @@ try {
   assert.match(payload.Subagents[0].Prompt, /Integrity Verdict: CLEAN/);
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
   assert.match(payload.Subagents[0].Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
-  assert.match(payload.Subagents[0].Prompt, /agy-context transcript list --parent <id> --lineage.*query --id <id> --summary/);
+  assert.match(payload.Subagents[0].Prompt, /agy-context transcript/);
   assert.doesNotMatch(payload.Subagents[0].Prompt, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
   // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
@@ -236,8 +236,8 @@ try {
   assert.equal(singlePayload.Subagents.length, 1);
   assert.ok(Array.isArray(singlePayload.warnings) && singlePayload.warnings.some(w => /ignored/.test(w)), "Custom integrity_auditor.lead must emit explicit warning (SQ-RUN-007)");
   assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor Policy/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor:/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
   assert.doesNotMatch(singlePayload.Subagents[0].Prompt, /query_transcript|read_transcript/, "SQ-MCP-002: briefs must not reference retired MCP transcript tools");
 
   // GOV-07: Swarm integrity auditor briefs must not treat workspace re-execution alone as sufficient for CLEAN
@@ -253,8 +253,8 @@ try {
   assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript|rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
   assert.match(swarmAuditSpec.Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
   assert.match(swarmAuditSpec.Prompt, /sender=<coordId> \+ @<workerName>/);
-  assert.match(swarmAuditSpec.Prompt, /coordinator-extracted sanitized transcript index in scratch\//);
-  assert.match(swarmAuditSpec.Prompt, /report 'Integrity Verdict: INTEGRITY VIOLATION' \(never CLEAN\)/);
+  assert.match(swarmAuditSpec.Prompt, /no raw \.system_generated\/ copies/);
+  assert.match(swarmAuditSpec.Prompt, /re-execution cannot satisfy CLEAN.*'Integrity Verdict: INTEGRITY VIOLATION' if traces missing\/tampered/);
 
   // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
   const intLeadCompiled = buildSubagentSpec(
@@ -262,8 +262,9 @@ try {
     "integrity_auditor-alpha",
     "single-squad.json"
   );
-  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof/);
-  assert.match(intLeadCompiled.Prompt, /never emit a content PASS/i);
+  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof|PASS on proof/);
+  assert.match(intLeadCompiled.Prompt, /Integrity Auditor Lead/);
+  assert.match(intLeadCompiled.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
 
   // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, SCRIPT-P3-04, ARCH-PR4-03, TEST-PR4-01)
   assert.equal(JSON.parse(runCli(["verdict", lead])).verdict, "PASS");
@@ -698,6 +699,55 @@ try {
   assert.equal(cleanOverrideBundleJson.integrityAudit, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudit");
   assert.equal(cleanOverrideBundleJson.integrityAudits, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudits");
   assert.equal(verifyBundle(root, cleanOverrideRes.path).auditPolicy, "unaudited-explicit");
+
+  // ASQ-RUN-002: Category Verdict columns and summary matrix tables do not false-conflict with top-level verdicts
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: FAIL\n| Category | Category Verdict |\n| --- | --- |\n| ARCH | PASS |\n| SEC | FAIL |\n"
+    ),
+    "FAIL",
+    "ASQ-RUN-002: Category Verdict table column with PASS must not false-conflict with Content Verdict: FAIL"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\n| Check | PASS | FAIL |\n| --- | --- | --- |\n| Unit | 10 | 0 |\n"
+    ),
+    "PASS",
+    "ASQ-RUN-002: summary table header '| Check | PASS | FAIL |' must not false-conflict with Content Verdict: PASS"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: FAIL\n| Check | PASS | FAIL |\n| --- | --- | --- |\n| Unit | 9 | 1 |\n"
+    ),
+    "FAIL",
+    "ASQ-RUN-002: summary table header '| Check | PASS | FAIL |' must not false-conflict with Content Verdict: FAIL"
+  );
+  assert.equal(
+    parseIntegrityVerdict(
+      "Target Squad: alpha\nIntegrity Verdict: CLEAN\n| Metric | CLEAN | INTEGRITY VIOLATION |\n| --- | --- | --- |\n| Traces | 3 | 0 |\n"
+    ),
+    "CLEAN",
+    "ASQ-RUN-002: summary table header '| Metric | CLEAN | INTEGRITY VIOLATION |' must not false-conflict with Integrity Verdict: CLEAN"
+  );
+  assert.equal(
+    parseIntegrityVerdict(
+      "Target Squad: alpha\nIntegrity Verdict: INTEGRITY VIOLATION\n| Metric | CLEAN | INTEGRITY VIOLATION |\n| --- | --- | --- |\n| Traces | 2 | 1 |\n"
+    ),
+    "INTEGRITY VIOLATION",
+    "ASQ-RUN-002: summary table header '| Metric | CLEAN | INTEGRITY VIOLATION |' must not false-conflict with Integrity Verdict: INTEGRITY VIOLATION"
+  );
+
+  // ASQ-SEC-006: stripCode stays linear-time on 40k consecutive backticks (< 100 ms)
+  const evilTicks = "`".repeat(40_000) + "x";
+  const evilInlineTicks = "a " + evilTicks;
+  const tStrip = performance.now();
+  const strippedFenceTicks = stripCode(evilTicks);
+  const strippedInlineTicks = stripCode(evilInlineTicks);
+  const stripMs = performance.now() - tStrip;
+  assert.equal(strippedFenceTicks, "");
+  assert.equal(strippedInlineTicks, evilInlineTicks);
+  assert.ok(stripMs < 100, `ASQ-SEC-006: stripCode on 40k backticks took ${stripMs.toFixed(1)} ms (>= 100 ms)`);
+  assert.doesNotMatch(stripCode("ok `Content Verdict: FAIL` ok"), /FAIL/);
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

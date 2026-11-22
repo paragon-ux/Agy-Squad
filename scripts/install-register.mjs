@@ -10,6 +10,7 @@
  * - Provisions executable agy-squad CLI shims in ~/.gemini/antigravity/bin/
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,7 @@ const fsPromises = fs.promises;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
-const PACKAGE_VERSION = (() => {
+export const PACKAGE_VERSION = (() => {
   try {
     return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.1";
   } catch {
@@ -29,8 +30,10 @@ const PACKAGE_VERSION = (() => {
 })();
 
 const PLUGIN_KEY = "agy-squad";
-const MIN_NODE_MAJOR = 22;
+export const MIN_NODE_MAJOR = 22;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
+export const SHIPPED_SKILLS = Object.freeze(["pr-review", "full-review", "day-one-review", "swarm-governance"]);
+const COPY_EXCLUDED_TOP_DIRS = new Set([".git", "node_modules", ".venv", ".cache", "scratch", "site", "benchmarks", "tests"]);
 
 function resolveProfilePaths() {
   const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
@@ -75,8 +78,60 @@ export function assertNodeVersion(versionStr = process.versions.node, minMajor =
   }
 }
 
+export { assertNodeVersion as assertSupportedNodeVersion };
+
+export function isDirectEntryPoint(
+  argv1 = process.argv[1],
+  selfPathOrUrl = import.meta.url,
+  platform = process.platform
+) {
+  if (!argv1 || !selfPathOrUrl) return false;
+  const selfPath =
+    selfPathOrUrl instanceof URL || (typeof selfPathOrUrl === "string" && selfPathOrUrl.startsWith("file:"))
+      ? fileURLToPath(selfPathOrUrl)
+      : selfPathOrUrl;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const normalizeForPlatform = (p) => {
+    let resolved;
+    if (platform === process.platform) {
+      try {
+        resolved = fs.realpathSync(path.resolve(p));
+      } catch {
+        resolved = path.resolve(p);
+      }
+    } else {
+      resolved = pathImpl.resolve(p);
+    }
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalizeForPlatform(argv1) === normalizeForPlatform(selfPath);
+}
+
 function normalizeSlash(p) {
   return p.replace(/\\/g, "/");
+}
+
+function stripTrailingSeparators(value) {
+  let end = value.length;
+  while (end > 0 && (value.charCodeAt(end - 1) === 47 || value.charCodeAt(end - 1) === 92)) {
+    end -= 1;
+  }
+  return end > 0 ? value.slice(0, end) : value;
+}
+
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isLocalGitCheckout(dir = repoRoot) {
+  return (
+    fs.existsSync(path.join(dir, ".git")) &&
+    !dir.includes("_npx") &&
+    !dir.includes("npm-cache") &&
+    !dir.includes("node_modules")
+  );
 }
 
 function resolveEnvPathValue(env = process.env, platform = os.platform()) {
@@ -107,7 +162,7 @@ function normalizePathEntry(entry, platform = os.platform(), homeDir = os.homedi
       resolved = fs.realpathSync(resolved);
     } catch {}
   }
-  resolved = resolved.replace(/[\\/]+$/, "") || resolved;
+  resolved = stripTrailingSeparators(resolved);
   return platform === "win32" || platform === "darwin" ? resolved.toLowerCase() : resolved;
 }
 
@@ -125,10 +180,11 @@ export function isDirOnPath(targetDir, envPath, platform = os.platform()) {
 
 export function formatPathGuidanceLines(antigravityBinDir, platform = os.platform()) {
   if (platform === "win32") {
+    const psBin = String(antigravityBinDir).replace(/'/g, "''");
     return [
       `[WARN] CLI bin directory is not on your PATH: ${antigravityBinDir}`,
-      `       PowerShell (current session): $env:PATH = "${antigravityBinDir};$env:PATH"`,
-      `       PowerShell (persist for user): [Environment]::SetEnvironmentVariable("Path", "${antigravityBinDir};" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")`,
+      `       PowerShell (current session): $bin = '${psBin}'; $parts = @($env:Path -split ';' | Where-Object { $_.Trim() }); if (@($parts | ForEach-Object { $_.TrimEnd('\\') }) -notcontains $bin.TrimEnd('\\')) { $env:Path = ($parts + $bin) -join ';' }`,
+      `       PowerShell (persist for user, preserves REG_EXPAND_SZ): $bin = '${psBin}'; $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); try { $cur = [string]$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $parts = @($cur -split ';' | Where-Object { $_.Trim() }); $norm = @($parts | ForEach-Object { $_.TrimEnd('\\') }); if ($norm -notcontains $bin.TrimEnd('\\') -and $norm -notcontains '%USERPROFILE%\\.gemini\\antigravity\\bin') { $k.SetValue('Path', (($parts + $bin) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString) } } finally { $k.Close() }`,
       "       Or invoke without editing PATH: npx --package=agy-squad agy-squad status"
     ];
   }
@@ -152,43 +208,56 @@ async function safeWriteFileIfChanged(filePath, content, mode) {
     }
   } catch {}
   await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const writeOpts = mode !== undefined ? { encoding: "utf8", flag: "wx", mode } : { encoding: "utf8", flag: "wx" };
   try {
-    await fsPromises.writeFile(tmpPath, content, "utf8");
+    await fsPromises.writeFile(tmpPath, content, writeOpts);
     if (mode !== undefined && os.platform() !== "win32") {
       await fsPromises.chmod(tmpPath, mode);
     }
     await fsPromises.rename(tmpPath, filePath);
   } catch (err) {
-    try {
-      await fsPromises.unlink(tmpPath);
-    } catch {}
+    if (err?.code !== "EEXIST") {
+      try {
+        await fsPromises.unlink(tmpPath);
+      } catch {}
+    }
     throw err;
   }
   return true;
 }
 
-function readAndValidateJsonFile(filePath, label) {
-  if (!fs.existsSync(filePath)) return null;
-  let raw = "";
+function inspectJsonObject(filePath, label) {
+  if (!fs.existsSync(filePath)) return { exists: false, data: null, error: null, readError: false };
+  let raw;
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch (err) {
-    throw new Error(`Cannot read ${label} (${filePath}): ${err.message}`);
+    return { exists: true, data: null, error: `Cannot read ${label} (${filePath}): ${err.message}`, readError: true };
   }
   if (!raw.trim()) {
-    throw new Error(`Existing ${label} (${filePath}) is empty; aborting to preserve user configuration.`);
+    return { exists: true, data: null, error: `${label} is empty`, readError: false };
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Existing ${label} (${filePath}) contains malformed JSON (${err.message}); aborting to preserve user configuration.`);
+    return { exists: true, data: null, error: `${label} contains malformed JSON (${err.message})`, readError: false };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Existing ${label} (${filePath}) root must be a JSON object; aborting to preserve user configuration.`);
+  if (!isPlainObject(parsed)) {
+    return { exists: true, data: null, error: `${label} root must be a JSON object`, readError: false };
   }
-  return parsed;
+  return { exists: true, data: parsed, error: null, readError: false };
+}
+
+function readAndValidateJsonFile(filePath, label) {
+  const result = inspectJsonObject(filePath, label);
+  if (!result.exists) return null;
+  if (result.error) {
+    if (result.readError) throw new Error(result.error);
+    throw new Error(`Existing ${result.error.replace(label, `${label} (${filePath})`)}; aborting to preserve user configuration.`);
+  }
+  return result.data;
 }
 
 export function detectExistingInstallation(options = {}) {
@@ -234,11 +303,7 @@ export function detectExistingInstallation(options = {}) {
     config: { enabled: false, corrupt: false, error: null, path: configJsonPath }
   };
 
-  const isLocalCheckout =
-    fs.existsSync(path.join(repoRoot, ".git")) &&
-    !repoRoot.includes("_npx") &&
-    !repoRoot.includes("npm-cache") &&
-    !repoRoot.includes("node_modules");
+  const isLocalCheckout = isLocalGitCheckout();
   const pathsEqual = (a, b) =>
     os.platform() === "win32" || os.platform() === "darwin"
       ? a.toLowerCase() === b.toLowerCase()
@@ -345,8 +410,7 @@ export function detectExistingInstallation(options = {}) {
       );
 
       const skillsPath = path.join(pluginDest, "skills");
-      const requiredSkills = ["pr-review", "full-review", "day-one-review", "self-diagnosis", "swarm-governance"];
-      details.plugin.skillsReady = requiredSkills.every((skillName) =>
+      details.plugin.skillsReady = SHIPPED_SKILLS.every((skillName) =>
         fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
       );
       details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
@@ -379,22 +443,6 @@ export function detectExistingInstallation(options = {}) {
     }
   } catch {}
 
-  const inspectJsonObject = (filePath, label) => {
-    if (!fs.existsSync(filePath)) return { exists: false, data: null, error: null };
-    try {
-      const raw = fs.readFileSync(filePath, "utf8");
-      if (!raw.trim()) {
-        return { exists: true, data: null, error: `${label} is empty` };
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { exists: true, data: null, error: `${label} root must be a JSON object` };
-      }
-      return { exists: true, data: parsed, error: null };
-    } catch (err) {
-      return { exists: true, data: null, error: `${label} contains malformed JSON (${err.message})` };
-    }
-  };
   const appendMcpError = (errMsg) => {
     details.mcp.corrupt = true;
     details.mcp.error = details.mcp.error ? `${details.mcp.error}; ${errMsg}` : errMsg;
@@ -404,12 +452,7 @@ export function detectExistingInstallation(options = {}) {
   if (pluginMcpCheck.error) {
     appendMcpError(pluginMcpCheck.error);
   } else if (pluginMcpCheck.data) {
-    if (
-      pluginMcpCheck.data.mcpServers !== undefined &&
-      (!pluginMcpCheck.data.mcpServers ||
-        typeof pluginMcpCheck.data.mcpServers !== "object" ||
-        Array.isArray(pluginMcpCheck.data.mcpServers))
-    ) {
+    if (pluginMcpCheck.data.mcpServers !== undefined && !isPlainObject(pluginMcpCheck.data.mcpServers)) {
       appendMcpError("plugin mcp_config.json field 'mcpServers' must be a JSON object");
     } else {
       const entry = pluginMcpCheck.data.mcpServers?.[PLUGIN_KEY];
@@ -438,12 +481,7 @@ export function detectExistingInstallation(options = {}) {
   if (globalMcpCheck.error) {
     appendMcpError(globalMcpCheck.error);
   } else if (globalMcpCheck.data) {
-    if (
-      globalMcpCheck.data.mcpServers !== undefined &&
-      (!globalMcpCheck.data.mcpServers ||
-        typeof globalMcpCheck.data.mcpServers !== "object" ||
-        Array.isArray(globalMcpCheck.data.mcpServers))
-    ) {
+    if (globalMcpCheck.data.mcpServers !== undefined && !isPlainObject(globalMcpCheck.data.mcpServers)) {
       appendMcpError("mcp_config.json field 'mcpServers' must be a JSON object");
     } else if (globalMcpCheck.data.mcpServers && PLUGIN_KEY in globalMcpCheck.data.mcpServers) {
       hasGlobalMcpEntry = true;
@@ -509,10 +547,7 @@ export function detectExistingInstallation(options = {}) {
     details.config.error = cfgCheck.error;
     details.config.enabled = false;
   } else if (cfgCheck.data) {
-    if (
-      cfgCheck.data.plugins !== undefined &&
-      (!cfgCheck.data.plugins || typeof cfgCheck.data.plugins !== "object" || Array.isArray(cfgCheck.data.plugins))
-    ) {
+    if (cfgCheck.data.plugins !== undefined && !isPlainObject(cfgCheck.data.plugins)) {
       details.config.corrupt = true;
       details.config.error = "config.json field 'plugins' must be a JSON object";
       details.config.enabled = false;
@@ -588,32 +623,44 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
   }
   await ensurePluginSkillsAndMcpManifest(targetPluginDir);
 }
-export function formatPosixMcpLauncher(execPath = process.execPath) {
-  if (typeof execPath !== "string" || !execPath.trim() || /[\r\n\0]/.test(execPath)) {
-    throw new Error(`Invalid POSIX MCP launcher execPath: ${JSON.stringify(execPath)}`);
+function validateAndEscapePosixPath(value, label) {
+  if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) {
+    throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
   }
-  const escapedExecPath = normalizeSlash(execPath).replace(/(["\\$`])/g, "\\$1");
+  return normalizeSlash(value).replace(/(["\\$`])/g, "\\$1");
+}
+
+function formatPosixNodeWrapper({ execPath = process.execPath, scriptPath = null, label = "POSIX wrapper" } = {}) {
+  const escapedExecPath = validateAndEscapePosixPath(execPath, `${label} execPath`);
+  const scriptArg = scriptPath !== null
+    ? `"${validateAndEscapePosixPath(scriptPath, `${label} target path`)}" `
+    : "";
   return [
     "#!/bin/sh",
     "if command -v node >/dev/null 2>&1; then",
     '  NODE_MAJOR="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
     '  NODE_MAJOR="${NODE_MAJOR%%[!0-9]*}"',
     `  if [ "\${NODE_MAJOR:-0}" -ge ${MIN_NODE_MAJOR} ] 2>/dev/null; then`,
-    '    exec node "$@"',
+    `    exec node ${scriptArg}"$@"`,
     "  fi",
     "fi",
     `if [ -x "${escapedExecPath}" ]; then`,
-    `  exec "${escapedExecPath}" "$@"`,
+    `  exec "${escapedExecPath}" ${scriptArg}"$@"`,
     "fi",
-    'exec node "$@"',
+    `exec node ${scriptArg}"$@"`,
     ""
   ].join("\n");
 }
 
-async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
+export function formatPosixMcpLauncher(execPath = process.execPath) {
+  return formatPosixNodeWrapper({ execPath, label: "POSIX MCP launcher" });
+}
+
+async function ensurePluginSkillsAndMcpManifest(targetPluginDir, options = {}) {
+  const isWin = os.platform() === "win32";
   const dotAgentsSkills = path.join(targetPluginDir, ".agents", "skills");
   const skillsDest = path.join(targetPluginDir, "skills");
-  if (!fs.existsSync(skillsDest) && fs.existsSync(dotAgentsSkills)) {
+  if (!(isWin && options.skipWindowsJunction) && !fs.existsSync(skillsDest) && fs.existsSync(dotAgentsSkills)) {
     try {
       const linkStat = fs.lstatSync(skillsDest);
       if (linkStat.isSymbolicLink()) {
@@ -621,7 +668,6 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
       }
     } catch {}
     try {
-      const isWin = os.platform() === "win32";
       fs.symlinkSync(
         isWin ? dotAgentsSkills : path.join(".agents", "skills"),
         skillsDest,
@@ -632,7 +678,6 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir) {
     }
   }
 
-  const isWin = os.platform() === "win32";
   let mcpEntry;
   if (isWin) {
     mcpEntry = {
@@ -683,8 +728,8 @@ export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
     "if errorlevel 1 goto :fallback",
     `node.exe -e "process.exit(Math.min(parseInt(process.versions.node,10),${MIN_NODE_MAJOR})===${MIN_NODE_MAJOR}?0:1)" >nul 2>nul`,
     "if errorlevel 1 goto :fallback",
-    // A label-less GOTO ends the batch context. The queued executable can
-    // delete this shim (and any managed node.cmd) and return its own status.
+    // A label-less GOTO ends the batch context so the queued executable can
+    // delete this shim and return its own status.
     `(goto) 2>nul & node.exe "${escapedTarget}" %*`,
     ":fallback",
     `(goto) 2>nul & "${escapedExecPath}" "${escapedTarget}" %*`,
@@ -693,23 +738,9 @@ export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
 }
 
 export function formatPosixShim(targetRoot, execPath = process.execPath) {
-  const cliTarget = normalizeSlash(path.join(targetRoot, "bin", "agy-squad.mjs")).replace(/(["\\$`])/g, "\\$1");
-  const escapedExecPath = normalizeSlash(execPath).replace(/(["\\$`])/g, "\\$1");
-  return [
-    "#!/bin/sh",
-    "if command -v node >/dev/null 2>&1; then",
-    '  NODE_MAJOR="$(node -p \'process.versions.node.split(".")[0]\' 2>/dev/null || echo 0)"',
-    '  NODE_MAJOR="${NODE_MAJOR%%[!0-9]*}"',
-    `  if [ "\${NODE_MAJOR:-0}" -ge ${MIN_NODE_MAJOR} ] 2>/dev/null; then`,
-    `    exec node "${cliTarget}" "$@"`,
-    "  fi",
-    "fi",
-    `if [ -x "${escapedExecPath}" ]; then`,
-    `  exec "${escapedExecPath}" "${cliTarget}" "$@"`,
-    "fi",
-    `exec node "${cliTarget}" "$@"`,
-    ""
-  ].join("\n");
+  validateAndEscapePosixPath(targetRoot, "POSIX CLI shim target path");
+  const cliTarget = path.join(targetRoot, "bin", "agy-squad.mjs");
+  return formatPosixNodeWrapper({ execPath, scriptPath: cliTarget, label: "POSIX CLI shim" });
 }
 
 async function installCliShims({ targetRoot, log }) {
@@ -730,6 +761,66 @@ async function installCliShims({ targetRoot, log }) {
   log(`[OK] CLI shim (agy-squad) ${verb} in: ${antigravityBinDir}`);
 }
 
+async function removeFsEntry(targetPath, knownStat = null) {
+  let lst = knownStat;
+  if (!lst) {
+    try {
+      lst = fs.lstatSync(targetPath);
+    } catch (err) {
+      if (err.code === "ENOENT") return;
+      throw err;
+    }
+  }
+  if (lst.isSymbolicLink()) {
+    await fsPromises.unlink(targetPath);
+  } else {
+    await fsPromises.rm(targetPath, { recursive: true, force: true });
+  }
+}
+
+async function stageAndSwapPluginDir({ pluginDest, pluginLst, stageInto, afterSwap, warn }) {
+  const stagingDir = `${pluginDest}.staging-${crypto.randomUUID()}`;
+  const backupDir = `${pluginDest}.backup-${crypto.randomUUID()}`;
+  let movedOldToBackup = false;
+  let swappedInStaging = false;
+  try {
+    await stageInto(stagingDir);
+    if (pluginLst) {
+      await fsPromises.rename(pluginDest, backupDir);
+      movedOldToBackup = true;
+    }
+    await fsPromises.rename(stagingDir, pluginDest);
+    swappedInStaging = true;
+    if (afterSwap) {
+      await afterSwap(pluginDest);
+    }
+  } catch (err) {
+    if (swappedInStaging) {
+      try {
+        await fsPromises.rename(pluginDest, stagingDir);
+        swappedInStaging = false;
+      } catch {}
+    }
+    if (movedOldToBackup && !swappedInStaging) {
+      try {
+        await fsPromises.rename(backupDir, pluginDest);
+        movedOldToBackup = false;
+      } catch {}
+    }
+    try {
+      await removeFsEntry(stagingDir);
+    } catch {}
+    throw err;
+  }
+  if (movedOldToBackup) {
+    try {
+      await removeFsEntry(backupDir);
+    } catch (err) {
+      warn(`[WARN] Could not clean up prior plugin backup (${backupDir}): ${err.message}`);
+    }
+  }
+}
+
 export async function runCheckOnly(options = {}) {
   assertNodeVersion();
   const { mcpJsonPath, configJsonPath } = resolveProfilePaths();
@@ -741,11 +832,7 @@ export async function runCheckOnly(options = {}) {
     "plugin.json",
     "bin/agy-squad.mjs",
     "mcp/index.js",
-    ".agents/skills/pr-review/SKILL.md",
-    ".agents/skills/full-review/SKILL.md",
-    ".agents/skills/day-one-review/SKILL.md",
-    ".agents/skills/self-diagnosis/SKILL.md",
-    ".agents/skills/swarm-governance/SKILL.md"
+    ...SHIPPED_SKILLS.map((skillName) => `.agents/skills/${skillName}/SKILL.md`)
   ]) {
     const abs = path.join(repoRoot, requiredRel);
     if (!fs.existsSync(abs)) {
@@ -785,18 +872,12 @@ export async function runInstall(options = {}) {
 
   const validatedMcp = readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   const validatedConfig = readAndValidateJsonFile(configJsonPath, "config.json");
-  if (
-    validatedMcp?.mcpServers !== undefined &&
-    (!validatedMcp.mcpServers || typeof validatedMcp.mcpServers !== "object" || Array.isArray(validatedMcp.mcpServers))
-  ) {
+  if (validatedMcp?.mcpServers !== undefined && !isPlainObject(validatedMcp.mcpServers)) {
     throw new Error(
       `Existing mcp_config.json (${mcpJsonPath}) field 'mcpServers' must be a JSON object; aborting to preserve user configuration.`
     );
   }
-  if (
-    validatedConfig?.plugins !== undefined &&
-    (!validatedConfig.plugins || typeof validatedConfig.plugins !== "object" || Array.isArray(validatedConfig.plugins))
-  ) {
+  if (validatedConfig?.plugins !== undefined && !isPlainObject(validatedConfig.plugins)) {
     throw new Error(
       `Existing config.json (${configJsonPath}) field 'plugins' must be a JSON object; aborting to preserve user configuration.`
     );
@@ -828,14 +909,11 @@ export async function runInstall(options = {}) {
   }
 
   await fsPromises.mkdir(pluginsDir, { recursive: true });
-  const isGitRepo = fs.existsSync(path.join(repoRoot, ".git"));
-  const isTempOrNpx =
-    !isGitRepo || repoRoot.includes("_npx") || repoRoot.includes("npm-cache") || repoRoot.includes("node_modules");
+  const isTempOrNpx = !isLocalGitCheckout();
   const copyFilter = (src) => {
     const rel = path.relative(repoRoot, src);
     if (!rel) return true;
-    const topSegment = rel.split(path.sep)[0];
-    return ![".git", "node_modules", ".venv", "scratch", "site", "benchmarks", "tests"].includes(topSegment);
+    return !COPY_EXCLUDED_TOP_DIRS.has(rel.split(path.sep)[0]);
   };
 
   let pluginLst = null;
@@ -848,34 +926,35 @@ export async function runInstall(options = {}) {
   // A shim installed from an npm tarball runs directly from the plugin copy.
   const installedSource = pluginLst?.isDirectory() &&
     pluginLst.dev === sourceStat.dev && pluginLst.ino === sourceStat.ino;
-  if (pluginLst && !installedSource) {
-    if (pluginLst.isSymbolicLink()) {
-      await fsPromises.unlink(pluginDest);
-    } else {
-      await fsPromises.rm(pluginDest, { recursive: true, force: true });
-    }
-  }
 
   if (installedSource) {
     await ensurePluginSkillsAndMcpManifest(pluginDest);
     log(`[OK] Native Antigravity Plugin verified: ${pluginDest}`);
   } else if (isTempOrNpx || options.forceCopyFallback) {
-    await fsPromises.cp(repoRoot, pluginDest, { recursive: true, filter: copyFilter });
-    await ensurePluginSkillsAndMcpManifest(pluginDest);
+    await stageAndSwapPluginDir({
+      pluginDest,
+      pluginLst,
+      warn,
+      stageInto: async (stagingDir) => {
+        await fsPromises.cp(repoRoot, stagingDir, { recursive: true, filter: copyFilter });
+        await ensurePluginSkillsAndMcpManifest(stagingDir, { skipWindowsJunction: true });
+      },
+      afterSwap: os.platform() === "win32" ? (finalDir) => ensurePluginSkillsAndMcpManifest(finalDir) : null
+    });
     log(`[OK] Native Antigravity Plugin installed to: ${pluginDest}`);
   } else {
-    await populateLinkedPluginDir(repoRoot, pluginDest);
+    await stageAndSwapPluginDir({
+      pluginDest,
+      pluginLst,
+      warn,
+      stageInto: (stagingDir) => populateLinkedPluginDir(repoRoot, stagingDir)
+    });
     log(`[OK] Native Antigravity Plugin linked: ${pluginDest} -> ${repoRoot}`);
   }
   log(`[OK] Plugin skills, docs & manifest verified: ${path.join(pluginDest, "skills")}`);
 
   // Strip duplicate global mcp_config.json entry; plugin-scoped mcp_config.json is canonical (SQ-DEP-001)
-  const hadGlobalMcpEntry = Boolean(
-    validatedMcp?.mcpServers &&
-      typeof validatedMcp.mcpServers === "object" &&
-      !Array.isArray(validatedMcp.mcpServers) &&
-      PLUGIN_KEY in validatedMcp.mcpServers
-  );
+  const hadGlobalMcpEntry = Boolean(isPlainObject(validatedMcp?.mcpServers) && PLUGIN_KEY in validatedMcp.mcpServers);
   if (hadGlobalMcpEntry) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
@@ -921,16 +1000,8 @@ export async function runInstall(options = {}) {
   }
 
   const nextConfig = validatedConfig ? { ...validatedConfig } : {};
-  if (
-    nextConfig.plugins !== undefined &&
-    (!nextConfig.plugins || typeof nextConfig.plugins !== "object" || Array.isArray(nextConfig.plugins))
-  ) {
-    throw new Error(
-      `Existing config.json (${configJsonPath}) field 'plugins' must be a JSON object; aborting to preserve user configuration.`
-    );
-  }
   const prevPluginEntry = nextConfig.plugins?.[PLUGIN_KEY];
-  if (!prevPluginEntry || typeof prevPluginEntry !== "object" || Array.isArray(prevPluginEntry) || prevPluginEntry.enabled !== true) {
+  if (!isPlainObject(prevPluginEntry) || prevPluginEntry.enabled !== true) {
     if (fs.existsSync(configJsonPath) && !fs.existsSync(configBakPath)) {
       try {
         const currentCfgRaw = fs.readFileSync(configJsonPath, "utf8");
@@ -938,13 +1009,9 @@ export async function runInstall(options = {}) {
       } catch {}
     }
     nextConfig.plugins = {
-      ...(nextConfig.plugins && typeof nextConfig.plugins === "object" && !Array.isArray(nextConfig.plugins)
-        ? nextConfig.plugins
-        : {}),
+      ...(isPlainObject(nextConfig.plugins) ? nextConfig.plugins : {}),
       [PLUGIN_KEY]: {
-        ...(prevPluginEntry && typeof prevPluginEntry === "object" && !Array.isArray(prevPluginEntry)
-          ? prevPluginEntry
-          : {}),
+        ...(isPlainObject(prevPluginEntry) ? prevPluginEntry : {}),
         enabled: true
       }
     };
@@ -968,26 +1035,21 @@ export async function runInstall(options = {}) {
   return { ...finalStatus, isInstalled: true, elapsedMs: elapsed };
 }
 
-function isPlainObject(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isOwnMcpServerKey(key) {
-  return key === PLUGIN_KEY || key.startsWith(PLUGIN_KEY);
+  return key === PLUGIN_KEY;
 }
 
-async function mergeRestoreJsonSection({
+function prepareRestoreJsonSection({
   targetPath,
   targetLabel,
   backupPath,
   legacyBackupPath,
   sectionKey,
-  keyFilter,
-  log
+  keyFilter
 }) {
   const hasPrimary = fs.existsSync(backupPath);
   const hasLegacy = !hasPrimary && fs.existsSync(legacyBackupPath);
-  if (!hasPrimary && !hasLegacy) return false;
+  if (!hasPrimary && !hasLegacy) return null;
 
   let backupData;
   if (hasPrimary) {
@@ -1001,14 +1063,13 @@ async function mergeRestoreJsonSection({
     try {
       backupData = readAndValidateJsonFile(legacyBackupPath, `legacy ${targetLabel} backup`);
     } catch {
-      return false;
+      return null;
     }
     if (!isPlainObject(backupData?.[sectionKey])) {
-      return false;
+      return null;
     }
-    const hasOwnLegacyKey = Object.keys(backupData[sectionKey]).some(keyFilter);
-    if (!hasOwnLegacyKey) {
-      return false;
+    if (!Object.keys(backupData[sectionKey]).some(keyFilter)) {
+      return null;
     }
   }
 
@@ -1023,11 +1084,12 @@ async function mergeRestoreJsonSection({
   const ownBackupKeys = Object.keys(backupSection).filter(keyFilter);
 
   if (!currentData && ownBackupKeys.length === 0) {
-    if (hasPrimary) {
-      await fsPromises.unlink(backupPath);
-      log(`[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}`);
-    }
-    return true;
+    return {
+      targetPath,
+      content: null,
+      unlinkBackupPath: hasPrimary ? backupPath : null,
+      logMessage: hasPrimary ? `[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}` : null
+    };
   }
 
   const nextDoc = currentData ? { ...currentData } : {};
@@ -1045,14 +1107,14 @@ async function mergeRestoreJsonSection({
     nextDoc[sectionKey] = nextSection;
   }
 
-  await safeWriteFileIfChanged(targetPath, JSON.stringify(nextDoc, null, 2) + "\n");
-  if (hasPrimary) {
-    await fsPromises.unlink(backupPath);
-    log(`[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`);
-  } else {
-    log(`[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`);
-  }
-  return true;
+  return {
+    targetPath,
+    content: JSON.stringify(nextDoc, null, 2) + "\n",
+    unlinkBackupPath: hasPrimary ? backupPath : null,
+    logMessage: hasPrimary
+      ? `[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`
+      : `[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`
+  };
 }
 
 export async function runRestoreBackups(options = {}) {
@@ -1065,40 +1127,46 @@ export async function runRestoreBackups(options = {}) {
     legacyMcpBakPath
   } = resolveProfilePaths();
   const log = options.silent ? () => {} : console.log;
-  let restoredCount = 0;
 
-  if (
-    await mergeRestoreJsonSection({
+  // Phase 1: validate and prepare all targets before mutating any file or unlinking any backup.
+  const plans = [
+    prepareRestoreJsonSection({
       targetPath: mcpJsonPath,
       targetLabel: "mcp_config.json",
       backupPath: mcpBakPath,
       legacyBackupPath: legacyMcpBakPath,
       sectionKey: "mcpServers",
-      keyFilter: isOwnMcpServerKey,
-      log
-    })
-  ) {
-    restoredCount += 1;
-  }
-
-  if (
-    await mergeRestoreJsonSection({
+      keyFilter: isOwnMcpServerKey
+    }),
+    prepareRestoreJsonSection({
       targetPath: configJsonPath,
       targetLabel: "config.json",
       backupPath: configBakPath,
       legacyBackupPath: legacyConfigBakPath,
       sectionKey: "plugins",
-      keyFilter: (key) => key === PLUGIN_KEY,
-      log
+      keyFilter: (key) => key === PLUGIN_KEY
     })
-  ) {
-    restoredCount += 1;
+  ].filter(Boolean);
+
+  // Phase 2: commit target writes first, then unlink primary backups.
+  for (const plan of plans) {
+    if (plan.content !== null) {
+      await safeWriteFileIfChanged(plan.targetPath, plan.content);
+    }
+  }
+  for (const plan of plans) {
+    if (plan.unlinkBackupPath) {
+      await fsPromises.unlink(plan.unlinkBackupPath);
+    }
+    if (plan.logMessage) {
+      log(plan.logMessage);
+    }
   }
 
-  if (restoredCount === 0) {
-    log("[INFO] No backup files (*.bak) found to restore.");
+  if (plans.length === 0) {
+    log("[INFO] No backup files (*.agy-squad.bak or legacy *.bak) found to restore.");
   }
-  return { restoredCount };
+  return { restoredCount: plans.length };
 }
 
 export async function runUninstall(options = {}) {
@@ -1122,22 +1190,11 @@ export async function runUninstall(options = {}) {
     if (err.code !== "ENOENT") throw err;
   }
   if (pluginStat) {
-    if (pluginStat.isSymbolicLink()) {
-      await fsPromises.unlink(pluginDest);
-    } else {
-      await fsPromises.rm(pluginDest, { recursive: true, force: true });
-    }
+    await removeFsEntry(pluginDest, pluginStat);
     log(`[OK] Removed plugin installation: ${pluginDest}`);
   }
 
-  const repoSkillsLink = path.join(repoRoot, "skills");
-  try {
-    if (fs.lstatSync(repoSkillsLink).isSymbolicLink()) {
-      await fsPromises.unlink(repoSkillsLink);
-    }
-  } catch {}
-
-  if (validatedMcp?.mcpServers && typeof validatedMcp.mcpServers === "object" && !Array.isArray(validatedMcp.mcpServers)) {
+  if (isPlainObject(validatedMcp?.mcpServers)) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
     const nextMcp = { ...validatedMcp, mcpServers: nextServers };
@@ -1145,12 +1202,7 @@ export async function runUninstall(options = {}) {
     log(`[OK] Removed '${PLUGIN_KEY}' from: ${mcpJsonPath} (foreign entries preserved)`);
   }
 
-  if (
-    validatedConfig?.plugins &&
-    typeof validatedConfig.plugins === "object" &&
-    !Array.isArray(validatedConfig.plugins) &&
-    PLUGIN_KEY in validatedConfig.plugins
-  ) {
+  if (isPlainObject(validatedConfig?.plugins) && PLUGIN_KEY in validatedConfig.plugins) {
     const nextPlugins = { ...validatedConfig.plugins };
     delete nextPlugins[PLUGIN_KEY];
     const nextConfig = { ...validatedConfig, plugins: nextPlugins };
@@ -1183,6 +1235,7 @@ export async function runUninstall(options = {}) {
   }
 
   log("\nAgy-Squad uninstallation complete.");
+  log("Next step: reload or restart Antigravity Desktop IDE (if open) so removed 'agy-squad' MCP tools and skills unload.");
   return detectExistingInstallation();
 }
 
@@ -1218,7 +1271,7 @@ export function printStatus(options = {}) {
   );
   log(`- Native Plugin Link: ${pluginNote}`);
   log(
-    `- Governance Skills (pr-review, full-review, day-one-review, self-diagnosis, swarm-governance): ${
+    `- Governance Skills (${SHIPPED_SKILLS.join(", ")}): ${
       status.details.plugin.skillsReady ? "READY" : "MISSING"
     }`
   );
@@ -1286,31 +1339,13 @@ Commands & Options:
   --status, status [--json]    Check live integration status (plugin, skills, MCP server, CLI shim, PATH)
   --check, -c                  Run read-only pre-flight validation check without writing changes
   --uninstall, uninstall       Remove plugin link, MCP entry, CLI shims, and schema caches
-  --restore-backups            Restore original configuration backup files (*.bak)
+  --restore-backups            Merge-restore Agy-Squad entries from *.agy-squad.bak (legacy *.bak fallback; preserves foreign entries)
   --help, -h, help             Show this help message
   (no arguments)               Install or synchronize Agy-Squad v${PACKAGE_VERSION}
 `);
 }
 
-function isDirectExecution() {
-  if (!process.argv[1]) return false;
-  const tryRealpath = (p) => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const resolvedArg = tryRealpath(path.resolve(process.argv[1]));
-  const resolvedSelf = tryRealpath(fileURLToPath(import.meta.url));
-  if (resolvedArg === resolvedSelf) return true;
-  if (os.platform() === "win32" || os.platform() === "darwin") {
-    return resolvedArg.toLowerCase() === resolvedSelf.toLowerCase();
-  }
-  return false;
-}
-
-if (isDirectExecution()) {
+if (isDirectEntryPoint()) {
   const args = process.argv.slice(2);
   const knownFlags = new Set(["--help", "-h", "--uninstall", "--status", "--check", "-c", "--restore-backups", "--json"]);
   const knownPositionals = new Set(["help", "uninstall", "status", "restore-backups"]);

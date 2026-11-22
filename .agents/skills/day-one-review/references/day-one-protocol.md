@@ -1,98 +1,63 @@
 # Day-One Review Protocol (PR Review Standard v1.5.0)
 
-This reference defines the exact non-digressing workflow for [../SKILL.md](../SKILL.md). It pairs with [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md) and applies to **any target repository or product** requested by the user (CLIs, IDE plugins, libraries, APIs, or web applications).
+Workflow reference for [../SKILL.md](../SKILL.md) under [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md). Applies to any target repo (CLIs, plugins, libraries, APIs, web apps).
 
----
+## 1. Stage 1: Cadence Intake and Audit Workspace
 
-## 1. Stage 1: Cadence Intake & Designated Audit Workspace
-
-1. **Upfront cadence intake (zero anti-anchoring bleed):** Before launching `r1`, ask the user which review cadence and stop criteria they want:
-   - **Single-round cold audit (`r1` only):** produce the read-only `r1` report and 4-tier ship verdict, then stop.
-   - **Multi-round (`r1` -> remediate -> `r2` cumulative):** iterate until the target ship verdict passes cleanly.
-   - **Full public-launch gate (`r1` -> remediate -> `r2` -> unanchored live `raw-final`):** run an unanchored consumer live trial before merging or tagging.
-   Restrict this intake strictly to workflow cadence and stop criteria; never ask for or inject bug hypotheses, suspected areas, or prior fix claims so Stage 2 Anti-Anchoring remains intact.
-2. **Default directory:** `scratch/day-one-review/` inside the target repository (or a user-designated path when specified).
-3. **Hygiene check:** Confirm `scratch/` (or the designated audit folder) is gitignored and excluded from release archives/tarballs so review ledgers never accidentally ship in public packages. Write under `docs/reviews/` only when the user explicitly requests a committed in-repo ledger.
-4. **File naming lineage:**
-   - Initial raw cold pass: `<auditDir>/day-one-review-r1.md`
-   - Cumulative follow-up passes: `<auditDir>/day-one-review-r2.md`, `day-one-review-r3.md`, ...
-   - Unanchored live final gate before tagging: `<auditDir>/day-one-review-raw-final.md`
-5. **Provenance pin:** Record repository path/URL, branch, `HEAD` SHA, uncommitted working-tree state, OS/runtime versions, chosen cadence, and Session Provenance before inspecting files.
-
----
+1. **Cadence intake (zero anchoring):** Ask strictly for cadence/stop criteria before `r1` (never bug hypotheses or prior fix claims):
+   - **Single-round (`r1` only):** cold audit + 4-tier verdict, then stop.
+   - **Multi-round (`r1` -> remediate -> `r2`):** iterate cumulatively until target verdict passes.
+   - **Full public-launch gate (`r1` -> remediate -> `r2` -> `raw-final`):** add one unanchored live consumer trial before merge/tag.
+2. **Workspace & hygiene:** Default `scratch/day-one-review/` (or user path); confirm `.gitignore` and release-tarball exclusion. Write `docs/reviews/` only if explicitly requested.
+3. **Lineage & pin:** `<auditDir>/day-one-review-r1.md`, `day-one-review-r2.md` (`r3`...), `day-one-review-raw-final.md`. Pin repo, branch, `HEAD`, dirty state, runtime, cadence, and Session Provenance first.
 
 ## 2. Stage 2: Raw, Unguided Initial Review (`r1`)
 
-### Anti-Anchoring Rules (Mandatory on `r1` and `raw-final`)
-- **Hook-enforced isolation:** Whenever `Agy-Context-Saver` is installed, place `[agy-transcript-access: deny]` on the first non-empty line of every `r1` and `raw-final` subagent prompt so the reviewer cannot read parent or prior review transcripts.
-- **Do NOT read** prior review ledgers (`docs/reviews/*`, `scratch/day-one-review/day-one-review-r*.md`), internal maintainer plans (`docs/plans/*`), `git log` / PR self-summaries, or user-supplied hypotheses before completing independent outside-in inspection.
-- **Zero leading briefs:** When spawning a read-only `invoke_subagent` reviewer (or opt-in `/swarm` specialists), pass ONLY the repository root, pinned commit/branch, output slot/path, and the cold Day-1 persona. Never inject prior finding IDs or "verify that X works" hints.
-- **Strictly read-only:** Do not edit repository files or leave artifacts in the repo root during a review pass.
+### Anti-Anchoring (`r1` and `raw-final`)
+- Prepend `[agy-transcript-access: deny]` on line 1 of `r1` and `raw-final` subagent prompts when `Agy-Context-Saver` is installed.
+- Do not read `docs/reviews/*`, `scratch/day-one-review/day-one-review-r*.md`, `docs/plans/*`, `git log`, PR summaries, or hints before outside-in inspection.
+- Pass only repo root, pinned commit/branch, output path, and cold Day-1 persona. Never edit repo files during review passes.
 
-### Mandatory Live Consumer Install & Outside-In Inspection Order
-Do not rely on static source reading alone during `r1`. Pack the release artifact (for example `npm pack --pack-destination /tmp/...`, `python -m build`, or cargo/go release artifact), install it into a disposable consumer project outside the checkout (testing both normal install and `--ignore-scripts` where applicable), compile public TypeScript/SDK types with strict settings (`tsc --noEmit --strict` with `skipLibCheck: false` when `.d.ts` files ship), and dogfood the CLI, SDK, and MCP surfaces live against an unrelated or disposable repo copy. Clean up all temporary directories and test daemons before finishing.
+### Live Consumer Install & Journeys
+Pack the release artifact (`npm pack`, `python -m build`, etc.), install into a disposable consumer project outside the checkout (normal + `--ignore-scripts`), compile public types strictly (`tsc --noEmit --strict`, `skipLibCheck: false` if `.d.ts` ships), and dogfood CLI/SDK/MCP live. Clean up temp dirs/daemons afterward.
 
-Walk the repository in the exact order a real external developer experiences it on Day 1, and record a **User-Journey Trace Matrix** inside Section 3 alongside the architecture trace:
+Record this **User-Journey Trace Matrix** in Section 3 alongside the architecture trace:
 
-| User Journey | Promised Contract | Actual Experience on Disk / Runtime | Test Coverage | Verdict |
+| Journey | Promised | Actual (`file:line`) | Coverage | Verdict |
 | --- | --- | --- | --- | --- |
-| 1. First 60 seconds (`README`, visuals/jargon, Quickstart, package/site metadata) | `<claim>` | `<observed reality + file:line>` | `<tests or gap>` | `Satisfied / Mismatch / Gap` |
-| 2. Clean install, setup, upgrade & rollback (fresh host, `--ignore-scripts`, off-`PATH`, cross-OS, strict public typecheck) | | | | |
-| 3. Everyday usage inside an unrelated user project (zero repo-checkout assumptions, live CLI/SDK/MCP dogfooding, clear errors) | | | | |
-| 4. Security & trust optics (`4.11 SEC`: execution surface, downloads/checksums, permissions, secret hygiene, linear-time regex / ReDoS, CI workflow `permissions:` / `concurrency:`, uninstall cleanliness) | | | | |
-| 5. Packaging, CI & release pipeline (published allowlist, exact artifact parity, multi-OS CI, release notes) | | | | |
+| 1. First 60s (`README`, Quickstart, metadata, jargon) | `<claim>` | `<reality>` | `<tests/gap>` | `Satisfied/Mismatch/Gap` |
+| 2. Clean install, upgrade, rollback (`--ignore-scripts`, off-`PATH`, `skipLibCheck: false`) | | | | |
+| 3. Everyday use in an unrelated project (live CLI/SDK/MCP, error clarity) | | | | |
+| 4. Security & trust (`4.11 SEC`: surface, checksums, secrets, ReDoS, CI `permissions:`/`concurrency:`, uninstall) | | | | |
+| 5. Packaging, CI & release (allowlist, artifact parity, multi-OS CI, release notes) | | | | |
 
-### Report Structure, P3 vs. Section 8 Boundary & 4-Tier Ship Verdict
-Conform strictly to [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md) Sections 1-8:
-- All **11 mandatory categories** (`4.1 ARCH`, `4.2 DOC`, `4.3 SKILL`, `4.4 MCP`, `4.5 RUN`, `4.6 SVC`, `4.7 DB`, `4.8 SCRIPT`, `4.9 TEST`, `4.10 DEP`, `4.11 SEC`), marking categories that do not apply to the target repository `Not applicable` with a concrete reason (never silently omitted). Under `4.11 SEC`, explicitly check CodeQL-class issues including polynomial/exponential regexes (ReDoS on untrusted input) and least-privilege GitHub Actions `permissions:` and `concurrency:` scoping.
-- Strict **`1 ID = 1 Row`** (10-field records for P0-P2; compact table rows for P3; mandatory Section 8 sink for residuals, deferred, by-design, and informational items).
-- **Sharp P3 vs. Section 8 triage boundary:**
-  - Classify as **P3** strictly concrete, unambiguous, user-visible in-repo defects (typos, stale doc counts, misleading schema descriptions, missing non-breaking validation, stray internal audit tags in public docs, leaked temp test dirs). Every P3 is auto-remediated in Stage 3 without asking.
-  - Route exclusively to **Section 8 (`Post-Remediation Residuals & Deferred Dispositions`)** items that require a human decision: external/upstream dependencies outside the repository, intentional behavior or contract trade-offs that could break existing suites or users, policy-gated files (such as benchmark definitions), and subjective polish suggestions.
-- Explicit **4-Tier Day-1 Ship Verdict** in Section 7:
-  - **`SHIP NOW`**: `0` open P0/P1/P2/P3 actionable in-repo defects (only tracked Section 8 residuals, upstream deferrals, or informational notes remain, if any).
-  - **`SHIP WITH MINOR POLISH`**: `0` P0/P1/SEC blockers and at most `<= 2` small, localized P2/P3 polish items with zero broken consumer install, compile, SDK, or core-command contracts.
-  - **`FIX BEFORE RELEASE`**: `0` P0/P1/SEC blockers, but **`>= 3` open P2/P3 items** or any P2 breaking consumer compilation, installation, or core documented workflows (under Stage 3, all concrete in-repo P0-P3 defects are fixed automatically to reach `SHIP NOW`).
-  - **`HOLD BEFORE PUBLIC RELEASE`**: Any open P0/P1 blocker, any unresolved `SEC` vulnerability, or any unreviewed material category.
+### P3 vs. Section 8 Boundary & 4-Tier Ship Verdict
+Follow Standard `v1.5.0` Sections 1-8 across all **11 categories** (`ARCH`..`DEP`, `SEC`; check ReDoS and CI `permissions:`/`concurrency:` under `4.11 SEC`) with `1 ID = 1 Row`:
 
----
+- **P3 (auto-fixed in Stage 3):** Concrete, unambiguous, user-visible in-repo defects (typos, stale counts, bad schema docs, missing non-breaking validation, stray internal tags, leaked temp dirs).
+- **Section 8 (human decision gate):** Upstream/external deps, intentional contract trade-offs risking breakage, policy-gated files (benchmarks), and subjective polish.
+- **4-Tier Verdict (Section 7):**
+  - **`SHIP NOW`**: `0` open P0/P1/P2/P3 in-repo defects (only tracked Section 8 residuals/deferrals/informational notes, if any).
+  - **`SHIP WITH MINOR POLISH`**: `0` P0/P1/SEC blockers and `<= 2` small localized P2/P3 polish items with zero broken install/compile/SDK/core contracts.
+  - **`FIX BEFORE RELEASE`**: `0` P0/P1/SEC blockers, but `>= 3` open P2/P3 items or any P2 breaking compile, install, or core workflows (auto-fixed in Stage 3 to reach `SHIP NOW`).
+  - **`HOLD BEFORE PUBLIC RELEASE`**: Any open P0/P1 blocker, unresolved `SEC` flaw, or unreviewed material category.
 
-## 3. Stage 3: Remediation (P0-P3 Auto-Fix, Section 8 Residuals & Selective Resume)
+## 3. Stage 3: Remediation and Selective Resume
 
-1. **Fix P0-P3 automatically; ask only on Section 8 residuals:** In a Day-1 public-launch review, **P3 defects are visible user-facing launch issues and MUST be remediated automatically alongside P0-P2, no questions asked.** Do not ask the user whether to skip P3s. Pause to ask the user **only** for Section 8 decision-gate items (upstream/external dependencies, intentional contract/behavior trade-offs that could break existing tests or users, or policy-gated files such as benchmark definitions). Ensure git state is clean (create a remediation branch or record baseline SHA) before editing files.
-2. **CPU/daemon serialization rule (single subagent default for heavy runtimes):** Default Stage 3 remediation to a **single coding subagent** whenever the target repository uses native indexers, local daemons, SQLite/database locks, or CPU-heavy build/test harnesses so parallel workers do not spawn competing indexers or starve host cores. Reserve multiple parallel coding subagents (with strictly disjoint file scopes mapped to atomic finding IDs) for lightweight, independent modules only.
-3. **Interruption & Selective Resume Protocol (Non-Negotiable):**
-   - If implementation is interrupted by a rate limit (`429`), timeout, disconnect, user pause, or session restart:
-     1. Run `manage_subagents(Action='list')` to inspect live state across all direct subagents.
-     2. **Resume ONLY the interrupted/paused subagent(s)** (never send unsolicited `send_message` nudges to healthy, actively working subagents; do not interrupt them).
-     3. **Never launch fresh replacement coding subagents** when the existing interrupted subagent can be resumed cleanly.
-   - **Permanent worker death fallback (Recovery Audit First):** Only when an interrupted subagent has permanently exited/died mid-edit and cannot be resumed in place:
-     1. Run a read-only **recovery audit** first inspecting `git diff` / `git status` AND the deceased subagent's full transcript (single-pass batch inspection of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl` when standalone, or `agy-context transcript` when `Agy-Context-Saver` is installed, without copying raw logs into workspace/scratch files) to classify every assigned finding ID as `Completed`, `Partially Completed`, or `Unremediated`.
-     2. Complete **only** the `Partially Completed` and `Unremediated` remainder without overwriting verified work.
-4. **Local, packaging & CodeQL-class pre-push verification:** Run the target repository's test suite, strict consumer typecheck (`skipLibCheck: false` when shipping `.d.ts`), `preflight`, packaging dry-run/smoke test, docs/lint build, and CodeQL-class security checks (linear-time regex / ReDoS inspection on modified parsers/routers and least-privilege GitHub Actions `permissions:` / `concurrency:` checks), then commit fixes cleanly before starting Stage 4.
+1. **Auto-fix P0-P3; ask only on Section 8:** Checkpoint clean git state, then fix every concrete in-repo P0-P3 defect automatically without asking to skip P3s. Pause only on Section 8 decision items.
+2. **CPU/daemon serialization:** Default to a **single coding subagent** when native indexers, local daemons, SQLite/DB locks, or heavy build harnesses exist; parallelize disjoint files only for lightweight modules.
+3. **Selective Resume:** Inspect `manage_subagents(Action='list')`, resume **ONLY** interrupted subagents, never message healthy workers, and never spawn duplicate replacements. If a worker died permanently, run a read-only recovery audit first (`git diff` + single-pass transcript read per [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection)) classifying IDs as `Completed`, `Partially Completed`, or `Unremediated`, then finish only the remainder.
+4. **Pre-push checks:** Run tests, strict typecheck (`skipLibCheck: false` if `.d.ts`), preflight/packaging smoke test, docs/lint, ReDoS inspection, and CI `permissions:`/`concurrency:` checks; commit cleanly.
 
----
+## 4. Stage 4: Cumulative Follow-Ups and `raw-final`
 
-## 4. Stage 4: Cumulative Follow-Up Reviews & Unanchored `raw-final`
+1. **Cumulative `r2+`:** Save `<auditDir>/day-one-review-r2.md` linking `Prior review: day-one-review-r1.md` and appending Session Provenance. Carry forward every prior ID in Section 7 closure using Section 4-7 statuses (`Open (Pre-Remediation)` or `Closed`) and route residual/deferred/by-design statuses (`Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`) exclusively to **Section 8**. Re-verify fixes across affected categories, log new IDs (`R2-...`), and auto-fix new in-repo P0-P3 before `raw-final` or merge.
+2. **Unanchored `raw-final`:** Under full launch gate (or on request), spawn one fresh read-only reviewer obeying Stage 2 Anti-Anchoring (`[agy-transcript-access: deny]` on line 1 when `Agy-Context-Saver` is installed; zero prior ledgers/`git log`) for a cold consumer install, compile, and live dogfooding trial.
 
-1. **Follow-up reviews build on the initial review (`r2`, `r3`, ...):**
-   - Save `<auditDir>/day-one-review-r2.md` (and `r3`, ...) in the same designated directory, explicitly linking `Prior review: day-one-review-r1.md` in Section 1.1 and appending the new session row to Section 1.2 (`Session Provenance`).
-   - Carry forward **every prior finding ID** in the Section 7 closure table with its updated Section 4-7 status (`Open (Pre-Remediation)` or `Closed`), and route all post-remediation residual/deferred/by-design statuses (`Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`) exclusively to Section 8 per PR Review Standard v1.5.0; never silently drop or renumber an ID.
-   - Re-verify each fix in its primary category and all affected categories at the new commit, and record any newly discovered defects or regressions with fresh atomic IDs (`R2-...`).
-   - Route every post-remediation decision-gate residual or upstream deferral exclusively to Section 8; any concrete in-repo P0-P3 defect newly found in `r2` is fixed automatically before moving to `raw-final` or merge.
-2. **Unanchored Live Final Pass (`day-one-review-raw-final.md`):**
-   - Required under the **full public-launch gate** cadence (or whenever requested before tagging/releasing). Spawn one fresh read-only reviewer obeying all Stage 2 Anti-Anchoring Rules (adding `[agy-transcript-access: deny]` on line 1 when `Agy-Context-Saver` is installed, with zero prior `r1..rN` ledgers or `git log` read) to execute a cold packed-artifact consumer install, strict SDK compile, and live CLI/MCP dogfooding pass to catch blind spots missed during guided follow-ups.
+## 5. Explicit `/swarm` Opt-In
 
----
+Launch `/swarm` ONLY when requested, pairing with [`swarm-governance`](../../swarm-governance/SKILL.md) in **flat** mode:
 
-## 5. Explicit `/swarm` Opt-In: Flat Category Specialists + Flat Auditor
-
-Do **not** launch `/swarm` by default for `day-one-review`. Only when the user **explicitly asks for `/swarm`**, pair with [swarm-governance](../../swarm-governance/SKILL.md) using a **flat `/swarm`** mirroring flat `self-diagnosis`, generalized completely to the requested target repository (never hardcoded to `Agy-Squad` or `Agy-Context-Saver`):
-
-1. **Flat category-specialist split:** Compile a flat single-squad plan via `squad_planner` (`agy-squad plan --topology flat --read-only`) partitioning the 11 Standard `v1.5.0` categories across read-only specialists tailored to the target repo's actual layout, for example:
-   - **Specialist 1 (`ARCH`, `DOC`, `SKILL`, `MCP`):** First 60s onboarding, architecture/contracts, public API/CLI/schema docs, diagrams & jargon.
-   - **Specialist 2 (`RUN`, `SVC`, `DB`, `SCRIPT`, `DEP`):** Clean install/upgrade/rollback, core runtime behavior, persistence, packaging & dependency boundaries.
-   - **Specialist 3 (`TEST`, `SEC`):** Adversarial test & CI strength plus `4.11 SEC` security, injection, containment, secrets, and supply-chain posture.
-   *(Adjust specialist count cleanly when categories such as `SKILL`, `MCP`, or `DB` are `Not applicable` for the target repo.)*
-2. **Flat Integrity Auditor (`audit-<id>`):** Always pair the flat working specialists with one independent flat `audit-<id>` worker verifying real tool traces (standalone native Antigravity: single-pass batch inspection of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` matching Step 0/1 `sender=<coordId>` + `@<workerName>` without copying raw JSONL into `scratch/`; when `Agy-Context-Saver` is installed: single-pass `agy-context transcript` or coordinator `export --sanitized`) and SHA-256 evidence digests (`Integrity Verdict: CLEAN | INTEGRITY VIOLATION`), plus `agy-squad finalize` bundle verification before accepting the synthesis into `scratch/day-one-review/day-one-review-r1.md`.
-3. **Preserve all core invariants:** Keep `r1` briefs unanchored (zero prior review ledgers/hints), keep `monitor`/`narrator` strictly observational, post `[done]` and run the 4-check closure gate when finished, and execute Stage 3 remediation separately with selective resume on interruption.
+1. **Flat specialists:** `agy-squad plan --topology flat --read-only` across applicable categories (e.g., `ARCH/DOC/SKILL/MCP`, `RUN/SVC/DB/SCRIPT/DEP`, `TEST/SEC`).
+2. **Flat auditor (`audit-<id>`):** Verify traces via [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection) and `agy-squad finalize` SHA-256 bundles before synthesizing `day-one-review-r1.md`.
+3. **Closure:** Keep `r1` unanchored, post `[done]` and pass [`swarm-governance` Section 5](../../swarm-governance/SKILL.md#5-runtime-closure-checklist-pre-handoff-gate), then run Stage 3 separately with selective resume.

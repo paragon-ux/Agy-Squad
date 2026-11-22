@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildSubagentSpec } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, buildSubagentSpec } from "./briefs.mjs";
+import { readRegularFileSafe, resolveCanonicalRoot } from "./handoffs.mjs";
 import { validateSquadId } from "./verdicts.mjs";
 
 const RETIRED_ADVERSARIAL_RE = /^adversarial_(?:review|l1|flat)$|^adversarial_/i;
@@ -32,37 +33,10 @@ function readManifest(root, filename, logicalRoot = root) {
   } else {
     assertWithinWorkspace(root, candidate);
   }
-  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
-  let file = candidate;
-  let fd;
-  try {
-    fd = fs.openSync(candidate, openFlags);
-  } catch (error) {
-    if (error.code !== "ELOOP") throw error;
-    file = fs.realpathSync(candidate);
-    assertWithinWorkspace(root, file);
-    fd = fs.openSync(file, openFlags);
-  }
-  let manifest;
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
-      throw new Error("Manifest path must name a regular file.");
-    }
-    if (process.platform === "linux") {
-      // On Linux/WSL, verify the opened fd target stays inside workspace (catches symlinked ancestor dirs).
-      const fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
-      assertWithinWorkspace(root, fdTarget);
-      file = fdTarget;
-    } else {
-      const realFile = fs.realpathSync(file);
-      assertWithinWorkspace(root, realFile);
-      file = realFile;
-    }
-    manifest = JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally {
-    fs.closeSync(fd);
-  }
-  return { squads: manifestSquads(manifest), selectedManifest: path.relative(root, file) };
+  const realFile = fs.realpathSync(candidate);
+  assertWithinWorkspace(root, realFile);
+  const manifest = JSON.parse(readRegularFileSafe(realFile, filename).toString("utf8"));
+  return { squads: manifestSquads(manifest), selectedManifest: path.relative(root, realFile) };
 }
 
 function manifestSquads(manifest) {
@@ -175,9 +149,9 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
     {
       spec: {
         role: "Integrity Auditor",
-        objective: `Audit working squad (${resolvedTarget}) for Subagent Alignment Policy compliance, empirical execution, absence of guessing or sycophancy, and truthfulness of reported evidence.`,
+        objective: `Audit squad '${resolvedTarget}' alignment, traces, and evidence.`,
         scopeFiles: ["."],
-        expectedDeliverable: `Markdown audit report recording 'Target Squad: ${resolvedTarget}', 'Evidence Digest: <sha256>' (via 'agy-squad digest <record.json>'), and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+        expectedDeliverable: `Target Squad: ${resolvedTarget}; Evidence Digest: <sha256> (agy-squad digest); Integrity Verdict: CLEAN | INTEGRITY VIOLATION.`
       },
       id: slotId,
       number: 1
@@ -203,24 +177,7 @@ function loadSquads(root, manifestPath, logicalRoot = root) {
   throw firstError ?? notFound;
 }
 
-const inlineLeadKeys = [
-  "role",
-  "Role",
-  "objective",
-  "Objective",
-  "scopeFiles",
-  "ScopeFiles",
-  "instructions",
-  "Instructions",
-  "expectedDeliverable",
-  "ExpectedDeliverable",
-  "typeName",
-  "TypeName",
-  "model",
-  "Model",
-  "workspace",
-  "Workspace"
-];
+const inlineLeadKeys = AGENT_ALIAS_PAIRS.flat();
 
 function resolveSquadLead(squad, squadId, requireLead) {
   if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
@@ -283,12 +240,7 @@ function logicalWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
 }
 
 function resolveWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
-  const candidate = resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace);
-  const root = fs.realpathSync(candidate);
-  if (!fs.statSync(root).isDirectory()) {
-    throw new Error(`Workspace path must be a directory: '${candidate}'.`);
-  }
-  return root;
+  return resolveCanonicalRoot(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
 }
 
 function formatNotFoundError(args, fallbackWorkspace) {
@@ -306,17 +258,12 @@ function formatNotFoundError(args, fallbackWorkspace) {
 
 function handleDispatchSquad(
   args = {},
-  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd(),
-  options = {}
+  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()
 ) {
   try {
     if (!args || typeof args !== "object" || Array.isArray(args) ||
         Object.keys(args).some(key => !ALLOWED_DISPATCH_KEYS.has(key))) {
       throw new Error("Only squadId, manifestPath, and workspace are supported.");
-    }
-    const includeTranscriptAccessDirectives = options?.includeTranscriptAccessDirectives ?? false;
-    if (typeof includeTranscriptAccessDirectives !== "boolean") {
-      throw new Error("includeTranscriptAccessDirectives must be a boolean.");
     }
     const { squadId, manifestPath, workspace: argWorkspace } = args;
     if (typeof squadId !== "string" || !squadId.trim()) {
@@ -356,7 +303,6 @@ function handleDispatchSquad(
       buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
         isIntegrityAuditor,
         workspace: delegateWorkspace,
-        includeTranscriptAccessDirectives,
         validateOnly,
         ...(emitWarnings ? { warnings } : {})
       });

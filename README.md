@@ -11,13 +11,13 @@ Agy-Squad is a multi-agent swarm planner, code-review harness, and SHA-256 proof
 
 ## Quickstart
 
-Requires Node.js 22 or newer and Google Antigravity Desktop IDE or CLI (agy) with native swarm or subagent support. Pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.0.1+, 2.0.4+ recommended) enables live integrity trace audits; standalone runs work without it.
+Requires Node.js 22 or newer and Google Antigravity Desktop IDE or CLI (agy) with native swarm or subagent support. Works 100% standalone, including live native JSONL Integrity Audits. Optionally pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.1.2+ recommended) adds hook-enforced context, shell, and transcript governance.
 
 ```bash
 # Install the plugin, skills, MCP server, and agy-squad CLI
 npx --package=agy-squad agy-squad setup
 
-# Verify plugin, skills, MCP registration, PATH, and companion tool status
+# Verify plugin, skills, MCP registration, and PATH status
 npx --package=agy-squad agy-squad status
 ```
 
@@ -31,7 +31,7 @@ Agy-Squad configures Antigravity's native swarm runtime rather than replacing it
 
 ## Built-in skills
 
-Agy-Squad ships five Antigravity skills covering structured code reviews, cold launch readiness, swarm governance, and harness diagnostics:
+Agy-Squad ships four user-facing Antigravity skills in the npm package covering structured code reviews, cold launch readiness, and swarm governance:
 
 | Skill | Best for | What it delivers |
 | --- | --- | --- |
@@ -39,7 +39,8 @@ Agy-Squad ships five Antigravity skills covering structured code reviews, cold l
 | [full-review](https://paragon-ux.github.io/Agy-Squad/skills/full-review/) | Whole repositories, subsystems, logs, or direction choices | Evidence-manifest triage across transcripts, CI runs, and code, plus structured direction decisions with constraints, options, and falsifiers |
 | [day-one-review](https://paragon-ux.github.io/Agy-Squad/skills/day-one-review/) | Public launch readiness from a cold first-time user lens | Raw, unguided Day-1 audit under scratch/ with a user-journey trace matrix, ship verdict, selective-resume remediation, and cumulative follow-up passes |
 | [swarm-governance](https://paragon-ux.github.io/Agy-Squad/skills/swarm-governance/) | Multi-agent teams running on Antigravity native swarm | Disjoint file scopes, model pinning, tiny one-line board receipts, independent integrity trace audits, SHA-256 proof bundles, and clean worker teardown |
-| [self-diagnosis](https://paragon-ux.github.io/Agy-Squad/skills/self-diagnosis/) | Maintainers working inside an Agy-Squad source checkout | Zero-subagent profiler checking skill token budgets, links, closure gates, ledger schemas, and compiled prompt sizes alongside optional audit cohorts |
+
+Maintainers working inside an Agy-Squad source checkout also have the repo-only [self-diagnosis](https://paragon-ux.github.io/Agy-Squad/skills/self-diagnosis/) skill (excluded from end-user npm installs) for checking skill token budgets, links, closure gates, ledger schemas, and compiled prompt sizes.
 
 ## Documentation
 

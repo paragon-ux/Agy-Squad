@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSubagentSpec, superviseSwarmCohort, superviseSwarmLayeredLead } from "../mcp/briefs.mjs";
+import { buildSubagentSpec, superviseSwarmLayeredLead } from "../mcp/briefs.mjs";
 import { handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -91,11 +91,12 @@ try {
   assert.equal(overlapTask.integrityAuditPlan.length, 1);
   assert.equal(overlapTask.integrityAuditPlan[0].swarmAdd.model, "gemini-3.8-flash-high");
   assert.doesNotMatch(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /or direct re-execution before CLEAN/);
-  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /coordinator-extracted sanitized transcript index in scratch\//);
-  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /re-execution alone cannot satisfy CLEAN; report 'Integrity Verdict: INTEGRITY VIOLATION' if traces are unavailable/);
-  assert.match(overlapTask.provenanceScaffold.transcriptIsolation, /Transcript isolation/);
-  assert.equal(overlapTask.provenanceScaffold.entries.length, 2);
-  assert.ok(overlapTask.bundleRecordTemplates.task_squad.requireIntegrityAudit);
+  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /no raw \.system_generated\/ copies/);
+  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /re-execution cannot satisfy CLEAN.*'Integrity Verdict: INTEGRITY VIOLATION' if traces missing\/tampered/);
+  assert.equal(overlapTask.workspace, root);
+  assert.equal(overlapTask.provenanceScaffold, undefined);
+  assert.equal(overlapTask.bundleRecordTemplates, undefined);
+  assert.equal(overlapTask.notes, undefined);
 
   // 3. Subagent-mode honest modelProvenance warning when exact model ID cannot be pinned
   const subagentPlan = planSquadCohort({
@@ -176,9 +177,26 @@ try {
       assert.match(w.lead.swarmAdd.brief, /swarm_wait/);
     }
     for (const s of w.specialists) assert.equal(s.swarmAdd.name, s.workerName);
-    const tplAssignments = selfDiagPlan.bundleRecordTemplates[w.squadId].assignments.map(a => a.conversationId);
-    assert.equal(new Set(tplAssignments).size, tplAssignments.length);
   }
+  assert.equal(selfDiagPlan.workspace, fs.realpathSync(repoRoot));
+  assert.equal(selfDiagPlan.provenanceScaffold, undefined);
+  assert.equal(selfDiagPlan.bundleRecordTemplates, undefined);
+  assert.equal(selfDiagPlan.notes, undefined);
+  const compactThreeSquad = planSquadCohort({
+    manifest: {
+      squads: {
+        alpha: { specialists: [{ role: "A1", objective: "Audit a1", scopeFiles: ["src/a/1.js"] }, { role: "A2", objective: "Audit a2", scopeFiles: ["src/a/2.js"] }] },
+        beta: { specialists: [{ role: "B1", objective: "Audit b1", scopeFiles: ["src/b/1.js"] }, { role: "B2", objective: "Audit b2", scopeFiles: ["src/b/2.js"] }] },
+        gamma: { specialists: [{ role: "C1", objective: "Audit c1", scopeFiles: ["src/c/1.js"] }, { role: "C2", objective: "Audit c2", scopeFiles: ["src/c/2.js"] }] }
+      }
+    },
+    executionMode: "swarm"
+  }, root);
+  const threeSquadBytes = Buffer.byteLength(JSON.stringify(compactThreeSquad), "utf8");
+  assert.ok(
+    threeSquadBytes < 16384,
+    `Expected compact 3-squad swarm plan < 16 KB, got ${threeSquadBytes} B`
+  );
   const sharedSelfDiagPlan = planSquadCohort({
     manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
     executionMode: "swarm",
@@ -228,7 +246,7 @@ try {
   }, root);
   assert.equal(normalizedRootPlan.workers[0].specialists[0].reportSlot, "custom/out/squad-task_squad/specialist-1/report.md");
   assert.equal(normalizedRootPlan.integrityAuditPlan[0].reportSlot, "custom/out/squad-integrity_auditor/specialist-1/report.md");
-  assert.equal(normalizedRootPlan.bundleRecordTemplates.task_squad.reportRoot, "custom/out");
+  assert.equal(normalizedRootPlan.reportRoot, "custom/out");
 
   // 8. MCP-PR5-01, MCP-PR5-02, SVC-PR5-02: per-spec model, swarm lead.swarmAdd, and inline-manifest lead brief
   const inlineSwarmLeadPlan = planSquadCohort({
@@ -254,11 +272,6 @@ try {
   assert.match(alphaWorker.specialists[0].swarmAdd.brief, /Pinned model expectation: gemini-2.5-pro/);
   assert.equal(alphaWorker.specialists[1].swarmAdd.model, undefined);
   assert.match(alphaWorker.specialists[1].swarmAdd.brief, /Model: coordinator default\./);
-  const leadProv = inlineSwarmLeadPlan.provenanceScaffold.entries.find(e => e.slotType === "lead");
-  assert.equal(leadProv.workerName, alphaWorker.lead.workerName);
-  assert.equal(leadProv.effectiveModel, "gemini-2.5-flash");
-  const specAProv = inlineSwarmLeadPlan.provenanceScaffold.entries.find(e => e.workerName === alphaWorker.specialists[0].workerName);
-  assert.equal(specAProv.effectiveModel, "gemini-2.5-pro");
 
   // Top-level model overrides lead & specialist models in swarm mode
   const swarmTopModelPlan = planSquadCohort({
@@ -274,10 +287,6 @@ try {
     model: "gemini-3.8-flash-high"
   }, root);
   assert.equal(swarmTopModelPlan.workers[0].lead.swarmAdd.model, "gemini-3.8-flash-high");
-  assert.equal(
-    swarmTopModelPlan.provenanceScaffold.entries.find(e => e.slotType === "lead").effectiveModel,
-    "gemini-3.8-flash-high"
-  );
 
   // Subagent mode: per-specialist & lead non-alias models warn and coerce to inherit; aliases preserved without warning
   const subagentSpecWarn = planSquadCohort({
@@ -369,7 +378,7 @@ try {
   assert.equal(multiSquadPlan.workers[0].squadId, "beta");
   assert.equal(multiSquadPlan.workers[0].specialists[0].swarmAdd.workspace, "branch");
   assert.equal(multiSquadPlan.integrityAuditPlan.length, 0);
-  assert.equal(multiSquadPlan.bundleRecordTemplates.beta.requireIntegrityAudit, false);
+  assert.ok(multiSquadPlan.verificationPipeline.some(step => /--allow-unaudited/.test(step)));
 
   const cliNoIntegrity = spawnSync(
     process.execPath,
@@ -379,7 +388,7 @@ try {
   assert.equal(cliNoIntegrity.status, 0, cliNoIntegrity.stderr);
   const parsedNoInt = JSON.parse(cliNoIntegrity.stdout);
   assert.equal(parsedNoInt.integrityAuditPlan.length, 0);
-  assert.equal(parsedNoInt.bundleRecordTemplates.alpha.requireIntegrityAudit, false);
+  assert.ok(parsedNoInt.verificationPipeline.some(step => /--allow-unaudited/.test(step)));
 
   for (const [badArgs, pattern] of [
     [{ task: "x", bogusKey: 1 }, /Unsupported squad_planner option/],
@@ -445,28 +454,22 @@ try {
     knownModels: ["gemini-4-hydrogen-high"]
   }, root), /not in knownModels: typo-spec-model/);
 
-  // 10. PR5-ARCH-02: swarm bundle templates use the board (member) name as identity
+  // 10. PR5-ARCH-02: swarm workers use board roster names; slimmed plans omit provenanceScaffold/bundleRecordTemplates/notes
   const swarmIdentity = planSquadCohort({ task: "audit", roles: ["A", "B"], scopeFiles: ["src"] }, root);
   for (const w of swarmIdentity.workers) {
-    const names = w.specialists.map(s => s.workerName);
-    const tpl = swarmIdentity.bundleRecordTemplates[w.squadId].assignments.map(a => a.conversationId);
-    assert.deepEqual(tpl, names);
+    assert.deepEqual(
+      w.specialists.map(s => s.swarmAdd.name),
+      w.specialists.map(s => s.workerName)
+    );
   }
-  assert.match(swarmIdentity.provenanceScaffold.identity, /roster name/);
+  assert.equal(swarmIdentity.provenanceScaffold, undefined);
+  assert.equal(swarmIdentity.bundleRecordTemplates, undefined);
+  assert.equal(swarmIdentity.notes, undefined);
   const subIdentity = planSquadCohort({ task: "audit", executionMode: "subagent" }, root);
-  assert.match(subIdentity.bundleRecordTemplates[subIdentity.workers[0].squadId].assignments[0].conversationId, /^<invoke_subagent:/);
-
-  // 11. PR5-ARCH-03 / PR5-SKILL-01: honest notes about layering cost and convention-only Pointer-Over-Wire
-  assert.ok(swarmIdentity.notes.some(n => /not enforced/.test(n)));
-  assert.ok(!swarmIdentity.notes.some(n => /Layered plan/.test(n)), "single-squad swarm plans have no squad lead");
-  const layered = planSquadCohort({
-    manifest: { squads: {
-      a: { lead: { role: "A Lead", objective: "Lead a", scopeFiles: ["a"] }, specialists: [{ role: "SA", objective: "Check a", scopeFiles: ["a/x.mjs"] }] },
-      b: { lead: { role: "B Lead", objective: "Lead b", scopeFiles: ["b"] }, specialists: [{ role: "SB", objective: "Check b", scopeFiles: ["b/y.mjs"] }] }
-    } }
-  }, root);
-  assert.ok(layered.notes.some(n => /Layered plan/.test(n)));
-  assert.equal(planSquadCohort({ task: "audit", executionMode: "subagent" }, root).notes.some(n => /not enforced/.test(n)), false);
+  assert.equal(subIdentity.workers[0].specialists[0].Subagent.TypeName, "self");
+  assert.equal(subIdentity.provenanceScaffold, undefined);
+  assert.equal(subIdentity.bundleRecordTemplates, undefined);
+  assert.equal(subIdentity.notes, undefined);
 
   // 12. Stage 1 remediation regressions: inherit model in swarm + knownModels, explicit topology flat/layered, PascalCase ReadOnly
   const inheritSwarmPlan = planSquadCohort({
@@ -633,10 +636,10 @@ try {
     assert.equal(scopesOverlap("sym-broken/Foo.js", "sym-broken/foo.js", root, { caseInsensitive: false }), false);
   }
 
-  // RUN-014 & SVC-007 & SVC-001: precompiledSpecialists omits Call dispatch_squad; occupiedWorkerNames deduplicates; integrityAuditSlots populated
+  // RUN-014 & SVC-007 & SVC-001: precompiledSpecialists omits Call dispatch_squad; occupiedWorkerNames deduplicates; integrityAuditPlan populated
   assert.equal(subagentPlan.workers[0].lead.Subagent.Prompt.includes("Call dispatch_squad"), false);
-  assert.equal(Array.isArray(overlapTask.bundleRecordTemplates.task_squad.integrityAuditSlots), true);
-  assert.equal(overlapTask.bundleRecordTemplates.task_squad.integrityAuditSlots.length, 1);
+  assert.equal(overlapTask.integrityAuditPlan.length, 1);
+  assert.equal(overlapTask.integrityAuditPlan[0].reportSlot, "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md");
   const deduplicatedPlan = planSquadCohort({
     manifest: {
       squads: {
@@ -682,7 +685,7 @@ try {
       workspace: root,
       executionMode: "swarm"
     }, altDir);
-    assert.equal(overridePlan.bundleRecordTemplates.alpha.workspace, root);
+    assert.equal(overridePlan.workspace, root);
     assert.equal(overridePlan.workers[0].squadId, "alpha");
     assert.match(
       inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
@@ -704,33 +707,13 @@ try {
     );
     assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
-    const optInSwarmPlan = planSquadCohort(
-      {
-        manifest: {
-          squads: {
-            alpha: {
-              lead: { role: "Alpha Lead", objective: "Lead", scopeFiles: ["a"], readOnly: true },
-              specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["a"], readOnly: true }]
-            }
-          }
-        },
-        workspace: root,
-        executionMode: "swarm"
-      },
-      altDir,
-      { includeTranscriptAccessDirectives: true }
-    );
-    assert.ok(optInSwarmPlan.workers[0].lead.swarmAdd.brief.startsWith("[agy-transcript-access: allow]\n"));
-    assert.ok(optInSwarmPlan.workers[0].specialists[0].swarmAdd.brief.startsWith("[agy-transcript-access: deny]\n"));
-    assert.ok(optInSwarmPlan.integrityAuditPlan[0].swarmAdd.brief.startsWith("[agy-transcript-access: allow]\n"));
-
     const symlinkAbsPlan = handleSquadPlanner({
       manifestPath: path.join(linkRoot, "plan-manifest.json"),
       workspace: linkRoot,
       executionMode: "swarm"
     }, altDir);
     assert.equal(symlinkAbsPlan.isError, undefined, symlinkAbsPlan.content[0].text);
-    assert.equal(JSON.parse(symlinkAbsPlan.content[0].text).bundleRecordTemplates.alpha.workspace, root);
+    assert.equal(JSON.parse(symlinkAbsPlan.content[0].text).workspace, root);
 
     fs.writeFileSync(path.join(root, "scope-real.txt"), "x\n");
     let scopeAliasCreated = false;
@@ -746,7 +729,7 @@ try {
 
     const taskOverridePlan = handleSquadPlanner({ task: "Audit task override", workspace: root }, altDir);
     assert.equal(taskOverridePlan.isError, undefined, taskOverridePlan.content[0].text);
-    assert.equal(JSON.parse(taskOverridePlan.content[0].text).bundleRecordTemplates.task_squad.workspace, root);
+    assert.equal(JSON.parse(taskOverridePlan.content[0].text).workspace, root);
 
     const noDefaultPlannerErr = handleSquadPlanner({ manifestPath: "missing.json" }, altDir);
     assert.equal(noDefaultPlannerErr.isError, true);
@@ -1057,7 +1040,7 @@ try {
     );
     assert.match(swarmAuditLeadSpec.Prompt, /Target Squad: <id>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
-    assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
+    assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
 
     // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and /swarm lead wording
     const compPlan = planSquadCohort(
@@ -1128,10 +1111,6 @@ try {
     assert.ok(
       benchPlan.warnings.some(w => /Detected 1 writable sibling scopeFiles overlap/.test(w)),
       `OPT-IO-6: expected 1 writable sibling overlap warning, got: ${JSON.stringify(benchPlan.warnings)}`
-    );
-    assert.ok(
-      benchPlan.notes.some(n => /Detected 2 same-squad lead-vs-specialist scopeFiles overlap/.test(n)),
-      `OPT-IO-6: expected 2 lead-vs-specialist overlap note, got: ${JSON.stringify(benchPlan.notes)}`
     );
     assert.equal(writableLeadOverlap.topology.siblingOverlaps.length, 0);
     assert.equal(writableLeadOverlap.topology.leadSpecialistOverlaps.length, 1);
@@ -1226,8 +1205,10 @@ try {
     assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
     assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} only/);
     assert.match(layeredLeadBrief, /follow Board scope above/);
-    const leadTemplateSavings = Buffer.byteLength(superviseSwarmCohort, "utf8") - Buffer.byteLength(superviseSwarmLayeredLead, "utf8");
-    assert.ok(leadTemplateSavings >= 226, `OPT-BRIEF-03: expected >= 226 B/lead savings, got ${leadTemplateSavings} B`);
+    assert.ok(
+      Buffer.byteLength(superviseSwarmLayeredLead, "utf8") <= 600,
+      `OPT-BRIEF-03: expected compact superviseSwarmLayeredLead <= 600 B, got ${Buffer.byteLength(superviseSwarmLayeredLead, "utf8")} B`
+    );
 
     // UX-SQ-003 & UX-SQ-015: handleSquadPlanner ENOENT recommends global 'agy-squad plan' and verificationPipeline surfaces 'agy-squad finalize'
     const missingPlanErr = handleSquadPlanner({ manifestPath: "missing-manifest.json" }, root);
@@ -1281,11 +1262,9 @@ try {
       "RAW-RUN-001: flat task plan must expose synthesisSlot pointing to lead/report.md"
     );
     assert.ok(
-      readmeQuickstartJson.notes.some(n => n.includes("scratch/agy-squad/squad-task_squad/lead/report.md") && n.includes("Content Verdict: PASS")),
-      "RAW-RUN-001: flat task plan notes must explain coordinator synthesisSlot authorship"
-    );
-    assert.ok(
-      readmeQuickstartJson.verificationPipeline.some(step => step.includes("scratch/agy-squad/squad-task_squad/lead/report.md")),
+      readmeQuickstartJson.verificationPipeline.some(
+        step => step.includes("scratch/agy-squad/squad-task_squad/lead/report.md") && step.includes("Content Verdict: PASS|FAIL|BLOCKED")
+      ),
       "RAW-RUN-001: flat task verificationPipeline must surface coordinator synthesisSlot before bundle-init"
     );
     const customRootFlatPlan = planSquadCohort({
@@ -1297,14 +1276,14 @@ try {
     assert.equal(customRootFlatPlan.workers[0].lead, null);
     assert.equal(customRootFlatPlan.workers[0].synthesisSlot, "scratch/custom-flat/squad-task_squad/lead/report.md");
     assert.ok(
-      customRootFlatPlan.notes.some(n => n.includes("scratch/custom-flat/squad-task_squad/lead/report.md")),
-      "RAW-RUN-001: custom reportRoot must propagate into flat synthesisSlot notes"
+      customRootFlatPlan.verificationPipeline.some(step => step.includes("scratch/custom-flat/squad-task_squad/lead/report.md")),
+      "RAW-RUN-001: custom reportRoot must propagate into flat synthesisSlot verificationPipeline"
     );
     assert.equal(layeredLeadCheckPlan.workers[0].synthesisSlot, layeredLeadCheckPlan.workers[0].lead.reportSlot);
     assert.equal(
-      layeredLeadCheckPlan.notes.some(n => /Coordinator synthesis slot\(s\) for flat squad/.test(n)),
+      layeredLeadCheckPlan.verificationPipeline.some(step => /Write synthesis/.test(step)),
       false,
-      "RAW-RUN-001: layered plans should not emit flat coordinator synthesis note"
+      "RAW-RUN-001: layered plans should not emit flat coordinator synthesis step"
     );
 
     // RAW-SCRIPT-001 / RAW-TEST-001: Windows backslash and Tab-completion CLI path normalization in plan

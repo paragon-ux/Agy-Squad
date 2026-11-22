@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
+import { createHash } from "node:crypto";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readOpenedFileWithStat, reportPath, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -1069,7 +1070,7 @@ try {
     assert.notEqual(badIdMap.status, 0, "bundle-init must reject unmatched --id-map keys");
     assert.match(badIdMap.stderr, /--id-map key/);
 
-    // Subagent-mode provenanceScaffold conversationId substitution in bundle-init
+    // Subagent-mode slimmed plan hydration & --id-map substitution in bundle-init (no provenanceScaffold / bundleRecordTemplates on plan)
     const subPlan = spawnSync(
       process.execPath,
       [agySquadCli, "plan", "--manifest", "svc-manifest.json", "--mode", "subagent"],
@@ -1077,12 +1078,28 @@ try {
     );
     assert.equal(subPlan.status, 0, subPlan.stderr);
     const subPlanObj = JSON.parse(subPlan.stdout);
-    subPlanObj.provenanceScaffold.entries[0].conversationId = "uuid-spec-1";
-    subPlanObj.provenanceScaffold.entries[1].conversationId = "uuid-spec-2";
+    assert.equal(subPlanObj.provenanceScaffold, undefined, "slimmed subagent plan omits provenanceScaffold");
+    assert.equal(subPlanObj.bundleRecordTemplates, undefined, "slimmed subagent plan omits bundleRecordTemplates");
     writeAt(svcCoord, "scratch/sub-plan.json", JSON.stringify(subPlanObj));
+    const spec1Name = subPlanObj.workers[0].specialists[0].workerName;
+    const spec2Name = subPlanObj.workers[0].specialists[1].workerName;
+    const directHydrated = buildBundleRecordInit(svcCoord, {
+      plan: subPlanObj,
+      files: ["src/core.mjs"],
+      idMap: { [spec2Name]: "uuid-override-2" }
+    });
+    assert.equal(directHydrated.assignments[0].conversationId, `<invoke_subagent:${spec1Name}:conversationId>`);
+    assert.equal(directHydrated.assignments[1].conversationId, "uuid-override-2");
     const subInit = spawnSync(
       process.execPath,
-      [agySquadCli, "bundle-init", "--plan", "scratch/sub-plan.json", "--id-map", `${subPlanObj.workers[0].specialists[1].workerName}=uuid-override-2`, "src/core.mjs"],
+      [
+        agySquadCli,
+        "bundle-init",
+        "--plan", "scratch/sub-plan.json",
+        "--id-map", `${spec1Name}=uuid-spec-1`,
+        "--id-map", `${spec2Name}=uuid-override-2`,
+        "src/core.mjs"
+      ],
       { cwd: svcCoord, encoding: "utf8" }
     );
     assert.equal(subInit.status, 0, subInit.stderr);
@@ -1335,11 +1352,14 @@ try {
       assert.match(initDigestOut.evidenceDigest, /^[0-9a-f]{64}$/);
       bWrite(bAudit, `Target Squad: alpha\nEvidence Digest: ${initDigestOut.evidenceDigest}\nIntegrity Verdict: CLEAN\n`);
       const bundledBatch = JSON.parse(spawnSync(process.execPath, [agySquadCli, "bundle", "scratch/rec.json"], { cwd: batchDir, encoding: "utf8" }).stdout);
-      const verifyKeep = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, "--prune", "--keep-reports"], { cwd: batchDir, encoding: "utf8" });
+      const verifyPruneNoHash = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, "--prune"], { cwd: batchDir, encoding: "utf8" });
+      assert.notEqual(verifyPruneNoHash.status, 0, "ASQ-SEC-002: verify --prune without expected sha256 must fail closed");
+      assert.match(verifyPruneNoHash.stderr, /expectedSha256/);
+      const verifyKeep = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, "--expected-sha256", bundledBatch.sha256, "--prune", "--keep-reports"], { cwd: batchDir, encoding: "utf8" });
       assert.equal(verifyKeep.status, 0, verifyKeep.stderr);
       assert.deepEqual(JSON.parse(verifyKeep.stdout).pruned.removed, []);
       assert.equal(fs.existsSync(path.join(batchDir, bS1)), true);
-      const verifyPrune = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, "--prune"], { cwd: batchDir, encoding: "utf8" });
+      const verifyPrune = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, bundledBatch.sha256, "--prune"], { cwd: batchDir, encoding: "utf8" });
       assert.equal(verifyPrune.status, 0, verifyPrune.stderr);
       assert.deepEqual(JSON.parse(verifyPrune.stdout).pruned.removed, [bS1]);
       assert.equal(fs.existsSync(path.join(batchDir, bS1)), false);
@@ -1921,34 +1941,53 @@ try {
         assert.equal(helpBadFlag.status, 1);
         assert.match(helpBadFlag.stderr, /Conflicting flags/);
 
-        // RAW-SVC-001: U+2014 delimiter mismatch hint on READY / PARTIAL / NO_REPORT, without false-positive on blank reason after U+2014
+        // ASQ-SVC-003 (C1): Spaced ASCII '-' and '--' accepted alongside U+2014 '—'; non-accepted delimiters fail closed with hint, without false-positive on blank observations
         const baseDelimRec = {
           workspace: finDir,
           assignments: [{ conversationId: "w1", report: qsSpec1.reportSlot }]
         };
-        assert.throws(
-          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `READY ${qsSpec1.reportSlot} - ASCII dash` }] }),
-          /Expected literal U\+2014 em-dash delimiter.*READY .* — <observation>/
-        );
-        assert.throws(
-          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: `PARTIAL ${qsSpec1.reportSlot} -- double dash` }] }),
-          /Expected literal U\+2014 em-dash delimiter.*PARTIAL .* — <observation>/
-        );
-        assert.throws(
-          () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: "NO_REPORT -- timed out" }] }),
-          /Expected literal U\+2014 em-dash delimiter.*NO_REPORT — <reason>/
-        );
+        for (const [msg, expectedStatus] of [
+          [`READY ${qsSpec1.reportSlot} - ASCII dash`, "READY"],
+          [`READY ${qsSpec1.reportSlot} -- double dash`, "READY"],
+          [`PARTIAL ${qsSpec1.reportSlot} - partial ascii`, "PARTIAL"],
+          [`PARTIAL ${qsSpec1.reportSlot} -- partial double`, "PARTIAL"],
+          ["NO_REPORT - timed out", "NO_REPORT"],
+          ["NO_REPORT -- timed out", "NO_REPORT"]
+        ]) {
+          assert.deepEqual(
+            inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: msg }] }).map(r => r.status),
+            [expectedStatus],
+            `ASQ-SVC-003: expected '${msg}' to be accepted as ${expectedStatus}`
+          );
+        }
+        for (const badDelimMsg of [
+          `READY ${qsSpec1.reportSlot} : colon delimiter`,
+          `PARTIAL ${qsSpec1.reportSlot} – en-dash delimiter`,
+          `READY ${qsSpec1.reportSlot}-unspaced dash`,
+          "NO_REPORT: colon reason",
+          "NO_REPORT-unspaced reason"
+        ]) {
+          assert.throws(
+            () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: badDelimMsg }] }),
+            /Expected ' — ', ' -- ', or ' - ' delimiter/,
+            `ASQ-SVC-003: non-accepted delimiter '${badDelimMsg}' must fail closed with delimiter hint`
+          );
+        }
         for (const nonMismatchMsg of [
           "NO_REPORT —   ",
           "NO_REPORT —",
+          "NO_REPORT --",
+          "NO_REPORT -",
           "NO_REPORT   ",
           `READY ${qsSpec1.reportSlot} —`,
+          `READY ${qsSpec1.reportSlot} --`,
+          `READY ${qsSpec1.reportSlot} -`,
           `READY ${qsSpec1.reportSlot}   `
         ]) {
           assert.throws(
             () => inspectHandoffs(finDir, { ...baseDelimRec, handoffs: [{ sender: "w1", message: nonMismatchMsg }] }),
-            (err) => /Handoff must include/.test(err.message) && !/Expected literal U\+2014/.test(err.message),
-            `RAW-SVC-001: '${nonMismatchMsg}' must not emit false-positive U+2014 delimiter mismatch hint`
+            (err) => /Handoff must include/.test(err.message) && !/Expected ' — ', ' -- ', or ' - '/.test(err.message),
+            `ASQ-SVC-003: '${nonMismatchMsg}' must not emit false-positive delimiter mismatch hint`
           );
         }
       } finally {
@@ -1969,6 +2008,159 @@ try {
   const tNorm = performance.now();
   assert.throws(() => normalizeReportRoot(evilRoot), /workspace-relative reportRoot/);
   assert.ok(performance.now() - tNorm < 50, "normalizeReportRoot must stay linear-time on repeated slashes");
+
+  // ASQ-TEST-001 regressions: ASQ-SEC-002, ASQ-RUN-001, ASQ-SVC-001, ASQ-SVC-002, ASQ-SEC-008
+  const asqDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-handoffs-")));
+  const asqWt = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-wt-")));
+  try {
+    const writeAtAsq = (base, rel, data) => {
+      const dest = path.join(base, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, data);
+    };
+
+    // ASQ-SEC-002: Stripping schemaVersion, auditPolicy, or integrityAudit* from a v2 bundle fails closed; verify --prune requires matching expectedSha256
+    const secS1 = reportPath("sec", 1);
+    const secLead = reportPath("sec");
+    const secAudit = reportPath("integrity_auditor-sec", 1);
+    writeAtAsq(asqDir, "src/mod.js", "export const ok = true;\n");
+    writeAtAsq(asqDir, secS1, "# Spec\nVerified src/mod.js:1.\n");
+    writeAtAsq(asqDir, secLead, "Content Verdict: PASS\nVerified.\n");
+    const secRec = {
+      workspace: asqDir,
+      squadId: "sec",
+      verdict: "PASS",
+      verifiedFiles: fingerprint(asqDir, ["src/mod.js"]),
+      assignments: [{ conversationId: "sec-w1", report: secS1 }],
+      handoffs: [{ sender: "sec-w1", message: `READY ${secS1} — Verified.` }],
+      requireIntegrityAudit: true,
+      integrityAuditSlots: [secAudit]
+    };
+    const secDig = computeEvidenceDigest(asqDir, secRec).evidenceDigest;
+    writeAtAsq(asqDir, secAudit, `Target Squad: sec\nEvidence Digest: ${secDig}\nIntegrity Verdict: CLEAN\n`);
+    const secBundled = bundleReports(asqDir, secRec);
+    const validBundleAbs = path.join(asqDir, secBundled.path);
+    const validBundleRaw = fs.readFileSync(validBundleAbs, "utf8");
+    const validBundleObj = JSON.parse(validBundleRaw);
+    assert.equal(verifyBundle(asqDir, secBundled.path, secBundled.sha256).auditPolicy, "required");
+
+    const tamperCases = [
+      ["missing schemaVersion", o => { delete o.schemaVersion; }, /Unsupported or missing bundle schemaVersion/],
+      ["missing auditPolicy", o => { delete o.auditPolicy; }, /Invalid auditPolicy/],
+      ["stripped integrityAudit*", o => { delete o.integrityAudit; delete o.integrityAudits; }, /missing integrityAudit evidence/]
+    ];
+    for (const [label, mutate, pattern] of tamperCases) {
+      const clone = structuredClone(validBundleObj);
+      mutate(clone);
+      fs.writeFileSync(validBundleAbs, JSON.stringify(clone, null, 2) + "\n", "utf8");
+      assert.throws(() => verifyBundle(asqDir, secBundled.path), pattern, `ASQ-SEC-002: ${label} must fail closed`);
+    }
+    fs.writeFileSync(validBundleAbs, validBundleRaw, "utf8");
+    assert.throws(
+      () => verifyAndPruneBundle(asqDir, secBundled.path),
+      /expectedSha256/,
+      "ASQ-SEC-002: verifyAndPruneBundle without expectedSha256 must fail closed"
+    );
+    assert.throws(
+      () => verifyAndPruneBundle(asqDir, secBundled.path, { expectedSha256: "0".repeat(64) }),
+      /differs from the primary's accepted digest/,
+      "ASQ-SEC-002: verifyAndPruneBundle with mismatched expectedSha256 must fail closed"
+    );
+    const prunedOk = verifyAndPruneBundle(asqDir, secBundled.path, { expectedSha256: secBundled.sha256 });
+    assert.deepEqual(prunedOk.pruned.removed, [secS1]);
+    assert.equal(fs.existsSync(path.join(asqDir, secS1)), false);
+
+    // ASQ-RUN-001: readOpenedFileWithStat reads full EOF content on empty and multi-chunk (>64 KiB) files
+    const emptyFile = path.join(asqDir, "empty.bin");
+    fs.writeFileSync(emptyFile, Buffer.alloc(0));
+    const emptyRead = readOpenedFileWithStat(emptyFile, "empty.bin");
+    assert.equal(emptyRead.bytes.length, 0);
+    assert.equal(emptyRead.stat.size, 0);
+
+    const bigPayload = Buffer.concat([
+      Buffer.from("HEADER-START\n"),
+      Buffer.alloc(150_000, 0x61),
+      Buffer.from("\nTAIL-EOF-MARKER")
+    ]);
+    const bigFile = path.join(asqDir, "big-multi-chunk.bin");
+    fs.writeFileSync(bigFile, bigPayload);
+    const bigRead = readOpenedFileWithStat(bigFile, "big-multi-chunk.bin");
+    assert.equal(bigRead.bytes.length, bigPayload.length);
+    assert.equal(bigRead.bytes.equals(bigPayload), true);
+
+    // ASQ-SVC-001: Predecessor lockfile rejects active concurrent .lock and recovers stale .lock cleanly
+    const lockRel = "scratch/lock-target.json";
+    const lockAbs = path.join(asqDir, lockRel);
+    const lockFile = `${lockAbs}.lock`;
+    const buf1 = Buffer.from('{"v":1}\n', "utf8");
+    const buf2 = Buffer.from('{"v":2}\n', "utf8");
+    const sha1 = createHash("sha256").update(buf1).digest("hex");
+    publish(asqDir, lockRel, buf1, true);
+    fs.writeFileSync(lockFile, "999999 active\n", "utf8");
+    assert.throws(
+      () => publish(asqDir, lockRel, buf2, true, undefined, sha1),
+      /Concurrent predecessor-checked publish already in progress/,
+      "ASQ-SVC-001: active lockfile must block concurrent predecessor-checked publish"
+    );
+    assert.equal(fs.readFileSync(lockAbs).equals(buf1), true);
+    const staleDate = new Date(Date.now() - 60_000);
+    fs.utimesSync(lockFile, staleDate, staleDate);
+    publish(asqDir, lockRel, buf2, true, undefined, sha1);
+    assert.equal(fs.readFileSync(lockAbs).equals(buf2), true);
+    assert.equal(fs.existsSync(lockFile), false, "ASQ-SVC-001: stale lockfile must be recovered and cleaned up");
+
+    // ASQ-SVC-002: computeEvidenceDigest rejects invalid UTF-8 specialist report; collect --squad tolerates corrupt unrelated flat audit file
+    const badUtf8S1 = reportPath("badutf8", 1);
+    const badUtf8Lead = reportPath("badutf8");
+    writeAtAsq(asqDir, badUtf8S1, Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a]));
+    writeAtAsq(asqDir, badUtf8Lead, "Content Verdict: PASS\nOk.\n");
+    assert.throws(
+      () => computeEvidenceDigest(asqDir, {
+        workspace: asqDir,
+        squadId: "badutf8",
+        verdict: "PASS",
+        verifiedFiles: fingerprint(asqDir, ["src/mod.js"]),
+        assignments: [{ conversationId: "u-w1", report: badUtf8S1 }],
+        handoffs: [{ sender: "u-w1", message: `READY ${badUtf8S1} — Done.` }]
+      }),
+      /UTF-8 Markdown/,
+      "ASQ-SVC-002: computeEvidenceDigest must reject invalid UTF-8 specialist report matching bundleReports"
+    );
+    const colS1 = reportPath("alpha", 1);
+    const corruptFlatAudit = reportPath("integrity_auditor", 1);
+    writeAtAsq(asqWt, colS1, "# Alpha spec\nClean.\n");
+    writeAtAsq(asqWt, corruptFlatAudit, Buffer.from([0xff, 0xfe, 0x00, 0x80]));
+    const collectedAlpha = collectReportSlots(asqDir, { sources: [asqWt], squadId: "alpha" });
+    assert.deepEqual(collectedAlpha.collected.map(c => c.slot), [colS1]);
+    assert.equal(fs.existsSync(path.join(asqDir, corruptFlatAudit)), false);
+
+    // ASQ-SEC-008: resolveReportRoot stays linear-time on 20k '/agy-squad' segments (< 100 ms)
+    const seg20k = "x" + "/agy-squad".repeat(20_000);
+    const tResolve = performance.now();
+    assert.throws(
+      () => inspectHandoffs(asqDir, {
+        workspace: asqDir,
+        squadId: "alpha",
+        assignments: [{ conversationId: "w1", report: `${seg20k}/squad-alpha/specialist-1/report.md` }],
+        handoffs: []
+      }),
+      /exceeds 500-byte Pointer-Over-Wire prefix budget/
+    );
+    assert.throws(
+      () => inspectHandoffs(asqDir, {
+        workspace: asqDir,
+        squadId: "alpha",
+        assignments: [{ conversationId: "w1", report: `${seg20k} bad/squad-alpha/not-valid` }],
+        handoffs: []
+      }),
+      /exact compiled report slots/
+    );
+    const resolveMs = performance.now() - tResolve;
+    assert.ok(resolveMs < 100, `ASQ-SEC-008: resolveReportRoot on 20k '/agy-squad' segments took ${resolveMs.toFixed(1)} ms (>= 100 ms)`);
+  } finally {
+    fs.rmSync(asqDir, { recursive: true, force: true });
+    fs.rmSync(asqWt, { recursive: true, force: true });
+  }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {

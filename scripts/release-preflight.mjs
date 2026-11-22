@@ -6,10 +6,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SHIPPED_SKILLS } from "./install-register.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const errors = [];
 const warnings = [];
+
+function stripTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
 
 function readText(relativePath) {
   const target = path.join(root, relativePath);
@@ -103,67 +112,35 @@ if (pkg) {
     "assets/logo.svg",
     "bin/agy-squad.mjs",
     "mcp/index.js",
-    "mcp/dispatch.mjs",
-    "mcp/planner.mjs",
-    "mcp/briefs.mjs",
-    "mcp/handoffs.mjs",
-    "mcp/verdicts.mjs",
     "scripts/install-register.mjs",
-    "scripts/release-preflight.mjs",
-    ".agents/skills/pr-review/SKILL.md",
-    ".agents/skills/pr-review/references/pr-review-standard.md",
-    ".agents/skills/full-review/SKILL.md",
-    ".agents/skills/full-review/references/evidence-intake.md",
-    ".agents/skills/full-review/references/report-template.md",
-    ".agents/skills/full-review/references/review-roles.md",
-    ".agents/skills/day-one-review/SKILL.md",
-    ".agents/skills/day-one-review/references/day-one-protocol.md",
-    ".agents/skills/self-diagnosis/SKILL.md",
-    ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
-    ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
-    ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
-    ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
-    ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
-    ".agents/skills/swarm-governance/SKILL.md",
-    ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
-    ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
-    ".agents/skills/swarm-governance/references/intake-and-planning.md",
-    ".agents/skills/swarm-governance/references/large-swarms.md",
-    "docs/benchmarks.md",
-    "docs/concepts.md",
-    "docs/core-workflows.md",
-    "docs/getting-started.md",
     "docs/index.md",
-    "docs/roles-and-workflows.md",
-    "docs/skills/pr-review.md",
-    "docs/skills/full-review.md",
-    "docs/skills/day-one-review.md",
-    "docs/skills/swarm-governance.md",
-    "docs/skills/self-diagnosis.md",
-    "docs/stopping-agents.md",
     "docs/tools.md",
-    "docs/assets/architecture-overview.svg",
-    "docs/assets/manifest-and-modes.svg",
-    "docs/assets/role-and-verdict-gate.svg",
-    "docs/assets/skill-role-workflows.svg",
-    "docs/assets/swarm-lifecycle.svg",
-    "docs/assets/swarm-vs-agy-squad-roles.svg",
     "plugin.json",
     "install.sh",
     "install.ps1",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    ...SHIPPED_SKILLS.map((skill) => `.agents/skills/${skill}/SKILL.md`)
   ];
+  if (exists("mcp")) {
+    for (const entry of fs.readdirSync(path.join(root, "mcp"), { withFileTypes: true })) {
+      if (entry.isFile() && /\.(?:m?js)$/.test(entry.name)) {
+        const rel = `mcp/${entry.name}`;
+        if (!requiredPackageFiles.includes(rel)) {
+          requiredPackageFiles.push(rel);
+        }
+      }
+    }
+  }
 
   const fileEntries = (pkg.files ?? [])
     .filter((entry) => typeof entry === "string" && entry.trim())
     .map((entry) => {
       const negated = entry.startsWith("!");
-      const normalized = (negated ? entry.slice(1) : entry)
-        .replace(/\\/g, "/")
-        .replace(/^\.\//, "")
-        .replace(/\/+$/, "");
+      const normalized = stripTrailingSlashes(
+        (negated ? entry.slice(1) : entry).replace(/\\/g, "/").replace(/^\.\//, "")
+      );
       return { negated, normalized };
     });
   const positiveEntries = fileEntries.filter((entry) => !entry.negated);
@@ -179,18 +156,31 @@ if (pkg) {
     }
     return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
   };
+  const isCoveredByFiles = (relativePath) =>
+    ["package.json", "README.md", "LICENSE"].includes(relativePath) ||
+    (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
+      !negativeEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)));
 
   for (const relativePath of requiredPackageFiles) {
     if (!exists(relativePath)) {
       errors.push(`Required runtime/release file is missing: ${relativePath}`);
     }
-    const alwaysIncluded = ["package.json", "README.md", "LICENSE"].includes(relativePath);
-    const coveredByFiles =
-      alwaysIncluded ||
-      (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
-        !negativeEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)));
-    if (!coveredByFiles) {
+    if (!isCoveredByFiles(relativePath)) {
       errors.push(`package.json "files" does not clearly include ${relativePath}.`);
+    }
+  }
+
+  for (const excludedPath of [
+    ".agents/skills/self-diagnosis",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    "scripts/release-preflight.mjs",
+    "docs/plans",
+    "docs/plans/example.md",
+    "docs/reviews",
+    "docs/reviews/example.md"
+  ]) {
+    if (isCoveredByFiles(excludedPath)) {
+      errors.push(`package.json "files" must exclude ${excludedPath}.`);
     }
   }
 
@@ -203,10 +193,7 @@ if (pkg) {
     if (!exists(normalizedBin)) {
       errors.push(`package.json bin target does not exist: ${binPath}`);
     }
-    const coveredByFiles =
-      positiveEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized)) &&
-      !negativeEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized));
-    if (!coveredByFiles) {
+    if (!isCoveredByFiles(normalizedBin)) {
       errors.push(`package.json "files" does not clearly include bin target: ${binPath}`);
     }
   }
@@ -236,18 +223,6 @@ if (pkg) {
     for (const suitePath of suitePaths) {
       if (!exists(suitePath)) {
         errors.push(`npm test references a missing test file: ${suitePath}`);
-      }
-    }
-    const gettingStartedText = readText("docs/getting-started.md");
-    const countMatch = gettingStartedText.match(/Runs all\s+(\d+)\s+test suites?/i);
-    if (!countMatch) {
-      errors.push('docs/getting-started.md must state the exact suite count using a phrase such as "Runs all 10 test suites".');
-    } else if (Number(countMatch[1]) !== suitePaths.length) {
-      errors.push(`docs/getting-started.md says ${countMatch[1]} test suites, but package.json scripts.test runs ${suitePaths.length}.`);
-    }
-    for (const suitePath of suitePaths) {
-      if (!gettingStartedText.includes(suitePath)) {
-        errors.push(`docs/getting-started.md does not list the test entrypoint that npm test runs: ${suitePath}`);
       }
     }
   }

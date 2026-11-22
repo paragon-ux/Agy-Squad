@@ -1283,6 +1283,123 @@ try {
     }
   }
 
+  // ASQ-TEST-001 regressions: ASQ-SEC-001, ASQ-SCRIPT-001, ASQ-DEP-001, ASQ-SCRIPT-002, ASQ-SEC-007, ASQ-SCRIPT-006, A1
+  {
+    const installerMod = await import("../scripts/install-register.mjs");
+    const asqProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-asq-reg-")));
+    const asqEnv = { ...process.env, AGY_TEST_PROFILE_DIR: asqProfile };
+    process.env.AGY_TEST_PROFILE_DIR = asqProfile;
+    try {
+      const cfgDir = path.join(asqProfile, ".gemini", "config");
+      const pluginsDir = path.join(cfgDir, "plugins");
+      const pluginDest = path.join(pluginsDir, "agy-squad");
+      const mcpJsonPath = path.join(cfgDir, "mcp_config.json");
+      const mcpBakPath = `${mcpJsonPath}.agy-squad.bak`;
+      const cfgJsonPath = path.join(cfgDir, "config.json");
+      const cfgBakPath = `${cfgJsonPath}.agy-squad.bak`;
+      fs.mkdirSync(cfgDir, { recursive: true });
+
+      // ASQ-SEC-001: Foreign MCP servers 'agy-squad-custom' and 'agy-squad-pro' survive restore-backups and uninstall --restore-backups
+      fs.writeFileSync(mcpJsonPath, JSON.stringify({
+        mcpServers: {
+          "agy-squad": { command: "new-node", args: ["./new.js"] },
+          "agy-squad-custom": { command: "custom-bin", args: ["--flag"] },
+          "agy-squad-pro": { command: "pro-bin", args: ["--pro"] },
+          "other-tool": { command: "other-bin", args: [] }
+        }
+      }, null, 2) + "\n");
+      fs.writeFileSync(mcpBakPath, JSON.stringify({
+        mcpServers: { "agy-squad": { command: "orig-node", args: ["./orig.js"] } }
+      }, null, 2) + "\n");
+      await installerMod.runRestoreBackups({ silent: true });
+      const afterRestoreMcp = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8")).mcpServers;
+      assert.equal(afterRestoreMcp["agy-squad"].command, "orig-node");
+      assert.deepEqual(afterRestoreMcp["agy-squad-custom"], { command: "custom-bin", args: ["--flag"] });
+      assert.deepEqual(afterRestoreMcp["agy-squad-pro"], { command: "pro-bin", args: ["--pro"] });
+      assert.deepEqual(afterRestoreMcp["other-tool"], { command: "other-bin", args: [] });
+
+      fs.writeFileSync(mcpBakPath, JSON.stringify({ mcpServers: {} }, null, 2) + "\n");
+      await installerMod.runUninstall({ restoreBackups: true, silent: true });
+      const afterUninstallMcp = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8")).mcpServers;
+      assert.equal(afterUninstallMcp["agy-squad"], undefined);
+      assert.deepEqual(afterUninstallMcp["agy-squad-custom"], { command: "custom-bin", args: ["--flag"] });
+      assert.deepEqual(afterUninstallMcp["agy-squad-pro"], { command: "pro-bin", args: ["--pro"] });
+
+      // ASQ-SCRIPT-001: Corrupt config.json or config.json.agy-squad.bak fails closed, leaving mcp_config.json and its backup byte-identical
+      const mcpBefore = JSON.stringify({ mcpServers: { "agy-squad": { command: "cur" }, foreign: { command: "f" } } }, null, 2) + "\n";
+      const mcpBakBefore = JSON.stringify({ mcpServers: { "agy-squad": { command: "bak" } } }, null, 2) + "\n";
+      fs.writeFileSync(mcpJsonPath, mcpBefore);
+      fs.writeFileSync(mcpBakPath, mcpBakBefore);
+      fs.writeFileSync(cfgJsonPath, JSON.stringify({ plugins: { "agy-squad": { enabled: true } } }, null, 2) + "\n");
+      fs.writeFileSync(cfgBakPath, "{ corrupt backup json");
+      await assert.rejects(() => installerMod.runRestoreBackups({ silent: true }), /invalid JSON|JSON/i);
+      assert.equal(fs.readFileSync(mcpJsonPath, "utf8"), mcpBefore, "ASQ-SCRIPT-001: corrupt config backup must leave mcp_config.json byte-identical");
+      assert.equal(fs.readFileSync(mcpBakPath, "utf8"), mcpBakBefore, "ASQ-SCRIPT-001: corrupt config backup must leave mcp_config.json.agy-squad.bak byte-identical");
+
+      fs.writeFileSync(cfgJsonPath, "{ corrupt current config json");
+      fs.writeFileSync(cfgBakPath, JSON.stringify({ plugins: {} }, null, 2) + "\n");
+      await assert.rejects(() => installerMod.runRestoreBackups({ silent: true }), /invalid JSON|JSON/i);
+      assert.equal(fs.readFileSync(mcpJsonPath, "utf8"), mcpBefore, "ASQ-SCRIPT-001: corrupt config.json must leave mcp_config.json byte-identical");
+      assert.equal(fs.readFileSync(mcpBakPath, "utf8"), mcpBakBefore, "ASQ-SCRIPT-001: corrupt config.json must leave mcp_config.json.agy-squad.bak byte-identical");
+
+      fs.rmSync(cfgJsonPath, { force: true });
+      fs.rmSync(cfgBakPath, { force: true });
+      fs.rmSync(mcpJsonPath, { force: true });
+      fs.rmSync(mcpBakPath, { force: true });
+
+      // ASQ-DEP-001: Copy-fallback install stages cleanly and replaces atomically without leftover staging/backup dirs
+      await installerMod.runInstall({ silent: true, forceCopyFallback: true });
+      const sentinelFile = path.join(pluginDest, "stale-sentinel.txt");
+      fs.writeFileSync(sentinelFile, "old-install\n");
+      await installerMod.runInstall({ silent: true, forceCopyFallback: true });
+      assert.equal(fs.existsSync(sentinelFile), false, "ASQ-DEP-001: staged swap must cleanly replace prior copy-fallback install");
+      const pluginSiblings = fs.readdirSync(pluginsDir);
+      assert.deepEqual(
+        pluginSiblings.filter((name) => name.startsWith("agy-squad.staging-") || name.startsWith("agy-squad.backup-")),
+        [],
+        `ASQ-DEP-001: unexpected leftover staging/backup dirs: ${pluginSiblings.join(", ")}`
+      );
+      assert.equal(installerMod.detectExistingInstallation().isComplete, true);
+
+      // A1: detectExistingInstallation() reports skillsReady: true with only the 4 shipped skills (without self-diagnosis)
+      fs.rmSync(path.join(pluginDest, "skills", "self-diagnosis"), { recursive: true, force: true });
+      fs.rmSync(path.join(pluginDest, ".agents", "skills", "self-diagnosis"), { recursive: true, force: true });
+      assert.deepEqual(
+        fs.readdirSync(path.join(pluginDest, "skills")).sort(),
+        ["day-one-review", "full-review", "pr-review", "swarm-governance"]
+      );
+      const fourSkillStatus = installerMod.detectExistingInstallation();
+      assert.equal(fourSkillStatus.details.plugin.skillsReady, true, "A1: 4 shipped skills without self-diagnosis must satisfy skillsReady");
+      assert.equal(fourSkillStatus.isComplete, true);
+      fs.rmSync(path.join(pluginDest, "skills", "pr-review", "SKILL.md"));
+      assert.equal(installerMod.detectExistingInstallation().details.plugin.skillsReady, false, "A1: missing shipped skill must flip skillsReady to false");
+
+      // ASQ-SCRIPT-002: Windows off-PATH persistence guidance preserves REG_EXPAND_SZ via DoNotExpandEnvironmentNames + ExpandString
+      const winGuidance = installerMod.formatPathGuidanceLines("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "win32").join("\n");
+      assert.match(winGuidance, /DoNotExpandEnvironmentNames/);
+      assert.match(winGuidance, /ExpandString/);
+      assert.match(winGuidance, /REG_EXPAND_SZ/);
+
+      // ASQ-SEC-007: formatPosixShim rejects /[\r\n\0]/ in targetRoot and execPath
+      for (const badPath of ["/tmp/ok\nrm -rf /", "/tmp/ok\rfoo", "/tmp/ok\0bar"]) {
+        assert.throws(() => installerMod.formatPosixShim(badPath), /Invalid POSIX CLI shim target path/);
+        assert.throws(() => installerMod.formatPosixShim("/tmp/valid-root", badPath), /Invalid POSIX CLI shim execPath/);
+      }
+
+      // ASQ-SCRIPT-006: runUninstall prints Desktop IDE reload/restart reminder
+      const uninstallCliRes = spawnSync(process.execPath, [cli, "uninstall"], {
+        cwd: repoRoot,
+        env: asqEnv,
+        encoding: "utf8"
+      });
+      assert.equal(uninstallCliRes.status, 0, uninstallCliRes.stderr || uninstallCliRes.stdout);
+      assert.match(uninstallCliRes.stdout, /reload or restart Antigravity Desktop IDE/i);
+    } finally {
+      process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
+      fs.rmSync(asqProfile, { recursive: true, force: true });
+    }
+  }
+
   console.log("Lifecycle installer, --check, and rollback tests passed");
 } finally {
   if (prevProfileEnv === undefined) delete process.env.AGY_TEST_PROFILE_DIR;

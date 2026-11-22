@@ -14,7 +14,7 @@
           ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
           "docs/tools.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch skill_and_pr_review_audit --parent-id <id>').",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad skill_and_pr_review_audit --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
@@ -30,7 +30,7 @@
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
             ".agents/skills/self-diagnosis/references/execution-and-teardown.md"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); pass --allow-active-cohort when running diagnose.mjs while sibling cohorts are active, and never run --teardown mid-cohort.",
+          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); run diagnose.mjs --json read-only as needed, and never prune or remove scratch/agy-squad/ mid-cohort.",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -66,14 +66,14 @@
           "bin/agy-squad.mjs",
           "scripts/install-register.mjs"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch runtime_and_contract_diagnosis --parent-id <id>').",
-        "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP findings."
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad runtime_and_contract_diagnosis --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
+        "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP/SEC findings."
       },
       "specialists": [
         {
           "role": "MCP, Dispatch, Planner & Handoff Boundary Inspector",
           "readOnly": true,
-          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, mcp/verdicts.mjs, and mcp/planner.mjs under pr-review MCP, RUN, and SVC criteria: verify input validation, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, model provenance caveats, and readSynthesis verdict enforcement.",
+          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, mcp/verdicts.mjs, and mcp/planner.mjs under pr-review MCP, RUN, SVC, and SEC criteria: verify input validation, injection/ReDoS safety, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, model provenance caveats, and readSynthesis verdict enforcement.",
           "scopeFiles": [
             "mcp/index.js",
             "mcp/dispatch.mjs",
@@ -83,12 +83,12 @@
             "mcp/planner.mjs"
           ],
           "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
-          "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC P1/P2/P3 triage and reproduction or test coverage evidence."
+          "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC/SEC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
           "role": "Governance CLI, Bundler & Test Coverage Inspector",
           "readOnly": true,
-          "objective": "Audit bin/agy-squad.mjs, scripts/, and tests/ under pr-review SCRIPT, TEST, and DEP criteria: verify CLI argument validation, --allow-unaudited override behavior, bundle integrity verification, release preflight, packaging, and adversarial test assertions.",
+          "objective": "Audit bin/agy-squad.mjs, scripts/, and tests/ under pr-review SCRIPT, TEST, DEP, and SEC criteria: verify CLI argument validation, --allow-unaudited override behavior, bundle integrity and --expected-sha256 prune verification, release preflight, packaging, CI workflow permissions/concurrency, and adversarial test assertions.",
           "scopeFiles": [
             "bin/agy-squad.mjs",
             "scripts/install-register.mjs",
@@ -104,7 +104,7 @@
             "tests/verify-package.mjs"
           ],
           "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
-          "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP P1/P2/P3 triage and verification gap analysis."
+          "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP/SEC P1/P2/P3 triage and verification gap analysis."
         }
       ]
     },
@@ -123,7 +123,7 @@
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/pr-review/SKILL.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'diagnose.mjs --print-dispatch token_and_execution_optimization --parent-id <id>').",
+        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad token_and_execution_optimization --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [

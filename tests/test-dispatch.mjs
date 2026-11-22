@@ -421,7 +421,7 @@ try {
   assert.match(missingRes.content[0].text, /agy-squad plan.*agy-squad dispatch/);
   assert.doesNotMatch(missingRes.content[0].text, /node bin\/agy-squad\.mjs/);
 
-  // Decoupled native fungibility: briefs use native search/read guidance (zero hardcoded rtk/<=150-line), omit foreign hook tags by default, support opt-in directives, and include standalone native JSONL traces on auditors
+  // Decoupled native fungibility: briefs use native search/read guidance (zero hardcoded rtk/<=150-line), omit foreign hook tags, and include standalone native JSONL traces on auditors
   const uxSpecBrief = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1).Prompt;
   const uxLeadBrief = buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json").Prompt;
   const uxAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1).Prompt;
@@ -464,40 +464,16 @@ try {
     /sender=<coordId> \+ @<workerName>/,
     "swarm Integrity Auditor brief must explain standalone Step 0/1 worker trace matching"
   );
-  // Explicit opt-in for Agy-Context-Saver transcript access directives
-  assert.ok(
-    buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
-      includeTranscriptAccessDirectives: true
-    }).Prompt.startsWith("[agy-transcript-access: deny]\nRole: ")
-  );
-  assert.ok(
-    buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json", undefined, undefined, {
-      includeTranscriptAccessDirectives: true
-    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
-  );
-  assert.ok(
-    buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1, undefined, {
-      includeTranscriptAccessDirectives: true
-    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
-  );
-  assert.ok(
-    buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
-      transcriptAccessDirective: "allow"
-    }).Prompt.startsWith("[agy-transcript-access: allow]\nRole: ")
-  );
-  assert.throws(
-    () => buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1, undefined, {
-      transcriptAccessDirective: "bogus"
-    }),
-    /Unsupported transcriptAccessDirective/
-  );
-  const optInDispatch = handleDispatchSquad(
+  const standaloneDispatch = handleDispatchSquad(
     { squadId: "alpha", manifestPath: "swarm-manifest.json" },
-    workspace,
-    { includeTranscriptAccessDirectives: true }
+    workspace
   );
-  assert.equal(optInDispatch.isError, undefined);
-  assert.ok(JSON.parse(optInDispatch.content[0].text).Subagents[0].Prompt.startsWith("[agy-transcript-access: deny]\n"));
+  assert.equal(standaloneDispatch.isError, undefined);
+  assert.doesNotMatch(
+    JSON.parse(standaloneDispatch.content[0].text).Subagents[0].Prompt,
+    /^\[agy-transcript-access:/m,
+    "dispatched brief must omit [agy-transcript-access:] by default"
+  );
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {

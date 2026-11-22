@@ -349,7 +349,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.match(explicitWsResponses[1].result.content[0].text, /Pass 'workspace'/);
   assert.equal(Boolean(explicitWsResponses[2].result.isError), false, explicitWsResponses[2].result.content[0].text);
   assert.equal(
-    JSON.parse(explicitWsResponses[2].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+    JSON.parse(explicitWsResponses[2].result.content[0].text).workspace,
     repoRoot
   );
   assert.equal(Boolean(explicitWsResponses[3].result.isError), false, explicitWsResponses[3].result.content[0].text);
@@ -381,7 +381,7 @@ console.log("Agy-Squad MCP server tests\n");
     ], { AGY_SQUAD_WORKSPACE: tmpAlt });
     assert.equal(Boolean(rootUriResponses[1].result.isError), false, rootUriResponses[1].result.content[0].text);
     assert.equal(
-      JSON.parse(rootUriResponses[1].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+      JSON.parse(rootUriResponses[1].result.content[0].text).workspace,
       repoRoot
     );
     assert.equal(Boolean(rootUriResponses[2].result.isError), false, rootUriResponses[2].result.content[0].text);
@@ -482,7 +482,7 @@ console.log("Agy-Squad MCP server tests\n");
     ]);
     assert.equal(Boolean(multiRootHit[1].result.isError), false, multiRootHit[1].result.content[0].text);
     assert.equal(
-      JSON.parse(multiRootHit[1].result.content[0].text).bundleRecordTemplates.skill_and_pr_review_audit.workspace,
+      JSON.parse(multiRootHit[1].result.content[0].text).workspace,
       repoRoot
     );
 
@@ -638,7 +638,7 @@ console.log("Agy-Squad MCP server tests\n");
       }
     ]);
     assert.equal(Boolean(multiNormRes[1].result.isError), false, `MCP-004: multi-root sub/../target.json must match secondary root: ${multiNormRes[1].result.content[0].text}`);
-    assert.equal(JSON.parse(multiNormRes[1].result.content[0].text).bundleRecordTemplates.beta.workspace, secondaryWs);
+    assert.equal(JSON.parse(multiNormRes[1].result.content[0].text).workspace, secondaryWs);
   } finally {
     fs.rmSync(dupSlashRoot, { recursive: true, force: true });
     fs.rmSync(secondaryWs, { recursive: true, force: true });
@@ -726,7 +726,7 @@ console.log("Agy-Squad MCP server tests\n");
     assert.match(pluginCwdResponses[2].result.content[0].text, /Refusing to target the installed Agy-Squad plugin directory/);
     assert.equal(Boolean(pluginCwdResponses[3].result.isError), false, pluginCwdResponses[3].result.content[0].text);
     assert.equal(
-      JSON.parse(pluginCwdResponses[3].result.content[0].text).bundleRecordTemplates.task_squad.workspace,
+      JSON.parse(pluginCwdResponses[3].result.content[0].text).workspace,
       repoRoot
     );
 
@@ -753,7 +753,7 @@ console.log("Agy-Squad MCP server tests\n");
       rootUriFallbackResponses[1].result.content[0].text
     );
     assert.equal(
-      JSON.parse(rootUriFallbackResponses[1].result.content[0].text).bundleRecordTemplates.task_squad.workspace,
+      JSON.parse(rootUriFallbackResponses[1].result.content[0].text).workspace,
       repoRoot,
       "RAW-MCP-001: initialize rootUri must supply workspace cleanly even when MCP cwd is installed plugin directory"
     );

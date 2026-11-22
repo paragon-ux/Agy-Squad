@@ -219,7 +219,7 @@
     <text class="card-head" x="628" y="570">3. Dual-Gate Proof &amp; Access</text>
     <text class="bullet" x="628" y="596">&#8226; Content review split from SHA-256 audit</text>
     <text class="bullet" x="628" y="618">&#8226; Independent peer verifies tool traces</text>
-    <text class="bullet" x="628" y="640">&#8226; Per-worker transcript access directives</text>
-    <text class="bullet-muted" x="638" y="657">(when paired with Agy-Context-Saver)</text>
+    <text class="bullet" x="628" y="640">&#8226; Optional transcript access directives</text>
+    <text class="bullet-muted" x="638" y="657">(opt-in with Agy-Context-Saver)</text>
   </g>
 </svg>

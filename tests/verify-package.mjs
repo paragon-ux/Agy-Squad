@@ -14,7 +14,6 @@ const REQUIRED = [
   "install.ps1",
   "bin/agy-squad.mjs",
   "scripts/install-register.mjs",
-  "scripts/release-preflight.mjs",
   "mcp/index.js",
   "mcp/dispatch.mjs",
   "mcp/briefs.mjs",
@@ -29,12 +28,6 @@ const REQUIRED = [
   ".agents/skills/full-review/references/review-roles.md",
   ".agents/skills/pr-review/SKILL.md",
   ".agents/skills/pr-review/references/pr-review-standard.md",
-  ".agents/skills/self-diagnosis/SKILL.md",
-  ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
-  ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
-  ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
-  ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
-  ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
   ".agents/skills/swarm-governance/SKILL.md",
   ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
   ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
@@ -97,7 +90,11 @@ function validate(packages) {
       lower === "docs/plans" ||
       lower.startsWith("docs/plans/") ||
       lower === "docs/reviews" ||
-      lower.startsWith("docs/reviews/")
+      lower.startsWith("docs/reviews/") ||
+      lower === "scripts/release-preflight.mjs" ||
+      lower === "scripts/diagnose.mjs" ||
+      lower === ".agents/skills/self-diagnosis" ||
+      lower.startsWith(".agents/skills/self-diagnosis/")
     );
   };
   const allowed = names.filter(name =>
@@ -150,7 +147,12 @@ function selfTest() {
     "../outside.txt",
     "bin/terminal.py",
     "mcp/run-state.mjs",
-    "mcp/subagent-brief.mjs"
+    "mcp/subagent-brief.mjs",
+    "scripts/release-preflight.mjs",
+    "scripts/diagnose.mjs",
+    ".agents/skills/self-diagnosis",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
   ];
   for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),

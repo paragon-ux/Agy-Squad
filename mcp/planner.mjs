@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import util from "node:util";
-import { SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
   loadSquads,
@@ -13,7 +13,7 @@ import {
   resolveWorkspaceRoot,
   specialistAssignments
 } from "./dispatch.mjs";
-import { normalizeReportRoot, reportPath } from "./handoffs.mjs";
+import { normalizeReportRoot, reportPath, trimTrailingSlashes } from "./handoffs.mjs";
 
 const ALLOWED_PLANNER_KEYS = new Set([
   "manifestPath",
@@ -40,16 +40,6 @@ const ALLOWED_PLANNER_KEYS = new Set([
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
 const MAX_SWARM_NAME_LENGTH = 24;
 const RESERVED_SWARM_NAMES = new Set(["all", "coordinator", "narrator", "monitor"]);
-const AGENT_ALIAS_PAIRS = [
-  ["role", "Role"],
-  ["objective", "Objective"],
-  ["scopeFiles", "ScopeFiles"],
-  ["instructions", "Instructions"],
-  ["expectedDeliverable", "ExpectedDeliverable"],
-  ["typeName", "TypeName"],
-  ["model", "Model"],
-  ["workspace", "Workspace"]
-];
 
 function trimEdgeDashes(value) {
   let start = 0;
@@ -174,13 +164,14 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
       : os.platform() === "win32" || os.platform() === "darwin";
   const applyCase = value => (caseInsensitive ? value.toLowerCase() : value);
 
-  let trimmed = scopeEntry
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/^(?:\.\/)+/, "")
-    .replace(/\/\.(?=\/|$)/g, "")
-    .replace(/\/+$/, "");
+  let trimmed = trimTrailingSlashes(
+    scopeEntry
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/\/+/g, "/")
+      .replace(/^(?:\.\/)+/, "")
+      .replace(/\/\.(?=\/|$)/g, "")
+  );
   if (trimmed === ".") trimmed = "";
   if (trimmed === "") return "";
   if (safeOptions.normCache?.has(trimmed)) {
@@ -524,11 +515,6 @@ function planSquadCohort(
   }
   const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
-  const includeTranscriptAccessDirectives = options?.includeTranscriptAccessDirectives ?? false;
-  if (typeof includeTranscriptAccessDirectives !== "boolean") {
-    throw new Error("includeTranscriptAccessDirectives must be a boolean.");
-  }
-
   const root = resolveWorkspaceRoot(argWorkspace, workspace);
   const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
   let loadedSquads;
@@ -589,12 +575,12 @@ function planSquadCohort(
         requestedModel: requestedModel ?? (explicitInheritRequested ? "inherit" : "inherit (coordinator default)"),
         pinningSupported: true,
         perWorkerModelExposed: true,
-        verificationMethod: "Call swarm{action: \"status\"} after spawning workers to verify actual running model IDs.",
+        verificationMethod: "Verify running models via swarm{action:\"status\"}.",
         caveat: requestedModel
-          ? "Each swarm add pins the requested model; monitor/coordinator model remains whatever session hosts the coordinator."
+          ? "Pinned per swarm add; coordinator/monitor use host model."
           : explicitInheritRequested
-            ? "Explicit 'inherit' requested; workers use the coordinator's active model."
-            : "No explicit model passed; workers default to the coordinator's active model."
+            ? "Explicit 'inherit'; workers use coordinator model."
+            : "No explicit model passed; workers use coordinator model."
       }
     : {
         executionMode: "subagent",
@@ -602,7 +588,7 @@ function planSquadCohort(
         effectiveModel: effectiveSubagentModel,
         pinningSupported: false,
         perChildModelExposed: false,
-        verificationMethod: "invoke_subagent inherits or aliases ('inherit'|'flash'|'flash_lite'|'pro'); neither session transcripts nor manage_subagents exposes per-child resolved model IDs.",
+        verificationMethod: "invoke_subagent inherits/aliases ('inherit'|'flash'|'flash_lite'|'pro'); session transcripts/manage_subagents omit per-child model IDs.",
         ...(requestedModel && !SUBAGENT_MODEL_ALIASES.has(requestedModel)
           ? {
               warning: `Requested explicit model '${requestedModel}' cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`
@@ -616,8 +602,6 @@ function planSquadCohort(
       : selectedManifest;
   const writableScopeEntries = [];
   const workers = [];
-  const provenanceEntries = [];
-  const bundleRecordTemplates = Object.create(null);
   const usedWorkerNames = new Set(RESERVED_SWARM_NAMES);
   for (const occupied of occupiedWorkerNames ?? []) {
     const trimmed = occupied.trim();
@@ -695,14 +679,12 @@ function planSquadCohort(
           isIntegrityAuditor: false,
           precompiledSpecialists: true,
           leadWorkerName,
-          boardSince,
-          includeTranscriptAccessDirectives
+          boardSince
         }
       );
     }
 
     const compiledSpecialists = [];
-    const assignmentsTemplate = [];
     for (const { spec, number } of specs) {
       const { canonical: rawSpec, readOnly: specReadOnly } = canonicalizeAgentSpec(spec, `${id}#${number}`);
       const specScope = validateScopeFiles(rawSpec.scopeFiles, rawSpec.role);
@@ -736,8 +718,7 @@ function planSquadCohort(
           workspaceIsolation,
           isIntegrityAuditor: false,
           leadWorkerName,
-          boardSince,
-          includeTranscriptAccessDirectives
+          boardSince
         }
       );
       const slot = reportPath(id, number, normalizedReportRoot);
@@ -748,36 +729,6 @@ function planSquadCohort(
         truncatedWorkerNames
       );
       compiledSpecialists.push({ slot, workerName, specModel, compiled });
-      assignmentsTemplate.push({
-        // Swarm identifies members on the board by roster name, so the name is the sender identity.
-        conversationId: executionMode === "swarm" ? workerName : `<invoke_subagent:${workerName}:conversationId>`,
-        report: slot
-      });
-      provenanceEntries.push({
-        squadId: id,
-        slotType: "specialist",
-        workerName,
-        role: compiled.Role,
-        reportSlot: slot,
-        requestedModel: specModel.requested,
-        effectiveModel: specModel.effective,
-        conversationId: "<record-after-launch>",
-        resolvedModel: executionMode === "swarm" ? "<verify-via-swarm-status>" : "<inherited-from-parent-unverified>"
-      });
-    }
-
-    if (compiledLead) {
-      provenanceEntries.push({
-        squadId: id,
-        slotType: "lead",
-        workerName: leadWorkerName,
-        role: compiledLead.Role,
-        reportSlot: leadSlot,
-        requestedModel: leadModel.requested,
-        effectiveModel: leadModel.effective,
-        conversationId: "<record-after-launch>",
-        resolvedModel: executionMode === "swarm" ? "<verify-via-swarm-status>" : "<inherited-from-parent-unverified>"
-      });
     }
 
     workers.push({
@@ -816,17 +767,6 @@ function planSquadCohort(
           : { Subagent: compiled })
       }))
     });
-
-    bundleRecordTemplates[id] = {
-      squadId: id,
-      workspace: root,
-      ...(normalizedReportRoot ? { reportRoot: normalizedReportRoot } : {}),
-      verdict: "PASS",
-      verifiedFiles: {},
-      assignments: assignmentsTemplate,
-      handoffs: [],
-      requireIntegrityAudit: includeIntegrityAuditor
-    };
   }
 
   const auditWarnings = [];
@@ -837,7 +777,7 @@ function planSquadCohort(
         const auditTargetArg =
           allWorkingIds.length > 1 || targetWorkingIds.length > 1 || hasTargetOverride ? id : undefined;
         const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings, { validatedAuditKeys });
-        const compiledAudits = auditSpecs.map(auditItem => {
+        return auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
           const auditSlot = reportPath(auditSquadId, auditItem.number, normalizedReportRoot);
           const { canonical: rawAudit } = canonicalizeAgentSpec(auditItem.spec, `${auditSquadId}#${auditItem.number}`);
@@ -849,8 +789,8 @@ function planSquadCohort(
           );
           recordSubagentWorkerModel(auditModel);
           const targetScopeNote = executionMode === "swarm"
-            ? `Audit '${id}' provenance, verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>').`
-            : `Audit '${id}' provenance, verifiedFiles hashes, and Evidence Digest ('agy-squad digest <record.json>') vs recorded conversationIds.`;
+            ? `Verify '${id}' verifiedFiles + Evidence Digest.`
+            : `Verify '${id}' verifiedFiles, Evidence Digest & conversationIds.`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -861,7 +801,7 @@ function planSquadCohort(
             manifestPathForBrief,
             auditItem.number,
             normalizedReportRoot,
-            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs, includeTranscriptAccessDirectives }
+            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs }
           );
           const rawAuditName =
             auditSpecs.length > 1
@@ -886,10 +826,6 @@ function planSquadCohort(
               : { Subagent: compiledAudit })
           };
         });
-        if (bundleRecordTemplates[id]) {
-          bundleRecordTemplates[id].integrityAuditSlots = compiledAudits.map(entry => entry.reportSlot);
-        }
-        return compiledAudits;
       })
     : [];
 
@@ -973,39 +909,12 @@ function planSquadCohort(
   const hasFlat = workers.some(w => !w.lead);
   const flatSynthesisSlots = workers.filter(w => !w.lead).map(w => w.synthesisSlot);
   const compiledPattern = hasLead && hasFlat ? "mixed" : hasLead ? "layered" : "flat";
-  const notes = [];
-  if (executionMode === "swarm" && compiledPattern === "mixed") {
-    notes.push(
-      "Mixed plan: cohort combines layered squads (with per-squad leads) and flat squads (specialists reporting directly to the coordinator). Neither topology is forced as default; ask the user which topology they want if unspecified."
-    );
-  } else if (executionMode === "swarm" && compiledPattern === "layered") {
-    notes.push(
-      "Layered plan: working squad(s) define a squad lead on top of the swarm coordinator. Compared with flat plans (specialists reporting directly to the coordinator), layered plans isolate multi-domain syntheses at higher coordination token cost. Neither topology is forced as default; ask the user which topology they want if unspecified."
-    );
-  } else if (executionMode === "swarm") {
-    notes.push(
-      "Flat plan: specialists report directly to the swarm coordinator without per-squad leads. Compared with layered plans, flat plans use fewer coordination hops when a single synthesis suffices. Neither topology is forced as default; ask the user which topology they want if unspecified."
-    );
-  }
-  if (flatSynthesisSlots.length > 0) {
-    notes.push(
-      `Coordinator synthesis slot(s) for flat squad(s): write ${flatSynthesisSlots.join(", ")} with a strict single-line 'Content Verdict: PASS' (or FAIL/BLOCKED) before running 'agy-squad bundle-init --digest' or 'agy-squad finalize'.`
-    );
-  }
-  if (executionMode === "swarm") {
-    notes.push(
-      "Pointer-Over-Wire on the swarm board is a convention, not enforced: workers can post anything. 'agy-squad inspect' detects violations after the fact; it does not prevent them."
-    );
-  }
-  if (leadSpecialistOverlaps.length > 0 && workspaceIsolation === "inherit") {
-    notes.push(
-      `Detected ${leadSpecialistOverlaps.length} same-squad lead-vs-specialist scopeFiles overlap(s) (sequential in layered mode; mark read-only leads with readOnly: true if they do not edit files).`
-    );
-  }
 
   return {
     plannerVersion: "2.0.0",
     source: selectedManifest,
+    workspace: root,
+    ...(normalizedReportRoot ? { reportRoot: normalizedReportRoot } : {}),
     executionMode,
     workspaceIsolation,
     topology: {
@@ -1021,36 +930,25 @@ function planSquadCohort(
     modelProvenance,
     ...(modelValidation ? { modelValidation } : {}),
     warnings,
-    notes,
     ...(executionMode === "swarm"
-      ? { preflight: ["swarm{action:\"models\"}  // confirm pinned model IDs and quota before the first add", "swarm{action:\"status\"}  // after spawning, confirm each worker runs the pinned model"] }
+      ? { preflight: ["swarm{action:\"models\"}", "swarm{action:\"status\"}"] }
       : {}),
     workers,
-    provenanceScaffold: {
-      transcriptIsolation: "Transcript isolation: keep raw transcripts in .system_generated/; never copy transcripts into scratch/ or lead/leaf directories.",
-      identity: executionMode === "swarm"
-        ? "Swarm identifies members by roster name: bundle assignments[].conversationId and handoffs[].sender use the swarm member name shown above and on the board."
-        : "invoke_subagent returns a conversationId per child; record it in assignments[].conversationId and use it as handoffs[].sender.",
-      coordinatorSessionModel: "<record-coordinator-model-from-swarm-status>",
-      entries: provenanceEntries
-    },
     integrityAuditPlan,
-    bundleRecordTemplates,
     verificationPipeline: [
       ...(workspaceIsolation !== "inherit"
         ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
         : []),
       ...(flatSynthesisSlots.length > 0
-        ? [`# Write coordinator synthesis report ('Content Verdict: PASS|FAIL|BLOCKED') at: ${flatSynthesisSlots.join(", ")}`]
+        ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
         : []),
       "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> <verified-files...>",
       ...(includeIntegrityAuditor
         ? ["agy-squad verdict --integrity <integrity-report.md>"]
         : []),
       includeIntegrityAuditor
-        ? "agy-squad finalize <bundle-record.json> [--prune [--keep-reports]]  # shorthand for inspect -> bundle -> verify (+ optional prune)"
-        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--prune [--keep-reports]]  # shorthand for inspect -> bundle -> verify (+ optional prune)",
-      "# Granular steps remain available: agy-squad fingerprint, inspect, digest, bundle, verify, prune"
+        ? "agy-squad finalize <bundle-record.json> [--prune [--keep-reports]]"
+        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--prune [--keep-reports]]"
     ]
   };
 }

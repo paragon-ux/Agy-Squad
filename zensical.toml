@@ -8,6 +8,11 @@ copyright = "Copyright &copy; 2026 paragon-ux. Released under the MIT License."
 repo_url = "https://github.com/paragon-ux/Agy-Squad"
 repo_name = "paragon-ux/Agy-Squad"
 
+exclude_docs = """
+plans/
+reviews/
+"""
+
 nav = [
   { "Overview" = "index.md" },
   { "Getting Started" = "getting-started.md" },

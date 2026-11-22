@@ -16,7 +16,7 @@ flowchart LR
 
 ![Role separation and dual-verdict bundle gate](assets/role-and-verdict-gate.svg)
 
-Agy-Squad splits content evaluation from execution-integrity auditing. The squad lead (or parent session) inspects cited source files and test runs to issue `Content Verdict: PASS`, `FAIL`, or `BLOCKED` on `lead/report.md`. Separately, an independent flat `integrity_auditor` queries worker transcripts in batch via `agy-context transcript list --parent <id> --lineage`, `agy-context transcript query --id <id> --summary`, or `agy-context transcript read --id <id> --last-turns 10` (or verifies a coordinator `agy-context transcript export --parent <id> --sanitized --out scratch/...` index) to issue `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`. `agy-squad bundle` (and `agy-squad finalize`) requires both verdicts before writing `lead/report.sources.json` (unless `--allow-unaudited` is passed). For the single canonical map of every role across all five skills, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
+Agy-Squad splits content evaluation from execution-integrity auditing. The squad lead (or parent session) inspects cited source files and test runs to issue `Content Verdict: PASS`, `FAIL`, or `BLOCKED` on `lead/report.md`. Separately, an independent flat `integrity_auditor` inspects worker transcripts in one batch pass (reading `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` and matching `transcript_full.jsonl` lines directly when running standalone, or running batch `agy-context transcript` CLI calls such as `list --parent <id> --lineage`, `query --id <id> --summary`, `read --id <id> --last-turns 10`, or verifying a coordinator `export --parent <id> --sanitized --out scratch/...` index when optional `Agy-Context-Saver` `2.1.2+` is installed) to issue `Integrity Verdict: CLEAN` or `INTEGRITY VIOLATION`. `agy-squad bundle` (and `agy-squad finalize`) requires both verdicts before writing `lead/report.sources.json` (unless `--allow-unaudited` is explicitly passed). For the single canonical map of every role across all Agy-Squad skills, see [Roles, skill workflows, and runtime closure](roles-and-workflows.md).
 
 ## Core orchestration terms
 
@@ -39,7 +39,7 @@ A focused worker compiled for a single squad (`squadId: "<id>"`). Under `invoke_
 ### Stage (`all_l1` vs. `<squadId>`)
 A single compilation step returned by `dispatch_squad` (`agy-squad dispatch`) for `invoke_subagent` (in `squad_planner` / `agy-squad plan`, omit `squadId` to compile all squads; `all_l1` is not used in `squad_planner`):
 
-- **Direct specialist stage (`squadId: "<id>"`):** Returns the `Subagents` array for that manifest squad (`diagnose.mjs --print-dispatch all_specialists` aggregates all self-diagnosis squads in one CLI call).
+- **Direct specialist stage (`squadId: "<id>"`):** Returns the `Subagents` array for that manifest squad.
 - **Lead stage (`squadId: "all_l1"`):** Returns one lead subagent per squad defined in the manifest (`1` or more squads).
 
 ### Manifest
@@ -49,11 +49,11 @@ A JSON file inside the workspace that defines `squads`, each containing an optio
 The deterministic workspace-relative path assigned to each specialist (`scratch/agy-squad/.../specialist-<N>/report.md`) or lead (`scratch/agy-squad/.../lead/report.md`). Writing full evidence to report slots keeps large markdown payloads out of the parent conversation context.
 
 ### Pointer-Over-Wire receipt (`<= 500` UTF-8 bytes)
-The single-line message a child sends back to its parent when it finishes (`send_message` for `invoke_subagent`, or `post_message` for `/swarm`):
+The single-line message a child sends back to its parent when it finishes (`send_message` for `invoke_subagent`, or `post_message` for `/swarm`). `mcp/handoffs.mjs` accepts spaced ASCII ` - ` or ` -- ` alongside ` — ` (`U+2014`):
 
-- `READY <report-path> — <concrete observation>`
-- `PARTIAL <report-path> — <reason>`
-- `NO_REPORT — <reason>`
+- `READY <report-path> -- <concrete observation>` (or ` - ` / ` — `)
+- `PARTIAL <report-path> -- <reason>` (or ` - ` / ` — `)
+- `NO_REPORT -- <reason>` (or ` - ` / ` — `)
 
 `mcp/handoffs.mjs` enforces the `500` UTF-8 byte ceiling and single-line format.
 
@@ -65,11 +65,11 @@ A JSON archive written by `agy-squad bundle` (or `agy-squad finalize`) alongside
 ### Reactive Wakeup
 Antigravity's event-driven resumption mechanism: when a background task or subagent calls `send_message` (or finishes), or a `/swarm` worker posts an `@mention`, the parent agent wakes automatically without polling `manage_task(Action='status')` in a loop.
 
-### RTK (`Rust Token Killer`)
-The command-line companion binary (`>= 1.1.0`) provisioned by `Agy-Context-Saver` (`>= 2.0.1`, `2.0.4+` recommended). During live subagent and `/swarm` sessions, `Agy-Context-Saver` delegates shell command rewrites to `rtk hook antigravity` (`rtk grep`, `rtk find`, `rtk git`; with `rtk read` reserved for step spillovers and completed task logs) and enforces the 3-tier `read_file` slice policy (`<= 150` lines) on editable workspace files to keep child transcripts compact.
+### RTK (`Rust Token Killer`) and optional `Agy-Context-Saver`
+`RTK` (`>= 1.1.0`) is an optional command-line binary provisioned by optional `Agy-Context-Saver` (`2.1.2+` recommended); neither is required for standalone `Agy-Squad` runs. When `Agy-Context-Saver` `v2.1.2+` is installed, its single global `~/.gemini/config/hooks.json` hook (`hooks.json` inside the plugin is `{}`) runs a narrow high-ROI RTK pre-gate on noisy runners (test suites, linters, builds, `git status`/`push`/`pull`) while leaving `rg`, `grep`, `find`, `ls`, `wc`, `diff`, and `git diff` native and lossless, unblocks native `grep_search`/`find_by_name`/`list_dir` on workspaces, allows `<= 300`-line / `<= 24 KiB` `read_file` calls without bounds (`<= 300`-line slices on larger files), and keeps `rtk read` for `.system_generated/` step spillovers and completed task logs.
 
-### Self-diagnosis (`/self-diagnosis`)
-Agy-Squad's harness diagnostic and optimization skill (`.agents/skills/self-diagnosis/SKILL.md`). It provides a zero-subagent local profiler (`diagnose.mjs`) and three targeted specialist cohorts that audit skills, runtime contracts, and token budgets under operator supervision.
+### Self-diagnosis (`/self-diagnosis`, repo-only)
+Agy-Squad's repo-only maintainer harness diagnostic and optimization skill (`.agents/skills/self-diagnosis/SKILL.md`, excluded from end-user npm installs). It provides a zero-subagent local profiler (`diagnose.mjs`) and three targeted specialist cohorts that audit skills, runtime contracts, and token budgets inside an `Agy-Squad` source checkout under operator supervision.
 
 ### PR Review Standard `v1.5.0` (`/pr-review`)
 Agy-Squad's review specification (`.agents/skills/pr-review/SKILL.md` and `.agents/skills/pr-review/references/pr-review-standard.md`). It requires commit and session provenance, architecture-before-runtime tracing, coverage across eleven categories (`ARCH`, `DOC`, `SKILL`, `MCP`, `RUN`, `SVC`, `DB`, `SCRIPT`, `TEST`, `DEP`, and `SEC` for security, trust boundaries, and vulnerabilities), and `1 ID = 1 Row` structured reports delivered in chat, an Antigravity artifact, or `docs/reviews/<slug>.md` when requested or already adopted in the repository.
