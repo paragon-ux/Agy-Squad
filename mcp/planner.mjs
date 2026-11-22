@@ -40,6 +40,7 @@ const ALLOWED_PLANNER_KEYS = new Set([
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
 const MAX_SWARM_NAME_LENGTH = 24;
 const RESERVED_SWARM_NAMES = new Set(["all", "coordinator", "narrator", "monitor"]);
+const isReservedSwarmName = (name) => RESERVED_SWARM_NAMES.has(name) || name.startsWith("coordinator-");
 
 function trimEdgeDashes(value) {
   let start = 0;
@@ -81,19 +82,19 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracke
       .replace(/[^a-z0-9]+/g, "-")
   );
   const rawBase = slugifyName(rawValue, fallback);
-  const base = RESERVED_SWARM_NAMES.has(rawBase)
+  const base = isReservedSwarmName(rawBase)
     ? trimTrailingDashes(`w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH))
     : rawBase;
   const recordIfTruncated = (candidate) => {
     if (
       Array.isArray(truncatedTracker) &&
-      (candidate.length >= MAX_SWARM_NAME_LENGTH || cleanRawSlug.length > MAX_SWARM_NAME_LENGTH)
+      (cleanRawSlug.length > MAX_SWARM_NAME_LENGTH || (candidate.length >= MAX_SWARM_NAME_LENGTH && candidate !== cleanRawSlug))
     ) {
       truncatedTracker.push(candidate);
     }
     return candidate;
   };
-  if (!usedWorkerNames.has(base) && !RESERVED_SWARM_NAMES.has(base)) {
+  if (!usedWorkerNames.has(base) && !isReservedSwarmName(base)) {
     usedWorkerNames.add(base);
     return recordIfTruncated(base);
   }
@@ -106,7 +107,7 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracke
       trimTrailingDashes(safeFallback.slice(0, maxPrefixLen)) ||
       "w";
     const candidate = `${prefix}${suffix}`;
-    if (!usedWorkerNames.has(candidate) && !RESERVED_SWARM_NAMES.has(candidate)) {
+    if (!usedWorkerNames.has(candidate) && !isReservedSwarmName(candidate)) {
       usedWorkerNames.add(candidate);
       return recordIfTruncated(candidate);
     }
@@ -917,6 +918,7 @@ function planSquadCohort(
     ...(normalizedReportRoot ? { reportRoot: normalizedReportRoot } : {}),
     executionMode,
     workspaceIsolation,
+    ...(includeIntegrityAuditor === false ? { includeIntegrityAuditor: false } : {}),
     topology: {
       compiledPattern,
       defaultBias: "none (ask user if unspecified)",

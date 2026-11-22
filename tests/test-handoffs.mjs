@@ -2157,6 +2157,21 @@ try {
     );
     const resolveMs = performance.now() - tResolve;
     assert.ok(resolveMs < 100, `ASQ-SEC-008: resolveReportRoot on 20k '/agy-squad' segments took ${resolveMs.toFixed(1)} ms (>= 100 ms)`);
+
+    // Post-swarm live fix: hydratePlanForBundleInit stays fail-closed (requireIntegrityAudit: true) unless plan explicitly opts out
+    const emptyAuditPlan = {
+      executionMode: "swarm",
+      workspace: asqDir,
+      workers: [{ squadId: "alpha", specialists: [{ workerName: "alpha-1", reportSlot: reportPath("alpha", 1) }] }],
+      integrityAuditPlan: []
+    };
+    const hydratedFailClosed = buildBundleRecordInit(asqDir, { plan: emptyAuditPlan, squadId: "alpha" });
+    assert.equal(hydratedFailClosed.requireIntegrityAudit, true, "Missing integrityAuditPlan without explicit opt-out must fail closed");
+    const hydratedOptOut = buildBundleRecordInit(asqDir, {
+      plan: { ...emptyAuditPlan, includeIntegrityAuditor: false },
+      squadId: "alpha"
+    });
+    assert.equal(hydratedOptOut.requireIntegrityAudit, false, "Explicit includeIntegrityAuditor: false must honor opt-out");
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

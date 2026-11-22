@@ -462,7 +462,7 @@ function parseIntegrityVerdict(markdown) {
  * @returns {string|undefined}
  */
 function parseTargetSquad(markdown) {
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown);
   const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Target Squad${POST_LABEL_EMPH}\\s*:`, "i");
   const found = new Set();
 
@@ -506,6 +506,9 @@ function parseTargetSquad(markdown) {
       trailingDotStripped = true;
     }
     value = unwrapBalancedEmphasis(value);
+    if (value.startsWith("`") && value.endsWith("`") && value.length > 2) {
+      value = value.slice(1, -1).trim();
+    }
     if (!trailingDotStripped && value.endsWith(".")) {
       value = value.slice(0, -1);
       trailingDotStripped = true;
@@ -527,10 +530,10 @@ function parseTargetSquad(markdown) {
  * @returns {string|undefined}
  */
 function parseEvidenceDigest(markdown) {
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown);
   const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
-    `^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}([0-9a-f]{64})${TRAILING_DOT_AND_EMPH}\\s*$`,
+    `^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}(?:\`([0-9a-f]{64})\`|([0-9a-f]{64}))(?:[*_]*\\s*\\([^)\\r\\n]*\\))?${TRAILING_DOT_AND_EMPH}\\s*$`,
     "i"
   );
   const found = new Set();
@@ -541,7 +544,7 @@ function parseEvidenceDigest(markdown) {
     if (!match) {
       throw new Error(`Malformed Evidence Digest line: "${line.trim()}"`);
     }
-    found.add(match[1].toLowerCase());
+    found.add((match[1] || match[2]).toLowerCase());
   }
   if (found.size > 1) {
     throw new Error(`Integrity report contains conflicting Evidence Digest declarations: ${[...found].join(", ")}.`);

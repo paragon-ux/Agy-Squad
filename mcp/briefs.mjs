@@ -18,7 +18,7 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 const NATIVE_READ_TOOLS =
   "native search/read tools (grep_search/find_by_name + bounded read_file slices on large files)";
 const TRANSCRIPT_FORENSICS =
-  "~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (swarm: sender=<coordId> + @<workerName>) or 'agy-context transcript'";
+  "single unchained 'agy-context transcript' if installed, else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (swarm: sender=<coordId> + @<workerName>)";
 
 const superviseCohort = [
   "Map conversationId->slot in shared workspace; yield via Reactive Wakeup, reconcile 1 receipt/slot; at 10m checkpoint operator checks /agents (stop own children only).",

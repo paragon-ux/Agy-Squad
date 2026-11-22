@@ -1347,6 +1347,43 @@ try {
     assert.ok(performance.now() - tSlug < 200, "planSquadCohort worker name allocation must stay linear-time on repeated dashes");
     assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "task-squad-a-b");
 
+    // Post-swarm live fixes: exact 24-char slug must not warn, 25-char warns, coordinator-* is reserved, includeIntegrityAuditor: false emitted on opt-out
+    const exact24Plan = planSquadCohort({
+      workspace: root,
+      manifest: {
+        squads: {
+          runtime: {
+            lead: { role: "Lead", readOnly: true, objective: "Lead", scopeFiles: ["mcp/planner.mjs"] },
+            specialists: [
+              { role: "Planner Dispatch", readOnly: true, objective: "Check", scopeFiles: ["mcp/planner.mjs"] }
+            ]
+          },
+          coordinator: {
+            lead: { role: "Alpha", readOnly: true, objective: "Lead", scopeFiles: ["mcp/briefs.mjs"] },
+            specialists: [
+              { role: "Worker", readOnly: true, objective: "Check", scopeFiles: ["mcp/briefs.mjs"] }
+            ]
+          }
+        }
+      },
+      executionMode: "swarm",
+      topology: "layered",
+      includeIntegrityAuditor: false
+    });
+    assert.equal(exact24Plan.workers[0].specialists[0].workerName, "runtime-planner-dispatch");
+    assert.equal(exact24Plan.workers[0].specialists[0].workerName.length, 24);
+    assert.equal(
+      exact24Plan.warnings.some(w => w.includes("runtime-planner-dispatch")),
+      false,
+      "Exact 24-char worker name without truncation must not trigger truncation warning"
+    );
+    assert.equal(
+      exact24Plan.workers[1].lead.workerName.startsWith("coordinator-"),
+      false,
+      "Reserved coordinator-* swarm worker name must be prefixed"
+    );
+    assert.equal(exact24Plan.includeIntegrityAuditor, false);
+
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

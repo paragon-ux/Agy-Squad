@@ -100,7 +100,6 @@
             "tests/test-run.mjs",
             "tests/test-server.mjs",
             "tests/test-lifecycle-installer.mjs",
-            "tests/test-comparative-dossier.mjs",
             "tests/verify-package.mjs"
           ],
           "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",

@@ -749,6 +749,44 @@ try {
   assert.ok(stripMs < 100, `ASQ-SEC-006: stripCode on 40k backticks took ${stripMs.toFixed(1)} ms (>= 100 ms)`);
   assert.doesNotMatch(stripCode("ok `Content Verdict: FAIL` ok"), /FAIL/);
 
+  // Post-swarm live fix: inline-backtick Evidence Digest/Target Squad + parenthetical provenance + verdict --integrity CLI parity
+  const digestA = "c".repeat(64);
+  const digestB = "d".repeat(64);
+  assert.equal(parseTargetSquad("Target Squad: `core`.\n"), "core");
+  assert.equal(parseEvidenceDigest(`Evidence Digest: \`${digestA}\`\n`), digestA);
+  assert.equal(
+    parseEvidenceDigest(
+      `Evidence Digest: ${digestA}\n- **Evidence Digest**: \`${digestA}\` (matches coordinator brief seq \`#48\` and \`record-core.json\`).\n`
+    ),
+    digestA,
+    "parseEvidenceDigest must accept matching inline-code digest with parenthetical provenance note"
+  );
+  assert.equal(
+    parseEvidenceDigest(`\`\`\`md\nEvidence Digest: not-a-hash\n\`\`\`\nEvidence Digest: \`${digestA}\`\n`),
+    digestA,
+    "parseEvidenceDigest must continue ignoring fenced code blocks"
+  );
+  assert.throws(
+    () => parseEvidenceDigest(`Evidence Digest: ${digestA}\n- **Evidence Digest**: \`${digestB}\` (conflict).\n`),
+    /conflicting Evidence Digest/
+  );
+  assert.throws(
+    () => parseEvidenceDigest(`Evidence Digest: \`${digestA}\n`),
+    /Malformed Evidence Digest/
+  );
+  const validIntRel = "scratch/agy-squad/squad-integrity_auditor/specialist-1/cli-verdict-ok.md";
+  write(
+    validIntRel,
+    `Target Squad: \`core\`\nEvidence Digest: ${digestA}\nIntegrity Verdict: CLEAN\n- **Evidence Digest**: \`${digestA}\` (matches brief seq \`#48\`).\n`
+  );
+  const cliVerdictOk = JSON.parse(runCli(["verdict", "--integrity", validIntRel]));
+  assert.deepEqual(cliVerdictOk, { verdict: "CLEAN", targetSquad: "core", evidenceDigest: digestA });
+  const badDigestRel = "scratch/agy-squad/squad-integrity_auditor/specialist-1/cli-verdict-bad-digest.md";
+  write(badDigestRel, "Target Squad: core\nEvidence Digest: not-a-sha256\nIntegrity Verdict: CLEAN\n");
+  const cliVerdictBad = runCliFail(["verdict", "--integrity", badDigestRel]);
+  assert.notEqual(cliVerdictBad.status, 0, "verdict --integrity must fail closed on malformed Evidence Digest");
+  assert.match(cliVerdictBad.stderr, /Malformed Evidence Digest/);
+
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

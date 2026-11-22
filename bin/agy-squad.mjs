@@ -1081,11 +1081,21 @@ async function main(args) {
       throw new Error(usageLine);
     }
     const { decodeUtf8, readFile } = await import("../mcp/handoffs.mjs");
-    const { parseContentVerdict, parseIntegrityVerdict } = await import("../mcp/verdicts.mjs");
+    const { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } = await import("../mcp/verdicts.mjs");
     const reportRel = normalizeWorkspaceCliPath(positionals[0]);
     const markdown = decodeUtf8(readFile(root, reportRel), reportRel);
-    const verdict = values.integrity ? parseIntegrityVerdict(markdown) : parseContentVerdict(markdown);
-    console.log(JSON.stringify({ verdict }, null, 2));
+    if (values.integrity) {
+      const verdict = parseIntegrityVerdict(markdown);
+      const targetSquad = parseTargetSquad(markdown);
+      const evidenceDigest = parseEvidenceDigest(markdown);
+      console.log(JSON.stringify({
+        verdict,
+        ...(targetSquad !== undefined ? { targetSquad } : {}),
+        ...(evidenceDigest !== undefined ? { evidenceDigest } : {})
+      }, null, 2));
+    } else {
+      console.log(JSON.stringify({ verdict: parseContentVerdict(markdown) }, null, 2));
+    }
     return 0;
   }
 }

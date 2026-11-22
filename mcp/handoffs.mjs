@@ -1516,7 +1516,7 @@ function hydratePlanForBundleInit(plan, fallbackRoot) {
       verifiedFiles: {},
       assignments,
       handoffs: [],
-      requireIntegrityAudit: auditSlots.length > 0,
+      requireIntegrityAudit: plan.includeIntegrityAuditor !== false,
       ...(auditSlots.length > 0 ? { integrityAuditSlots: auditSlots } : {})
     };
   }
