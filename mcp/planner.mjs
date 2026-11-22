@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import util from "node:util";
-import { AGENT_ALIAS_PAIRS, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, CONTROL_CHAR_RE, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
   loadSquads,
@@ -121,13 +121,11 @@ function normalizeExplicitModel(rawModel) {
 }
 
 function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overriddenSubagentModels) {
-  if (specModelRaw !== undefined && typeof specModelRaw !== "string") {
-    return {
-      requested: requestedModel ?? "inherit",
-      effective: "inherit",
-      swarmPin: requestedModel,
-      compiledModel: specModelRaw
-    };
+  if (
+    specModelRaw !== undefined &&
+    (typeof specModelRaw !== "string" || !specModelRaw.trim() || CONTROL_CHAR_RE.test(specModelRaw))
+  ) {
+    throw new Error("Agent model must be a non-empty string without control characters.");
   }
   const explicitSpecModel = normalizeExplicitModel(specModelRaw);
   const targetModel = requestedModel ?? explicitSpecModel;
@@ -147,7 +145,7 @@ function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overri
     requested: targetModel ?? "inherit",
     effective: targetModel ?? "inherit",
     swarmPin: targetModel,
-    compiledModel: targetModel ?? (specModelRaw ?? "inherit")
+    compiledModel: targetModel ?? "inherit"
   };
 }
 
@@ -234,7 +232,13 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
         } else if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
           result = applyCase(rel);
         } else {
-          result = applyCase(lexRel);
+          const externalTarget = trimTrailingSlashes(resolvedTarget.split(path.sep).join("/"));
+          result = `external:${applyCase(externalTarget)}`;
+          if (Array.isArray(safeOptions.warnings)) {
+            safeOptions.warnings.push(
+              `Scope path '${trimmed}' resolves outside workspace root ('${resolvedTarget}'); verify symlink boundaries before running writable workers.`
+            );
+          }
         }
       }
     } catch {
@@ -505,8 +509,8 @@ function planSquadCohort(
       throw new Error("boardSeqs must be a non-empty array of non-negative integer sequence numbers.");
     }
   }
-  if (model !== undefined && (typeof model !== "string" || !model.trim())) {
-    throw new Error("model must be a non-empty string when provided.");
+  if (model !== undefined && (typeof model !== "string" || !model.trim() || CONTROL_CHAR_RE.test(model))) {
+    throw new Error("model must be a non-empty string without control characters when provided.");
   }
   if (includeIntegrityAuditor !== undefined && typeof includeIntegrityAuditor !== "boolean") {
     throw new Error("includeIntegrityAuditor must be a boolean.");
@@ -796,7 +800,10 @@ function planSquadCohort(
             {
               ...rawAudit,
               model: auditModel.compiledModel,
-              instructions: [rawAudit.instructions, targetScopeNote].filter(Boolean).join("\n")
+              instructions:
+                rawAudit.instructions === undefined || typeof rawAudit.instructions === "string"
+                  ? [rawAudit.instructions, targetScopeNote].filter(Boolean).join("\n")
+                  : rawAudit.instructions
             },
             auditSquadId,
             manifestPathForBrief,
@@ -843,11 +850,16 @@ function planSquadCohort(
     modelProvenance.warning = `Manifest model(s) (${uniqueOverridden.join(", ")}) cannot be pinned under executionMode 'subagent'; compiled Model defaults to 'inherit'. Switch to executionMode 'swarm' to pin exact model IDs.`;
   }
 
-  const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root, options);
+  const scopeEscapeWarnings = [];
+  const scopeOverlaps = findScopeOverlaps(writableScopeEntries, root, {
+    ...(options && typeof options === "object" ? options : {}),
+    warnings: scopeEscapeWarnings
+  });
   const siblingOverlaps = scopeOverlaps.filter(item => item.kind !== "lead-specialist");
   const leadSpecialistOverlaps = scopeOverlaps.filter(item => item.kind === "lead-specialist");
   const warnings = [
     ...new Set(auditWarnings),
+    ...new Set(scopeEscapeWarnings),
     ...(strippedFlatLeads.length > 0
       ? [`Squad(s) ${strippedFlatLeads.join(", ")} define lead blocks that were validated and stripped under topology='flat'.`]
       : [])
@@ -884,8 +896,9 @@ function planSquadCohort(
     const pinned = [...pinnedModels];
     if (!requestedModel) {
       modelProvenance.requestedModel = `per-worker (${pinned.join(", ")})`;
-      modelProvenance.caveat =
-        "Top-level model omitted, but worker/lead specs pin explicit models; verify actual running IDs via swarm{action:\"status\"}.";
+      modelProvenance.caveat = explicitInheritRequested
+        ? "Top-level 'inherit' passed, but worker/lead specs pin explicit models; verify actual running IDs via swarm{action:\"status\"}."
+        : "Top-level model omitted, but worker/lead specs pin explicit models; verify actual running IDs via swarm{action:\"status\"}.";
     }
     if (knownModels !== undefined) {
       const known = new Set(knownModels.map(m => m.trim()));
@@ -921,7 +934,7 @@ function planSquadCohort(
     ...(includeIntegrityAuditor === false ? { includeIntegrityAuditor: false } : {}),
     topology: {
       compiledPattern,
-      defaultBias: "none (ask user if unspecified)",
+      defaultBias: "flat for inline task; manifest-defined otherwise (Step 0 asks for any unspecified swarm setting)",
       workingSquads: targetWorkingIds.length,
       totalSpecialists,
       scopeOverlaps,

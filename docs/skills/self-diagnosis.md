@@ -18,7 +18,7 @@ node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json]
 
    `diagnose.mjs` (`[--json] [--help]`) validates shipped `SKILL.md` frontmatter and line/byte budgets, relative and hosted doc links, retired-symbol/em-dash hygiene, `docs/assets/*.svg` XML and reference checks, and compiled brief + MCP `tools/list` byte budgets.
 
-2. **Compile diagnostic cohorts:** Compile `self-diagnosis-manifest.json` via `agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json` (primary `/swarm`, defaulting to `flat` and `inherit`) or `agy-squad dispatch --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json --squad <all_l1|squadId>` (`invoke_subagent` fallback):
+2. **Compile diagnostic cohorts:** Compile `self-diagnosis-manifest.json` via `agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json` (primary `/swarm`; manifests with `lead` blocks compile `layered` with `inherit` workspace isolation unless `--topology flat` is passed) or `agy-squad dispatch --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json --squad <all_l1|squadId>` (`invoke_subagent` fallback):
    - `Skill & PR-Review Standard Lead` (`skill_and_pr_review_audit`) -> 2 `readOnly: true` specialists (`SKILL`, `DOC`, `ARCH`, `SCRIPT`).
    - `Runtime & Contract Diagnostics Lead` (`runtime_and_contract_diagnosis`) -> 2 `readOnly: true` specialists (`MCP`, `RUN`, `SVC`, `SCRIPT`, `TEST`, `DEP`, `SEC`).
    - `Token & Execution Optimization Lead` (`token_and_execution_optimization`) -> 2 `readOnly: true` specialists (`RUN`, `SKILL`, `SVC`, `ARCH`).

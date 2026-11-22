@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { text } from "node:stream/consumers";
+import { fileURLToPath } from "node:url";
+import { stripCode } from "../mcp/verdicts.mjs";
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const REQUIRED = [
   "package.json",
@@ -60,7 +65,20 @@ const RETIRED_DENYLIST = [
   "mcp/subagent-brief.mjs"
 ];
 
-function validate(packages) {
+function stripHtmlComments(markdown) {
+  let out = "";
+  for (let pos = 0; pos < markdown.length; ) {
+    const start = markdown.indexOf("<!--", pos);
+    if (start === -1) return out + markdown.slice(pos);
+    out += markdown.slice(pos, start);
+    const end = markdown.indexOf("-->", start + 4);
+    if (end === -1) return out;
+    pos = end + 3;
+  }
+  return out;
+}
+
+function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
   assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",
     "Expected one npm pack JSON package record");
   const entries = packages[0].files;
@@ -115,11 +133,38 @@ function validate(packages) {
   for (const file of REQUIRED) {
     assert.ok(present.has(file), `Missing required npm package file: ${file}`);
   }
+
+  // SKILL-002: Verify every local relative link in packaged .agents/skills/**/*.md resolves inside the packed file list
+  const brokenSkillLinks = [];
+  for (const name of names) {
+    if (!name.startsWith(".agents/skills/") || !name.endsWith(".md")) continue;
+    const markdown =
+      fileContents && Object.hasOwn(fileContents, name)
+        ? fileContents[name]
+        : fs.readFileSync(path.join(rootDir, name), "utf8");
+    const stripped = stripCode(stripHtmlComments(markdown));
+    const baseDir = path.posix.dirname(name);
+    for (const match of stripped.matchAll(/\[[^\]]+\]\(([^)#\s]*)(?:#[^)\s]*)?(?:\s+(?:"[^"]*"|'[^']*'))?\)/g)) {
+      const rawTarget = match[1];
+      const cleanTarget = rawTarget.split("?")[0];
+      if (!cleanTarget || /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(cleanTarget)) continue;
+      if (cleanTarget.includes("\\")) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget}`);
+        continue;
+      }
+      const resolved = path.posix.normalize(path.posix.join(baseDir, cleanTarget));
+      if (resolved === ".." || resolved.startsWith("../") || !present.has(resolved)) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget} (absent from package: ${resolved})`);
+      }
+    }
+  }
+  assert.deepEqual(brokenSkillLinks, [], `Broken or unpackaged relative skill links: ${brokenSkillLinks.join(", ")}`);
+
   return names.length;
 }
 
 function selfTest() {
-  const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
+  const fixture = extra => [{ files: [...REQUIRED, ...extra].map(p => ({ path: p })) }];
   assert.equal(validate(fixture(["docs/extra-guide.md"])), REQUIRED.length + 1);
   const badCases = [
     "tests/leaked.mjs",
@@ -160,9 +205,40 @@ function selfTest() {
       `Expected synthetic package with ${bad} to be rejected`);
   }
   assert.throws(() => validate([{ files: REQUIRED
-    .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
+    .filter(p => p !== "mcp/index.js").map(p => ({ path: p })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log(`Package verifier self-test passed (positive + ${badCases.length + 1} negatives)`);
+
+  // SKILL-002 self-test: broken or excluded relative link in a packaged skill file must fail closed; valid/code-fenced links pass
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/swarm-governance/SKILL.md": "See [self-diagnosis](../self-diagnosis/SKILL.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*\.agents\/skills\/self-diagnosis\/SKILL\.md/,
+    "SKILL-002: relative link to unpackaged ../self-diagnosis/SKILL.md must be rejected"
+  );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md": "See [missing](./references/does-not-exist.md#sec).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*does-not-exist\.md/,
+    "SKILL-002: broken relative link in packaged skill file must be rejected"
+  );
+  assert.equal(
+    validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md":
+          "See [standard](./references/pr-review-standard.md#top) and [docs](https://paragon-ux.github.io/Agy-Squad/).\n" +
+          "```md\n[ignored](../self-diagnosis/SKILL.md)\n```\n"
+      }
+    }),
+    REQUIRED.length
+  );
+
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 3} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

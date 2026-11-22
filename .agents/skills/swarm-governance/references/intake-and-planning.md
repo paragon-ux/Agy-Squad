@@ -4,14 +4,14 @@ Reference for [`SKILL.md`](../SKILL.md).
 
 ## Step 0: Sensible Defaults and Overrides
 
-Proceed with defaults unless genuinely ambiguous or asked for options:
+Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/swarm` prompt explicitly specifies all four settings below. Trigger a single `ask_question` call **iff ANY** of the four settings is missing, asking **only** for the missing setting(s) with the recommended default listed first. Skip Step 0 **only** when all four settings are explicitly specified in the prompt.
 
-| Setting | Default | Override / When to Ask |
+| Setting | Recommended Default (first option) | Alternatives / Override |
 | --- | --- | --- |
-| **Topology** | `flat` (specialists -> coordinator) | `layered` only if domain leads or multi-squad isolation is requested. |
-| **Workspace** | `inherit` (shared) | `share` for overlapping edits; `branch` for isolated git history. Ask if overlap is unclear. |
-| **Retention** | Prune verified loose reports (`--prune`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
-| **Model** | Coordinator model (omitted) | `--model <id> --known-model <id>` (from `swarm{action: "models"}`) only on request. |
+| **Topology** | `flat` for inline tasks; `layered` for multi-squad manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (domain leads). |
+| **Model** | Coordinator model (omit `--model`) | `--model <id> --known-model <id>` (validated via `swarm{action: "models"}`). |
+| **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
+| **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
 
 ## Planner and Dispatch Commands
 
@@ -31,7 +31,7 @@ agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
 ```
 
 - Inline `task` builds a flat `task_squad` (`--role`, `--scope`, `--read-only`, `--role-scope`); use `manifest` for custom per-worker objectives/models, leads, or multiple squads (never mix).
-- Caps ([tools](https://paragon-ux.github.io/Agy-Squad/tools/#manifest-structure-rules)): `24`-char `workerName`, `<= 255` B `squad-<id>` dir, `<= 458` B prefix budget, `10 MiB` MCP stdio.
+- Caps ([tools](https://paragon-ux.github.io/Agy-Squad/tools/#manifest-structure-rules)): `24`-char `workerName`, `<= 255` B `squad-<id>` dir, `<= 451` B prefix budget (reserves `33` B for `@<24-char> [done] ` + `16` B min observation), `10 MiB` MCP stdio.
 
 ## Models, Subagents & ACS Opt-In
 
@@ -41,7 +41,8 @@ agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
 
 ## Turn Lifecycle and `[done]` Control
 
-1. Emit verbatim `open_board` on launch turn or when asked while active only (never fabricate `sidecar://...` or repeat on wakeups).
+1. Emit verbatim `open_board` (`[Open the Swarm UI](sidecar://swarm/swarm_board/?auto_open=false)`) on its own line on **launch turns, resume turns**, and whenever asked while active (never fabricate other `sidecar://...` URLs or repeat on routine wakeups).
 2. Park quiet turns via `swarm_wait` (`since` = highest seen `seq`); never add `schedule` timers on `/swarm`.
-3. Post single-line `[done] <summary>` (no `@`) before pausing `waiting` workers so `monitor` cron stops. Wake via `post_message` (`occupiedWorkerNames` if adding workers; fresh chat between major waves).
-4. On close: collect worktrees + verify bundles, post `[done]`, `swarm{action: "kill"}` workers + `monitor`, pass [Section 5](../SKILL.md#5-runtime-closure-checklist-pre-handoff-gate).
+3. Post single-line `[done] <summary>` (no `@`) before pausing `waiting` workers so `monitor` cron stops.
+4. **Top-down resume:** Resume paused swarms strictly top-down (**coordinator -> leads -> workers** layered; **coordinator -> workers** flat) via `post_message` with a plain prompt (`resume your assigned work from where you left off`; never tell unfinished workers to jump straight to posting reports), and re-emit verbatim `open_board` on its own line (`occupiedWorkerNames` if adding workers; fresh chat between major waves).
+5. On close: collect worktrees + verify bundles, post `[done]`, `swarm{action: "kill"}` workers + `monitor`, pass [Section 5](../SKILL.md#5-runtime-closure-checklist-pre-handoff-gate).

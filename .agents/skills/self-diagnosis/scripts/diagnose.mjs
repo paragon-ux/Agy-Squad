@@ -24,6 +24,15 @@ const USAGE =
 const estimateTokens = bytes => Math.ceil(bytes / 4);
 const trimLeadingSlashes = s => { let i = 0; while (i < s.length && s[i] === "/") i++; return s.slice(i); };
 
+function toFindingSlug(value) {
+  const raw = value.replace(/\.(?:md|mjs|js|svg)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  let start = 0;
+  let end = raw.length;
+  while (start < end && raw[start] === "-") start++;
+  while (end > start && raw[end - 1] === "-") end--;
+  return raw.slice(start, end) || "file";
+}
+
 function stripHtmlComments(text) {
   let out = "";
   for (let pos = 0; pos < text.length; ) {
@@ -169,21 +178,45 @@ function checkRelativeLinks(skillFile, markdown) {
   return broken;
 }
 
-function walkMarkdownFiles(dir) {
+function walkMarkdownFiles(dir, excludedDirs = null) {
   const results = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results.push(...walkMarkdownFiles(full));
-    else if (entry.isFile() && entry.name.endsWith(".md")) results.push(full);
+    if (entry.isDirectory()) {
+      if (!excludedDirs?.has(full)) results.push(...walkMarkdownFiles(full, excludedDirs));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      results.push(full);
+    }
   }
   return results;
 }
 
 function findRetiredSymbolMatches(markdown) {
   const matched = new Set();
+  const normalized = markdown.startsWith("\uFEFF") ? markdown.slice(1) : markdown;
   let activeHistoricalBlock = false;
-  for (const line of stripFencedCodeBlocks(markdown).split(/\r?\n/)) {
-    if (/^\s*#{1,6}\s+/.test(line)) activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+  let fenceChar = "";
+  let fenceLen = 0;
+  for (const line of normalized.split(/\r?\n/)) {
+    if (!fenceChar) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+      if (/^\s*#{1,6}\s+/.test(line)) activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+    } else {
+      const trimmed = line.trimEnd();
+      let spaces = 0;
+      while (spaces < trimmed.length && trimmed[spaces] === " ") spaces++;
+      const body = trimmed.slice(spaces);
+      if (spaces <= 3 && body.length >= fenceLen && [...body].every(c => c === fenceChar)) {
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
+    }
     if (activeHistoricalBlock) continue;
     const segments = line.trim().startsWith("|") ? line.split(/(?<!\\)\|/) : line.split(/(?<=[.!?;])\s+/);
     for (const seg of segments) {
@@ -225,19 +258,34 @@ function runDiagnostics() {
     }
     let brokenLinksCount = 0;
     for (const f of walkMarkdownFiles(dir)) {
-      const text = f === skillMd ? content : fs.readFileSync(f, "utf8");
-      const relFile = path.relative(repoRoot, f);
+      const isSkillMd = f === skillMd;
+      const text = isSkillMd ? content : fs.readFileSync(f, "utf8");
+      const relFile = path.relative(repoRoot, f).replace(/\\/g, "/");
+      const relInSkill = path.relative(dir, f).replace(/\\/g, "/");
+      const fileSlug = isSkillMd ? "" : toFindingSlug(relInSkill.replace(/^references\//, ""));
       const broken = checkRelativeLinks(f, text);
       if (broken.length) {
         brokenLinksCount += broken.length;
-        findings.push({ id: `SKILL-LINKS-${name}`, priority: "P1", summary: `Broken links in ${relFile}: ${broken.join(", ")}` });
+        findings.push({
+          id: isSkillMd ? `SKILL-LINKS-${name}` : `SKILL-REFLINKS-${name}-${fileSlug}`,
+          priority: "P1",
+          summary: `Broken links in ${relFile}: ${broken.join(", ")}`
+        });
       }
       const retired = findRetiredSymbolMatches(text);
       if (retired.length) {
-        findings.push({ id: `SKILL-DRIFT-${name}`, priority: "P2", summary: `Retired symbol(s) in ${relFile}: ${retired.join(", ")}` });
+        findings.push({
+          id: isSkillMd ? `SKILL-DRIFT-${name}` : `SKILL-DRIFT-${name}-${fileSlug}`,
+          priority: "P2",
+          summary: `Retired symbol(s) in ${relFile}: ${retired.join(", ")}`
+        });
       }
-      if (STRAY_FLAG_EMDASH_RE.test(stripCode(text))) {
-        findings.push({ id: `SKILL-EMDASH-${name}`, priority: "P2", summary: `Stray em-dash attached to CLI flag in ${relFile}` });
+      if (STRAY_FLAG_EMDASH_RE.test(stripHtmlComments(text))) {
+        findings.push({
+          id: isSkillMd ? `SKILL-EMDASH-${name}` : `SKILL-EMDASH-${name}-${fileSlug}`,
+          priority: "P2",
+          summary: `Stray em-dash attached to CLI flag in ${relFile}`
+        });
       }
     }
     if (lines > 300 || bytes > 12288) {
@@ -247,30 +295,41 @@ function runDiagnostics() {
   }
 
   const docsRoot = path.join(repoRoot, "docs");
+  const excludedDocDirs = new Set([path.join(docsRoot, "reviews"), path.join(docsRoot, "plans")]);
+  const activeDocs = fs.existsSync(docsRoot)
+    ? walkMarkdownFiles(docsRoot, excludedDocDirs).map(filePath => ({
+        path: filePath,
+        text: fs.readFileSync(filePath, "utf8")
+      }))
+    : [];
   const driftTargets = [
-    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"].map(rel => path.join(repoRoot, rel)),
-    ...(fs.existsSync(docsRoot)
-      ? fs.readdirSync(docsRoot, { withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith(".md")).map(e => path.join(docsRoot, e.name))
-      : [])
-  ].filter(abs => fs.existsSync(abs));
-  for (const abs of driftTargets) {
-    const retired = findRetiredSymbolMatches(fs.readFileSync(abs, "utf8"));
+    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
+      .map(rel => path.join(repoRoot, rel))
+      .filter(abs => fs.existsSync(abs))
+      .map(filePath => ({ path: filePath, text: fs.readFileSync(filePath, "utf8") })),
+    ...activeDocs
+  ];
+  for (const { path: abs, text } of driftTargets) {
+    const retired = findRetiredSymbolMatches(text);
     if (retired.length) {
-      findings.push({ id: "DOC-MCP-DRIFT", priority: "P2", summary: `Retired symbol(s) in ${path.relative(repoRoot, abs)}: ${retired.join(", ")}` });
+      const rel = path.relative(repoRoot, abs).replace(/\\/g, "/");
+      findings.push({
+        id: `DOC-MCP-DRIFT-${toFindingSlug(rel)}`,
+        priority: "P2",
+        summary: `Retired symbol(s) in ${rel}: ${retired.join(", ")}`
+      });
     }
   }
 
   const assetsDir = path.join(docsRoot, "assets");
   if (fs.existsSync(assetsDir)) {
-    const reviewsPrefix = path.join(docsRoot, "reviews") + path.sep;
-    const docsTexts = walkMarkdownFiles(docsRoot).filter(f => !f.startsWith(reviewsPrefix)).map(f => fs.readFileSync(f, "utf8"));
     for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
       const svgRaw = fs.readFileSync(path.join(assetsDir, entry.name), "utf8");
       if (!/<svg\b[^>]*>[\s\S]*<\/svg>\s*$/i.test(svgRaw) || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw)) {
         findings.push({ id: `DOC-SVG-XML-${entry.name.replace(/\.svg$/, "")}`, priority: "P2", summary: `docs/assets/${entry.name} failed SVG XML check` });
       }
-      if (docsTexts.length && !docsTexts.some(t => t.includes(entry.name))) {
+      if (activeDocs.length && !activeDocs.some(d => d.text.includes(entry.name))) {
         findings.push({ id: `DOC-SVG-ORPHAN-${entry.name.replace(/\.svg$/, "")}`, priority: "P3", summary: `docs/assets/${entry.name} is unreferenced under docs/` });
       }
     }
@@ -289,9 +348,20 @@ function runDiagnostics() {
   const swarmAuditBrief = minSwarm.integrityAuditPlan[0].swarmAdd.brief;
   const mcpToolsListResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } }), "utf8");
 
-  for (const [label, text] of [["subagent specialist", subSpecPrompt], ["swarm specialist", swarmSpecBrief], ["swarm auditor", swarmAuditBrief]]) {
+  for (const [label, text] of [
+    ["subagent specialist", subSpecPrompt],
+    ["subagent lead", subLeadPrompt],
+    ["precompiled lead", subPreLeadPrompt],
+    ["swarm specialist", swarmSpecBrief],
+    ["swarm lead", swarmLeadBrief],
+    ["swarm auditor", swarmAuditBrief]
+  ]) {
     if (text.includes("——") || STRAY_FLAG_EMDASH_RE.test(text)) {
-      findings.push({ id: "BRIEF-EMDASH", priority: "P2", summary: `Malformed em-dash in ${label} brief` });
+      findings.push({
+        id: `BRIEF-EMDASH-${toFindingSlug(label)}`,
+        priority: "P2",
+        summary: `Malformed em-dash in ${label} brief`
+      });
     }
   }
 

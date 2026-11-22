@@ -56,8 +56,8 @@ Follow Standard `v1.5.0` Sections 1-8 across all **11 categories** (`ARCH`..`DEP
 
 ## 5. Explicit `/swarm` Opt-In
 
-Launch `/swarm` ONLY when requested, pairing with [`swarm-governance`](../../swarm-governance/SKILL.md) in **flat** mode:
+Launch `/swarm` ONLY when requested, pairing with [`swarm-governance`](../../swarm-governance/SKILL.md) (Step 0 `ask_question` for any unspecified settings) in **flat** mode:
 
-1. **Flat specialists:** `agy-squad plan --topology flat --read-only` across applicable categories (e.g., `ARCH/DOC/SKILL/MCP`, `RUN/SVC/DB/SCRIPT/DEP`, `TEST/SEC`).
-2. **Flat auditor (`audit-<id>`):** Verify traces via [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection) and `agy-squad finalize` SHA-256 bundles before synthesizing `day-one-review-r1.md`.
+1. **Flat specialists:** Run `agy-squad plan --topology flat --read-only --role "Arch/Doc/Skill/MCP Auditor" --role "Runtime/Script/Dep Auditor" --role "Test/Sec Auditor" "<cold Day-1 review task>"` (inline task mode uses `--read-only`; manifest mode sets per-agent `readOnly: true`).
+2. **Strict role ordering (Synthesis -> Audit -> Finalize):** After collecting receipts, the **coordinator** verifies cited files/tests, writes `scratch/agy-squad/squad-<id>/lead/report.md` (with plain `Content Verdict: PASS | FAIL | BLOCKED`), and runs `agy-squad verdict` + `agy-squad bundle-init --plan <plan.json> --handoff '<worker>=READY <slot> - <note>' --digest --out <record.json> <verified-files...>`. Next, wake flat **`audit-<id>`** to verify traces via [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection) (`Target Squad:`, `Evidence Digest:`, `Integrity Verdict: CLEAN`). Finally, the **coordinator** runs `agy-squad verdict --integrity` + `agy-squad finalize <record.json> --prune` and publishes `day-one-review-r1.md`.
 3. **Closure:** Keep `r1` unanchored, post `[done]` and pass [`swarm-governance` Section 5](../../swarm-governance/SKILL.md#5-runtime-closure-checklist-pre-handoff-gate), then run Stage 3 separately with selective resume.

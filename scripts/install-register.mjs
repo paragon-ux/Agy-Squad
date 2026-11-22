@@ -33,7 +33,13 @@ const PLUGIN_KEY = "agy-squad";
 export const MIN_NODE_MAJOR = 22;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
 export const SHIPPED_SKILLS = Object.freeze(["pr-review", "full-review", "day-one-review", "swarm-governance"]);
-const COPY_EXCLUDED_TOP_DIRS = new Set([".git", "node_modules", ".venv", ".cache", "scratch", "site", "benchmarks", "tests"]);
+const COPY_EXCLUDED_TOP_DIRS = new Set([".git", ".github", "node_modules", ".venv", ".cache", "scratch", "site", "benchmarks", "tests"]);
+const COPY_EXCLUDED_PATHS = Object.freeze([
+  ".agents/skills/self-diagnosis",
+  "scripts/release-preflight.mjs",
+  "docs/plans",
+  "docs/reviews"
+]);
 
 function resolveProfilePaths() {
   const homeDir = process.env.AGY_TEST_PROFILE_DIR || os.homedir();
@@ -483,7 +489,7 @@ export function detectExistingInstallation(options = {}) {
   } else if (globalMcpCheck.data) {
     if (globalMcpCheck.data.mcpServers !== undefined && !isPlainObject(globalMcpCheck.data.mcpServers)) {
       appendMcpError("mcp_config.json field 'mcpServers' must be a JSON object");
-    } else if (globalMcpCheck.data.mcpServers && PLUGIN_KEY in globalMcpCheck.data.mcpServers) {
+    } else if (globalMcpCheck.data.mcpServers && Object.hasOwn(globalMcpCheck.data.mcpServers, PLUGIN_KEY)) {
       hasGlobalMcpEntry = true;
       details.mcp.globalDuplicate = true;
       details.mcp.staleSchemaCount += 1;
@@ -911,9 +917,10 @@ export async function runInstall(options = {}) {
   await fsPromises.mkdir(pluginsDir, { recursive: true });
   const isTempOrNpx = !isLocalGitCheckout();
   const copyFilter = (src) => {
-    const rel = path.relative(repoRoot, src);
+    const rel = normalizeSlash(path.relative(repoRoot, src));
     if (!rel) return true;
-    return !COPY_EXCLUDED_TOP_DIRS.has(rel.split(path.sep)[0]);
+    if (COPY_EXCLUDED_TOP_DIRS.has(rel.split("/")[0])) return false;
+    return !COPY_EXCLUDED_PATHS.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
   };
 
   let pluginLst = null;
@@ -954,7 +961,9 @@ export async function runInstall(options = {}) {
   log(`[OK] Plugin skills, docs & manifest verified: ${path.join(pluginDest, "skills")}`);
 
   // Strip duplicate global mcp_config.json entry; plugin-scoped mcp_config.json is canonical (SQ-DEP-001)
-  const hadGlobalMcpEntry = Boolean(isPlainObject(validatedMcp?.mcpServers) && PLUGIN_KEY in validatedMcp.mcpServers);
+  const hadGlobalMcpEntry = Boolean(
+    isPlainObject(validatedMcp?.mcpServers) && Object.hasOwn(validatedMcp.mcpServers, PLUGIN_KEY)
+  );
   if (hadGlobalMcpEntry) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
@@ -1117,37 +1126,28 @@ function prepareRestoreJsonSection({
   };
 }
 
-export async function runRestoreBackups(options = {}) {
-  const {
-    configJsonPath,
-    configBakPath,
-    legacyConfigBakPath,
-    mcpJsonPath,
-    mcpBakPath,
-    legacyMcpBakPath
-  } = resolveProfilePaths();
-  const log = options.silent ? () => {} : console.log;
-
-  // Phase 1: validate and prepare all targets before mutating any file or unlinking any backup.
-  const plans = [
+function prepareRestorePlans(paths) {
+  return [
     prepareRestoreJsonSection({
-      targetPath: mcpJsonPath,
+      targetPath: paths.mcpJsonPath,
       targetLabel: "mcp_config.json",
-      backupPath: mcpBakPath,
-      legacyBackupPath: legacyMcpBakPath,
+      backupPath: paths.mcpBakPath,
+      legacyBackupPath: paths.legacyMcpBakPath,
       sectionKey: "mcpServers",
       keyFilter: isOwnMcpServerKey
     }),
     prepareRestoreJsonSection({
-      targetPath: configJsonPath,
+      targetPath: paths.configJsonPath,
       targetLabel: "config.json",
-      backupPath: configBakPath,
-      legacyBackupPath: legacyConfigBakPath,
+      backupPath: paths.configBakPath,
+      legacyBackupPath: paths.legacyConfigBakPath,
       sectionKey: "plugins",
       keyFilter: (key) => key === PLUGIN_KEY
     })
   ].filter(Boolean);
+}
 
+async function commitRestorePlans(plans, log) {
   // Phase 2: commit target writes first, then unlink primary backups.
   for (const plan of plans) {
     if (plan.content !== null) {
@@ -1169,19 +1169,30 @@ export async function runRestoreBackups(options = {}) {
   return { restoredCount: plans.length };
 }
 
+export async function runRestoreBackups(options = {}) {
+  const paths = resolveProfilePaths();
+  const log = options.silent ? () => {} : console.log;
+
+  // Phase 1: validate and prepare all targets before mutating any file or unlinking any backup.
+  const plans = prepareRestorePlans(paths);
+  return commitRestorePlans(plans, log);
+}
+
 export async function runUninstall(options = {}) {
+  const paths = resolveProfilePaths();
   const {
     pluginDest,
     configJsonPath,
     mcpJsonPath,
     antigravityMcpRootDir,
     antigravityBinDir
-  } = resolveProfilePaths();
+  } = paths;
   const log = options.silent ? () => {} : console.log;
   log("Uninstalling Agy-Squad...");
 
   const validatedMcp = readAndValidateJsonFile(mcpJsonPath, "mcp_config.json");
   const validatedConfig = readAndValidateJsonFile(configJsonPath, "config.json");
+  const restorePlans = options.restoreBackups ? prepareRestorePlans(paths) : null;
 
   let pluginStat = null;
   try {
@@ -1194,7 +1205,7 @@ export async function runUninstall(options = {}) {
     log(`[OK] Removed plugin installation: ${pluginDest}`);
   }
 
-  if (isPlainObject(validatedMcp?.mcpServers)) {
+  if (isPlainObject(validatedMcp?.mcpServers) && Object.hasOwn(validatedMcp.mcpServers, PLUGIN_KEY)) {
     const nextServers = { ...validatedMcp.mcpServers };
     delete nextServers[PLUGIN_KEY];
     const nextMcp = { ...validatedMcp, mcpServers: nextServers };
@@ -1202,7 +1213,7 @@ export async function runUninstall(options = {}) {
     log(`[OK] Removed '${PLUGIN_KEY}' from: ${mcpJsonPath} (foreign entries preserved)`);
   }
 
-  if (isPlainObject(validatedConfig?.plugins) && PLUGIN_KEY in validatedConfig.plugins) {
+  if (isPlainObject(validatedConfig?.plugins) && Object.hasOwn(validatedConfig.plugins, PLUGIN_KEY)) {
     const nextPlugins = { ...validatedConfig.plugins };
     delete nextPlugins[PLUGIN_KEY];
     const nextConfig = { ...validatedConfig, plugins: nextPlugins };
@@ -1231,7 +1242,7 @@ export async function runUninstall(options = {}) {
   }
 
   if (options.restoreBackups) {
-    await runRestoreBackups(options);
+    await commitRestorePlans(restorePlans, log);
   }
 
   log("\nAgy-Squad uninstallation complete.");

@@ -96,26 +96,45 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
   }
   if (sessionWorkspaces.length > 1 && typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
     const rel = args.manifestPath.trim();
-    const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
-    if (!path.isAbsolute(rel) && !posixNorm.startsWith("/") && posixNorm !== "." && posixNorm !== ".." && !posixNorm.startsWith("../")) {
-      const matching = sessionWorkspaces.filter((root) => {
-        try {
-          const candidate = path.resolve(root, posixNorm);
-          const relCheck = path.relative(root, candidate);
-          if (!relCheck || relCheck.startsWith("..") || path.isAbsolute(relCheck)) return false;
-          return fs.existsSync(candidate);
-        } catch {
-          return false;
-        }
-      });
-      if (matching.length === 1) {
-        return matching[0];
+    const isContained = (dir, target) => {
+      const relCheck = path.relative(dir, target);
+      return Boolean(relCheck) && relCheck !== ".." && !relCheck.startsWith(`..${path.sep}`) && !path.isAbsolute(relCheck);
+    };
+    let matching = [];
+    if (path.isAbsolute(rel)) {
+      const candidate = path.resolve(rel);
+      let exists = false;
+      try { exists = fs.existsSync(candidate); } catch {}
+      if (exists) {
+        matching = sessionWorkspaces.filter((root) => {
+          try {
+            if (isContained(root, candidate)) return true;
+            return isContained(fs.realpathSync(root), candidate);
+          } catch {
+            return false;
+          }
+        });
       }
-      if (matching.length > 1) {
-        throw new Error(
-          `Ambiguous multi-root workspace for manifestPath '${rel}' (matched: ${matching.join(", ")}). Pass 'workspace' explicitly.`
-        );
+    } else {
+      const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
+      if (!posixNorm.startsWith("/") && posixNorm !== "." && posixNorm !== ".." && !posixNorm.startsWith("../")) {
+        matching = sessionWorkspaces.filter((root) => {
+          try {
+            const candidate = path.resolve(root, posixNorm);
+            return isContained(root, candidate) && fs.existsSync(candidate);
+          } catch {
+            return false;
+          }
+        });
       }
+    }
+    if (matching.length === 1) {
+      return matching[0];
+    }
+    if (matching.length > 1) {
+      throw new Error(
+        `Ambiguous multi-root workspace for manifestPath '${rel}' (matched: ${matching.join(", ")}). Pass 'workspace' explicitly.`
+      );
     }
   }
   if (sessionWorkspaces.length > 1 && args?.manifestPath === undefined && args?.manifest === undefined && args?.task === undefined) {

@@ -2,6 +2,7 @@ const CONTENT_VERDICTS = new Set(["PASS", "FAIL", "BLOCKED"]);
 const INTEGRITY_VERDICTS = new Set(["CLEAN", "INTEGRITY VIOLATION"]);
 const SQUAD_ID_RE = /^[A-Za-z0-9_.-]*[A-Za-z0-9_-]$/;
 const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const MAX_RESERVED_KEY_LEN = Math.max(...[...RESERVED_OBJECT_KEYS].map(k => k.length));
 
 function validateSquadId(squadId) {
   if (typeof squadId !== "string" || !squadId) {
@@ -22,10 +23,10 @@ const POST_COLON_EMPH = "(?:[*_]+\\s+)?[*_]*";
 const TRAILING_DOT_AND_EMPH = "(?:\\s*(?:\\.(?:\\s*[*_]+)?|[*_]+(?:\\s*\\.)?))?";
 
 const HISTORICAL_CONTEXT_RE =
-  /\b(?:prior|previous|baseline|before|wave\s*\d+|pr\s*#?\d+|historical|old|initial|original|earlier)\b/i;
+  /\b(?:prior|previous|baseline|before|historical|old|initial|original|earlier)\b/i;
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
 const LABELED_VERDICT_PREFIX_RE =
-  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]*[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?[*_]*\s+){0,2}[*_]*(?:verdict|status|result|check|disposition|outcome)(?:\s*[*_]+)?(?:\s*[:—–]|\s+-(?=\s|$))\s*(?:[*_]+\s+)?[*_]*/i;
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]*#?[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?[*_]*\s+){0,3}[*_]*(?:verdict|status|result|check|disposition|outcome)(?:\s*[*_]+)?(?:\s*[:—–]|\s+-(?=\s|$))\s*(?:[*_]+\s+)?[*_]*/i;
 const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/;
 const STRICT_UPPERCASE_INTEGRITY_VERDICT_RE = /^(CLEAN|INTEGRITY VIOLATION)(?![*_]*[-A-Za-z0-9/])/;
 const VERDICT_NEGATION_RE =
@@ -66,7 +67,7 @@ function matchTwoColumnContentVerdict(cells) {
     /^(?:(?:content|overall|final)\s+)?(?:verdict|gate)$/i.test(keyText) ||
     (/\b(?:content\s+verdict|overall\s+verdict|final\s+verdict|verdict)\b/i.test(keyText) &&
       !/\b(?:category|integrity)\b/i.test(keyText) &&
-      !isHistoricalTableHeader(keyText));
+      !isHistoricalLine(keyText));
   if (!isVerdictKey) return null;
   const m = cells[1].match(/^[*_]*(PASS|FAIL|BLOCKED)\.?[*_]*\.?$/);
   return m ? m[1] : null;
@@ -79,7 +80,7 @@ function matchTwoColumnIntegrityVerdict(cells) {
     /^(?:(?:integrity|audit|overall|final)\s+)?(?:verdict|status|result|outcome)$/i.test(keyText) ||
     (/\b(?:integrity\s+verdict|audit\s+(?:verdict|status)|verdict)\b/i.test(keyText) &&
       !/\b(?:category|content)\b/i.test(keyText) &&
-      !isHistoricalTableHeader(keyText));
+      !isHistoricalLine(keyText));
   if (!isIntegrityKey) return null;
   const m = cells[1].match(/^[*_]*(CLEAN|INTEGRITY VIOLATION)\.?[*_]*\.?$/);
   return m ? m[1] : null;
@@ -124,10 +125,10 @@ function createTableVerdictScanner(config) {
     const isFirstRow = !inTable;
     if (isFirstRow) {
       inTable = true;
-      headerHistoricalCol = cells.map(isHistoricalTableHeader);
+      headerHistoricalCol = cells.map(isHistoricalLine);
       headerVerdictCol = cells.map(h => {
         const cleanHeader = h.replace(/[*_`]+/g, "").trim();
-        return config.isVerdictHeader(cleanHeader) && !isHistoricalTableHeader(cleanHeader);
+        return config.isVerdictHeader(cleanHeader) && !isHistoricalLine(cleanHeader);
       });
     }
     const matches = [];
@@ -146,24 +147,35 @@ function createTableVerdictScanner(config) {
 }
 
 function unwrapBalancedEmphasis(value) {
-  let cur = value.trim();
-  while (cur.length > 2) {
-    const first = cur[0];
+  const trimmed = value.trim();
+  let left = 0;
+  let right = trimmed.length;
+  while (right - left > 2) {
+    const first = trimmed[left];
     if (first !== "*" && first !== "_") break;
-    if (first === "_" && (/^_+$/.test(cur) || RESERVED_OBJECT_KEYS.has(cur))) break;
     let lead = 0;
-    while (lead < cur.length && cur[lead] === first) lead++;
+    while (left + lead < right && trimmed[left + lead] === first) lead++;
+    if (lead * 2 >= right - left) break;
     let trail = 0;
-    while (trail < cur.length && cur[cur.length - 1 - trail] === first) trail++;
-    if (lead === 0 || lead !== trail || lead * 2 >= cur.length) break;
-    const step = lead >= 2 ? 2 : 1;
-    cur = cur.slice(step, -step);
+    while (trail < lead && trimmed[right - 1 - trail] === first) trail++;
+    if (trail !== lead || trimmed[right - 1 - trail] === first) break;
+    if (first === "_" && lead >= 2 && lead % 2 === 0) {
+      const innerStart = left + lead - 2;
+      const innerEnd = right - trail + 2;
+      if (innerEnd - innerStart <= MAX_RESERVED_KEY_LEN && RESERVED_OBJECT_KEYS.has(trimmed.slice(innerStart, innerEnd))) {
+        left = innerStart;
+        right = innerEnd;
+        break;
+      }
+    }
+    left += lead;
+    right -= trail;
   }
-  return cur;
+  return trimmed.slice(left, right);
 }
 
-function isHistoricalTableHeader(header) {
-  return HISTORICAL_CONTEXT_RE.test(header) && !CURRENT_CONTEXT_RE.test(header);
+function isHistoricalLine(line) {
+  return HISTORICAL_CONTEXT_RE.test(line) && !CURRENT_CONTEXT_RE.test(line);
 }
 
 function isClosingFence(line, fenceChar, fenceLen) {
@@ -290,7 +302,7 @@ function isCategoryVerdictLine(line) {
  * @returns {Set<string>}
  */
 function parseStrictLines(markdown, labels, allowed) {
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const labelPattern = labels.join("|");
   const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}(?:${labelPattern})${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
@@ -334,11 +346,11 @@ function hasContentVerdictAttempt(markdown) {
     if (verdictLabelRe.test(line)) return true;
     if (
       /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(?:PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/.test(line) &&
-      !HISTORICAL_CONTEXT_RE.test(line)
+      !isHistoricalLine(line)
     ) {
       return true;
     }
-    if (matchLabeledVerdict(line) && !HISTORICAL_CONTEXT_RE.test(line)) return true;
+    if (matchLabeledVerdict(line) && !isHistoricalLine(line)) return true;
     if (tableScanner.scanLine(line).length > 0) return true;
   }
   return false;
@@ -364,7 +376,7 @@ function parseContentVerdict(markdown) {
       continue;
     }
     // Reject explicit verdict-targeted negations of PASS when report claims PASS (excluding historical/negative-test prose)
-    if (found.has("PASS") && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (found.has("PASS") && !isHistoricalLine(line)) {
       for (const negMatch of line.matchAll(VERDICT_NEGATION_RE)) {
         const isUppercasePass = negMatch[2] === "PASS";
         if (isUppercasePass) {
@@ -387,13 +399,13 @@ function parseContentVerdict(markdown) {
     }
     // Reject secondary labeled verdict/status/check lines asserting conflicting verdicts (excluding historical/compound tokens)
     const labeled = matchLabeledVerdict(line);
-    if (labeled && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (labeled && !isHistoricalLine(line)) {
       found.add(labeled[1]);
     }
     const leading = line.match(
       /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(PASS|FAIL|BLOCKED)[*_]*(?:\s*[:—–]|\s+-(?=\s|$))/
     );
-    if (leading && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (leading && !isHistoricalLine(line)) {
       found.add(leading[1]);
     }
     for (const verdict of tableScanner.scanLine(line)) {
@@ -422,7 +434,7 @@ function parseIntegrityVerdict(markdown) {
   const clean = stripCode(markdown);
   const tableScanner = createTableVerdictScanner(INTEGRITY_TABLE_CONFIG);
   for (const line of clean.split(/\r?\n/)) {
-    if (found.has("CLEAN") && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (found.has("CLEAN") && !isHistoricalLine(line)) {
       for (const m of line.matchAll(INTEGRITY_NEGATION_RE)) {
         if (m[1] === "CLEAN") {
           found.add("INTEGRITY VIOLATION");
@@ -431,13 +443,13 @@ function parseIntegrityVerdict(markdown) {
       }
     }
     const labeled = matchLabeledIntegrityVerdict(line);
-    if (labeled && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (labeled && !isHistoricalLine(line)) {
       found.add(labeled[1]);
     }
     const leading = line.match(
       /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(CLEAN|INTEGRITY VIOLATION)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/
     );
-    if (leading && !HISTORICAL_CONTEXT_RE.test(line)) {
+    if (leading && !isHistoricalLine(line)) {
       found.add(leading[1]);
     }
     for (const verdict of tableScanner.scanLine(line)) {
@@ -462,7 +474,7 @@ function parseIntegrityVerdict(markdown) {
  * @returns {string|undefined}
  */
 function parseTargetSquad(markdown) {
-  const clean = stripFencedCodeBlocks(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Target Squad${POST_LABEL_EMPH}\\s*:`, "i");
   const found = new Set();
 
@@ -530,7 +542,7 @@ function parseTargetSquad(markdown) {
  * @returns {string|undefined}
  */
 function parseEvidenceDigest(markdown) {
-  const clean = stripFencedCodeBlocks(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const labelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:`, "i");
   const exactRe = new RegExp(
     `^\\s*${LINE_ITEM_PREFIX}Evidence Digest${POST_LABEL_EMPH}\\s*:\\s*${POST_COLON_EMPH}(?:\`([0-9a-f]{64})\`|([0-9a-f]{64}))(?:[*_]*\\s*\\([^)\\r\\n]*\\))?${TRAILING_DOT_AND_EMPH}\\s*$`,

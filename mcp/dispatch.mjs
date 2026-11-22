@@ -113,36 +113,34 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
     if (!auditSquad || typeof auditSquad !== "object" || Array.isArray(auditSquad)) {
       throw new Error(`Squad '${auditKey}' must be an object.`);
     }
-    if (!auditSquad._synthesized) {
-      const { validatedAuditKeys } = options;
-      const alreadyValidated = Boolean(validatedAuditKeys?.has(auditKey));
-      if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
-        throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
+    const { validatedAuditKeys } = options;
+    const alreadyValidated = Boolean(validatedAuditKeys?.has(auditKey));
+    if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
+      throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
+    }
+    const customSpecs = auditSquad.children ?? auditSquad.specialists;
+    const customLead = resolveSquadLead(auditSquad, auditKey, false);
+    if (customSpecs !== undefined) {
+      if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
+        throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
       }
-      const customSpecs = auditSquad.children ?? auditSquad.specialists;
-      const customLead = resolveSquadLead(auditSquad, auditKey, false);
-      if (customSpecs !== undefined) {
-        if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
-          throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
+      if (customLead && !alreadyValidated) {
+        buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true, validateOnly: true });
+        if (Array.isArray(warnings)) {
+          warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
         }
-        if (customLead && !alreadyValidated) {
-          buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true, validateOnly: true });
-          if (Array.isArray(warnings)) {
-            warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
-          }
-        }
-        validatedAuditKeys?.add(auditKey);
-        return customSpecs.map((spec, index) => ({
-          spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
-          id: slotId,
-          number: index + 1
-        }));
       }
-      if (customLead) {
-        throw new Error(
-          `Custom '${auditKey}' defines a lead without specialists or children; add specialists/children or omit the lead.`
-        );
-      }
+      validatedAuditKeys?.add(auditKey);
+      return customSpecs.map((spec, index) => ({
+        spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
+        id: slotId,
+        number: index + 1
+      }));
+    }
+    if (customLead) {
+      throw new Error(
+        `Custom '${auditKey}' defines a lead without specialists or children; add specialists/children or omit the lead.`
+      );
     }
   }
   return [

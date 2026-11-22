@@ -787,6 +787,79 @@ try {
   assert.notEqual(cliVerdictBad.status, 0, "verdict --integrity must fail closed on malformed Evidence Digest");
   assert.match(cliVerdictBad.stderr, /Malformed Evidence Digest/);
 
+  // Batch A regressions: SEC-001, RUN-001, RUN-002, SEC-002
+  // SEC-001: inline backticks on verdict lines fail closed as malformed/hedged while stripCode still strips inline code
+  for (const hedgedContent of [
+    "Content Verdict: PASS `(FAIL: 3 P1 blockers open)`\n",
+    "Content Verdict: `FAIL` PASS\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(hedgedContent),
+      /Malformed or hedged verdict line/,
+      `SEC-001: backtick-smuggled content verdict must fail closed: ${JSON.stringify(hedgedContent)}`
+    );
+  }
+  for (const hedgedIntegrity of [
+    "Integrity Verdict: `NOT` CLEAN\n",
+    "Integrity Verdict: CLEAN `(INTEGRITY VIOLATION: traces missing)`\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(hedgedIntegrity),
+      /Malformed or hedged verdict line/,
+      `SEC-001: backtick-smuggled integrity verdict must fail closed: ${JSON.stringify(hedgedIntegrity)}`
+    );
+  }
+  assert.doesNotMatch(stripCode("ok `Content Verdict: FAIL` ok"), /FAIL/);
+
+  // RUN-001: PR #N / Wave N lines are no longer treated as historical bypasses; true historical lines remain allowed
+  for (const badContent of [
+    "Content Verdict: PASS\nFinal PR #15 status: FAIL\n",
+    "Content Verdict: PASS\nTests for PR #15 did not PASS\n",
+    "Content Verdict: PASS\nFAIL — Wave 2 still has P1 blockers\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(badContent),
+      /conflicting content verdicts/,
+      `RUN-001: conflicting PR/Wave verdict line must throw: ${JSON.stringify(badContent)}`
+    );
+  }
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nPR #15 status: PASS\n"),
+    /role conflation/,
+    "RUN-001: PR #15 status: PASS in integrity report must throw role conflation"
+  );
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nPR #15 audit is not CLEAN\n"),
+    /conflicting verdicts/,
+    "RUN-001: PR #15 audit is not CLEAN must throw conflicting verdicts"
+  );
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior baseline check did not pass.\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior status: FAIL\n"), "PASS");
+
+  // RUN-002: 4-space and tab-indented Target Squad / Evidence Digest code blocks are ignored while value-only backticks still parse
+  assert.equal(parseTargetSquad("    Target Squad: alpha\n\tTarget Squad: beta\n"), undefined);
+  assert.equal(parseTargetSquad("Target Squad: `alpha`\n    Target Squad: beta\n\tTarget Squad: gamma\n"), "alpha");
+  assert.equal(parseEvidenceDigest(`    Evidence Digest: ${digestA}\n\tEvidence Digest: ${digestB}\n`), undefined);
+  assert.equal(
+    parseEvidenceDigest(`Evidence Digest: \`${digestA}\`\n    Evidence Digest: ${digestB}\n\tEvidence Digest: not-a-hash\n`),
+    digestA
+  );
+
+  // SEC-002: parseTargetSquad unwrapBalancedEmphasis stays linear-time on N=30,000 runs and preserves reserved-key checks
+  const tEmph = performance.now();
+  assert.equal(parseTargetSquad(`Target Squad: ${"*".repeat(30_000)}alpha${"*".repeat(30_000)}\n`), "alpha");
+  assert.equal(parseTargetSquad(`Target Squad: ${"*_".repeat(15_000)}alpha${"_*".repeat(15_000)}\n`), "alpha");
+  assert.throws(
+    () => parseTargetSquad(`Target Squad: ${"_".repeat(30_000)}__proto__${"_".repeat(30_000)}\n`),
+    /Invalid reserved squad ID/
+  );
+  assert.throws(
+    () => parseTargetSquad(`Target Squad: ${"_*".repeat(15_000)}__proto__${"*_".repeat(15_000)}\n`),
+    /Invalid reserved squad ID/
+  );
+  const emphMs = performance.now() - tEmph;
+  assert.ok(emphMs < 50, `SEC-002: parseTargetSquad on N=30,000 balanced emphasis took ${emphMs.toFixed(1)} ms (>= 50 ms)`);
+
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

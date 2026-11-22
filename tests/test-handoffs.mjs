@@ -361,9 +361,9 @@ try {
   assert.match(nullBundle.stderr, /Provide a valid bundle record\./);
   assert.ok(!/TypeError/.test(nullBundle.stderr));
 
-  // Verify SVC-HANDOFF-PREFIX-AND-LENGTH & RUN-009: reportPath enforces <= 500 B PARTIAL prefix (+26 B @mention + 16 B observation reserve = 458 B PARTIAL ceiling)
-  assert.equal(reportPath("a", undefined, "x".repeat(422)).endsWith("/squad-a/lead/report.md"), true);
-  assert.throws(() => reportPath("a", undefined, "x".repeat(423)), /500-byte Pointer-Over-Wire/);
+  // Verify SVC-HANDOFF-PREFIX-AND-LENGTH & RUN-009: reportPath enforces <= 500 B PARTIAL prefix (+33 B @mention+[done] + 16 B observation reserve = 451 B PARTIAL ceiling)
+  assert.equal(reportPath("a", undefined, "x".repeat(415)).endsWith("/squad-a/lead/report.md"), true);
+  assert.throws(() => reportPath("a", undefined, "x".repeat(416)), /500-byte Pointer-Over-Wire/);
   assert.throws(() => reportPath("a", undefined, "x".repeat(439)), /500-byte Pointer-Over-Wire/);
   assert.throws(() => reportPath("alpha", 1, "a/".repeat(230) + "out"), /500-byte Pointer-Over-Wire/);
   write(first, firstEvidence);
@@ -2172,6 +2172,147 @@ try {
       squadId: "alpha"
     });
     assert.equal(hydratedOptOut.requireIntegrityAudit, false, "Explicit includeIntegrityAuditor: false must honor opt-out");
+
+    // Batch A regressions: SEC-005, RUN-004, SVC-003, SVC-001
+    const baS1 = reportPath("batcha", 1);
+    const baS2 = reportPath("batcha", 2);
+    const baS3 = reportPath("batcha", 3);
+    const baLead = reportPath("batcha");
+    const baAudit = reportPath("integrity_auditor-batcha", 1);
+    writeAtAsq(asqDir, "src/batcha.js", "export const batchA = true;\n");
+    writeAtAsq(asqDir, baS1, "# Spec 1\nVerified src/batcha.js.\n");
+    writeAtAsq(asqDir, baLead, "Content Verdict: PASS\nVerified batcha.\n");
+    const baFiles = fingerprint(asqDir, ["src/batcha.js"]);
+    const baRec = {
+      workspace: asqDir,
+      squadId: "batcha",
+      verdict: "PASS",
+      verifiedFiles: baFiles,
+      assignments: [{ conversationId: "ba-w1", report: baS1 }],
+      handoffs: [{ sender: "ba-w1", message: `@lead [done] READY ${baS1} - Verified batcha.` }],
+      requireIntegrityAudit: true,
+      integrityAuditSlots: [baAudit]
+    };
+    const baDig = computeEvidenceDigest(asqDir, baRec).evidenceDigest;
+    writeAtAsq(asqDir, baAudit, `Target Squad: batcha\nEvidence Digest: ${baDig}\nIntegrity Verdict: CLEAN\n`);
+
+    // SEC-005: bundleReports rejects audit slot in verifiedFiles; verifyBundle rejects self-referenced specialist/synthesis/bundle/audit paths and whitespace-only archived markdown
+    assert.throws(
+      () => bundleReports(asqDir, { ...baRec, verifiedFiles: { ...baFiles, [baAudit]: fingerprint(asqDir, [baAudit])[baAudit] } }),
+      /Record final work inputs in verifiedFiles/,
+      "SEC-005: bundleReports must reject audit path in verifiedFiles"
+    );
+    const baBundled = bundleReports(asqDir, baRec);
+    const baBundleAbs = path.join(asqDir, baBundled.path);
+    const baBundleRaw = fs.readFileSync(baBundleAbs, "utf8");
+    const baBundleObj = JSON.parse(baBundleRaw);
+    for (const [label, selfPath] of [
+      ["specialist slot", baS1],
+      ["synthesis slot", baLead],
+      ["bundle path", baBundled.path],
+      ["audit path", baAudit]
+    ]) {
+      const clone = structuredClone(baBundleObj);
+      clone.verifiedFiles[selfPath] = fingerprint(asqDir, [selfPath])[selfPath];
+      fs.writeFileSync(baBundleAbs, JSON.stringify(clone, null, 2) + "\n", "utf8");
+      assert.throws(
+        () => verifyBundle(asqDir, baBundled.path),
+        /Record final work inputs in verifiedFiles/,
+        `SEC-005: verifyBundle must reject ${label} in verifiedFiles`
+      );
+    }
+    const wsMarkdown = "   \n\t  ";
+    const wsClone = structuredClone(baBundleObj);
+    wsClone.reports[0].markdown = wsMarkdown;
+    wsClone.reports[0].sha256 = createHash("sha256").update(wsMarkdown, "utf8").digest("hex");
+    fs.writeFileSync(baBundleAbs, JSON.stringify(wsClone, null, 2) + "\n", "utf8");
+    writeAtAsq(asqDir, baS1, wsMarkdown);
+    assert.throws(
+      () => verifyBundle(asqDir, baBundled.path),
+      /Empty evidence report/,
+      "SEC-005: verifyBundle must reject whitespace-only archived reports[].markdown"
+    );
+    fs.writeFileSync(baBundleAbs, baBundleRaw, "utf8");
+    writeAtAsq(asqDir, baS1, "# Spec 1\nVerified src/batcha.js.\n");
+    assert.equal(verifyBundle(asqDir, baBundled.path, baBundled.sha256).sha256, baBundled.sha256);
+
+    // RUN-004: buildBundleRecordInit rejects non-boolean flags, invalid template.verdict (even with missing lead/report.md), and null specialists
+    for (const flagName of ["allowUnaudited", "allowNonPassing", "allowPartial"]) {
+      assert.throws(
+        () => buildBundleRecordInit(asqDir, { plan: emptyAuditPlan, squadId: "alpha", [flagName]: "false" }),
+        new RegExp(`${flagName} must be a boolean`),
+        `RUN-004: buildBundleRecordInit must reject string "false" for ${flagName}`
+      );
+    }
+    assert.throws(
+      () => buildBundleRecordInit(asqDir, {
+        plan: {
+          executionMode: "swarm",
+          workspace: asqDir,
+          workers: [{ squadId: "missing_lead_squad", specialists: [{ workerName: "ml-1", reportSlot: reportPath("missing_lead_squad", 1) }] }],
+          bundleRecordTemplates: {
+            missing_lead_squad: {
+              squadId: "missing_lead_squad",
+              workspace: asqDir,
+              verdict: "BOGUS",
+              assignments: [{ conversationId: "ml-1", report: reportPath("missing_lead_squad", 1) }]
+            }
+          }
+        },
+        squadId: "missing_lead_squad",
+        allowUnaudited: true
+      }),
+      /Invalid verdict 'BOGUS'/,
+      "RUN-004: invalid template.verdict must throw even when lead/report.md is absent"
+    );
+    assert.throws(
+      () => buildBundleRecordInit(asqDir, {
+        plan: {
+          executionMode: "swarm",
+          workspace: asqDir,
+          workers: [{ squadId: "null_spec", specialists: [null] }]
+        },
+        squadId: "null_spec",
+        allowUnaudited: true
+      }),
+      /specialist must be a plain object/,
+      "RUN-004: hydratePlanForBundleInit must reject null specialist entries"
+    );
+
+    // SVC-003: computeEvidenceDigest rejects record.verdict disagreeing with lead/report.md under allowNonPassing: true
+    writeAtAsq(asqDir, baLead, "Content Verdict: FAIL\nFailing synthesis.\n");
+    assert.throws(
+      () => computeEvidenceDigest(asqDir, { ...baRec, verdict: "PASS", allowNonPassing: true }),
+      /Synthesis report verdict 'FAIL' does not match record verdict 'PASS'/,
+      "SVC-003: computeEvidenceDigest must reject record.verdict mismatch under allowNonPassing: true"
+    );
+    writeAtAsq(asqDir, baLead, "Content Verdict: PASS\nVerified batcha.\n");
+
+    // SVC-001: inspectHandoffs + agy-squad finalize reconcile [done]-prefixed Pointer-Over-Wire handoffs
+    writeAtAsq(asqDir, baS2, "# Spec 2\nPartial findings.\n");
+    const doneInspected = inspectHandoffs(asqDir, {
+      workspace: asqDir,
+      assignments: [
+        { conversationId: "ba-w1", report: baS1 },
+        { conversationId: "ba-w2", report: baS2 },
+        { conversationId: "ba-w3", report: baS3 }
+      ],
+      handoffs: [
+        { sender: "ba-w1", message: `@lead [done] READY ${baS1} - obs 1` },
+        { sender: "ba-w2", message: `@lead [done] PARTIAL ${baS2} -- obs 2` },
+        { sender: "ba-w3", message: "@coordinator [done] NO_REPORT — reason 3" }
+      ]
+    });
+    assert.deepEqual(doneInspected.map(r => r.status), ["READY", "PARTIAL", "NO_REPORT"]);
+    const baRecFile = path.join(asqDir, "batcha-finalize-record.json");
+    fs.writeFileSync(baRecFile, JSON.stringify({ ...baRec, replaceExisting: true }, null, 2) + "\n", "utf8");
+    const finDoneRes = spawnSync(process.execPath, [agySquadCli, "finalize", "batcha-finalize-record.json", "--replace"], {
+      cwd: asqDir,
+      encoding: "utf8"
+    });
+    assert.equal(finDoneRes.status, 0, finDoneRes.stderr || finDoneRes.stdout);
+    const finDoneJson = JSON.parse(finDoneRes.stdout);
+    assert.equal(finDoneJson.inspected[0].status, "READY", "SVC-001: finalize must report inspected[].status === 'READY' on '@lead [done] READY'");
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

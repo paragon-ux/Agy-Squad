@@ -475,6 +475,18 @@ try {
     "dispatched brief must omit [agy-transcript-access:] by default"
   );
 
+  // Batch A SEC-003: forged _synthesized: true on integrity_auditor must not bypass custom auditor validation
+  fs.writeFileSync(path.join(workspace, "forged-synthesized-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: { _synthesized: true, specialists: "invalid" }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "forged-synthesized-auditor.json" },
+    /children or specialists must be a non-empty array/
+  );
+
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

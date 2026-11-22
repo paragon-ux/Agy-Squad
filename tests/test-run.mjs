@@ -127,8 +127,8 @@ try {
     assert.equal(driftBad.status, 1, driftBad.stderr);
     const driftBadJson = JSON.parse(driftBad.stdout);
     assert.equal(driftBadJson.status, "ISSUES");
-    const driftFinding = driftBadJson.findings.find(f => f.id === "SKILL-DRIFT-swarm-governance");
-    assert.ok(driftFinding, "Expected SKILL-DRIFT-swarm-governance for active retired Phase 1/2 symbol reference");
+    const driftFinding = driftBadJson.findings.find(f => f.id === "SKILL-DRIFT-swarm-governance-drift-probe");
+    assert.ok(driftFinding, "Expected SKILL-DRIFT-swarm-governance-drift-probe for active retired Phase 1/2 symbol reference");
     assert.match(driftFinding.summary, /terminal\.py/);
     assert.match(driftFinding.summary, /adversarial_l1/);
     assert.match(driftFinding.summary, /mcp\/handoffs\.mjs/);
@@ -143,7 +143,7 @@ try {
     fs.writeFileSync(driftRefFile, "```bash\n# deprecated example\necho ok\n```\n\nRun `subagent_brief` now.\n");
     const fenceDriftRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
     assert.equal(fenceDriftRun.status, 1, "Bash '# deprecated' inside fence must not disable drift scanning");
-    assert.ok(JSON.parse(fenceDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance" && /subagent_brief/.test(f.summary)));
+    assert.ok(JSON.parse(fenceDriftRun.stdout).findings.some(f => f.id === "SKILL-DRIFT-swarm-governance-drift-probe" && /subagent_brief/.test(f.summary)));
   } finally {
     fs.rmSync(driftRefFile, { force: true });
   }
@@ -155,9 +155,112 @@ try {
     fs.writeFileSync(driftDocPath, savedConcepts + "\nCall query_transcript summaryOnly=true now.\n");
     const driftRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
     assert.equal(driftRun.status, 1);
-    assert.ok(JSON.parse(driftRun.stdout).findings.some(f => f.id === "DOC-MCP-DRIFT" && /query_transcript/.test(f.summary)));
+    assert.ok(JSON.parse(driftRun.stdout).findings.some(f => f.id === "DOC-MCP-DRIFT-docs-concepts" && /query_transcript/.test(f.summary)));
   } finally {
     fs.writeFileSync(driftDocPath, savedConcepts);
+  }
+
+  // Batch A SD-SCRIPT-001..005 regressions
+  const batchRefProbe = path.join(isoRepo, ".agents/skills/swarm-governance/references/batch-a-probe.md");
+  const prSkillFile = path.join(isoRepo, ".agents/skills/pr-review/SKILL.md");
+  const prRefFile = path.join(isoRepo, ".agents/skills/pr-review/references/pr-review-standard.md");
+  const docsToolsPath = path.join(isoRepo, "docs/tools.md");
+  const docsSkillPath = path.join(isoRepo, "docs/skills/swarm-governance.md");
+  const planOrphanSvg = path.join(isoRepo, "docs/assets/test-plan-only-orphan.svg");
+  const planOrphanMention = path.join(isoRepo, "docs/plans/test-plan-only-mention.md");
+  const savedPrSkillForBatchA = fs.readFileSync(prSkillFile, "utf8");
+  const savedPrRefForBatchA = fs.readFileSync(prRefFile, "utf8");
+  const savedToolsForBatchA = fs.readFileSync(docsToolsPath, "utf8");
+  const savedDocsSkillForBatchA = fs.readFileSync(docsSkillPath, "utf8");
+  try {
+    // SD-SCRIPT-001: em-dash CLI flag (—prune) inside inline backticks AND inside fenced bash block fails diagnose.mjs
+    for (const [label, body] of [
+      ["inline backticks", "Run `agy-squad verify bundle.json —prune` now.\n"],
+      ["fenced bash block", "```bash\nagy-squad verify bundle.json —prune\n```\n"]
+    ]) {
+      fs.writeFileSync(batchRefProbe, body, "utf8");
+      const emdashRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+      assert.equal(emdashRun.status, 1, `SD-SCRIPT-001: em-dash CLI flag in ${label} must fail diagnose.mjs`);
+      assert.ok(
+        JSON.parse(emdashRun.stdout).findings.some(f => f.id === "SKILL-EMDASH-swarm-governance-batch-a-probe"),
+        `SD-SCRIPT-001: expected SKILL-EMDASH-swarm-governance-batch-a-probe for ${label}`
+      );
+    }
+
+    // SD-SCRIPT-002: retired commands inside fenced bash block fail diagnose.mjs while '# deprecated' bash comment isolation stays green
+    fs.writeFileSync(
+      batchRefProbe,
+      "```bash\nagy-squad run \"audit\"\nnode mcp/handoffs.mjs\n```\n",
+      "utf8"
+    );
+    const fencedRetiredRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(fencedRetiredRun.status, 1, "SD-SCRIPT-002: retired commands in fenced bash block must fail diagnose.mjs");
+    const fencedRetiredFinding = JSON.parse(fencedRetiredRun.stdout).findings.find(
+      f => f.id === "SKILL-DRIFT-swarm-governance-batch-a-probe"
+    );
+    assert.ok(fencedRetiredFinding, "SD-SCRIPT-002: expected SKILL-DRIFT-swarm-governance-batch-a-probe");
+    assert.match(fencedRetiredFinding.summary, /agy-squad run/);
+    assert.match(fencedRetiredFinding.summary, /node mcp\/handoffs\.mjs/);
+
+    fs.writeFileSync(batchRefProbe, "```bash\n# deprecated bash comment\necho ok\n```\n\nActive guidance stays clean.\n", "utf8");
+    const commentIsoRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(commentIsoRun.status, 0, `SD-SCRIPT-002: bash '# deprecated' comment without retired symbols must remain green: ${commentIsoRun.stdout}`);
+    assert.equal(JSON.parse(commentIsoRun.stdout).status, "HEALTHY");
+    fs.rmSync(batchRefProbe, { force: true });
+
+    // SD-SCRIPT-003: multi-file failures across SKILL.md + references/*.md and two docs/*.md files emit distinct unique finding IDs including SKILL-REFLINKS-*
+    fs.writeFileSync(prSkillFile, `${savedPrSkillForBatchA}\nSee [missing-skill](./references/missing-skill-link.md).\nCall \`subagent_brief\`.\n`);
+    fs.writeFileSync(prRefFile, `${savedPrRefForBatchA}\nSee [missing-ref](./missing-ref-link.md).\nCall \`subagent_brief\`.\n`);
+    fs.writeFileSync(driftDocPath, `${savedConcepts}\nCall query_transcript now.\n`);
+    fs.writeFileSync(docsToolsPath, `${savedToolsForBatchA}\nCall read_transcript now.\n`);
+    const multiFailRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(multiFailRun.status, 1, "SD-SCRIPT-003: multi-file failures must fail diagnose.mjs");
+    const multiFindings = JSON.parse(multiFailRun.stdout).findings;
+    const multiIds = multiFindings.map(f => f.id);
+    assert.equal(
+      new Set(multiIds).size,
+      multiIds.length,
+      `SD-SCRIPT-003: finding IDs must be unique across multi-file failures, got: ${JSON.stringify(multiIds)}`
+    );
+    for (const expectedId of [
+      "SKILL-LINKS-pr-review",
+      "SKILL-REFLINKS-pr-review-pr-review-standard",
+      "SKILL-DRIFT-pr-review",
+      "SKILL-DRIFT-pr-review-pr-review-standard",
+      "DOC-MCP-DRIFT-docs-concepts",
+      "DOC-MCP-DRIFT-docs-tools"
+    ]) {
+      assert.ok(multiIds.includes(expectedId), `SD-SCRIPT-003: expected finding ID '${expectedId}' in ${JSON.stringify(multiIds)}`);
+    }
+    fs.writeFileSync(prSkillFile, savedPrSkillForBatchA);
+    fs.writeFileSync(prRefFile, savedPrRefForBatchA);
+    fs.writeFileSync(driftDocPath, savedConcepts);
+    fs.writeFileSync(docsToolsPath, savedToolsForBatchA);
+
+    // SD-SCRIPT-005: retired symbol in docs/skills/*.md triggers DOC-MCP-DRIFT-*, and orphan SVG cited only in docs/plans/ still triggers DOC-SVG-ORPHAN
+    fs.writeFileSync(docsSkillPath, `${savedDocsSkillForBatchA}\nRun \`agy-squad run\` directly.\n`);
+    writeIso("docs/assets/test-plan-only-orphan.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
+    writeIso("docs/plans/test-plan-only-mention.md", "Plan referencing test-plan-only-orphan.svg must not clear DOC-SVG-ORPHAN.\n");
+    const sd005Run = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(sd005Run.status, 1, "SD-SCRIPT-005: retired symbol in docs/skills/*.md and plan-only SVG must fail diagnose.mjs");
+    const sd005Ids = JSON.parse(sd005Run.stdout).findings.map(f => f.id);
+    assert.ok(
+      sd005Ids.includes("DOC-MCP-DRIFT-docs-skills-swarm-governance"),
+      `SD-SCRIPT-005: expected DOC-MCP-DRIFT-docs-skills-swarm-governance in ${JSON.stringify(sd005Ids)}`
+    );
+    assert.ok(
+      sd005Ids.includes("DOC-SVG-ORPHAN-test-plan-only-orphan"),
+      `SD-SCRIPT-005: expected DOC-SVG-ORPHAN-test-plan-only-orphan in ${JSON.stringify(sd005Ids)}`
+    );
+  } finally {
+    fs.rmSync(batchRefProbe, { force: true });
+    fs.writeFileSync(prSkillFile, savedPrSkillForBatchA);
+    fs.writeFileSync(prRefFile, savedPrRefForBatchA);
+    fs.writeFileSync(driftDocPath, savedConcepts);
+    fs.writeFileSync(docsToolsPath, savedToolsForBatchA);
+    fs.writeFileSync(docsSkillPath, savedDocsSkillForBatchA);
+    fs.rmSync(planOrphanSvg, { force: true });
+    fs.rmSync(planOrphanMention, { force: true });
   }
 
   // Orphan SVG detection ignores docs/reviews/ mentions; frontmatter edge cases trigger SKILL-FM

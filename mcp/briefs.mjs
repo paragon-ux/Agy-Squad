@@ -26,7 +26,7 @@ const superviseCohort = [
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
-  "Park via swarm_wait; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot.",
+  "Park via swarm_wait; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
   `Squad Lead Patrol & Alignment Gate: verify swarm status, batch-read traces (${TRANSCRIPT_FORENSICS}), and artifacts via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
@@ -175,10 +175,10 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? Array.isArray(boardSeqs) && boardSeqs.length > 0
       ? `Board scope: read_board{seqs: [${boardSeqs.join(", ")}]} only.`
       : boardSince !== undefined
-        ? `Board scope: read_board{since: ${boardSince}} only.`
+        ? `Board scope: read_board{since: ${boardSince}} initially, then since: <last_read_seq>.`
         : isIntegrityAuditor
           ? "Board scope: read_board{seqs: [<workerSeqs...>, <auditBriefSeq>]} only."
-          : "Board scope: read_board{since: <cohortBaseSeq>} only."
+          : "Board scope: read_board{since: <cohortBaseSeq>} initially, then since: <last_read_seq>."
     : null;
 
   const handoffInstructionLine = isSwarm
@@ -205,6 +205,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
 export {
   AGENT_ALIAS_PAIRS,
+  CONTROL_CHAR_RE,
   DISALLOWED_BUILTINS,
   SUBAGENT_MODEL_ALIASES,
   buildSubagentSpec,

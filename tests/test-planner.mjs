@@ -83,7 +83,10 @@ try {
   }, root);
   assert.equal(overlapTask.executionMode, "swarm");
   assert.equal(overlapTask.topology.compiledPattern, "flat");
-  assert.match(overlapTask.topology.defaultBias, /ask user/i);
+  assert.equal(
+    overlapTask.topology.defaultBias,
+    "flat for inline task; manifest-defined otherwise (Step 0 asks for any unspecified swarm setting)"
+  );
   assert.equal(overlapTask.topology.scopeOverlaps.length, 1);
   assert.match(overlapTask.warnings[0], /scopeFiles overlap/);
   assert.equal(overlapTask.modelProvenance.pinningSupported, true);
@@ -616,9 +619,15 @@ try {
   const escapeOutsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-escape-")));
   try {
     fs.symlinkSync(escapeOutsideDir, path.join(root, "sym-escape"), os.platform() === "win32" ? "junction" : "dir");
+    const expectedExternal = `external:${path.join(escapeOutsideDir, "uncreated/item.js").split(path.sep).join("/")}`;
+    const escapeWarnings = [];
     assert.equal(
-      normalizeScopePath("sym-escape/uncreated/item.js", root, { caseInsensitive: false }),
-      "sym-escape/uncreated/item.js"
+      normalizeScopePath("sym-escape/uncreated/item.js", root, { caseInsensitive: false, warnings: escapeWarnings }),
+      expectedExternal
+    );
+    assert.ok(
+      escapeWarnings.some(w => /resolves outside workspace root/.test(w)),
+      "SEC-004: external symlink normalization must emit workspace-escape warning"
     );
   } finally {
     fs.rmSync(escapeOutsideDir, { recursive: true, force: true });
@@ -952,7 +961,7 @@ try {
     // W2-RUN-002: boardSince: 0 must not emit self-contradictory '(no unfiltered/since:0/limit:50)' or lead ', since: 0,'
     const zeroBoardPlan = planSquadCohort({ task: "Check zero cursor", boardSince: 0 }, root);
     const zeroBrief = zeroBoardPlan.workers[0].specialists[0].swarmAdd.brief;
-    assert.match(zeroBrief, /Board scope: read_board\{since:\s*0\} only/);
+    assert.match(zeroBrief, /Board scope: read_board\{since:\s*0\} initially, then since: <last_read_seq>\./);
     assert.doesNotMatch(zeroBrief, /no unfiltered\/since:0/, "W2-RUN-002: boardSince=0 must omit since:0 from negative clause");
     const zeroLayeredLeadPlan = planSquadCohort({
       manifest: {
@@ -967,7 +976,7 @@ try {
       boardSince: 0
     }, root);
     const zeroLeadBrief = zeroLayeredLeadPlan.workers[0].lead.swarmAdd.brief;
-    assert.match(zeroLeadBrief, /Board scope: read_board\{since:\s*0\} only/);
+    assert.match(zeroLeadBrief, /Board scope: read_board\{since:\s*0\} initially, then since: <last_read_seq>\./);
     assert.match(zeroLeadBrief, /\(never unfiltered read_board\(\) or limit: 50\)/, "W2-RUN-002: layered lead brief with boardSince=0 must phrase negative clause cleanly");
     assert.doesNotMatch(zeroLeadBrief, /since:\s*0,\s*or limit:\s*50/, "W2-RUN-002: layered lead brief with boardSince=0 must not forbid since: 0");
 
@@ -1203,7 +1212,7 @@ try {
     assert.doesNotMatch(layeredLeadBrief, /swarm add/);
     assert.doesNotMatch(layeredLeadBrief, /kill finished workers/);
     assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
-    assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} only/);
+    assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} initially, then since: <last_read_seq>\./);
     assert.match(layeredLeadBrief, /follow Board scope above/);
     assert.ok(
       Buffer.byteLength(superviseSwarmLayeredLead, "utf8") <= 600,
@@ -1383,6 +1392,126 @@ try {
       "Reserved coordinator-* swarm worker name must be prefixed"
     );
     assert.equal(exact24Plan.includeIntegrityAuditor, false);
+
+    // Batch A regressions: SEC-003, SEC-004, RUN-003, RUN-005, SVC-002
+    // SEC-003: forged _synthesized: true on integrity_auditor must throw in squad_planner
+    assert.throws(
+      () => planSquadCohort({
+        workspace: root,
+        manifest: {
+          squads: {
+            alpha: { specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["mcp/planner.mjs"] }] },
+            integrity_auditor: { _synthesized: true, specialists: "invalid" }
+          }
+        }
+      }),
+      /children or specialists must be a non-empty array/,
+      "SEC-003: forged _synthesized integrity_auditor must be rejected by squad_planner"
+    );
+
+    // SEC-004: two workspace symlinks pointing to the same external directory trigger overlap detection AND workspace-escape warning
+    const sharedExtDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ext-overlap-")));
+    const extLinkA = path.join(root, "sym-ext-a");
+    const extLinkB = path.join(root, "sym-ext-b");
+    try {
+      fs.writeFileSync(path.join(sharedExtDir, "shared.js"), "// shared external file\n", "utf8");
+      const linkType = os.platform() === "win32" ? "junction" : "dir";
+      fs.symlinkSync(sharedExtDir, extLinkA, linkType);
+      fs.symlinkSync(sharedExtDir, extLinkB, linkType);
+      const extOverlapPlan = planSquadCohort({
+        workspace: root,
+        manifest: {
+          squads: {
+            alpha: {
+              specialists: [
+                { role: "Ext A", objective: "Edit A", scopeFiles: ["sym-ext-a/shared.js"] },
+                { role: "Ext B", objective: "Edit B", scopeFiles: ["sym-ext-b/shared.js"] }
+              ]
+            }
+          }
+        },
+        includeIntegrityAuditor: false
+      });
+      assert.equal(extOverlapPlan.topology.scopeOverlaps.length, 1, "SEC-004: two symlinks to same external dir must trigger overlap detection");
+      assert.ok(
+        extOverlapPlan.warnings.some(w => /resolves outside workspace root/.test(w)),
+        `SEC-004: external symlink scope must emit workspace-escape warning, got: ${JSON.stringify(extOverlapPlan.warnings)}`
+      );
+    } finally {
+      fs.rmSync(extLinkA, { force: true });
+      fs.rmSync(extLinkB, { force: true });
+      fs.rmSync(sharedExtDir, { recursive: true, force: true });
+    }
+
+    // RUN-003: control chars and empty strings in top-level model and per-worker spec.model throw in both swarm and subagent modes
+    for (const mode of ["swarm", "subagent"]) {
+      for (const badModel of ["bad\nINJECTED", ""]) {
+        assert.throws(
+          () => planSquadCohort({
+            workspace: root,
+            task: "Bad top-level model check",
+            executionMode: mode,
+            model: badModel,
+            includeIntegrityAuditor: false
+          }),
+          /model must be a non-empty string without control characters/,
+          `RUN-003: top-level model=${JSON.stringify(badModel)} must throw in ${mode} mode`
+        );
+        assert.throws(
+          () => planSquadCohort({
+            workspace: root,
+            executionMode: mode,
+            manifest: {
+              squads: {
+                alpha: {
+                  specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["mcp/planner.mjs"], model: badModel }]
+                }
+              }
+            },
+            includeIntegrityAuditor: false
+          }),
+          /Agent model must be a non-empty string without control characters/,
+          `RUN-003: per-worker spec.model=${JSON.stringify(badModel)} must throw in ${mode} mode`
+        );
+      }
+    }
+
+    // RUN-005: non-string instructions on custom integrity_auditor specialist throws in squad_planner
+    assert.throws(
+      () => planSquadCohort({
+        workspace: root,
+        manifest: {
+          squads: {
+            alpha: { specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["mcp/planner.mjs"] }] },
+            integrity_auditor: {
+              specialists: [{ role: "Bad Auditor", objective: "Audit", scopeFiles: ["."], instructions: { bad: 1 } }]
+            }
+          }
+        }
+      }),
+      /invalid brief or payload fields/,
+      "RUN-005: non-string instructions on custom integrity_auditor specialist must throw"
+    );
+
+    // SVC-002: explicit model: "inherit" with per-worker manifest model in swarm mode emits accurate caveat
+    const inheritWithWorkerModel = planSquadCohort({
+      workspace: root,
+      executionMode: "swarm",
+      model: "inherit",
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["mcp/planner.mjs"], model: "gemini-3.8-flash-high" }]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    });
+    assert.match(
+      inheritWithWorkerModel.modelProvenance.caveat,
+      /^Top-level 'inherit' passed, but worker\/lead specs pin explicit models/,
+      `SVC-002: expected explicit inherit caveat, got: ${inheritWithWorkerModel.modelProvenance.caveat}`
+    );
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

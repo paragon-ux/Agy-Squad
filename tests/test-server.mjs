@@ -639,6 +639,76 @@ console.log("Agy-Squad MCP server tests\n");
     ]);
     assert.equal(Boolean(multiNormRes[1].result.isError), false, `MCP-004: multi-root sub/../target.json must match secondary root: ${multiNormRes[1].result.content[0].text}`);
     assert.equal(JSON.parse(multiNormRes[1].result.content[0].text).workspace, secondaryWs);
+
+    // Batch A MCP-001: multi-root initialize resolves absolute manifestPath inside secondary root for both dispatch_squad and squad_planner, and rejects ambiguous nested roots
+    const absTargetManifest = path.join(secondaryWs, "target.json");
+    const absMultiRes = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(dupSlashRoot).href, name: "r1" },
+            { uri: pathToFileURL(secondaryWs).href, name: "r2" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: absTargetManifest } }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "dispatch_squad", arguments: { squadId: "beta", manifestPath: absTargetManifest } }
+      }
+    ]);
+    assert.equal(Boolean(absMultiRes[1].result.isError), false, `MCP-001: squad_planner must resolve absolute manifestPath in r2: ${absMultiRes[1].result.content[0].text}`);
+    assert.equal(JSON.parse(absMultiRes[1].result.content[0].text).workspace, secondaryWs);
+    assert.equal(Boolean(absMultiRes[2].result.isError), false, `MCP-001: dispatch_squad must resolve absolute manifestPath in r2: ${absMultiRes[2].result.content[0].text}`);
+    assert.equal(JSON.parse(absMultiRes[2].result.content[0].text).Subagents[0].Role, "Beta");
+
+    const nestedChildWs = path.join(secondaryWs, "nested-child");
+    fs.mkdirSync(nestedChildWs, { recursive: true });
+    const nestedAbsManifest = path.join(nestedChildWs, "nested.json");
+    fs.writeFileSync(nestedAbsManifest, JSON.stringify({
+      squads: { nested: { specialists: [{ role: "Nested Spec", objective: "Check", scopeFiles: ["."] }] } }
+    }));
+    const nestedAmbigRes = runTmpSession([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [
+            { uri: pathToFileURL(secondaryWs).href, name: "parent" },
+            { uri: pathToFileURL(nestedChildWs).href, name: "child" }
+          ]
+        }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: nestedAbsManifest } }
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "dispatch_squad", arguments: { squadId: "nested", manifestPath: nestedAbsManifest } }
+      }
+    ]);
+    assert.equal(nestedAmbigRes[1].result.isError, true, "MCP-001: squad_planner must reject ambiguous nested roots");
+    assert.match(nestedAmbigRes[1].result.content[0].text, /Ambiguous multi-root workspace/);
+    assert.equal(nestedAmbigRes[2].result.isError, true, "MCP-001: dispatch_squad must reject ambiguous nested roots");
+    assert.match(nestedAmbigRes[2].result.content[0].text, /Ambiguous multi-root workspace/);
   } finally {
     fs.rmSync(dupSlashRoot, { recursive: true, force: true });
     fs.rmSync(secondaryWs, { recursive: true, force: true });

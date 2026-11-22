@@ -57,7 +57,7 @@ Keep all 3 triage buckets even when empty; escalate P0 emergencies explicitly. S
 ## 5. Required finding record
 
 - **`1 ID = 1 Row / Record`:** Assign one stable ID per independently remediable defect (e.g., `MCP-001`) and preserve IDs across revisions. Umbrella IDs, range IDs (`TEST-2..4`), combined rows (`A & B`), and silent omissions are prohibited because pruned loose reports leave this report as the sole record. Merge only exact duplicates (noting aliases in parentheses).
-- **Readability & backticks:** Keep prose and tables clean. Use inline backticks only for code identifiers, paths (`path#L10-L20`), flags, commands, and literal machine-parsed verdicts (`Content Verdict: PASS`); never wrap plain numbers, English statuses, or multi-sentence quotes.
+- **Readability & backticks:** Keep prose and tables clean. Use inline backticks only for code identifiers, paths (`path#L10-L20`), flags, commands, and verdicts quoted inside prose; never wrap plain numbers, English statuses, or multi-sentence quotes. Standalone machine-parsed `Content Verdict:`, `Integrity Verdict:`, `Target Squad:`, and `Evidence Digest:` declaration lines must NEVER wrap the declaration (or verdict token) in backticks (use plain text or balanced `**...**` emphasis only).
 - **Six canonical statuses:** Open (Pre-Remediation), Closed, Residual (Open), Closed (Post-Remediation), Deferred / Won't Fix, Closed (By Design) (+ Informational in Section 8). Route the last 4 + Informational **exclusively to Section 8** (never Sections 4-7, Section 9, or buried inside a Closed row).
 
 **Tiered density:**

@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: "release-${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/v') && 'publish' || github.ref }}"
   cancel-in-progress: false
 
 jobs:
@@ -48,6 +48,7 @@ jobs:
   publish:
     name: Publish and create release
     needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -80,16 +81,18 @@ jobs:
       - name: Create or update GitHub Release and attach npm tarball
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.pack.outputs.release_tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
-          tag="${{ steps.pack.outputs.release_tag }}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${{ steps.pack.outputs.tarball }}" --clobber
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${TARBALL}"
           else
-            gh release create "${tag}" "${{ steps.pack.outputs.tarball }}" --verify-tag --generate-notes
+            gh release create "${RELEASE_TAG}" "${TARBALL}" --verify-tag --generate-notes
           fi
       - name: Publish to npm (OIDC Trusted Publishing or NPM_TOKEN)
         env:
           NPM_TOKEN_SECRET: ${{ secrets.NPM_TOKEN }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
           pkg_name="$(node -p "require('./package.json').name")"
           pkg_version="$(node -p "require('./package.json').version")"
@@ -100,4 +103,4 @@ jobs:
           if [ -n "${NPM_TOKEN_SECRET}" ]; then
             export NODE_AUTH_TOKEN="${NPM_TOKEN_SECRET}"
           fi
-          npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance
+          npm publish "${TARBALL}" --access public --provenance

@@ -5,7 +5,7 @@ import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, par
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
-const SWARM_MENTION_RESERVE_BYTES = 26; // "@<24-char-name> " prefix headroom on /swarm
+const SWARM_MENTION_RESERVE_BYTES = 33; // "@<24-char-name> [done] " prefix headroom on /swarm
 const MIN_OBSERVATION_BYTES = 16; // minimum observation reserve alongside PARTIAL prefix + @24-char mention
 
 function isValidRelativePrefix(prefix) {
@@ -66,7 +66,12 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
 
 const REPORT_TAIL_RE = /^squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/;
 const RECEIPT_SEPARATORS = [" — ", " -- ", " - "];
+const RECEIPT_PREFIX_RE = /^(?:@[A-Za-z0-9._:-]+\s+)*(?:\[done\]\s+)?(?=(?:READY|PARTIAL|NO_REPORT)\b)/;
 const PREDECESSOR_LOCK_STALE_MS = 30_000;
+
+function stripReceiptPrefix(message) {
+  return message.replace(RECEIPT_PREFIX_RE, "");
+}
 
 function hasAgySquadSegment(prefix) {
   const parts = prefix.split("/");
@@ -155,8 +160,8 @@ function reconcileHandoffs(assignments, handoffs, customReportRoot) {
     if (typeof message !== "string" || Buffer.byteLength(message) > messageLimit || CONTROL_CHAR_RE.test(message)) {
       throw new Error("Handoff must be one line within 500 UTF-8 bytes without control characters.");
     }
-    // Allow one or more leading /swarm @mention prefixes before Pointer-Over-Wire verbs.
-    const parsedMessage = message.replace(/^(?:@[A-Za-z0-9._:-]+\s+)+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
+    // Allow leading /swarm @mention prefixes and optional [done] marker before Pointer-Over-Wire verbs.
+    const parsedMessage = stripReceiptPrefix(message);
     // REVIEW: Compare to the exact assigned path. It may contain spaces, "-", "--", or " — ".
     const parsedReceipt = parsePointerReceipt(parsedMessage, report);
     if (!parsedReceipt) {
@@ -726,7 +731,8 @@ function computeEvidenceDigest(root, record) {
   if (typeof allowNonPassing !== "boolean") throw new Error("allowNonPassing must be a boolean.");
   validateSquadId(squadId);
   const { synthesis, reports, evidenceDigest } = prepareCohortSnapshot(canonicalRoot, record, {
-    action: "Computing evidence digest"
+    action: "Computing evidence digest",
+    expectedVerdict: record.verdict
   });
   return {
     squadId,
@@ -888,6 +894,9 @@ function bundleReports(root, record) {
       }
     }
     const candidates = [...candidateSet];
+    if (candidates.some(slot => Object.hasOwn(verifiedFiles ?? {}, slot))) {
+      throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
+    }
     if (requireIntegrityAudit && candidates.length === 0) {
       throw new Error("Acceptance blocked: Mandatory integrity audit report missing. Run integrity_auditor (or audit-<squad> in /swarm) before bundling.");
     }
@@ -984,12 +993,29 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   ) {
     throw new Error("Bundle must contain the recorded squad's exact specialist slots.");
   }
-  const synthesisCheck = readSynthesis(root, reportPath(squadId, undefined, rootPrefix), verifiedDirs, { allowNonPassing });
+  const synthesisSlot = reportPath(squadId, undefined, rootPrefix);
+  const synthesisCheck = readSynthesis(root, synthesisSlot, verifiedDirs, { allowNonPassing });
   if (synthesisCheck.verdict !== verdict || sha256(synthesisCheck.bytes) !== synthesis) {
     throw new Error("Synthesis changed after bundling.");
   }
   if (parsed.retainReports !== undefined && typeof parsed.retainReports !== "boolean") {
     throw new Error("Invalid retainReports boolean in bundle.");
+  }
+  const auditPaths = [
+    ...(parsed.integrityAudit && typeof parsed.integrityAudit.path === "string" ? [parsed.integrityAudit.path] : []),
+    ...(Array.isArray(parsed.integrityAudits)
+      ? parsed.integrityAudits
+          .filter(audit => audit && typeof audit === "object" && typeof audit.path === "string")
+          .map(audit => audit.path)
+      : [])
+  ];
+  if (
+    verifiedFiles &&
+    typeof verifiedFiles === "object" &&
+    !Array.isArray(verifiedFiles) &&
+    [...reports.map(r => r.path), synthesisSlot, relative, ...auditPaths].some(p => Object.hasOwn(verifiedFiles, p))
+  ) {
+    throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
   verifyFiles(root, verifiedFiles, verifiedDirs);
 
@@ -1016,9 +1042,12 @@ function verifyBundleInternal(root, relative, acceptedHash) {
     if (report.status === "PARTIAL" && !allowPartial) {
       throw new Error(`PARTIAL report requires allowPartial bundle opt-in: ${report?.path}`);
     }
+    if (!report.markdown.trim()) {
+      throw new Error(`Empty evidence report: ${report.path}`);
+    }
     const bytes = Buffer.from(report.markdown, "utf8");
     const loose = readIfPresentWithStat(root, report.path, verifiedDirs);
-    if (!bytes.length || sha256(bytes) !== report.sha256 || (loose && !loose.bytes.equals(bytes))) {
+    if (sha256(bytes) !== report.sha256 || (loose && !loose.bytes.equals(bytes))) {
       throw new Error(`Archived or loose report changed: ${report.path}`);
     }
     if (loose) {
@@ -1494,12 +1523,16 @@ function hydratePlanForBundleInit(plan, fallbackRoot) {
     if (!w || typeof w !== "object" || typeof w.squadId !== "string") continue;
     const id = w.squadId;
     const specialists = Array.isArray(w.specialists) ? w.specialists : [];
-    const assignments = specialists.map(s => ({
-      conversationId:
-        plan.executionMode === "swarm" ? s.workerName : `<invoke_subagent:${s.workerName}:conversationId>`,
-      report: s.reportSlot
-    }));
+    const assignments = [];
     for (const s of specialists) {
+      if (!isPlainObject(s)) {
+        throw new Error(`Plan workers['${id}'] specialist must be a plain object.`);
+      }
+      assignments.push({
+        conversationId:
+          plan.executionMode === "swarm" ? s.workerName : `<invoke_subagent:${s.workerName}:conversationId>`,
+        report: s.reportSlot
+      });
       entries.push({ squadId: id, slotType: "specialist", workerName: s.workerName, reportSlot: s.reportSlot });
     }
     if (w.lead && typeof w.lead === "object") {
@@ -1546,6 +1579,15 @@ function buildBundleRecordInit(root, options = {}) {
     allowPartial = false
   } = options;
 
+  if (typeof allowUnaudited !== "boolean") {
+    throw new Error("allowUnaudited must be a boolean.");
+  }
+  if (typeof allowNonPassing !== "boolean") {
+    throw new Error("allowNonPassing must be a boolean.");
+  }
+  if (typeof allowPartial !== "boolean") {
+    throw new Error("allowPartial must be a boolean.");
+  }
   if (!isPlainObject(rawPlan)) {
     throw new Error("Provide a valid squad_planner JSON object.");
   }
@@ -1650,11 +1692,8 @@ function buildBundleRecordInit(root, options = {}) {
   }
 
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
-  let resolvedVerdict = template.verdict || "PASS";
+  let resolvedVerdict = template.verdict === undefined ? "PASS" : template.verdict;
   if (verdict !== undefined) {
-    if (!validVerdicts.has(verdict)) {
-      throw new Error(`Invalid verdict '${verdict}': expected PASS, FAIL, or BLOCKED.`);
-    }
     resolvedVerdict = verdict;
   } else {
     const leadSlot = reportPath(selectedSquadId, undefined, resolvedReportRoot);
@@ -1671,6 +1710,9 @@ function buildBundleRecordInit(root, options = {}) {
         }
       }
     }
+  }
+  if (!validVerdicts.has(resolvedVerdict)) {
+    throw new Error(`Invalid verdict '${resolvedVerdict}': expected PASS, FAIL, or BLOCKED.`);
   }
 
   const requireAudit = allowUnaudited ? false : (template.requireIntegrityAudit ?? true);
@@ -1733,6 +1775,7 @@ export {
   readRegularFileSafe,
   reportPath,
   resolveCanonicalRoot,
+  stripReceiptPrefix,
   trimTrailingSlashes,
   verifyAndPruneBundle,
   verifyBundle

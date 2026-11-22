@@ -19,5 +19,5 @@ Reference for `8+` workers, concurrent editors, or multi-squad waves under [`SKI
 ## Scaling Limits & Quota Recovery
 
 - **Zero chatter (`O(N^2)`):** One final `<= 500` B receipt (`-`, `--`, or `—`); scope `read_board{since|seqs}`; no board acks; fresh chat between major waves.
-- **Name & prefix caps:** Keep `squadId`, role prefixes, and `--report-root` short (`24`-char slug cap; pass `occupiedWorkerNames` on follow-ups; `<= 458` B prefix budget). Bundle each squad independently.
+- **Name & prefix caps:** Keep `squadId`, role prefixes, and `--report-root` short (`24`-char slug cap; pass `occupiedWorkerNames` on follow-ups; `<= 451` B prefix budget). Bundle each squad independently.
 - **Quota recovery:** Never `kill` + `add` (wipes context/worktree). Run `swarm{action: "models"}`, wait for `state: "waiting"`, and switch in place via `swarm{action: "model", name: "<worker>", model: "<fallback-id>"}`.

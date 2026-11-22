@@ -10,9 +10,9 @@ Run from the `Agy-Squad` repo root:
 # 1. Read-only zero-subagent check (skills, links, hygiene, brief/MCP byte budgets):
 node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json]
 
-# 2. Primary /swarm cohort plan (all 3 squads; defaults to flat + inherit):
+# 2. Primary /swarm cohort plan (all 3 squads; manifests defining lead blocks compile layered unless --topology flat is explicitly passed):
 agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
-  [--topology flat|layered] [--workspace-isolation inherit|share|branch]
+  [--topology layered|flat] [--workspace-isolation inherit|share|branch]
 
 # 3. Fallback invoke_subagent dispatch:
 agy-squad dispatch --squad all_l1 --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json
@@ -33,7 +33,7 @@ Each squad owns `scratch/agy-squad/squad-<id>/`, flat auditor `audit-<id>` (`scr
 agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolated
 agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
 agy-squad bundle-init --plan <plan.json> --squad <id> \
-  [--handoff <worker=READY ...> | --handoffs <file.json>] [--id-map <worker=id>] \
+  (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) [--id-map <worker=id>] \
   <verified-file...> --digest --out scratch/bundle-record-<id>.json
 agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
 agy-squad finalize scratch/bundle-record-<id>.json [--replace] [--prune [--keep-reports]]

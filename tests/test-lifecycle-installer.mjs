@@ -1361,9 +1361,21 @@ try {
       );
       assert.equal(installerMod.detectExistingInstallation().isComplete, true);
 
-      // A1: detectExistingInstallation() reports skillsReady: true with only the 4 shipped skills (without self-diagnosis)
-      fs.rmSync(path.join(pluginDest, "skills", "self-diagnosis"), { recursive: true, force: true });
-      fs.rmSync(path.join(pluginDest, ".agents", "skills", "self-diagnosis"), { recursive: true, force: true });
+      // DEP-001 & A1: copy-fallback install excludes maintainer-only paths directly (no manual rmSync mask) and ships exactly the 4 portable skills
+      for (const excludedRel of [
+        ".agents/skills/self-diagnosis",
+        "skills/self-diagnosis",
+        "scripts/release-preflight.mjs",
+        "docs/plans",
+        "docs/reviews",
+        ".github"
+      ]) {
+        assert.equal(
+          fs.existsSync(path.join(pluginDest, excludedRel)),
+          false,
+          `DEP-001: forceCopyFallback install must not copy maintainer-only path '${excludedRel}'`
+        );
+      }
       assert.deepEqual(
         fs.readdirSync(path.join(pluginDest, "skills")).sort(),
         ["day-one-review", "full-review", "pr-review", "swarm-governance"]
@@ -1386,14 +1398,104 @@ try {
         assert.throws(() => installerMod.formatPosixShim("/tmp/valid-root", badPath), /Invalid POSIX CLI shim execPath/);
       }
 
-      // ASQ-SCRIPT-006: runUninstall prints Desktop IDE reload/restart reminder
+      // Batch A SCRIPT-001: runUninstall({ restoreBackups: true }) validates backups & target sections BEFORE deleting pluginDest/shims or mutating configs/backups
+      await installerMod.runInstall({ silent: true, forceCopyFallback: true });
+      const binDir = path.join(asqProfile, ".gemini", "antigravity", "bin");
+      const snapshotFiles = () => {
+        const shimNames = fs.readdirSync(binDir).sort();
+        const shims = Object.fromEntries(shimNames.map((n) => [n, fs.readFileSync(path.join(binDir, n), "utf8")]));
+        return {
+          pluginExists: fs.existsSync(pluginDest),
+          pluginJson: fs.readFileSync(path.join(pluginDest, "plugin.json"), "utf8"),
+          shims,
+          cfg: fs.readFileSync(cfgJsonPath, "utf8"),
+          cfgBak: fs.readFileSync(cfgBakPath, "utf8"),
+          mcp: fs.readFileSync(mcpJsonPath, "utf8"),
+          mcpBak: fs.readFileSync(mcpBakPath, "utf8")
+        };
+      };
+      const validCfgBefore = fs.readFileSync(cfgJsonPath, "utf8");
+      const validCfgBak = JSON.stringify({ plugins: {} }, null, 2) + "\n";
+      const validMcpBefore = JSON.stringify({ mcpServers: { "agy-squad": { command: "cur" }, foreign: { command: "f" } } }, null, 2) + "\n";
+      const validMcpBak = JSON.stringify({ mcpServers: { "agy-squad": { command: "bak" } } }, null, 2) + "\n";
+      const script001Cases = [
+        [
+          "corrupt config.json.agy-squad.bak",
+          { cfg: validCfgBefore, cfgBak: "{ corrupt config backup", mcp: validMcpBefore, mcpBak: validMcpBak },
+          /invalid JSON|JSON/i
+        ],
+        [
+          "corrupt mcp_config.json.agy-squad.bak",
+          { cfg: validCfgBefore, cfgBak: validCfgBak, mcp: validMcpBefore, mcpBak: "{ corrupt mcp backup" },
+          /invalid JSON|JSON/i
+        ],
+        [
+          "non-object plugins section in config.json",
+          { cfg: JSON.stringify({ plugins: [] }), cfgBak: validCfgBak, mcp: validMcpBefore, mcpBak: validMcpBak },
+          /field 'plugins' must be a JSON object/
+        ],
+        [
+          "non-object mcpServers section in mcp_config.json",
+          { cfg: validCfgBefore, cfgBak: validCfgBak, mcp: JSON.stringify({ mcpServers: "invalid" }), mcpBak: validMcpBak },
+          /field 'mcpServers' must be a JSON object/
+        ]
+      ];
+      for (const [label, files, errPattern] of script001Cases) {
+        fs.writeFileSync(cfgJsonPath, files.cfg);
+        fs.writeFileSync(cfgBakPath, files.cfgBak);
+        fs.writeFileSync(mcpJsonPath, files.mcp);
+        fs.writeFileSync(mcpBakPath, files.mcpBak);
+        const before = snapshotFiles();
+        assert.ok(Object.keys(before.shims).length > 0, "Expected installed CLI shims before failed uninstall");
+        await assert.rejects(
+          () => installerMod.runUninstall({ restoreBackups: true, silent: true }),
+          errPattern,
+          `SCRIPT-001: runUninstall({ restoreBackups: true }) must fail closed on ${label}`
+        );
+        const after = snapshotFiles();
+        assert.deepEqual(after, before, `SCRIPT-001: ${label} must leave pluginDest, shims, configs, and backups byte-identical`);
+      }
+      fs.writeFileSync(cfgJsonPath, validCfgBefore);
+      fs.rmSync(cfgBakPath, { force: true });
+      fs.rmSync(mcpBakPath, { force: true });
+
+      // Batch A SCRIPT-002 & ASQ-SCRIPT-006: compact foreign-only mcp_config.json (no trailing newline) stays byte-identical on uninstall, stdout omits false removal claim, and prints IDE reload reminder
+      const compactForeignMcp = '{"mcpServers":{"foreign-srv":{"command":"f","args":[]}}}';
+      fs.writeFileSync(mcpJsonPath, compactForeignMcp);
       const uninstallCliRes = spawnSync(process.execPath, [cli, "uninstall"], {
         cwd: repoRoot,
         env: asqEnv,
         encoding: "utf8"
       });
       assert.equal(uninstallCliRes.status, 0, uninstallCliRes.stderr || uninstallCliRes.stdout);
+      assert.equal(
+        fs.readFileSync(mcpJsonPath, "utf8"),
+        compactForeignMcp,
+        "SCRIPT-002: foreign-only compact mcp_config.json must stay byte-identical after uninstall"
+      );
+      assert.doesNotMatch(
+        uninstallCliRes.stdout,
+        /Removed 'agy-squad' from:.*mcp_config\.json/,
+        "SCRIPT-002: uninstall stdout must omit mcp_config.json removal notice when agy-squad was absent"
+      );
       assert.match(uninstallCliRes.stdout, /reload or restart Antigravity Desktop IDE/i);
+
+      // Batch A SEC-008: release-tag.yml publish job is tag-gated and never uses --clobber on gh release upload
+      const releaseWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "release-tag.yml"), "utf8");
+      const publishIdx = releaseWorkflow.indexOf("\n  publish:");
+      assert.notEqual(publishIdx, -1, "SEC-008: expected 'publish:' job in .github/workflows/release-tag.yml");
+      const publishJobBlock = releaseWorkflow.slice(publishIdx);
+      assert.match(
+        publishJobBlock,
+        /^\s{4}if:\s*startsWith\(github\.ref,\s*'refs\/tags\/v'\)\s*$/m,
+        "SEC-008: publish job must enforce if: startsWith(github.ref, 'refs/tags/v')"
+      );
+      assert.match(publishJobBlock, /\bgh release upload\b/, "SEC-008: expected gh release upload in publish job");
+      assert.doesNotMatch(
+        releaseWorkflow,
+        /\bgh release upload[^\n]*--clobber\b/,
+        "SEC-008: gh release upload must not pass --clobber"
+      );
     } finally {
       process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
       fs.rmSync(asqProfile, { recursive: true, force: true });

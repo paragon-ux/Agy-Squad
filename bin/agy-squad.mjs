@@ -107,12 +107,12 @@ const SUBCOMMAND_HELP = {
   plan: [
     "Usage: agy-squad plan (--manifest <path> | \"<task>\") [options]",
     "",
-    "Compile a flat or layered /swarm (or invoke_subagent) cohort plan and provenance scaffold.",
+    "Compile a flat or layered /swarm (or invoke_subagent) cohort plan.",
     "",
     "Options:",
     "  --manifest <path>                Load squads from a workspace manifest JSON file",
     "  --squad <id>                     Compile one squad (omit to compile all manifest squads)",
-    "  --topology flat|layered          Override topology (no default bias; ask if unspecified)",
+    "  --topology flat|layered          Override topology (flat for inline task, manifest-defined otherwise; Step 0 asks if unspecified)",
     "  --mode swarm|subagent            Target native /swarm (default) or invoke_subagent",
     "  --model <id>                     Pin an explicit model ID (verified via --known-model)",
     "  --known-model <id>               Repeatable allowed model ID from swarm{action:\"models\"}",
@@ -1012,6 +1012,7 @@ async function main(args) {
       bundleReports,
       decodeUtf8,
       readFile,
+      stripReceiptPrefix,
       verifyAndPruneBundle,
       verifyBundle
     } = await import("../mcp/handoffs.mjs");
@@ -1034,7 +1035,7 @@ async function main(args) {
     const bundled = bundleReports(root, bundleInput);
     const statusBySender = new Map();
     for (const h of record.handoffs ?? []) {
-      const stripped = h.message.replace(/^(?:@[A-Za-z0-9._:-]+\s+)+(?=(?:READY|PARTIAL|NO_REPORT)\b)/, "");
+      const stripped = stripReceiptPrefix(h.message);
       statusBySender.set(
         h.sender,
         stripped.startsWith("READY ") ? "READY" : stripped.startsWith("PARTIAL ") ? "PARTIAL" : "NO_REPORT"

@@ -35,14 +35,14 @@ Verified bundles (`lead/report.sources.json`) prove SHA-256 **file integrity** f
 ```bash
 agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolated
 agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
-agy-squad bundle-init --plan <plan.json> [--squad <id>] [--handoff <worker=READY ...> | --handoffs <file.json>] \
+agy-squad bundle-init --plan <plan.json> [--squad <id>] (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) \
   [--id-map <worker=id>] <verified-file...> --out <record.json> --digest
 agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
 agy-squad finalize <record.json> [--replace] [--prune [--keep-reports]]
 agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune --expected-sha256 <sha256> [--keep-reports]
 ```
 
-*(Granular `fingerprint`, `inspect`, `digest`, `bundle`, and `prune <bundle> <sha256>` remain available; standalone `verify --prune` requires `--expected-sha256 <sha256>`.)*
+*(Passing `--digest` requires `--handoff` or `--handoffs` and at least one `<verified-file>`. Granular `fingerprint`, `inspect`, `digest`, `bundle`, and `prune <bundle> <sha256>` remain available; standalone `verify --prune` requires `--expected-sha256 <sha256>`.)*
 
 ```json
 {
