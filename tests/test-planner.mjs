@@ -616,7 +616,7 @@ try {
   assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/NewFile.js", root, { caseInsensitive: false }), true);
   assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/newfile.js", root, { caseInsensitive: false }), false);
   assert.equal(scopesOverlap("sym-src/uncreated/NewFile.js", "real-src/uncreated/newfile.js", root, { caseInsensitive: true }), true);
-  const escapeOutsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-escape-")));
+  const escapeOutsideDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-escape-")));
   try {
     fs.symlinkSync(escapeOutsideDir, path.join(root, "sym-escape"), os.platform() === "win32" ? "junction" : "dir");
     const expectedExternal = `external:${path.join(escapeOutsideDir, "uncreated/item.js").split(path.sep).join("/")}`;
@@ -1410,7 +1410,7 @@ try {
     );
 
     // SEC-004: two workspace symlinks pointing to the same external directory trigger overlap detection AND workspace-escape warning
-    const sharedExtDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ext-overlap-")));
+    const sharedExtDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ext-overlap-")));
     const extLinkA = path.join(root, "sym-ext-a");
     const extLinkB = path.join(root, "sym-ext-b");
     try {
