@@ -18,8 +18,11 @@ const HISTORICAL_NOTICE_RE =
   /\b(?:retired|historical|deprecated|removed|superseded|obsolete|replaced\s+by|do\s+not\s+use|never\s+use)\b/i;
 const STRAY_FLAG_EMDASH_RE = /(?:^|\s)—[a-z][a-z0-9-]*/i;
 const USAGE =
-  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json] [--help]\n" +
-  "Read-only Agy-Squad maintainer check: audits shipped skills, links, hygiene, and brief/MCP byte budgets.";
+  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json] [-h|--help]\n" +
+  "Read-only Agy-Squad maintainer check: audits shipped skills, links, hygiene, and brief/MCP byte budgets.\n" +
+  "Options:\n" +
+  "  --json        Emit JSON report (default output format; retained as a compatibility alias)\n" +
+  "  -h, --help    Show this help message";
 
 const estimateTokens = bytes => Math.ceil(bytes / 4);
 const trimLeadingSlashes = s => { let i = 0; while (i < s.length && s[i] === "/") i++; return s.slice(i); };
@@ -94,7 +97,7 @@ function parseFrontmatter(markdown) {
     const m = /^description:\s*(.*)$/.exec(fmLines[i]);
     if (!m) continue;
     const inlineVal = m[1].trim();
-    if (/^[>|][-+]?$/.test(inlineVal)) {
+    if (/^[>|](?:[-+]?[1-9]|[1-9]?[-+]?)$/.test(inlineVal)) {
       const block = [];
       for (let j = i + 1; j < fmLines.length; j++) {
         if (/^\s*$/.test(fmLines[j])) continue;

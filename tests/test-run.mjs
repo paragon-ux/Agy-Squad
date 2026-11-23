@@ -73,7 +73,11 @@ try {
 
   const diagHelp = spawnSync(process.execPath, [isoDiag, "--help"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagHelp.status, 0, diagHelp.stderr);
-  assert.match(diagHelp.stdout, /Usage:.*--json.*--help/);
+  assert.match(diagHelp.stdout, /Usage:.*--json.*-h\|--help/);
+  assert.match(diagHelp.stdout, /compatibility alias/i);
+  const diagShortHelp = spawnSync(process.execPath, [isoDiag, "-h"], { cwd: isoRepo, encoding: "utf8" });
+  assert.equal(diagShortHelp.status, 0, diagShortHelp.stderr);
+  assert.equal(diagShortHelp.stdout, diagHelp.stdout);
 
   for (const args of [[], ["--json"]]) {
     const diagRun = spawnSync(process.execPath, [isoDiag, ...args], { cwd: isoRepo, encoding: "utf8" });
@@ -536,6 +540,36 @@ try {
   assert.equal(matchesPackageEntry("mcp/handoffs.mjs", "mcp/*.mjs"), true);
   assert.equal(matchesPackageEntry("mcp/sub/handoffs.mjs", "mcp/*.mjs"), false);
   assert.equal(matchesPackageEntry("docs/plans/LEDGER.md", "docs/plans/**"), true);
+  // Batch B SCRIPT-005: '?' single non-slash wildcard + plugin.json logo coverage + SD-SCRIPT-007 YAML block scalar indicators + TEST-003 unwired test warning
+  assert.equal(matchesPackageEntry("mcp/a.mjs", "mcp/?.mjs"), true);
+  assert.equal(matchesPackageEntry("mcp/ab.mjs", "mcp/?.mjs"), false);
+  assert.equal(matchesPackageEntry("mcp//.mjs", "mcp/?.mjs"), false);
+
+  const origPlugin = fs.readFileSync(path.join(isoRepo, "plugin.json"), "utf8");
+  const badLogoPlugin = JSON.parse(origPlugin);
+  writeIso("unpacked-logo.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
+  badLogoPlugin.logo = "unpacked-logo.svg";
+  writeIso("plugin.json", JSON.stringify(badLogoPlugin, null, 2) + "\n");
+  const preflightBadLogo = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightBadLogo.status, 0, "SCRIPT-005: plugin.json logo excluded from package.json files must fail preflight");
+  assert.match(preflightBadLogo.stderr, /plugin\.json logo: unpacked-logo\.svg/);
+  writeIso("plugin.json", origPlugin);
+  fs.rmSync(path.join(isoRepo, "unpacked-logo.svg"), { force: true });
+
+  const unwiredProbe = path.join(isoRepo, "tests/test-unwired-probe.mjs");
+  fs.writeFileSync(unwiredProbe, "// probe\n", "utf8");
+  const preflightUnwired = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  fs.rmSync(unwiredProbe, { force: true });
+  assert.equal(preflightUnwired.status, 0, preflightUnwired.stderr);
+  assert.match(preflightUnwired.stderr, /WARN: Test file tests\/test-unwired-probe\.mjs is not wired/);
+
+  for (const scalarHeader of [">2", ">-2", ">2-", "|+2", "|2+"]) {
+    fs.writeFileSync(prSkillPath, `---\nname: pr-review\ndescription: ${scalarHeader}\n  Indented scalar body.\n---\nBody.\n`);
+    const scalarOut = JSON.parse(spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" }).stdout);
+    assert.ok(!scalarOut.findings.some(f => f.id === "SKILL-FM-pr-review"), `SD-SCRIPT-007: '${scalarHeader}' must pass SKILL-FM`);
+  }
+  fs.writeFileSync(prSkillPath, savedPrSkill);
+
   const tGlob = performance.now();
   assert.equal(matchesPackageEntry("a/".repeat(25) + "y", "**/".repeat(15) + "x"), false);
   assert.equal(matchesPackageEntry("a/".repeat(40) + "y", "**/a/".repeat(15) + "x"), false);

@@ -270,6 +270,25 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(crlfMsgs[0].id, 11);
   assert.equal(crlfMsgs[1].error.code, -32700);
 
+  // Batch B MCP-003: multi-chunk oversized frame crossing cap on terminating newline chunk rejects pre-concat and recovers
+  const splitCapProc = spawn(process.execPath, [server], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: { ...process.env, AGY_MAX_STDIO_PAYLOAD_BYTES: "2048" }
+  });
+  const splitCapChunks = [];
+  splitCapProc.stdout.on("data", (d) => splitCapChunks.push(d));
+  const splitCapExited = new Promise((resolve) => splitCapProc.on("exit", resolve));
+  splitCapProc.stdin.write(Buffer.alloc(1500, 0x61));
+  splitCapProc.stdin.write(Buffer.concat([Buffer.alloc(600, 0x62), Buffer.from("\n")]));
+  splitCapProc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 13, method: "ping" }) + "\n");
+  splitCapProc.stdin.end();
+  assert.equal(await splitCapExited, 0);
+  const splitCapMsgs = Buffer.concat(splitCapChunks).toString("utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
+  assert.equal(splitCapMsgs.length, 2);
+  assert.equal(splitCapMsgs[0].error.code, -32600);
+  assert.match(splitCapMsgs[0].error.message, /2048-byte safety ceiling/);
+  assert.equal(splitCapMsgs[1].id, 13);
+
   // MCP-004: >500 KB response written while stdin closes immediately after sending the request (early EOF)
   const manyRoles = Array.from({ length: 120 }, (_, i) => `Role ${i + 1} Large Objective Padding`);
   const largeProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });

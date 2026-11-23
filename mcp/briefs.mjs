@@ -15,19 +15,19 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
   ["workspace", "Workspace"]
 ]);
 
-const NATIVE_READ_TOOLS =
-  "native search/read tools (grep_search/find_by_name + bounded read_file slices on large files)";
-const TRANSCRIPT_FORENSICS =
-  "single unchained 'agy-context transcript' if installed, else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (swarm: sender=<coordId> + @<workerName>)";
+const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file)";
+const TRANSCRIPT_FORENSICS_BASE =
+  "single unchained 'agy-context transcript' if installed, else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl";
+const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [
   "Map conversationId->slot in shared workspace; yield via Reactive Wakeup, reconcile 1 receipt/slot; at 10m checkpoint operator checks /agents (stop own children only).",
-  `Squad Lead Patrol & Alignment Gate: reject ungrounded claims; batch-read traces (${TRANSCRIPT_FORENSICS}) and verify via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
+  `Squad Lead Patrol & Alignment Gate: reject ungrounded claims; batch-read traces (${TRANSCRIPT_FORENSICS_BASE}) and verify via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
-  "Park via swarm_wait; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
-  `Squad Lead Patrol & Alignment Gate: verify swarm status, batch-read traces (${TRANSCRIPT_FORENSICS}), and artifacts via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
+  "Follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
+  `Squad Lead Patrol & Alignment Gate: verify swarm status, batch-read traces (${TRANSCRIPT_FORENSICS_SWARM}), and artifacts via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -59,7 +59,10 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     leadWorkerName,
     boardSince,
     boardSeqs,
-    validateOnly = false
+    validateOnly = false,
+    isCanonicalSpec = false,
+    prevalidatedScope,
+    precomputedArtifact
   } = options;
   if (executionMode !== "subagent" && executionMode !== "swarm") {
     throw new Error(`Unsupported executionMode '${executionMode}'.`);
@@ -67,14 +70,25 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
     throw new Error(`Invalid agent in squad '${squadId}'.`);
   }
-  const pickAlias = (lower, upper, fallback) =>
-    spec[lower] !== undefined ? spec[lower] : spec[upper] !== undefined ? spec[upper] : fallback;
+  const pickAlias = isCanonicalSpec
+    ? (lower, _upper, fallback) => (spec[lower] !== undefined ? spec[lower] : fallback)
+    : (lower, upper, fallback) =>
+        spec[lower] !== undefined ? spec[lower] : spec[upper] !== undefined ? spec[upper] : fallback;
   const isLead = specialistNumber === undefined;
   const rawRole = pickAlias("role", "Role", isLead ? "Squad Lead" : "Specialist");
   const role = typeof rawRole === "string" ? rawRole.trim() : "";
-  for (const [lower, upper] of AGENT_ALIAS_PAIRS) {
-    if (spec[lower] !== undefined && spec[upper] !== undefined && !util.isDeepStrictEqual(spec[lower], spec[upper])) {
-      throw new Error(`Agent '${role || "unnamed"}' has conflicting ${lower} and ${upper} fields.`);
+  if (!isCanonicalSpec) {
+    for (const [lower, upper] of AGENT_ALIAS_PAIRS) {
+      if (spec[lower] !== undefined && spec[upper] !== undefined && !util.isDeepStrictEqual(spec[lower], spec[upper])) {
+        throw new Error(`Agent '${role || "unnamed"}' has conflicting ${lower} and ${upper} fields.`);
+      }
+    }
+    if (spec.readOnly !== undefined && spec.ReadOnly !== undefined && spec.readOnly !== spec.ReadOnly) {
+      throw new Error(`Agent '${role || "unnamed"}' cannot define both 'readOnly' and 'ReadOnly'.`);
+    }
+    const readOnly = spec.readOnly !== undefined ? spec.readOnly : spec.ReadOnly;
+    if (readOnly !== undefined && typeof readOnly !== "boolean") {
+      throw new Error(`Agent '${role || "unnamed"}' readOnly must be a boolean.`);
     }
   }
   const safeRole = role.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim() || "unnamed";
@@ -97,9 +111,9 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   if (typeof objective !== "string" || !objective.trim()) {
     throw new Error(`Agent '${role || "unnamed"}' requires an objective.`);
   }
-  const scope = validateScopeFiles(pickAlias("scopeFiles", "ScopeFiles", undefined), safeRole);
+  const scope = prevalidatedScope ?? validateScopeFiles(pickAlias("scopeFiles", "ScopeFiles", undefined), safeRole);
 
-  const artifact = reportPath(squadId, specialistNumber, reportRoot);
+  const artifact = precomputedArtifact ?? reportPath(squadId, specialistNumber, reportRoot);
   const trimmedModel = rawModel.trim();
   const coercedSubagentModel = executionMode === "subagent" && !SUBAGENT_MODEL_ALIASES.has(trimmedModel);
   if (coercedSubagentModel && Array.isArray(options.warnings)) {
@@ -129,8 +143,16 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       : squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-");
   const isSwarm = executionMode === "swarm";
 
+  const traceForensics = isSwarm ? TRANSCRIPT_FORENSICS_SWARM : TRANSCRIPT_FORENSICS_BASE;
+  const deliverableHasAuditFields =
+    deliverable.includes("Target Squad:") &&
+    deliverable.includes("Evidence Digest:") &&
+    deliverable.includes("Integrity Verdict:");
+  const auditEmitClause = deliverableHasAuditFields
+    ? ""
+    : "; emit 'Target Squad: <id>', 'Evidence Digest: <sha256>', 'Integrity Verdict: CLEAN | INTEGRITY VIOLATION'";
   const alignmentLine = isIntegrityAuditor
-    ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Batch-check traces (${TRANSCRIPT_FORENSICS}${isSwarm ? "; read_board/status verify handoffs/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered; emit 'Target Squad: <id>', 'Evidence Digest: <sha256>', 'Integrity Verdict: CLEAN | INTEGRITY VIOLATION'.`
+    ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Batch-check traces (${traceForensics}${isSwarm ? "; read_board/status verify handoffs/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered${auditEmitClause}.`
     : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed checks or file:line; use ${NATIVE_READ_TOOLS}. Retry when inputs change/transient; else partial+blocker.`;
 
   const hasManifestFile =
@@ -163,10 +185,11 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? `Integrity Auditor Lead.${dispatchCall ? ` ${dispatchCall}` : ""}\n${alignmentLine}`
     : `${leadIntro ? `${leadIntro}\n` : ""}${workingSupervision}`;
 
+  const citeSuffix = isLead || isIntegrityAuditor ? "; cite checks/file:line." : ".";
   const reportPlacementLine =
     isSwarm && workspaceIsolation !== "inherit"
-      ? `Write '${workspaceIsolation}' working copy slot (no overwrite); cite checks/file:line.`
-      : "Write shared slot (no overwrite); cite checks/file:line.";
+      ? `Write '${workspaceIsolation}' working copy slot (no overwrite)${citeSuffix}`
+      : `Write shared slot (no overwrite)${citeSuffix}`;
 
   const swarmRecipient =
     leadWorkerName && !isLead && !isIntegrityAuditor ? `@${leadWorkerName}` : "@coordinator";
@@ -182,15 +205,15 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     : null;
 
   const handoffInstructionLine = isSwarm
-    ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}, sep —/--/-): READY ${artifact} — <concrete observation> | PARTIAL <slot> | NO_REPORT. Then swarm_wait.`
-    : `1 send_message <= ${messageLimit} UTF-8 bytes (sep —/--/-): READY ${artifact} — <concrete observation> | PARTIAL <slot> | NO_REPORT.`;
+    ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>. Then swarm_wait.`
+    : `1 send_message <= ${messageLimit} UTF-8 bytes: READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>.`;
 
   return {
     ...payload,
     Prompt: [
       `Role: ${role}`,
       `Objective: ${objective.trim()}`,
-      "Work within these files or directories:",
+      "Scope:",
       ...scope.map(file => `- ${file}`),
       ...(instructions ? [`Instructions: ${instructions}`] : []),
       `Deliverable: ${deliverable}`,

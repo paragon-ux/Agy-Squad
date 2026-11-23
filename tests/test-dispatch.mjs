@@ -50,7 +50,8 @@ try {
     assert.deepEqual(Object.keys(leaf).sort(), ["Model", "Prompt", "Role", "TypeName", "Workspace"]);
     const pointer = leaf.Prompt.match(/^Report slot: (\S+)$/m)?.[1];
     assert.equal(pointer, reportPath("alpha", index + 1));
-    assert.ok(leaf.Prompt.includes(`READY ${pointer} — <concrete observation>`));
+    assert.ok(leaf.Prompt.includes("READY <Report slot> - <obs>"));
+    assert.doesNotMatch(leaf.Prompt, /—/);
     assert.match(leaf.Prompt, /500 UTF-8 bytes/);
     assert.match(leaf.Prompt, /Retry when inputs change/);
     assert.match(leaf.Prompt, /Subagent Alignment Policy: Follow squad lead policy/);
@@ -251,7 +252,7 @@ try {
   assert.equal(delegatedSpecialists.isError, undefined, delegatedSpecialists.content[0].text);
   assert.equal(JSON.parse(delegatedSpecialists.content[0].text).Subagents[0].Role, "First");
 
-  assert.match(leaves[0].Prompt, /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/);
+  assert.match(leaves[0].Prompt, /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/);
 
   const emptyWs = path.join(testDir, "empty-ws");
   fs.mkdirSync(emptyWs);
@@ -453,7 +454,7 @@ try {
   ]) {
     assert.match(
       promptText,
-      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/,
+      /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/,
       `${label} brief must use native search/read guidance`
     );
     assert.doesNotMatch(
@@ -468,6 +469,9 @@ try {
     );
     assert.ok(promptText.startsWith("Role: "), `${label} default prompt should begin directly with Role:`);
   }
+  assert.doesNotMatch(uxLeadBrief, /sender=<coordId>/, "OPT-BRIEF-01: subagent lead must omit swarm-only trace suffix");
+  assert.doesNotMatch(uxAuditBrief, /sender=<coordId>/, "OPT-BRIEF-01: subagent auditor must omit swarm-only trace suffix");
+  assert.doesNotMatch(uxSpecBrief, /Write shared slot \(no overwrite\); cite checks/, "OPT-BRIEF-03: non-auditor specialist must omit duplicate cite checks");
   assert.match(
     uxAuditBrief,
     /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
@@ -505,6 +509,54 @@ try {
     { squadId: "integrity_auditor:alpha", manifestPath: "forged-synthesized-auditor.json" },
     /children or specialists must be a non-empty array/
   );
+
+  // Batch B RUN-006 & RUN-007: custom auditor lead readOnly/ReadOnly conflict + reportRoot propagation + POSIX selectedManifest
+  fs.writeFileSync(path.join(workspace, "conflict-ro-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: {
+        lead: { ...agent("Ignored Lead", "."), readOnly: true, ReadOnly: false },
+        specialists: [agent("Auditor", ".")]
+      }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "conflict-ro-auditor.json" },
+    /cannot define both 'readOnly' and 'ReadOnly'/
+  );
+  fs.writeFileSync(path.join(workspace, "nonbool-ro-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: {
+        lead: { ...agent("Ignored Lead", "."), readOnly: "yes" },
+        specialists: [agent("Auditor", ".")]
+      }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "nonbool-ro-auditor.json" },
+    /readOnly must be a boolean/
+  );
+  const { readManifest, resolveIntegrityAuditor } = await import("../mcp/dispatch.mjs");
+  assert.throws(
+    () =>
+      resolveIntegrityAuditor(
+        {
+          alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+          integrity_auditor: { lead: agent("Ignored Lead", "."), specialists: [agent("Auditor", ".")] }
+        },
+        "alpha",
+        [],
+        { reportRoot: "a/".repeat(220) + "root" }
+      ),
+    /500-byte Pointer-Over-Wire prefix budget/,
+    "RUN-006: resolveIntegrityAuditor must pass custom reportRoot when validating custom auditor lead"
+  );
+  const nestedManifestDir = path.join(workspace, "nested");
+  fs.mkdirSync(nestedManifestDir, { recursive: true });
+  fs.writeFileSync(path.join(nestedManifestDir, "m.json"), JSON.stringify(manifest));
+  const nestedLoaded = readManifest(workspace, path.join("nested", "m.json"));
+  assert.equal(nestedLoaded.selectedManifest, "nested/m.json", "RUN-007: selectedManifest must use POSIX / separators");
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {

@@ -729,7 +729,7 @@ export function formatWindowsCmdShim(targetRoot, execPath = process.execPath) {
   return [
     "@echo off",
     "chcp 65001 >nul",
-    "setlocal",
+    "setlocal DisableDelayedExpansion",
     "where node.exe >nul 2>nul",
     "if errorlevel 1 goto :fallback",
     `node.exe -e "process.exit(Math.min(parseInt(process.versions.node,10),${MIN_NODE_MAJOR})===${MIN_NODE_MAJOR}?0:1)" >nul 2>nul`,

@@ -6,11 +6,10 @@ import { AGENT_ALIAS_PAIRS, CONTROL_CHAR_RE, SUBAGENT_MODEL_ALIASES, buildSubage
 import {
   formatNotFoundError,
   loadSquads,
-  logicalWorkspaceRoot,
   manifestSquads,
   resolveIntegrityAuditor,
   resolveSquadLead,
-  resolveWorkspaceRoot,
+  resolveWorkspaceRoots,
   specialistAssignments
 } from "./dispatch.mjs";
 import { normalizeReportRoot, reportPath, trimTrailingSlashes } from "./handoffs.mjs";
@@ -363,6 +362,9 @@ function findScopeOverlaps(entries, root, options = {}) {
     resolvedOptions = root;
     resolvedRoot = undefined;
   }
+  const safeOptions = resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {};
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  if (entries.length < 2 && !Array.isArray(safeOptions.warnings)) return [];
   let canonicalRoot;
   if (resolvedRoot) {
     canonicalRoot = path.resolve(resolvedRoot);
@@ -371,7 +373,7 @@ function findScopeOverlaps(entries, root, options = {}) {
     } catch {}
   }
   const scopedOptions = {
-    ...(resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {}),
+    ...safeOptions,
     canonicalRoot,
     normCache: new Map(),
     segmentCache: new Map()
@@ -381,47 +383,106 @@ function findScopeOverlaps(entries, root, options = {}) {
     resolveScopeCaseInsensitive(scopedOptions),
     canonicalRoot
   );
-  const normalizedEntries = entries.map(entry => {
+  const normalizedEntries = entries.map((entry, workerIdx) => {
     const deduped = [];
     const seenNorm = new Set();
     for (const raw of entry.scopeFiles) {
       const norm = normalizeScopePath(raw, resolvedRoot, scopedOptions);
       if (!seenNorm.has(norm)) {
         seenNorm.add(norm);
-        deduped.push({ raw, norm });
+        deduped.push({ workerIdx, scopeIdx: deduped.length, raw, norm });
       }
     }
-    return { label: entry.label, squadId: entry.squadId, roleType: entry.roleType, scopes: deduped };
+    return { workerIdx, label: entry.label, squadId: entry.squadId, roleType: entry.roleType, scopes: deduped };
   });
-  const overlaps = [];
-  for (let i = 0; i < normalizedEntries.length; i++) {
-    for (let j = i + 1; j < normalizedEntries.length; j++) {
-      const left = normalizedEntries[i];
-      const right = normalizedEntries[j];
-      const matchingPair = [];
-      for (const a of left.scopes) {
-        for (const b of right.scopes) {
-          if (normalizedScopesOverlap(a.norm, b.norm, canonicalRootKey)) {
-            matchingPair.push([a.raw, b.raw]);
-          }
+  if (normalizedEntries.length < 2) return [];
+
+  const workerCount = normalizedEntries.length;
+  const pairMatches = new Map();
+  const recordPair = (itemA, itemB) => {
+    if (itemA.workerIdx === itemB.workerIdx) return;
+    const left = itemA.workerIdx < itemB.workerIdx ? itemA : itemB;
+    const right = itemA.workerIdx < itemB.workerIdx ? itemB : itemA;
+    const key = left.workerIdx * workerCount + right.workerIdx;
+    let bucket = pairMatches.get(key);
+    if (!bucket) {
+      bucket = { leftIdx: left.workerIdx, rightIdx: right.workerIdx, seen: new Set(), items: [] };
+      pairMatches.set(key, bucket);
+    }
+    const pairTag = `${left.scopeIdx}:${right.scopeIdx}`;
+    if (!bucket.seen.has(pairTag)) {
+      bucket.seen.add(pairTag);
+      bucket.items.push({ leftScopeIdx: left.scopeIdx, rightScopeIdx: right.scopeIdx, leftRaw: left.raw, rightRaw: right.raw });
+    }
+  };
+
+  const wildcards = [];
+  const relItems = [];
+  const extItems = [];
+  const rootCoveringExt = [];
+  for (const entry of normalizedEntries) {
+    for (const item of entry.scopes) {
+      if (item.norm === "") {
+        wildcards.push(item);
+      } else if (item.norm.startsWith("external:")) {
+        const extPath = item.norm.slice("external:".length);
+        const extItem = { ...item, pathKey: extPath, sortKey: extPath.replace(/\//g, "\0") };
+        extItems.push(extItem);
+        if (canonicalRootKey && isSameOrParentPath(extPath, canonicalRootKey)) {
+          rootCoveringExt.push(extItem);
         }
-      }
-      if (matchingPair.length > 0) {
-        const isLeadSpecialist =
-          left.squadId !== undefined &&
-          left.squadId === right.squadId &&
-          left.roleType !== right.roleType &&
-          (left.roleType === "lead" || right.roleType === "lead");
-        overlaps.push({
-          workerA: left.label,
-          workerB: right.label,
-          kind: isLeadSpecialist ? "lead-specialist" : "sibling",
-          pairs: matchingPair.map(([a, b]) => `${a} <-> ${b}`)
-        });
+      } else {
+        relItems.push({ ...item, pathKey: item.norm, sortKey: item.norm.replace(/\//g, "\0") });
       }
     }
   }
-  return overlaps;
+
+  for (const wc of wildcards) {
+    for (const other of normalizedEntries) {
+      if (other.workerIdx === wc.workerIdx) continue;
+      for (const s of other.scopes) recordPair(wc, s);
+    }
+  }
+  for (const extItem of rootCoveringExt) {
+    for (const relItem of relItems) recordPair(extItem, relItem);
+  }
+
+  const sweepSortedPrefix = (items) => {
+    if (items.length < 2) return;
+    items.sort((a, b) =>
+      a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : a.workerIdx - b.workerIdx || a.scopeIdx - b.scopeIdx
+    );
+    const stack = [];
+    for (const item of items) {
+      while (stack.length > 0 && !isSameOrParentPath(stack[stack.length - 1].pathKey, item.pathKey)) {
+        stack.pop();
+      }
+      for (const anc of stack) {
+        if (anc.workerIdx !== item.workerIdx) recordPair(anc, item);
+      }
+      stack.push(item);
+    }
+  };
+  sweepSortedPrefix(relItems);
+  sweepSortedPrefix(extItems);
+
+  const sortedBuckets = [...pairMatches.values()].sort((a, b) => a.leftIdx - b.leftIdx || a.rightIdx - b.rightIdx);
+  return sortedBuckets.map(bucket => {
+    const left = normalizedEntries[bucket.leftIdx];
+    const right = normalizedEntries[bucket.rightIdx];
+    bucket.items.sort((a, b) => a.leftScopeIdx - b.leftScopeIdx || a.rightScopeIdx - b.rightScopeIdx);
+    const isLeadSpecialist =
+      left.squadId !== undefined &&
+      left.squadId === right.squadId &&
+      left.roleType !== right.roleType &&
+      (left.roleType === "lead" || right.roleType === "lead");
+    return {
+      workerA: left.label,
+      workerB: right.label,
+      kind: isLeadSpecialist ? "lead-specialist" : "sibling",
+      pairs: bucket.items.map(p => `${p.leftRaw} <-> ${p.rightRaw}`)
+    };
+  });
 }
 
 function canonicalizeAgentSpec(spec, fallbackLabel) {
@@ -619,8 +680,7 @@ function planSquadCohort(
   }
   const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
-  const root = resolveWorkspaceRoot(argWorkspace, workspace);
-  const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
+  const { root, logicalRoot } = resolveWorkspaceRoots(argWorkspace, workspace);
   let loadedSquads;
   let selectedManifest;
   if (task !== undefined) {
@@ -736,7 +796,8 @@ function planSquadCohort(
       buildSubagentSpec(canonicalStrippedLead, id, manifestPathForBrief, undefined, normalizedReportRoot, {
         executionMode,
         workspaceIsolation: "inherit",
-        validateOnly: true
+        validateOnly: true,
+        isCanonicalSpec: true
       });
       strippedFlatLeads.push(id);
     }
@@ -783,7 +844,10 @@ function planSquadCohort(
           isIntegrityAuditor: false,
           precompiledSpecialists: true,
           leadWorkerName,
-          boardSince
+          boardSince,
+          isCanonicalSpec: true,
+          prevalidatedScope: leadScope,
+          precomputedArtifact: leadSlot
         }
       );
     }
@@ -811,6 +875,7 @@ function planSquadCohort(
         ...rawSpec,
         model: specModel.compiledModel
       };
+      const slot = reportPath(id, number, normalizedReportRoot);
       const compiled = buildSubagentSpec(
         subSpec,
         id,
@@ -822,10 +887,12 @@ function planSquadCohort(
           workspaceIsolation,
           isIntegrityAuditor: false,
           leadWorkerName,
-          boardSince
+          boardSince,
+          isCanonicalSpec: true,
+          prevalidatedScope: specScope,
+          precomputedArtifact: slot
         }
       );
-      const slot = reportPath(id, number, normalizedReportRoot);
       const workerName = allocateWorkerName(
         usedWorkerNames,
         `${id}-${rawSpec.role ?? number}`,
@@ -880,7 +947,10 @@ function planSquadCohort(
         const hasTargetOverride = Object.hasOwn(loadedSquads, `integrity_auditor-${id}`);
         const auditTargetArg =
           allWorkingIds.length > 1 || targetWorkingIds.length > 1 || hasTargetOverride ? id : undefined;
-        const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings, { validatedAuditKeys });
+        const auditSpecs = resolveIntegrityAuditor(loadedSquads, auditTargetArg, auditWarnings, {
+          validatedAuditKeys,
+          reportRoot: normalizedReportRoot
+        });
         return auditSpecs.map(auditItem => {
           const auditSquadId = auditItem.id;
           const auditSlot = reportPath(auditSquadId, auditItem.number, normalizedReportRoot);
@@ -908,7 +978,15 @@ function planSquadCohort(
             manifestPathForBrief,
             auditItem.number,
             normalizedReportRoot,
-            { executionMode, workspaceIsolation: "inherit", isIntegrityAuditor: true, precompiledSpecialists: true, boardSeqs }
+            {
+              executionMode,
+              workspaceIsolation: "inherit",
+              isIntegrityAuditor: true,
+              precompiledSpecialists: true,
+              boardSeqs,
+              isCanonicalSpec: true,
+              precomputedArtifact: auditSlot
+            }
           );
           const rawAuditName =
             auditSpecs.length > 1

@@ -380,7 +380,7 @@ try {
   const cmdShimText = formatWindowsCmdShim(pluginDir);
   assert.match(cmdShimText, /^@echo off\r\nchcp 65001 >nul\r\n/);
   assert.match(cmdShimText, /chcp 65001 >nul/);
-  assert.match(cmdShimText, /setlocal/);
+  assert.match(cmdShimText, /setlocal DisableDelayedExpansion/);
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
   assert.match(cmdShimText, /Math\.min\(parseInt\(process\.versions\.node,10\),22\)===22/);
@@ -551,7 +551,7 @@ try {
   assert.match(partialStatus.stdout, /PARTIAL INSTALLATION/);
   fs.writeFileSync(shimFile, savedShim, os.platform() === "win32" ? undefined : { mode: 0o755 });
 
-  // L49 / v0.2.0: skillsReady must require all 5 skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
+  // L49 / v0.2.0: skillsReady must require all 4 shipped skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
   const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
   fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
   assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);

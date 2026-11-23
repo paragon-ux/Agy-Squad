@@ -1,14 +1,61 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { readRegularFileSafe, resolveCanonicalRoot } from "../mcp/handoffs.mjs";
-import {
-  PACKAGE_VERSION,
-  assertNodeVersion,
-  isDirectEntryPoint,
-  isNodeVersionSupported
-} from "../scripts/install-register.mjs";
+
+const MIN_NODE_MAJOR = 22;
+
+function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (typeof versionStr !== "string") return false;
+  const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
+}
+
+function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
+  if (!isNodeVersionSupported(versionStr, minMajor)) {
+    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
+    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
+    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
+  }
+}
+
+function readPackageVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.1";
+  } catch {
+    return "0.2.1";
+  }
+}
+
+function isDirectExecution(
+  argv1 = process.argv[1],
+  selfUrl = import.meta.url,
+  platform = process.platform
+) {
+  if (!argv1 || !selfUrl) return false;
+  const selfPath =
+    selfUrl instanceof URL || (typeof selfUrl === "string" && selfUrl.startsWith("file:"))
+      ? fileURLToPath(selfUrl)
+      : selfUrl;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const normalize = (p) => {
+    let resolved;
+    if (platform === process.platform) {
+      try {
+        resolved = fs.realpathSync(path.resolve(p));
+      } catch {
+        resolved = path.resolve(p);
+      }
+    } else {
+      resolved = pathImpl.resolve(p);
+    }
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalize(argv1) === normalize(selfPath);
+}
 
 const usage = [
   "Agy-Squad Governance & Verification CLI (pairs with Antigravity native /swarm)",
@@ -290,7 +337,7 @@ const SUBCOMMAND_HELP = {
     "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED) or Integrity Verdict.",
     "",
     "Options:",
-    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION)",
+    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION) plus targetSquad and evidenceDigest when present",
     "",
     "Examples:",
     "  agy-squad verdict scratch/agy-squad/squad-auth/lead/report.md",
@@ -387,7 +434,7 @@ async function runDispatchCommand(rest, root) {
     squad: { type: "string" },
     manifest: { type: "string" }
   });
-  const { handleDispatchSquad } = await import("../mcp/dispatch.mjs");
+  const { dispatchSquadData, formatNotFoundError } = await import("../mcp/dispatch.mjs");
   if (values.squad !== undefined && positionals.length > 0) {
     throw new Error("Pass either --squad <id> or a positional <squadId>, not both.");
   }
@@ -398,17 +445,16 @@ async function runDispatchCommand(rest, root) {
   if (!squadId) {
     throw new Error(usageLine);
   }
-  const result = handleDispatchSquad(
-    {
-      squadId,
-      ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {})
-    },
-    root
-  );
-  if (result.isError) {
-    throw new Error(result.content?.[0]?.text || "dispatch_squad failed.");
+  const dispatchArgs = {
+    squadId,
+    ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {})
+  };
+  try {
+    return JSON.stringify(dispatchSquadData(dispatchArgs, root), null, 2);
+  } catch (error) {
+    const message = error.code === "ENOENT" ? formatNotFoundError(dispatchArgs, root) : error.message;
+    throw new Error(`dispatch_squad: ${message}`);
   }
-  return JSON.stringify(JSON.parse(result.content[0].text), null, 2);
 }
 
 const KNOWN_COMMANDS = new Set([
@@ -433,7 +479,7 @@ const KNOWN_COMMANDS = new Set([
   "run"
 ]);
 
-function resolveWorkspaceRoot(workspaceArg, fallbackRoot) {
+function resolveWorkspaceRoot(workspaceArg, fallbackRoot, resolveCanonicalRoot) {
   if (workspaceArg === undefined) return fallbackRoot;
   const trimmed = String(workspaceArg).trim();
   if (!trimmed) throw new Error("--workspace must be a nonempty directory path.");
@@ -447,7 +493,7 @@ function resolveWorkspaceRoot(workspaceArg, fallbackRoot) {
   }
 }
 
-async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFile }) {
+async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpectedRealPath, readFile, readRegularFileSafe }) {
   if (typeof pathOrDash !== "string" || !pathOrDash.trim()) {
     throw new Error(`${label} path must be nonempty.`);
   }
@@ -469,8 +515,13 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFi
         raw = decodeUtf8(readFile(targetRoot, normalized), normalized);
       } catch (err) {
         const cwdResolved = path.resolve(trimmedInput);
-        if (err.code === "ENOENT" && path.dirname(cwdResolved) !== targetRoot && fs.existsSync(cwdResolved)) {
-          raw = decodeUtf8(readRegularFileSafe(cwdResolved, trimmedInput), trimmedInput);
+        const workspaceCandidate = path.resolve(targetRoot, normalized);
+        if (err.code === "ENOENT" && !isExpectedRealPath(workspaceCandidate, cwdResolved)) {
+          try {
+            raw = decodeUtf8(readRegularFileSafe(cwdResolved, trimmedInput), trimmedInput);
+          } catch (fallbackErr) {
+            throw fallbackErr.code === "ENOENT" ? err : fallbackErr;
+          }
         } else {
           throw err;
         }
@@ -591,13 +642,27 @@ function parseHandoffPairEntries(items) {
   });
 }
 
-function hasHelpFlag(argv) {
+const STRING_OPTIONS_BY_COMMAND = {
+  plan: ["manifest", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq"],
+  dispatch: ["squad", "manifest"],
+  collect: ["plan", "record", "squad", "from", "workspace", "report-root"],
+  "bundle-init": ["plan", "provenance", "squad", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "out"],
+  bundle: ["predecessor"],
+  verify: ["expected-sha256"],
+  finalize: ["predecessor"]
+};
+
+function hasHelpFlag(argv, command) {
+  const options = { help: { type: "boolean", short: "h" } };
+  for (const name of STRING_OPTIONS_BY_COMMAND[command] ?? []) {
+    options[name] = { type: "string", multiple: true };
+  }
   const { tokens } = parseArgs({
     args: argv,
     allowPositionals: true,
     strict: false,
     tokens: true,
-    options: { help: { type: "boolean", short: "h" } }
+    options
   });
   for (const tok of tokens) {
     if (tok.kind === "option-terminator") break;
@@ -635,7 +700,7 @@ async function main(args) {
     if (args.length > 1) {
       throw new Error("Conflicting flags: --version cannot be combined with operational flags or arguments.");
     }
-    console.log(PACKAGE_VERSION);
+    console.log(readPackageVersion());
     return 0;
   }
   const [command, ...rest] = args;
@@ -670,7 +735,7 @@ async function main(args) {
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
-  if (hasHelpFlag(rest)) {
+  if (hasHelpFlag(rest, command)) {
     if (rest.length > 1 || (rest[0] !== "--help" && rest[0] !== "-h")) {
       throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
     }
@@ -772,12 +837,12 @@ async function main(args) {
     if (values.record !== undefined && values.squad !== undefined) {
       throw new Error("Pass either --record or --squad to 'agy-squad collect', not both.");
     }
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root);
     const sources = [...(values.from ?? []), ...positionals];
     if (!sources.length) {
       throw new Error(usageLine);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
+    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     let plan;
     let record;
     if (values.plan !== undefined) {
@@ -824,8 +889,11 @@ async function main(args) {
     if (values.plan === undefined) {
       throw new Error(usageLine);
     }
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root);
+    if (values.replace && values.out === undefined) {
+      throw new Error(`Flag '--replace' requires '--out <record.json>' on 'agy-squad bundle-init'.\n${usageLine}`);
+    }
     const handoffsMod = await import("../mcp/handoffs.mjs");
+    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     const plan = await readJsonInput(targetRoot, values.plan, "plan", handoffsMod);
     const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, values.provenance, "provenance", handoffsMod) : undefined;
     if (
@@ -850,6 +918,8 @@ async function main(args) {
     }
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
     const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p));
+    const initVerifiedDirs = new Set([targetRoot]);
+    let preReadSynthesis;
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
       provenance,
@@ -861,7 +931,9 @@ async function main(args) {
       handoffs,
       allowUnaudited: values["allow-unaudited"],
       allowNonPassing: values["allow-non-passing"],
-      allowPartial: values["allow-partial"]
+      allowPartial: values["allow-partial"],
+      verifiedDirs: initVerifiedDirs,
+      onLeadRead: info => { preReadSynthesis = info; }
     });
     if (values.digest && (!Array.isArray(record.handoffs) || record.handoffs.length === 0)) {
       throw new Error(
@@ -873,15 +945,21 @@ async function main(args) {
         "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
       );
     }
-    const digestResult = values.digest ? handoffsMod.computeEvidenceDigest(targetRoot, record) : undefined;
+    const digestResult = values.digest
+      ? handoffsMod.computeEvidenceDigest(targetRoot, record, {
+          verifiedDirs: initVerifiedDirs,
+          skipFileRehash: true,
+          preReadSynthesis
+        })
+      : undefined;
     if (values.out !== undefined) {
       const outRel = normalizeBundleOutCliPath(values.out);
       const parentDir = path.posix.dirname(outRel);
       if (parentDir && parentDir !== ".") {
-        handoffsMod.ensureDirectory(targetRoot, parentDir, [], new Set());
+        handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
       }
       const outBytes = Buffer.from(JSON.stringify(record, null, 2) + "\n", "utf8");
-      handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, undefined, undefined, { sync: false });
+      handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
       console.log(JSON.stringify({
         path: outRel,
         squadId: record.squadId,
@@ -1017,7 +1095,8 @@ async function main(args) {
       verifyBundle
     } = await import("../mcp/handoffs.mjs");
     const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
+    const verifiedDirs = new Set([root]);
+    const record = JSON.parse(decodeUtf8(readFile(root, recPath, verifiedDirs), recPath));
     if (!record || typeof record !== "object" || Array.isArray(record)) {
       throw new Error("Provide a valid bundle record.");
     }
@@ -1032,7 +1111,7 @@ async function main(args) {
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
     // bundleReports already reconciles handoffs and reads every report slot once; derive inspected summary from validated inputs without a duplicate disk pass.
-    const bundled = bundleReports(root, bundleInput);
+    const bundled = bundleReports(root, bundleInput, { verifiedDirs });
     const statusBySender = new Map();
     for (const h of record.handoffs ?? []) {
       const stripped = stripReceiptPrefix(h.message);
@@ -1051,12 +1130,13 @@ async function main(args) {
     if (values.prune) {
       const vp = verifyAndPruneBundle(root, bundled.path, {
         expectedSha256: bundled.sha256,
-        keepReports: values["keep-reports"]
+        keepReports: values["keep-reports"],
+        verifiedDirs
       });
       pruned = vp.pruned;
       verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports };
     } else {
-      verified = verifyBundle(root, bundled.path, bundled.sha256);
+      verified = verifyBundle(root, bundled.path, bundled.sha256, { verifiedDirs });
     }
     console.log(JSON.stringify({ inspected, bundled, verified, pruned }, null, 2));
     return 0;
@@ -1100,9 +1180,6 @@ async function main(args) {
     return 0;
   }
 }
-
-const isDirectExecution = (argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) =>
-  isDirectEntryPoint(argv1, selfUrl, platform);
 
 if (isDirectExecution()) {
   main(process.argv.slice(2)).then(

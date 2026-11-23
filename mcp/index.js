@@ -177,18 +177,24 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active repo root path (pass explicitly from global plugin installs)."
+  description: "Active repo root (pass from global installs)."
+};
+
+const MANIFEST_PATH_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  description: "Contained manifest path (rel/abs)."
 };
 
 const TOOLS = [
   {
     name: "dispatch_squad",
-    description: "Compile leads (all_l1), integrity_auditor[:<target>], or squad specialists for invoke_subagent.",
+    description: "Compile subagent leads (all_l1), integrity_auditor[:<id>], or squad specs.",
     inputSchema: {
       type: "object",
       properties: {
-        squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<target>]', or squad ID." },
-        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
+        squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<id>]', or squad ID." },
+        manifestPath: MANIFEST_PATH_SCHEMA,
         workspace: WORKSPACE_SCHEMA
       },
       required: ["squadId"],
@@ -197,39 +203,39 @@ const TOOLS = [
   },
   {
     name: "squad_planner",
-    description: "Plan /swarm (primary) or subagent cohorts with pinning, overlap checks, transcript-safe provenance, and audit slots.",
+    description: "Plan /swarm or subagent cohorts (pinning, overlap checks, audit slots).",
     inputSchema: {
       type: "object",
       properties: {
-        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
+        manifestPath: MANIFEST_PATH_SCHEMA,
         manifest: {
           type: "object",
-          description: "Inline squads manifest.",
+          description: "Inline manifest.",
           properties: { squads: { type: "object", minProperties: 1 } },
           required: ["squads"]
         },
-        task: { type: "string", minLength: 1, description: "Freeform task string." },
+        task: { type: "string", minLength: 1, description: "Freeform task." },
         workspace: WORKSPACE_SCHEMA,
-        squadId: { type: "string", minLength: 1, description: "Target working squad ID." },
-        topology: { type: "string", enum: ["flat", "layered"], description: "Flat or layered topology." },
-        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (default: swarm)." },
-        model: { type: "string", minLength: 1, description: "Target model ID." },
-        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation." },
+        squadId: { type: "string", minLength: 1, description: "Target squad ID." },
+        topology: { type: "string", enum: ["flat", "layered"], description: "Cohort topology." },
+        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (swarm|subagent)." },
+        model: { type: "string", minLength: 1, description: "Model ID." },
+        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Copy isolation." },
         scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task paths." },
-        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task role titles." },
-        readOnly: { type: "boolean", description: "Read-only task workers." },
+        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Role titles." },
+        readOnly: { type: "boolean", description: "Read-only workers." },
         roleScopes: {
           type: "object",
           minProperties: 1,
-          description: "Per-role task paths.",
+          description: "Per-role paths.",
           additionalProperties: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
         },
-        includeIntegrityAuditor: { type: "boolean", description: "Include integrity audit." },
-        reportRoot: { type: "string", minLength: 1, description: "Relative report root." },
-        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowed model IDs." },
-        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Reserved roster names." },
-        boardSince: { type: "integer", minimum: 0, description: "Swarm board since seq." },
-        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Swarm audit board seqs." }
+        includeIntegrityAuditor: { type: "boolean", description: "Include auditor." },
+        reportRoot: { type: "string", minLength: 1, description: "Report root." },
+        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Valid models." },
+        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Used names." },
+        boardSince: { type: "integer", minimum: 0, description: "Board since." },
+        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." }
       },
       oneOf: [
         { required: ["manifestPath"] },
@@ -347,6 +353,7 @@ if (isEntryPoint) {
       resolve();
       return;
     }
+    let pausedStdin = false;
     const onDone = () => {
       cleanup();
       resolve();
@@ -355,6 +362,9 @@ if (isEntryPoint) {
       process.stdout.off("drain", onDone);
       process.stdout.off("error", onDone);
       process.stdout.off("close", onDone);
+      if (pausedStdin && !shutdownStarted && !process.stdin.destroyed && !process.stdin.readableEnded) {
+        process.stdin.resume();
+      }
     };
     process.stdout.once("error", onDone);
     process.stdout.once("close", onDone);
@@ -363,6 +373,10 @@ if (isEntryPoint) {
       cleanup();
       resolve();
     } else {
+      if (!shutdownStarted && !process.stdin.destroyed && !process.stdin.readableEnded) {
+        pausedStdin = true;
+        process.stdin.pause();
+      }
       process.stdout.once("drain", onDone);
     }
   });
@@ -457,6 +471,22 @@ if (isEntryPoint) {
         droppingOversized = false;
         continue;
       }
+      const totalLen = bufferedBytes + segment.length;
+      const lastByte = segment.length > 0
+        ? segment[segment.length - 1]
+        : (chunks.length > 0 ? chunks[chunks.length - 1][chunks[chunks.length - 1].length - 1] : -1);
+      const cleanLen = totalLen - (lastByte === 0x0d ? 1 : 0);
+      if (cleanLen > MAX_STDIO_PAYLOAD_BYTES) {
+        chunks = [];
+        bufferedBytes = 0;
+        enqueueOversizedError();
+        continue;
+      }
+      if (cleanLen === 0) {
+        chunks = [];
+        bufferedBytes = 0;
+        continue;
+      }
       if (segment.length > 0) {
         chunks.push(segment);
         bufferedBytes += segment.length;
@@ -464,26 +494,30 @@ if (isEntryPoint) {
       const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
       chunks = [];
       bufferedBytes = 0;
-      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
-      if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
-        enqueueOversizedError();
-        continue;
-      }
-      enqueueLine(cleanBuf);
+      enqueueLine(stripSingleTrailingCr(fullLineBuf));
     }
   });
 
   const flushBufferedRemainder = () => {
     if (!droppingOversized && bufferedBytes > 0) {
+      const lastChunk = chunks[chunks.length - 1];
+      const lastByte = lastChunk && lastChunk.length > 0 ? lastChunk[lastChunk.length - 1] : -1;
+      const cleanLen = bufferedBytes - (lastByte === 0x0d ? 1 : 0);
+      if (cleanLen > MAX_STDIO_PAYLOAD_BYTES) {
+        chunks = [];
+        bufferedBytes = 0;
+        enqueueOversizedError();
+        return;
+      }
+      if (cleanLen === 0) {
+        chunks = [];
+        bufferedBytes = 0;
+        return;
+      }
       const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
       chunks = [];
       bufferedBytes = 0;
-      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
-      if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
-        enqueueOversizedError();
-      } else {
-        enqueueLine(cleanBuf);
-      }
+      enqueueLine(stripSingleTrailingCr(fullLineBuf));
     }
   };
 

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readOpenedFileWithStat, reportPath, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -1365,6 +1365,140 @@ try {
       assert.equal(fs.existsSync(path.join(batchDir, bS1)), false);
       const keepOnlyErr = spawnSync(process.execPath, [agySquadCli, "verify", bundledBatch.path, "--keep-reports"], { cwd: batchDir, encoding: "utf8" });
       assert.notEqual(keepOnlyErr.status, 0, "verify --keep-reports without --prune must fail closed");
+
+      // Batch B TEST-002: CLI subprocess negative tests for verify --expected-sha256 & finalize --allow-unaudited
+      const verifyConflict = spawnSync(
+        process.execPath,
+        [agySquadCli, "verify", bundledBatch.path, bundledBatch.sha256, "--expected-sha256", bundledBatch.sha256],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(verifyConflict.status, 0, "TEST-002: positional + --expected-sha256 conflict must fail");
+      assert.match(verifyConflict.stderr, /not both/);
+      const verifyUpper = spawnSync(
+        process.execPath,
+        [agySquadCli, "verify", bundledBatch.path, "--expected-sha256", bundledBatch.sha256.toUpperCase(), "--prune"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(verifyUpper.status, 0, "TEST-002: uppercase --expected-sha256 must fail");
+      const verifyEmpty = spawnSync(
+        process.execPath,
+        [agySquadCli, "verify", bundledBatch.path, "--expected-sha256", "", "--prune"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(verifyEmpty.status, 0, "TEST-002: empty --expected-sha256 must fail");
+      const verifyMismatch = spawnSync(
+        process.execPath,
+        [agySquadCli, "verify", bundledBatch.path, "--expected-sha256", "0".repeat(64)],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(verifyMismatch.status, 0, "TEST-002: mismatched --expected-sha256 must fail");
+      assert.match(verifyMismatch.stderr, /accepted digest/);
+
+      bWrite(bS1, "# Spec 1\nVerified src/x.js.\n");
+      fs.rmSync(path.join(batchDir, bAudit), { force: true });
+      const finMissingAudit = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "scratch/rec.json", "--replace"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(finMissingAudit.status, 0, "TEST-002: finalize without --allow-unaudited when audit missing must fail");
+      const finKeepNoPrune = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "scratch/rec.json", "--allow-unaudited", "--keep-reports"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(finKeepNoPrune.status, 0, "TEST-002: finalize --keep-reports without --prune must fail");
+      const finUnaudited = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "scratch/rec.json", "--allow-unaudited", "--replace", "--prune"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.equal(finUnaudited.status, 0, `TEST-002: finalize --allow-unaudited --replace --prune failed: ${finUnaudited.stderr}`);
+      const finUnauditedJson = JSON.parse(finUnaudited.stdout);
+      assert.equal(finUnauditedJson.bundled.auditPolicy, "unaudited-explicit");
+      assert.deepEqual(finUnauditedJson.pruned.removed, [bS1]);
+
+      // Batch B SCRIPT-003, SCRIPT-004, SCRIPT-006, SEC-006, SEC-007
+      const replaceNoOut = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--replace", "src/x.js"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(replaceNoOut.status, 0, "SCRIPT-004: bundle-init --replace without --out must fail");
+      assert.match(replaceNoOut.stderr, /--replace.*requires '--out/);
+
+      const childPlanPath = path.join(batchDir, "plan-child.json");
+      fs.copyFileSync(path.join(batchDir, "scratch/plan.json"), childPlanPath);
+      const childFallback = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--workspace", batchDir, "--plan", `${path.basename(batchDir)}/plan-child.json`, "src/x.js"],
+        { cwd: path.dirname(batchDir), encoding: "utf8" }
+      );
+      assert.equal(childFallback.status, 0, `SCRIPT-003: direct child-dir --workspace cwd fallback failed: ${childFallback.stderr}`);
+      assert.equal(JSON.parse(childFallback.stdout).squadId, "alpha");
+
+      const dashHRoleInline = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--role=-h", "--scope", "src/x.js", "Audit role flag"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.equal(dashHRoleInline.status, 0, `SCRIPT-006: --role=-h must succeed: ${dashHRoleInline.stderr}`);
+      const dashHRoleSpaced = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--role", "-h", "--scope", "src/x.js", "Audit role flag"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(dashHRoleSpaced.status, 0);
+      assert.match(dashHRoleSpaced.stderr, /argument is ambiguous/, "SCRIPT-006: arity-aware hasHelpFlag must not misreport --role -h as --help conflict");
+      assert.doesNotMatch(dashHRoleSpaced.stderr, /Conflicting flags/);
+      const dashHConflict = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--role=-h", "--help"],
+        { cwd: batchDir, encoding: "utf8" }
+      );
+      assert.notEqual(dashHConflict.status, 0, "SCRIPT-006: trailing --help after --role=-h must still conflict");
+      assert.match(dashHConflict.stderr, /Conflicting flags/);
+
+      for (const driveRel of ["C:scratch/agy-squad", "c:foo/bar"]) {
+        assert.throws(() => normalizeReportRoot(driveRel), /workspace-relative reportRoot/, `SEC-006: normalizeReportRoot must reject ${driveRel}`);
+        assert.throws(() => readFile(batchDir, driveRel), /workspace-relative file path/, `SEC-006: readFile must reject ${driveRel}`);
+        assert.throws(() => ensureDirectory(batchDir, driveRel), /Invalid workspace directory/, `SEC-006: ensureDirectory must reject ${driveRel}`);
+      }
+      const outsideSafeFile = path.join(path.dirname(batchDir), `sec007-outside-${process.pid}.txt`);
+      fs.writeFileSync(outsideSafeFile, "outside\n", "utf8");
+      try {
+        assert.equal(
+          readRegularFileSafe(path.join(batchDir, "src/x.js"), "src/x.js", { allowedRoot: batchDir }).toString("utf8"),
+          "export const x = 42;\n"
+        );
+        assert.throws(
+          () => readRegularFileSafe(outsideSafeFile, "outside.txt", { allowedRoot: batchDir }),
+          /inside the workspace/,
+          "SEC-007: readRegularFileSafe with allowedRoot must reject paths outside root"
+        );
+      } finally {
+        fs.rmSync(outsideSafeFile, { force: true });
+      }
+      // Batch B OPT-IO-06 & OPT-IO-10e: size-hinted readOpenedFileWithStat on 0-byte & >64KB files; selective squad hydration
+      bWrite("src/empty.txt", "");
+      const largeBody = "0123456789abcdef".repeat(9000);
+      bWrite("src/large.txt", largeBody);
+      assert.equal(readOpenedFileWithStat(path.join(batchDir, "src/empty.txt"), "src/empty.txt").bytes.length, 0);
+      assert.equal(readOpenedFileWithStat(path.join(batchDir, "src/large.txt"), "src/large.txt").bytes.toString("utf8"), largeBody);
+      const multiHydrateRec = buildBundleRecordInit(batchDir, {
+        plan: {
+          executionMode: "swarm",
+          workspace: batchDir,
+          workers: [
+            { squadId: "target_sq", specialists: [{ workerName: "t-1", reportSlot: reportPath("target_sq", 1) }] },
+            { squadId: "unrelated_sq", specialists: ["not-a-plain-object-skipped-when-unselected"] }
+          ]
+        },
+        squadId: "target_sq",
+        files: ["src/x.js"]
+      });
+      assert.equal(multiHydrateRec.squadId, "target_sq");
+      assert.equal(multiHydrateRec.assignments.length, 1);
     } finally {
       fs.rmSync(batchDir, { recursive: true, force: true });
     }
