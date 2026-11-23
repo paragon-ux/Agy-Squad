@@ -64,6 +64,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(planner.inputSchema.properties.boardSince && planner.inputSchema.properties.boardSeqs, "SQ-SWARM-BOARD-SCOPE schema fields exposed");
   assert.equal(planner.inputSchema.properties.readOnly?.type, "boolean", "OPT-IO-6: readOnly schema field exposed");
   assert.equal(planner.inputSchema.properties.roleScopes?.type, "object", "OPT-IO-6: roleScopes schema field exposed");
+  assert.equal(planner.inputSchema.properties.roleScopes?.minProperties, 1, "R1-MCP-001: roleScopes schema enforces minProperties: 1");
   assert.equal(planner.inputSchema.properties.scopeFiles.description, "Task paths.", "OPT-GAP-SCHEMA-WORD: scopeFiles description must use 'Task paths.'");
   const toolsListBytes = Buffer.byteLength(JSON.stringify(res), "utf8");
   assert.ok(toolsListBytes <= 3072, `W4 target: tools/list response must stay <= 3072 B (got ${toolsListBytes})`);
@@ -709,6 +710,111 @@ console.log("Agy-Squad MCP server tests\n");
     assert.match(nestedAmbigRes[1].result.content[0].text, /Ambiguous multi-root workspace/);
     assert.equal(nestedAmbigRes[2].result.isError, true, "MCP-001: dispatch_squad must reject ambiguous nested roots");
     assert.match(nestedAmbigRes[2].result.content[0].text, /Ambiguous multi-root workspace/);
+
+    // Session 3 MCP-004 & TEST-NEW-001: symlink-aliased multi-root manifestPath and outbound cross-root symlink containment
+    const secondaryLink = path.join(path.dirname(secondaryWs), `${path.basename(secondaryWs)}-link`);
+    fs.symlinkSync(secondaryWs, secondaryLink, os.platform() === "win32" ? "junction" : "dir");
+    try {
+      const symManifestRes = runTmpSession([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            workspaceFolders: [
+              { uri: pathToFileURL(dupSlashRoot).href, name: "r1" },
+              { uri: pathToFileURL(secondaryWs).href, name: "r2" }
+            ]
+          }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "squad_planner", arguments: { manifestPath: path.join(secondaryLink, "target.json") } }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "dispatch_squad", arguments: { squadId: "beta", manifestPath: path.join(secondaryLink, "target.json") } }
+        }
+      ]);
+      assert.equal(Boolean(symManifestRes[1].result.isError), false, `MCP-004: symlink-aliased manifestPath must pass squad_planner: ${symManifestRes[1].result.content[0].text}`);
+      assert.equal(JSON.parse(symManifestRes[1].result.content[0].text).workspace, secondaryWs);
+      assert.equal(Boolean(symManifestRes[2].result.isError), false, `MCP-004: symlink-aliased manifestPath must pass dispatch_squad: ${symManifestRes[2].result.content[0].text}`);
+      assert.equal(JSON.parse(symManifestRes[2].result.content[0].text).Subagents[0].Role, "Beta");
+
+      const symRootRes = runTmpSession([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            workspaceFolders: [
+              { uri: pathToFileURL(dupSlashRoot).href, name: "r1" },
+              { uri: pathToFileURL(secondaryLink).href, name: "r2-link" }
+            ]
+          }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "squad_planner", arguments: { manifestPath: absTargetManifest } }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "dispatch_squad", arguments: { squadId: "beta", manifestPath: absTargetManifest } }
+        }
+      ]);
+      assert.equal(Boolean(symRootRes[1].result.isError), false, `TEST-NEW-001: symlinked root + canonical manifestPath must pass squad_planner: ${symRootRes[1].result.content[0].text}`);
+      assert.equal(JSON.parse(symRootRes[1].result.content[0].text).workspace, secondaryWs);
+      assert.equal(Boolean(symRootRes[2].result.isError), false, `TEST-NEW-001: symlinked root + canonical manifestPath must pass dispatch_squad: ${symRootRes[2].result.content[0].text}`);
+      assert.equal(JSON.parse(symRootRes[2].result.content[0].text).Subagents[0].Role, "Beta");
+
+      const crossRootEscape = path.join(dupSlashRoot, "escape-to-r2.json");
+      let crossLinkCreated = false;
+      try {
+        fs.symlinkSync(absTargetManifest, crossRootEscape, "file");
+        crossLinkCreated = true;
+      } catch (err) {
+        if (err?.code !== "EPERM") throw err;
+      }
+      if (crossLinkCreated) {
+        for (const folderPair of [[dupSlashRoot, secondaryWs], [secondaryWs, dupSlashRoot]]) {
+          const escapeRes = runTmpSession([
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2024-11-05",
+                workspaceFolders: [
+                  { uri: pathToFileURL(folderPair[0]).href, name: "a" },
+                  { uri: pathToFileURL(folderPair[1]).href, name: "b" }
+                ]
+              }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: crossRootEscape } }
+            }
+          ]);
+          assert.equal(escapeRes[1].result.isError, true, "MCP-004: outbound cross-root symlink must be rejected");
+          assert.match(escapeRes[1].result.content[0].text, /inside the workspace/);
+          assert.doesNotMatch(escapeRes[1].result.content[0].text, /Ambiguous multi-root workspace/);
+        }
+      }
+    } finally {
+      fs.rmSync(secondaryLink, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(dupSlashRoot, { recursive: true, force: true });
     fs.rmSync(secondaryWs, { recursive: true, force: true });

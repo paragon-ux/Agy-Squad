@@ -87,7 +87,7 @@ If you prefer not to use `agy-squad setup`, you can register `agy-squad` manuall
 }
 ```
 
-In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` and the `swarm-governance` skill (defaulting cleanly to `flat` topology, `inherit` workspace, and the coordinator's active model unless you ask for layered leads or isolated worktrees), or call `dispatch_squad` / `agy-squad dispatch` when targeting `invoke_subagent`. Enforce strict single-line verdicts and SHA-256 bundles with `agy-squad` (`plan`, `dispatch`, `collect`, `bundle-init`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
+In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` and the `swarm-governance` skill (calling Step 0 `ask_question` for any missing setting among `topology`, `model`, `workspaceIsolation`, and report retention; inline tasks default to `flat`, while manifests with `lead` blocks compile `layered` unless `--topology flat` is passed), or call `dispatch_squad` / `agy-squad dispatch` when targeting `invoke_subagent`. Enforce strict single-line verdicts and SHA-256 bundles with `agy-squad` (`plan`, `dispatch`, `collect`, `bundle-init`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
 
 ## 3. CLI Planner and Governance (`agy-squad`)
 

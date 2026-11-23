@@ -2313,6 +2313,122 @@ try {
     assert.equal(finDoneRes.status, 0, finDoneRes.stderr || finDoneRes.stdout);
     const finDoneJson = JSON.parse(finDoneRes.stdout);
     assert.equal(finDoneJson.inspected[0].status, "READY", "SVC-001: finalize must report inspected[].status === 'READY' on '@lead [done] READY'");
+
+    // Session 3 regressions: SVC-005, RUN-011, SVC-006
+    // SVC-005: collectReportSlots(--record --strict) treats lead synthesis and integrity auditor slots as inherit-capable, plus legacy slotType === "audit"
+    const svc5S1 = reportPath("svc5", 1);
+    const svc5Lead = reportPath("svc5");
+    const svc5Audit = reportPath("integrity_auditor-svc5", 1);
+    const svc5AltAudit = reportPath("integrity_auditor-svc5", 2);
+    writeAtAsq(asqWt, svc5S1, "# SVC-005 Specialist\nDone in worktree.\n");
+    writeAtAsq(asqDir, svc5Lead, "Content Verdict: PASS\nLead in coordinator inherit root.\n");
+    writeAtAsq(asqDir, svc5Audit, "Target Squad: svc5\nIntegrity Verdict: CLEAN\nAudit in coordinator inherit root.\n");
+    const svc5Rec = {
+      workspace: asqDir,
+      squadId: "svc5",
+      verdict: "PASS",
+      verifiedFiles: baFiles,
+      assignments: [{ conversationId: "svc5-w1", report: svc5S1 }],
+      handoffs: [{ sender: "svc5-w1", message: `READY ${svc5S1} - Done.` }],
+      requireIntegrityAudit: true,
+      integrityAuditSlots: [svc5Audit]
+    };
+    const svc5Collected = collectReportSlots(asqDir, { record: svc5Rec, sources: [asqWt], strict: true });
+    assert.deepEqual(svc5Collected.missing, [], "SVC-005: inherit lead + integrityAuditSlots in coordinator root must satisfy --strict");
+    assert.deepEqual(svc5Collected.collected.map(c => c.slot), [svc5S1]);
+    writeAtAsq(asqDir, svc5AltAudit, "Target Squad: svc5\nIntegrity Verdict: CLEAN\nAlt audit in root.\n");
+    const svc5ReportFieldCollected = collectReportSlots(asqDir, {
+      record: { ...svc5Rec, integrityAuditSlots: undefined, integrityReport: svc5AltAudit },
+      sources: [asqWt],
+      strict: true
+    });
+    assert.deepEqual(svc5ReportFieldCollected.missing, [], "SVC-005: inherit integrityReport in coordinator root must satisfy --strict");
+    const svc5LegacyScaffold = collectReportSlots(asqDir, {
+      plan: {
+        executionMode: "swarm",
+        workers: [{ squadId: "svc5", specialists: [{ reportSlot: svc5S1 }] }],
+        provenanceScaffold: {
+          entries: [
+            { squadId: "svc5", slotType: "lead", reportSlot: svc5Lead },
+            { squadId: "svc5", slotType: "audit", reportSlot: svc5Audit }
+          ]
+        }
+      },
+      sources: [asqWt],
+      strict: true
+    });
+    assert.deepEqual(svc5LegacyScaffold.missing, [], "SVC-005: legacy provenanceScaffold slotType === 'audit' must be treated as inherit");
+    assert.throws(
+      () => collectReportSlots(asqDir, {
+        record: { ...svc5Rec, integrityAuditSlots: [reportPath("integrity_auditor-svc5", 9)] },
+        sources: [asqWt],
+        strict: true
+      }),
+      /Missing expected report slot/,
+      "SVC-005: --strict must still fail when inherit audit slot is absent from both worktree and root"
+    );
+
+    // RUN-011: non-boolean includeIntegrityAuditor and template/record requireIntegrityAudit must fail closed
+    for (const badBool of ["false", 0, "true", null]) {
+      assert.throws(
+        () => buildBundleRecordInit(asqDir, {
+          plan: { ...emptyAuditPlan, includeIntegrityAuditor: badBool },
+          squadId: "alpha"
+        }),
+        /includeIntegrityAuditor must be a boolean/,
+        `RUN-011: includeIntegrityAuditor=${JSON.stringify(badBool)} must throw`
+      );
+      assert.throws(
+        () => buildBundleRecordInit(asqDir, {
+          plan: {
+            executionMode: "swarm",
+            workspace: asqDir,
+            workers: [{ squadId: "bad_req", specialists: [{ workerName: "br-1", reportSlot: reportPath("bad_req", 1) }] }],
+            bundleRecordTemplates: {
+              bad_req: {
+                squadId: "bad_req",
+                workspace: asqDir,
+                verdict: "PASS",
+                assignments: [{ conversationId: "br-1", report: reportPath("bad_req", 1) }],
+                requireIntegrityAudit: badBool
+              }
+            }
+          },
+          squadId: "bad_req",
+          allowUnaudited: true
+        }),
+        /requireIntegrityAudit must be a boolean/,
+        `RUN-011: template.requireIntegrityAudit=${JSON.stringify(badBool)} must throw`
+      );
+    }
+    assert.throws(
+      () => collectReportSlots(asqDir, {
+        record: { ...svc5Rec, requireIntegrityAudit: "false" },
+        sources: [asqWt]
+      }),
+      /requireIntegrityAudit must be a boolean/,
+      "RUN-011: collectReportSlots must reject non-boolean record.requireIntegrityAudit"
+    );
+
+    // SVC-006: computeEvidenceDigest rejects integrityAuditSlots and integrityReport self-references in verifiedFiles
+    assert.throws(
+      () => computeEvidenceDigest(asqDir, {
+        ...baRec,
+        verifiedFiles: { ...baFiles, [baAudit]: fingerprint(asqDir, [baAudit])[baAudit] }
+      }),
+      /Record final work inputs in verifiedFiles/,
+      "SVC-006: computeEvidenceDigest must reject integrityAuditSlots entry in verifiedFiles"
+    );
+    assert.throws(
+      () => computeEvidenceDigest(asqDir, {
+        ...baRec,
+        integrityAuditSlots: undefined,
+        integrityReport: baAudit,
+        verifiedFiles: { ...baFiles, [baAudit]: fingerprint(asqDir, [baAudit])[baAudit] }
+      }),
+      /Record final work inputs in verifiedFiles/,
+      "SVC-006: computeEvidenceDigest must reject integrityReport in verifiedFiles"
+    );
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

@@ -96,9 +96,9 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
   }
   if (sessionWorkspaces.length > 1 && typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
     const rel = args.manifestPath.trim();
-    const isContained = (dir, target) => {
+    const isContained = (dir, target, allowEqual = false) => {
       const relCheck = path.relative(dir, target);
-      return Boolean(relCheck) && relCheck !== ".." && !relCheck.startsWith(`..${path.sep}`) && !path.isAbsolute(relCheck);
+      return (allowEqual || Boolean(relCheck)) && relCheck !== ".." && !relCheck.startsWith(`..${path.sep}`) && !path.isAbsolute(relCheck);
     };
     let matching = [];
     if (path.isAbsolute(rel)) {
@@ -106,17 +106,27 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
       let exists = false;
       try { exists = fs.existsSync(candidate); } catch {}
       if (exists) {
-        let canonicalCandidate = candidate;
-        try { canonicalCandidate = fs.realpathSync(candidate); } catch {}
-        matching = sessionWorkspaces.filter((root) => {
-          try {
-            if (isContained(root, candidate)) return true;
-            const canonicalRoot = fs.realpathSync(root);
-            return isContained(canonicalRoot, candidate) || isContained(canonicalRoot, canonicalCandidate);
-          } catch {
-            return false;
-          }
-        });
+        let canonicalCandidate;
+        let canonicalParent;
+        try {
+          canonicalCandidate = fs.realpathSync(candidate);
+          canonicalParent = fs.realpathSync(path.dirname(candidate));
+        } catch {}
+        if (canonicalCandidate && canonicalParent) {
+          matching = sessionWorkspaces.filter((root) => {
+            try {
+              const canonicalRoot = fs.realpathSync(root);
+              if (!isContained(canonicalRoot, canonicalCandidate)) return false;
+              return (
+                isContained(root, candidate) ||
+                isContained(canonicalRoot, candidate) ||
+                isContained(canonicalRoot, canonicalParent, true)
+              );
+            } catch {
+              return false;
+            }
+          });
+        }
       }
     } else {
       const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
@@ -210,6 +220,7 @@ const TOOLS = [
         readOnly: { type: "boolean", description: "Read-only task workers." },
         roleScopes: {
           type: "object",
+          minProperties: 1,
           description: "Per-role task paths.",
           additionalProperties: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
         },

@@ -6,11 +6,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_SKILLS } from "./install-register.mjs";
+import { SHIPPED_SKILLS, isDirectEntryPoint } from "./install-register.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const errors = [];
-const warnings = [];
 
 function stripTrailingSlashes(value) {
   let end = value.length;
@@ -19,6 +17,74 @@ function stripTrailingSlashes(value) {
   }
   return value.slice(0, end);
 }
+
+function matchPackageGlob(value, pattern) {
+  const tokens = [];
+  for (let i = 0; i < pattern.length; ) {
+    if (pattern.startsWith("**/", i)) {
+      if (tokens[tokens.length - 1] !== "**/") tokens.push("**/");
+      i += 3;
+    } else if (pattern.startsWith("**", i)) {
+      if (tokens[tokens.length - 1] !== "**") tokens.push("**");
+      i += 2;
+    } else if (pattern[i] === "*") {
+      if (tokens[tokens.length - 1] !== "*") tokens.push("*");
+      i += 1;
+    } else {
+      tokens.push(pattern[i]);
+      i += 1;
+    }
+  }
+  const n = value.length;
+  let dp = new Uint8Array(n + 1);
+  dp[0] = 1;
+  for (const tok of tokens) {
+    const next = new Uint8Array(n + 1);
+    if (tok === "**/") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) {
+          next[j] = 1;
+          seen = true;
+        }
+        if (seen && j > 0 && value[j - 1] === "/") {
+          next[j] = 1;
+        }
+      }
+    } else if (tok === "**") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) seen = true;
+        if (seen) next[j] = 1;
+      }
+    } else if (tok === "*") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (j > 0 && value[j - 1] === "/") seen = false;
+        if (dp[j]) seen = true;
+        if (seen) next[j] = 1;
+      }
+    } else {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && value[j] === tok) next[j + 1] = 1;
+      }
+    }
+    dp = next;
+  }
+  return dp[n] === 1;
+}
+
+function matchesPackageEntry(relativePath, normalized) {
+  if (!normalized) return false;
+  if (normalized.includes("*")) {
+    return matchPackageGlob(relativePath, normalized);
+  }
+  return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
+}
+
+function runReleasePreflight() {
+const errors = [];
+const warnings = [];
 
 function readText(relativePath) {
   const target = path.join(root, relativePath);
@@ -145,17 +211,6 @@ if (pkg) {
     });
   const positiveEntries = fileEntries.filter((entry) => !entry.negated);
   const negativeEntries = fileEntries.filter((entry) => entry.negated);
-  const matchesPackageEntry = (relativePath, normalized) => {
-    if (!normalized) return false;
-    if (normalized.includes("*")) {
-      const escaped = normalized.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-      const pattern = escaped.replace(/\*\*\/|\*\*|\*/g, (m) =>
-        m === "**/" ? "(?:.*/)?" : m === "**" ? ".*" : "[^/]*"
-      );
-      return new RegExp(`^${pattern}$`).test(relativePath);
-    }
-    return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
-  };
   const isCoveredByFiles = (relativePath) =>
     ["package.json", "README.md", "LICENSE"].includes(relativePath) ||
     (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
@@ -241,3 +296,10 @@ if (errors.length) {
 } else {
   console.log(`\nRelease preflight passed${warnings.length ? ` with ${warnings.length} warning(s)` : ""}.`);
 }
+}
+
+if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
+  runReleasePreflight();
+}
+
+export { matchPackageGlob, matchesPackageEntry, runReleasePreflight };

@@ -1496,6 +1496,28 @@ try {
         /\bgh release upload[^\n]*--clobber\b/,
         "SEC-008: gh release upload must not pass --clobber"
       );
+
+      // Day-1 raw-final RF-SCRIPT-001: stale global mcp_config.json-only profile reports PARTIAL INSTALLATION + Next step (not DISABLED)
+      const rfProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rf-status-"));
+      try {
+        const rfCfgDir = path.join(rfProfile, ".gemini", "config");
+        fs.mkdirSync(rfCfgDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(rfCfgDir, "mcp_config.json"),
+          JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["old/mcp/index.js"] } } }, null, 2) + "\n"
+        );
+        const rfStatus = spawnSync(process.execPath, [cli, "status"], {
+          cwd: repoRoot,
+          env: { ...process.env, AGY_TEST_PROFILE_DIR: rfProfile },
+          encoding: "utf8"
+        });
+        assert.equal(rfStatus.status, 1, "RF-SCRIPT-001: stale global MCP-only profile must exit 1");
+        assert.match(rfStatus.stdout, /Overall Status: PARTIAL INSTALLATION/, "RF-SCRIPT-001: stale global MCP-only profile must report PARTIAL INSTALLATION");
+        assert.doesNotMatch(rfStatus.stdout, /Overall Status: DISABLED/, "RF-SCRIPT-001: stale global MCP-only profile must not report DISABLED");
+        assert.match(rfStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/, "RF-SCRIPT-001: Next step setup hint must print");
+      } finally {
+        fs.rmSync(rfProfile, { recursive: true, force: true });
+      }
     } finally {
       process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
       fs.rmSync(asqProfile, { recursive: true, force: true });

@@ -78,6 +78,52 @@ function stripHtmlComments(markdown) {
   return out;
 }
 
+function extractMarkdownLinks(text) {
+  const links = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) break;
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) break;
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      pos = closeBracket + 1;
+      continue;
+    }
+    let i = closeBracket + 2;
+    const destStart = i;
+    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
+      i++;
+    }
+    const rawDest = text.slice(destStart, i);
+    if (i < text.length && text[i] === ")") {
+      pos = i + 1;
+    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
+      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+      const quote = text[i];
+      if (quote !== '"' && quote !== "'") {
+        pos = i;
+        continue;
+      }
+      const closeQuote = text.indexOf(quote, i + 1);
+      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
+        pos = i + 1;
+        continue;
+      }
+      pos = closeQuote + 2;
+    } else {
+      pos = i;
+      continue;
+    }
+    if (!rawDest) continue;
+    const hashIdx = rawDest.indexOf("#");
+    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
+    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
+    links.push({ target, fragment });
+  }
+  return links;
+}
+
 function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
   assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",
     "Expected one npm pack JSON package record");
@@ -144,8 +190,7 @@ function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
         : fs.readFileSync(path.join(rootDir, name), "utf8");
     const stripped = stripCode(stripHtmlComments(markdown));
     const baseDir = path.posix.dirname(name);
-    for (const match of stripped.matchAll(/\[[^\]]+\]\(([^)#\s]*)(?:#[^)\s]*)?(?:\s+(?:"[^"]*"|'[^']*'))?\)/g)) {
-      const rawTarget = match[1];
+    for (const { target: rawTarget } of extractMarkdownLinks(stripped)) {
       const cleanTarget = rawTarget.split("?")[0];
       if (!cleanTarget || /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(cleanTarget)) continue;
       if (cleanTarget.includes("\\")) {
@@ -237,6 +282,20 @@ function selfTest() {
     }),
     REQUIRED.length
   );
+
+  // R1-SEC-004: linear-time Markdown link scanning on pathological unclosed link payloads (< 100 ms)
+  const tLinks = performance.now();
+  assert.equal(
+    validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md":
+          "[a](b".repeat(20_000) + "\n" + "[a](b ".repeat(20_000) + ")\n" + "[a](b \"".repeat(20_000) + "\n"
+      }
+    }),
+    REQUIRED.length
+  );
+  const linksMs = performance.now() - tLinks;
+  assert.ok(linksMs < 100, `R1-SEC-004: verify-package link scanner took ${linksMs.toFixed(1)} ms (>= 100 ms)`);
 
   console.log(`Package verifier self-test passed (positive + ${badCases.length + 3} negatives)`);
 }

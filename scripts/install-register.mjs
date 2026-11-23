@@ -1328,7 +1328,7 @@ export function printStatus(options = {}) {
       : !status.details.runtime.supported
         ? (status.isInstalled ? "UNSUPPORTED NODE.JS RUNTIME" : "NOT INSTALLED (UNSUPPORTED NODE.JS)")
         : status.isInstalled
-          ? (!status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
+          ? (status.details.plugin.exists && !status.details.config.enabled ? "DISABLED" : "PARTIAL INSTALLATION")
           : "NOT INSTALLED";
   log(`\nOverall Status: ${overallLabel}`);
   if (!status.details.runtime.supported) {

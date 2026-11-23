@@ -15,7 +15,7 @@ Trace `invariant -> decision (docs/plans/LEDGER.md) -> contract -> code -> verif
 | `RUN` | `mcp/{dispatch,briefs,planner}.mjs` symlink/fd checks, `TypeName: "self"`, `modelProvenance`, scope overlaps. |
 | `SVC` | `mcp/{handoffs,verdicts}.mjs`, `bin/agy-squad.mjs` receipts, custom `reportRoot`, strict verdicts, atomic bundles. |
 | `DB` | Confirm no unreviewed DB state (file-backed bundles audited under `SVC`). |
-| `SCRIPT` | `bin/agy-squad.mjs` CLI and `scripts/diagnose.mjs` exit codes and strict arg validation. |
+| `SCRIPT` | `bin/agy-squad.mjs`, `scripts/{install-register,release-preflight}.mjs`, and `.agents/skills/self-diagnosis/scripts/diagnose.mjs` exit codes and strict arg validation. |
 | `TEST` | `tests/test-*.mjs` assertion strength, adversarial cases, concurrency, live verification. |
 | `DEP` | `package.json`, `zensical.toml`, `.gitignore`, `.github/workflows/*.yml`. |
 | `SEC` | Injection/ReDoS, symlink/fd escapes, isolation/transcript boundaries, secret hygiene, CI `permissions:`/`concurrency:`, fail-closed defaults. |

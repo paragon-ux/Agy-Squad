@@ -149,6 +149,82 @@ function resolveWorkerModels(executionMode, requestedModel, specModelRaw, overri
   };
 }
 
+function resolvePathThroughMissing(targetPath, depth = 0) {
+  if (depth > 16) return null;
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch (err) {
+    if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") return null;
+  }
+  let cur = path.resolve(targetPath);
+  const tail = [];
+  while (true) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) {
+        const parentReal = resolvePathThroughMissing(path.dirname(cur), depth + 1);
+        if (!parentReal) return null;
+        const nextTarget = path.resolve(parentReal, fs.readlinkSync(cur));
+        const resolved = resolvePathThroughMissing(nextTarget, depth + 1);
+        if (!resolved) return null;
+        return tail.length ? path.join(resolved, ...tail) : resolved;
+      }
+      const real = fs.realpathSync.native(cur);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch (err) {
+      if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") return null;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) {
+      return tail.length ? path.join(cur, ...tail) : cur;
+    }
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
+function resolveScopeCaseInsensitive(options) {
+  return typeof options?.caseInsensitive === "boolean"
+    ? options.caseInsensitive
+    : os.platform() === "win32" || os.platform() === "darwin";
+}
+
+function resolveCanonicalRootKey(root, caseInsensitive, cachedCanonicalRoot) {
+  let canonicalRoot = cachedCanonicalRoot;
+  if (!canonicalRoot && root) {
+    canonicalRoot = path.resolve(root);
+    try {
+      canonicalRoot = fs.realpathSync.native(canonicalRoot);
+    } catch {}
+  }
+  if (!canonicalRoot) return undefined;
+  const normalized = trimTrailingSlashes(canonicalRoot.split(path.sep).join("/")) || "/";
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+function isSameOrParentPath(parent, child) {
+  if (parent === child) return true;
+  if (parent === "/") return child.startsWith("/");
+  return child.startsWith(`${parent}/`);
+}
+
+function normalizedScopesOverlap(normA, normB, canonicalRootKey) {
+  if (normA === "" || normB === "") return true;
+  const extA = normA.startsWith("external:");
+  const extB = normB.startsWith("external:");
+  if (extA && extB) {
+    const pathA = normA.slice("external:".length);
+    const pathB = normB.slice("external:".length);
+    return isSameOrParentPath(pathA, pathB) || isSameOrParentPath(pathB, pathA);
+  }
+  if (extA || extB) {
+    if (!canonicalRootKey) return false;
+    const extPath = (extA ? normA : normB).slice("external:".length);
+    return isSameOrParentPath(extPath, canonicalRootKey);
+  }
+  return isSameOrParentPath(normA, normB) || isSameOrParentPath(normB, normA);
+}
+
 function normalizeScopePath(scopeEntry, root, options = {}) {
   let resolvedRoot = root;
   let resolvedOptions = options;
@@ -157,10 +233,7 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
     resolvedRoot = undefined;
   }
   const safeOptions = resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {};
-  const caseInsensitive =
-    typeof safeOptions.caseInsensitive === "boolean"
-      ? safeOptions.caseInsensitive
-      : os.platform() === "win32" || os.platform() === "darwin";
+  const caseInsensitive = resolveScopeCaseInsensitive(safeOptions);
   const applyCase = value => (caseInsensitive ? value.toLowerCase() : value);
 
   let trimmed = trimTrailingSlashes(
@@ -204,8 +277,19 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
             try {
               const st = fs.lstatSync(curPath);
               if (st.isSymbolicLink()) {
-                const real = fs.realpathSync.native(curPath);
-                cached = { exists: true, real };
+                try {
+                  cached = { exists: true, real: fs.realpathSync.native(curPath) };
+                } catch (symErr) {
+                  if (symErr?.code === "ENOENT" || symErr?.code === "ENOTDIR") {
+                    const resolvedDangling = resolvePathThroughMissing(
+                      path.resolve(curReal, fs.readlinkSync(curPath)),
+                      1
+                    );
+                    cached = resolvedDangling ? { exists: true, real: resolvedDangling } : { exists: false };
+                  } else {
+                    cached = { error: true };
+                  }
+                }
               } else {
                 const real = path.join(curReal, parts[i]);
                 cached = { exists: true, real };
@@ -232,7 +316,7 @@ function normalizeScopePath(scopeEntry, root, options = {}) {
         } else if (rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) {
           result = applyCase(rel);
         } else {
-          const externalTarget = trimTrailingSlashes(resolvedTarget.split(path.sep).join("/"));
+          const externalTarget = trimTrailingSlashes(resolvedTarget.split(path.sep).join("/")) || "/";
           result = `external:${applyCase(externalTarget)}`;
           if (Array.isArray(safeOptions.warnings)) {
             safeOptions.warnings.push(
@@ -256,10 +340,20 @@ function scopesOverlap(a, b, root, options = {}) {
     resolvedOptions = root;
     resolvedRoot = undefined;
   }
-  const normA = normalizeScopePath(a, resolvedRoot, resolvedOptions);
-  const normB = normalizeScopePath(b, resolvedRoot, resolvedOptions);
-  if (normA === "" || normB === "") return true;
-  return normA === normB || normA.startsWith(`${normB}/`) || normB.startsWith(`${normA}/`);
+  const safeOptions = resolvedOptions && typeof resolvedOptions === "object" ? resolvedOptions : {};
+  const caseInsensitive = resolveScopeCaseInsensitive(safeOptions);
+  let canonicalRoot = safeOptions.canonicalRoot;
+  if (!canonicalRoot && resolvedRoot) {
+    canonicalRoot = path.resolve(resolvedRoot);
+    try {
+      canonicalRoot = fs.realpathSync.native(canonicalRoot);
+    } catch {}
+  }
+  const scopedOptions = canonicalRoot ? { ...safeOptions, canonicalRoot } : safeOptions;
+  const normA = normalizeScopePath(a, resolvedRoot, scopedOptions);
+  const normB = normalizeScopePath(b, resolvedRoot, scopedOptions);
+  const canonicalRootKey = resolveCanonicalRootKey(resolvedRoot, caseInsensitive, canonicalRoot);
+  return normalizedScopesOverlap(normA, normB, canonicalRootKey);
 }
 
 function findScopeOverlaps(entries, root, options = {}) {
@@ -282,6 +376,11 @@ function findScopeOverlaps(entries, root, options = {}) {
     normCache: new Map(),
     segmentCache: new Map()
   };
+  const canonicalRootKey = resolveCanonicalRootKey(
+    resolvedRoot,
+    resolveScopeCaseInsensitive(scopedOptions),
+    canonicalRoot
+  );
   const normalizedEntries = entries.map(entry => {
     const deduped = [];
     const seenNorm = new Set();
@@ -302,7 +401,7 @@ function findScopeOverlaps(entries, root, options = {}) {
       const matchingPair = [];
       for (const a of left.scopes) {
         for (const b of right.scopes) {
-          if (a.norm === "" || b.norm === "" || a.norm === b.norm || a.norm.startsWith(`${b.norm}/`) || b.norm.startsWith(`${a.norm}/`)) {
+          if (normalizedScopesOverlap(a.norm, b.norm, canonicalRootKey)) {
             matchingPair.push([a.raw, b.raw]);
           }
         }

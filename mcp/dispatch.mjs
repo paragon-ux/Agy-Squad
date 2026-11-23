@@ -28,7 +28,13 @@ function readManifest(root, filename, logicalRoot = root) {
   const candidate = path.resolve(root, filename);
   if (path.isAbsolute(filename)) {
     if (!isWithinWorkspace(root, candidate) && !isWithinWorkspace(logicalRoot, candidate)) {
-      throw new Error("Manifest path must stay inside the workspace.");
+      let realParent;
+      try {
+        realParent = fs.realpathSync(path.dirname(candidate));
+      } catch {
+        throw new Error("Manifest path must stay inside the workspace.");
+      }
+      assertWithinWorkspace(root, realParent);
     }
   } else {
     assertWithinWorkspace(root, candidate);

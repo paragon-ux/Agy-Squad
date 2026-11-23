@@ -273,6 +273,25 @@ try {
     ).isError,
     undefined
   );
+  // Session 3 MCP-004: canonical workspace + symlink-aliased absolute manifestPath succeeds; external file symlink pointing in fails
+  assert.equal(
+    handleDispatchSquad(
+      { squadId: "alpha", workspace, manifestPath: path.join(linkWs, "swarm-manifest.json") },
+      testDir
+    ).isError,
+    undefined
+  );
+  let inboundEscapeCreated = false;
+  const externalInboundLink = path.join(testDir, "inbound-escape.json");
+  try {
+    fs.symlinkSync(manifestPath, externalInboundLink, "file");
+    inboundEscapeCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (inboundEscapeCreated) {
+    rejects({ squadId: "alpha", manifestPath: externalInboundLink }, /inside the workspace/);
+  }
   if (escapeLinkCreated) {
     assert.equal(
       handleDispatchSquad(

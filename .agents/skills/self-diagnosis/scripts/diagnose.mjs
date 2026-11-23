@@ -8,7 +8,7 @@ import { normalizeReportRoot, trimTrailingSlashes } from "../../../../mcp/handof
 import { TOOLS } from "../../../../mcp/index.js";
 import { planSquadCohort } from "../../../../mcp/planner.mjs";
 import { stripCode, stripFencedCodeBlocks } from "../../../../mcp/verdicts.mjs";
-import { SHIPPED_SKILLS } from "../../../../scripts/install-register.mjs";
+import { SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const HOSTED_DOCS_PREFIX = "https://paragon-ux.github.io/Agy-Squad/";
@@ -111,15 +111,62 @@ function parseFrontmatter(markdown) {
 }
 
 const headingSlugCache = new Map();
-function getHeadingSlugs(filePath) {
+function readMarkdownCached(filePath, markdownTextCache) {
+  if (markdownTextCache?.has(filePath)) return markdownTextCache.get(filePath);
+  const text = fs.readFileSync(filePath, "utf8");
+  markdownTextCache?.set(filePath, text);
+  return text;
+}
+
+function existsCached(filePath, markdownTextCache, existsCache) {
+  if (markdownTextCache?.has(filePath)) return true;
+  if (existsCache?.has(filePath)) return existsCache.get(filePath);
+  const ok = fs.existsSync(filePath);
+  existsCache?.set(filePath, ok);
+  return ok;
+}
+
+function trimAsciiSpaceTabEnd(line) {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  return line.slice(0, end);
+}
+
+function stripMarkdownLinkSyntax(text) {
+  if (!text.includes("[")) return text;
+  let out = "";
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) return out + text.slice(pos);
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) return out + text.slice(pos);
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      out += text.slice(pos, closeBracket + 1);
+      pos = closeBracket + 1;
+      continue;
+    }
+    const closeParen = text.indexOf(")", closeBracket + 2);
+    if (closeParen === -1) return out + text.slice(pos);
+    if (closeParen === closeBracket + 2) {
+      out += text.slice(pos, closeParen + 1);
+      pos = closeParen + 1;
+      continue;
+    }
+    out += text.slice(pos, openBracket) + text.slice(openBracket + 1, closeBracket);
+    pos = closeParen + 1;
+  }
+  return out;
+}
+
+function getHeadingSlugs(filePath, markdownTextCache) {
   if (!headingSlugCache.has(filePath)) {
     const slugs = new Set();
     const counts = new Map();
-    for (const line of stripFencedCodeBlocks(fs.readFileSync(filePath, "utf8")).split(/\r?\n/)) {
+    for (const line of stripFencedCodeBlocks(readMarkdownCached(filePath, markdownTextCache)).split(/\r?\n/)) {
       const match = /^#{1,6}\s+(.+)$/.exec(line);
       if (!match) continue;
-      const base = match[1]
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      const base = stripMarkdownLinkSyntax(match[1])
         .toLowerCase()
         .replace(/`/g, "")
         .replace(/[^\w\s-]/g, "")
@@ -135,16 +182,78 @@ function getHeadingSlugs(filePath) {
   return headingSlugCache.get(filePath);
 }
 
-function checkRelativeLinks(skillFile, markdown) {
+function extractMarkdownLinks(text) {
+  const links = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) break;
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) break;
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      pos = closeBracket + 1;
+      continue;
+    }
+    let i = closeBracket + 2;
+    const destStart = i;
+    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
+      i++;
+    }
+    const rawDest = text.slice(destStart, i);
+    if (i < text.length && text[i] === ")") {
+      pos = i + 1;
+    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
+      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+      const quote = text[i];
+      if (quote !== '"' && quote !== "'") {
+        pos = i;
+        continue;
+      }
+      const closeQuote = text.indexOf(quote, i + 1);
+      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
+        pos = i + 1;
+        continue;
+      }
+      pos = closeQuote + 2;
+    } else {
+      pos = i;
+      continue;
+    }
+    if (!rawDest) continue;
+    const hashIdx = rawDest.indexOf("#");
+    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
+    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
+    links.push({ target, fragment });
+  }
+  return links;
+}
+
+function hasValidSvgEnvelope(svgRaw) {
+  const lower = svgRaw.trimEnd().toLowerCase();
+  if (!lower.endsWith("</svg>")) return false;
+  const bodyEnd = lower.length - 6;
+  let idx = 0;
+  while (idx < bodyEnd) {
+    const start = lower.indexOf("<svg", idx);
+    if (start === -1 || start >= bodyEnd) return false;
+    const next = lower[start + 4];
+    if (next === ">" || next === " " || next === "\t" || next === "\n" || next === "\r") {
+      const closeGt = lower.indexOf(">", start + 4);
+      return closeGt !== -1 && closeGt < bodyEnd;
+    }
+    idx = start + 4;
+  }
+  return false;
+}
+
+function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache) {
   const broken = [];
   const dir = path.dirname(skillFile);
   const skillsRootDir = path.join(repoRoot, ".agents", "skills");
   const isInsideSkills = skillFile === skillsRootDir || skillFile.startsWith(skillsRootDir + path.sep);
   const stripped = stripCode(stripHtmlComments(markdown));
 
-  for (const match of stripped.matchAll(/\[[^\]]+\]\(([^)#\s]*)(?:#([^)\s]*))?\)/g)) {
-    const rawTarget = match[1];
-    const fragment = match[2] ?? "";
+  for (const { target: rawTarget, fragment } of extractMarkdownLinks(stripped)) {
     if (!rawTarget && !fragment) continue;
     let resolved;
     let isHostedDocs = false;
@@ -162,17 +271,18 @@ function checkRelativeLinks(skillFile, markdown) {
       resolved = rawTarget ? path.resolve(dir, rawTarget) : skillFile;
     }
     const label = rawTarget || `#${fragment}`;
+    const displayLink = rawTarget ? `${rawTarget}${fragment ? `#${fragment}` : ""}` : `#${fragment}`;
     if (!isHostedDocs && isInsideSkills) {
       const rel = path.relative(skillsRootDir, resolved);
       if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-        broken.push(`${label}${fragment ? `#${fragment}` : ""} (escapes .agents/skills/)`);
+        broken.push(`${displayLink} (escapes .agents/skills/)`);
         continue;
       }
     }
-    if (!fs.existsSync(resolved)) {
+    if (!existsCached(resolved, markdownTextCache, existsCache)) {
       broken.push(label);
-    } else if (fragment && resolved.endsWith(".md") && !getHeadingSlugs(resolved).has(fragment.toLowerCase())) {
-      broken.push(`${label}#${fragment}`);
+    } else if (fragment && resolved.endsWith(".md") && !getHeadingSlugs(resolved, markdownTextCache).has(fragment.toLowerCase())) {
+      broken.push(displayLink);
     }
   }
   return broken;
@@ -207,7 +317,7 @@ function findRetiredSymbolMatches(markdown) {
       }
       if (/^\s*#{1,6}\s+/.test(line)) activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
     } else {
-      const trimmed = line.trimEnd();
+      const trimmed = trimAsciiSpaceTabEnd(line);
       let spaces = 0;
       while (spaces < trimmed.length && trimmed[spaces] === " ") spaces++;
       const body = trimmed.slice(spaces);
@@ -238,18 +348,40 @@ function runDiagnostics() {
 
   const findings = [];
   const skills = [];
+  const markdownTextCache = new Map();
+  const existsCache = new Map();
+  const docsRoot = path.join(repoRoot, "docs");
+  const excludedDocDirs = new Set([path.join(docsRoot, "reviews"), path.join(docsRoot, "plans")]);
+  const activeDocs = fs.existsSync(docsRoot)
+    ? walkMarkdownFiles(docsRoot, excludedDocDirs).map(filePath => ({
+        path: filePath,
+        text: readMarkdownCached(filePath, markdownTextCache)
+      }))
+    : [];
   const skillsRoot = path.join(repoRoot, ".agents", "skills");
   const skillNames = [...SHIPPED_SKILLS];
   if (fs.existsSync(path.join(skillsRoot, "self-diagnosis"))) skillNames.push("self-diagnosis");
-
+  const skillDirs = new Map();
   for (const name of skillNames) {
     const dir = path.join(skillsRoot, name);
     const skillMd = path.join(dir, "SKILL.md");
     if (!fs.existsSync(skillMd)) {
+      skillDirs.set(name, null);
+      continue;
+    }
+    const files = walkMarkdownFiles(dir);
+    for (const f of files) readMarkdownCached(f, markdownTextCache);
+    skillDirs.set(name, { dir, skillMd, files });
+  }
+
+  for (const name of skillNames) {
+    const entry = skillDirs.get(name);
+    if (!entry) {
       findings.push({ id: `SKILL-MISSING-${name}`, priority: "P1", summary: `Missing .agents/skills/${name}/SKILL.md` });
       continue;
     }
-    const content = fs.readFileSync(skillMd, "utf8");
+    const { dir, skillMd, files } = entry;
+    const content = readMarkdownCached(skillMd, markdownTextCache);
     const bytes = Buffer.byteLength(content, "utf8");
     const lines = content.replace(/\r?\n$/, "").split(/\r?\n/).length;
     const fm = parseFrontmatter(content);
@@ -257,13 +389,13 @@ function runDiagnostics() {
       findings.push({ id: `SKILL-FM-${name}`, priority: "P1", summary: `Invalid frontmatter in .agents/skills/${name}/SKILL.md` });
     }
     let brokenLinksCount = 0;
-    for (const f of walkMarkdownFiles(dir)) {
+    for (const f of files) {
       const isSkillMd = f === skillMd;
-      const text = isSkillMd ? content : fs.readFileSync(f, "utf8");
+      const text = readMarkdownCached(f, markdownTextCache);
       const relFile = path.relative(repoRoot, f).replace(/\\/g, "/");
       const relInSkill = path.relative(dir, f).replace(/\\/g, "/");
       const fileSlug = isSkillMd ? "" : toFindingSlug(relInSkill.replace(/^references\//, ""));
-      const broken = checkRelativeLinks(f, text);
+      const broken = checkRelativeLinks(f, text, markdownTextCache, existsCache);
       if (broken.length) {
         brokenLinksCount += broken.length;
         findings.push({
@@ -294,14 +426,6 @@ function runDiagnostics() {
     skills.push({ name, path: path.relative(repoRoot, skillMd), lines, bytes, estimatedTokens: estimateTokens(bytes), brokenLinksCount });
   }
 
-  const docsRoot = path.join(repoRoot, "docs");
-  const excludedDocDirs = new Set([path.join(docsRoot, "reviews"), path.join(docsRoot, "plans")]);
-  const activeDocs = fs.existsSync(docsRoot)
-    ? walkMarkdownFiles(docsRoot, excludedDocDirs).map(filePath => ({
-        path: filePath,
-        text: fs.readFileSync(filePath, "utf8")
-      }))
-    : [];
   const driftTargets = [
     ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
       .map(rel => path.join(repoRoot, rel))
@@ -326,7 +450,7 @@ function runDiagnostics() {
     for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
       const svgRaw = fs.readFileSync(path.join(assetsDir, entry.name), "utf8");
-      if (!/<svg\b[^>]*>[\s\S]*<\/svg>\s*$/i.test(svgRaw) || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw)) {
+      if (!hasValidSvgEnvelope(svgRaw) || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw)) {
         findings.push({ id: `DOC-SVG-XML-${entry.name.replace(/\.svg$/, "")}`, priority: "P2", summary: `docs/assets/${entry.name} failed SVG XML check` });
       }
       if (activeDocs.length && !activeDocs.some(d => d.text.includes(entry.name))) {
@@ -389,28 +513,36 @@ function runDiagnostics() {
   return { status: findings.length === 0 ? "HEALTHY" : "ISSUES", skills, promptBudgets, findings };
 }
 
-let cli;
-try {
-  cli = parseArgs({
-    args: process.argv.slice(2),
-    strict: true,
-    allowPositionals: false,
-    options: { json: { type: "boolean", default: false }, help: { type: "boolean", short: "h", default: false } }
-  });
-} catch (error) {
-  console.error(`${error.message}\n${USAGE}`);
-  process.exit(1);
+function runCli() {
+  let cli;
+  try {
+    cli = parseArgs({
+      args: process.argv.slice(2),
+      strict: true,
+      allowPositionals: false,
+      options: { json: { type: "boolean", default: false }, help: { type: "boolean", short: "h", default: false } }
+    });
+  } catch (error) {
+    console.error(`${error.message}\n${USAGE}`);
+    process.exit(1);
+  }
+  if (cli.values.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  assertAgySquadWorkspace();
+  try {
+    const report = runDiagnostics();
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = report.status === "HEALTHY" ? 0 : 1;
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
 }
-if (cli.values.help) {
-  console.log(USAGE);
-  process.exit(0);
+
+if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
+  runCli();
 }
-assertAgySquadWorkspace();
-try {
-  const report = runDiagnostics();
-  console.log(JSON.stringify(report, null, 2));
-  process.exitCode = report.status === "HEALTHY" ? 0 : 1;
-} catch (error) {
-  console.error(error.message);
-  process.exit(1);
-}
+
+export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripMarkdownLinkSyntax };

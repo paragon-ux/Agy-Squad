@@ -860,6 +860,195 @@ try {
   const emphMs = performance.now() - tEmph;
   assert.ok(emphMs < 50, `SEC-002: parseTargetSquad on N=30,000 balanced emphasis took ${emphMs.toFixed(1)} ms (>= 50 ms)`);
 
+  // Session 3 regressions: RUN-009, SEC-011, RUN-010
+  // RUN-009: Section 4 category Verdict lines quoting backticked PASS/FAIL/BLOCKED parse cleanly and agree with hasContentVerdictAttempt
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (must emit `PASS` or `FAIL`)\n"),
+    "PASS",
+    "RUN-009: category Verdict line quoting backticked verdict tokens must not throw"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- **Verdict:** Changes required (must emit `PASS` or `FAIL`)\n"),
+    false,
+    "RUN-009: category Verdict line quoting backticked verdict tokens must not trip hasContentVerdictAttempt"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (FAIL)\n"),
+    /Malformed or hedged verdict line/,
+    "RUN-009: unbackticked FAIL on category Verdict line must still throw"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("Content Verdict: `PASS`\n"),
+    true,
+    "RUN-009: malformed backticked strict verdict line must still trip hasContentVerdictAttempt"
+  );
+
+  // SEC-011: backticked table/labeled/negated verdict contradictions & role conflation, label-prefix historical scoping, and narrowed 'before'
+  for (const sec11BadContent of [
+    "Content Verdict: PASS\n| Squad | `Verdict` |\n| --- | --- |\n| Alpha | `FAIL` |\n",
+    "Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| `Content Verdict` | `FAIL` |\n",
+    "Content Verdict: PASS\nSecondary check: `FAIL`\n",
+    "Content Verdict: PASS\nUnit tests did not `PASS`.\n",
+    "Content Verdict: PASS\nSecondary check: FAIL (fix blockers before release)\n",
+    "Content Verdict: PASS\nStatus: FAIL (matches old baseline bug)\n",
+    "Content Verdict: PASS\nUnit tests did not pass before timeout.\n",
+    "Content Verdict: PASS\nUnit tests did not pass; fix blockers before release.\n",
+    "Content Verdict: PASS\nFixed prior bug; unit tests did not pass.\n",
+    "Content Verdict: PASS\n- **FAIL:** Failed before timeout.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(sec11BadContent),
+      /conflicting content verdicts/,
+      `SEC-011: conflicting content verdict must throw: ${JSON.stringify(sec11BadContent)}`
+    );
+  }
+  for (const sec11BadIntegrity of [
+    "Integrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Audit Status | `INTEGRITY VIOLATION` |\n",
+    "Integrity Verdict: CLEAN\nAudit Status: `INTEGRITY VIOLATION`\n",
+    "Integrity Verdict: CLEAN\nAudit is not `CLEAN`.\n",
+    "Integrity Verdict: CLEAN\nAudit Status: INTEGRITY VIOLATION (fix before release)\n",
+    "Integrity Verdict: CLEAN\nAudit is not CLEAN — fix missing trace before merge.\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(sec11BadIntegrity),
+      /conflicting verdicts/,
+      `SEC-011: conflicting integrity verdict must throw: ${JSON.stringify(sec11BadIntegrity)}`
+    );
+  }
+  for (const sec11RoleConflation of [
+    "Integrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| `Content Verdict` | `PASS` |\n",
+    "Integrity Verdict: CLEAN\nPR #15 status: `PASS`\n",
+    "Integrity Verdict: CLEAN\nStatus: PASS (fix blockers before release)\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(sec11RoleConflation),
+      /role conflation/,
+      `SEC-011: integrity role conflation must throw: ${JSON.stringify(sec11RoleConflation)}`
+    );
+  }
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\nPrior status: FAIL\nBefore the fix, unit tests did not pass.\nQuoted `Content Verdict: FAIL` in prose.\n| Field | Before | Current |\n| --- | --- | --- |\n| Verdict | FAIL | PASS |\n"
+    ),
+    "PASS",
+    "SEC-011: true historical context and prose code quotes must still pass"
+  );
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nLead report recorded `PASS` in prose.\n"),
+    "CLEAN",
+    "SEC-011: integrity prose mentioning backticked PASS must not false-trigger role conflation"
+  );
+
+  // RUN-010: odd balanced underscore emphasis wrapping reserved keys still throws Invalid reserved squad ID
+  for (const oddProto of ["___proto___", "_____proto_____"]) {
+    assert.throws(
+      () => parseTargetSquad(`Target Squad: ${oddProto}\n`),
+      /Invalid reserved squad ID/,
+      `RUN-010: ${oddProto} must throw Invalid reserved squad ID`
+    );
+  }
+  assert.equal(parseTargetSquad("Target Squad: ___alpha___\n"), "alpha");
+
+  // Day-1 r1 regressions: R1-SEC-001 (tab-indented fence spoofing) & R1-SEC-002 (linear-time clause negation scan)
+  for (const tabFence of ["\t```", "\t~~~"]) {
+    // Forward suppression: tab-indented fence outside a fence must be stripped as indented code, not open a fake fence
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: PASS\n\n${tabFence}\nContent Verdict: FAIL\n`),
+      /conflicting content verdicts/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Content Verdict: FAIL`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`Integrity Verdict: CLEAN\n\n${tabFence}\nIntegrity Verdict: INTEGRITY VIOLATION\n`),
+      /conflicting verdicts/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Integrity Verdict: INTEGRITY VIOLATION`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`Integrity Verdict: CLEAN\n\n${tabFence}\nContent Verdict: PASS\n`),
+      /role conflation/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent role-conflated Content Verdict: PASS`
+    );
+    assert.throws(
+      () => parseTargetSquad(`Target Squad: alpha\n\n${tabFence}\nTarget Squad: beta\n`),
+      /conflicting Target Squad/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Target Squad`
+    );
+    assert.throws(
+      () => parseEvidenceDigest(`Evidence Digest: ${digestA}\n\n${tabFence}\nEvidence Digest: ${digestB}\n`),
+      /conflicting Evidence Digest/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Evidence Digest`
+    );
+
+    // Reverse injection: tab-indented fence inside an open fence must not prematurely close the fence
+    const openFence = tabFence.includes("`") ? "```md" : "~~~md";
+    const closeFence = tabFence.includes("`") ? "```" : "~~~";
+    assert.throws(
+      () => parseContentVerdict(`${openFence}\n${tabFence}\nContent Verdict: PASS\n${closeFence}\n`),
+      /unambiguous single-line 'Content Verdict:/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} inside an open fence must not allow Content Verdict: PASS injection`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`${openFence}\n${tabFence}\nIntegrity Verdict: CLEAN\n${closeFence}\n`),
+      /unambiguous single-line 'Integrity Verdict:/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} inside an open fence must not allow Integrity Verdict: CLEAN injection`
+    );
+  }
+  // Valid CommonMark 0-3 ASCII spaces still open/close fences cleanly
+  assert.equal(parseContentVerdict("   ```md\n   Content Verdict: FAIL\n   ```\nContent Verdict: PASS\n"), "PASS");
+
+  // R1-SEC-002: negation scans stay linear-time (< 100 ms) with or without clause separators
+  const tNeg = performance.now();
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "prior not pass; ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "the endpoint does not pass foo; ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "the endpoint does not pass foo ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseIntegrityVerdict("Integrity Verdict: CLEAN\n" + "prior not CLEAN; ".repeat(6000) + "\n"), "CLEAN");
+  assert.equal(parseIntegrityVerdict("Integrity Verdict: CLEAN\n" + "prior not CLEAN ".repeat(6000) + "\n"), "CLEAN");
+  const negMs = performance.now() - tNeg;
+  assert.ok(negMs < 100, `R1-SEC-002: negation scans took ${negMs.toFixed(1)} ms (>= 100 ms)`);
+  // Parity check: same-clause historical exemption still holds across multiple negations
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior check did not pass and still does not pass.\n"), "PASS");
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\nPrior check did not pass; current check did not pass.\n"),
+    /conflicting content verdicts/
+  );
+
+  // Day-1 r2 regressions: R2-SEC-001 (CommonMark 1-3 spaces + tab indented code) & R2-SEC-002 (ASCII-only closing fence trailing whitespace)
+  for (const spaceTab of [" \t", "  \t", "   \t"]) {
+    assert.throws(
+      () => parseContentVerdict(`${spaceTab}Content Verdict: PASS\n`),
+      /unambiguous single-line 'Content Verdict:/,
+      `R2-SEC-001: ${JSON.stringify(spaceTab)} indented code must not inject Content Verdict: PASS`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`${spaceTab}Integrity Verdict: CLEAN\n`),
+      /unambiguous single-line 'Integrity Verdict:/,
+      `R2-SEC-001: ${JSON.stringify(spaceTab)} indented code must not inject Integrity Verdict: CLEAN`
+    );
+    assert.equal(parseTargetSquad(`${spaceTab}Target Squad: alpha\n`), undefined);
+    assert.equal(parseEvidenceDigest(`${spaceTab}Evidence Digest: ${digestA}\n`), undefined);
+    assert.equal(parseContentVerdict(`Content Verdict: PASS\n${spaceTab}Content Verdict: FAIL\n`), "PASS");
+  }
+  // 3 ASCII spaces without tab remain a normal CommonMark paragraph
+  assert.equal(parseContentVerdict("   Content Verdict: PASS\n"), "PASS");
+
+  for (const nonAsciiWs of ["\u00A0", "\uFEFF", "\f", "\v", "\u3000"]) {
+    for (const [openF, closeF] of [["```md", "```"], ["~~~md", "~~~"]]) {
+      assert.throws(
+        () => parseContentVerdict(`${openF}\n${closeF}${nonAsciiWs}\nContent Verdict: PASS\n${closeF}\n`),
+        /unambiguous single-line 'Content Verdict:/,
+        `R2-SEC-002: trailing ${JSON.stringify(nonAsciiWs)} on ${closeF} must not close fence to inject PASS`
+      );
+      assert.throws(
+        () => parseIntegrityVerdict(`${openF}\n${closeF}${nonAsciiWs}\nIntegrity Verdict: CLEAN\n${closeF}\n`),
+        /unambiguous single-line 'Integrity Verdict:/,
+        `R2-SEC-002: trailing ${JSON.stringify(nonAsciiWs)} on ${closeF} must not close fence to inject CLEAN`
+      );
+      assert.equal(parseTargetSquad(`${openF}\n${closeF}${nonAsciiWs}\nTarget Squad: alpha\n${closeF}\n`), undefined);
+      assert.equal(parseEvidenceDigest(`${openF}\n${closeF}${nonAsciiWs}\nEvidence Digest: ${digestA}\n${closeF}\n`), undefined);
+    }
+  }
+  // Trailing ASCII space and tab still close CommonMark fences cleanly
+  assert.equal(parseContentVerdict("```md\nContent Verdict: FAIL\n``` \t \nContent Verdict: PASS\n"), "PASS");
+
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

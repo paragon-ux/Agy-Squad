@@ -23,8 +23,11 @@ const POST_COLON_EMPH = "(?:[*_]+\\s+)?[*_]*";
 const TRAILING_DOT_AND_EMPH = "(?:\\s*(?:\\.(?:\\s*[*_]+)?|[*_]+(?:\\s*\\.)?))?";
 
 const HISTORICAL_CONTEXT_RE =
-  /\b(?:prior|previous|baseline|before|historical|old|initial|original|earlier)\b/i;
+  /\b(?:prior|previous|baseline|historical|old|initial|original|earlier)\b|^before$|\bbefore\s+(?:the\s+|this\s+|our\s+)?(?:fix(?:es)?|patch(?:es)?|remediation|change(?:s)?|update(?:s)?|refactor(?:ing)?|migration|edit(?:s)?|commit)\b/i;
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
+const LEADING_HISTORICAL_RE =
+  /^\s*(?:(?:on|in|from|during)\s+)?(?:(?:the|a|an|this|our)\s+)?(?:(?:prior|previous|baseline|historical|old|initial|original|earlier)\b|before\s+(?:the\s+|this\s+|our\s+)?(?:fix(?:es)?|patch(?:es)?|remediation|change(?:s)?|update(?:s)?|refactor(?:ing)?|migration|edit(?:s)?|commit)\b)/i;
+const PRESERVED_VERDICT_TOKENS = new Set(["PASS", "FAIL", "BLOCKED", "CLEAN", "INTEGRITY VIOLATION"]);
 const LABELED_VERDICT_PREFIX_RE =
   /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]*#?[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?[*_]*\s+){0,3}[*_]*(?:verdict|status|result|check|disposition|outcome)(?:\s*[*_]+)?(?:\s*[:—–]|\s+-(?=\s|$))\s*(?:[*_]+\s+)?[*_]*/i;
 const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/;
@@ -35,62 +38,128 @@ const VERDICT_SUBJECT_NOUN_RE =
   /\b(?:verdict|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
 const NEGATIVE_EXPECTATION_RE =
   /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
-const VERDICT_ADJUNCT_TAIL_RE =
-  /^\s+(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
+const CLAUSE_BREAK_RE = /(?:[.;:!?]|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
+const TAIL_ADJUNCT_WORD_RE =
+  /^(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
 const INTEGRITY_NEGATION_RE =
   /\b(?:not|never|isn't|wasn't|cannot\s+be|can't\s+be)\s+(CLEAN)\b/gi;
 
-function extractCurrentClause(prefix) {
-  let start = 0;
-  for (const m of prefix.matchAll(/(?:[.;:!?]|,\s*(?:and|but|however|yet|while)\b)\s*/gi)) {
-    start = m.index + m[0].length;
+function createClauseTracker(line) {
+  let scanFrom = 0;
+  let hasHistorical = false;
+  let hasCurrent = false;
+  let hasSubject = false;
+  let hasNegExpectation = false;
+  let hasPriorNegation = false;
+
+  const advanceTo = toIndex => {
+    const seg = line.slice(scanFrom, toIndex);
+    let lastBreakEnd = -1;
+    CLAUSE_BREAK_RE.lastIndex = 0;
+    for (let m; (m = CLAUSE_BREAK_RE.exec(seg)); ) {
+      lastBreakEnd = m.index + m[0].length;
+    }
+    let delta = seg;
+    if (lastBreakEnd !== -1) {
+      hasHistorical = false;
+      hasCurrent = false;
+      hasSubject = false;
+      hasNegExpectation = false;
+      hasPriorNegation = false;
+      delta = seg.slice(lastBreakEnd);
+    }
+    if (HISTORICAL_CONTEXT_RE.test(delta)) hasHistorical = true;
+    if (CURRENT_CONTEXT_RE.test(delta)) hasCurrent = true;
+    if (VERDICT_SUBJECT_NOUN_RE.test(delta)) hasSubject = true;
+    if (NEGATIVE_EXPECTATION_RE.test(delta)) hasNegExpectation = true;
+    const isLineInitial =
+      !hasPriorNegation && /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
+    return {
+      isHistorical: hasHistorical && !hasCurrent,
+      hasVerdictSubject: hasSubject && !hasNegExpectation,
+      isLineInitial
+    };
+  };
+
+  const markConsumed = matchEnd => {
+    scanFrom = matchEnd;
+    hasPriorNegation = true;
+  };
+
+  return { advanceTo, markConsumed };
+}
+
+function classifyNegationTail(line, matchEnd) {
+  let i = matchEnd;
+  while (i < line.length && (line[i] === " " || line[i] === "\t")) i++;
+  if (i === line.length || ".,;:!?)]".includes(line[i])) {
+    return { isClauseEnd: true, isAdjunctTail: false };
   }
-  return prefix.slice(start);
+  const isAdjunctTail = i > matchEnd && TAIL_ADJUNCT_WORD_RE.test(line.slice(i, i + 24));
+  return { isClauseEnd: false, isAdjunctTail };
+}
+
+function isHistoricalLeadingDesc(desc) {
+  const cleaned = desc.replace(/^[*_\s]+/, "");
+  const firstClause = cleaned.split(/[.;!?]/)[0];
+  return LEADING_HISTORICAL_RE.test(firstClause) && !CURRENT_CONTEXT_RE.test(cleaned);
+}
+
+function unwrapOuterCodeSpan(text) {
+  const trimmed = text.replace(/[*_]+/g, "").trim();
+  const m = /^`([^`]+)`$/.exec(trimmed);
+  return m ? m[1].trim() : stripInlineCodeLine(text).replace(/[*_]+/g, "").trim();
 }
 
 function matchLabeledVerdict(line) {
   const prefixMatch = LABELED_VERDICT_PREFIX_RE.exec(line);
   if (!prefixMatch) return null;
-  return STRICT_UPPERCASE_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+  const verdictMatch = STRICT_UPPERCASE_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+  return verdictMatch ? { verdict: verdictMatch[1], prefix: prefixMatch[0] } : null;
 }
 
 function matchLabeledIntegrityVerdict(line) {
   const prefixMatch = LABELED_VERDICT_PREFIX_RE.exec(line);
   if (!prefixMatch) return null;
-  return STRICT_UPPERCASE_INTEGRITY_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+  const verdictMatch = STRICT_UPPERCASE_INTEGRITY_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+  return verdictMatch ? { verdict: verdictMatch[1], prefix: prefixMatch[0] } : null;
 }
+
+const CONTENT_CELL_VERDICT_RE = /^[*_]*(?:`[*_]*(PASS|FAIL|BLOCKED)\.?[*_]*`|(PASS|FAIL|BLOCKED))\.?[*_]*\.?$/;
+const INTEGRITY_CELL_VERDICT_RE =
+  /^[*_]*(?:`[*_]*(CLEAN|INTEGRITY VIOLATION)\.?[*_]*`|(CLEAN|INTEGRITY VIOLATION))\.?[*_]*\.?$/;
 
 function matchTwoColumnContentVerdict(cells) {
   if (cells.length !== 2) return null;
-  const keyText = cells[0].replace(/[*_`]+/g, "").trim();
+  const keyText = unwrapOuterCodeSpan(cells[0]);
   const isVerdictKey =
     /^(?:(?:content|overall|final)\s+)?(?:verdict|gate)$/i.test(keyText) ||
     (/\b(?:content\s+verdict|overall\s+verdict|final\s+verdict|verdict)\b/i.test(keyText) &&
       !/\b(?:category|integrity)\b/i.test(keyText) &&
       !isHistoricalLine(keyText));
   if (!isVerdictKey) return null;
-  const m = cells[1].match(/^[*_]*(PASS|FAIL|BLOCKED)\.?[*_]*\.?$/);
-  return m ? m[1] : null;
+  const m = cells[1].match(CONTENT_CELL_VERDICT_RE);
+  return m ? (m[1] || m[2]) : null;
 }
 
 function matchTwoColumnIntegrityVerdict(cells) {
   if (cells.length !== 2) return null;
-  const keyText = cells[0].replace(/[*_`]+/g, "").trim();
+  const keyText = unwrapOuterCodeSpan(cells[0]);
   const isIntegrityKey =
     /^(?:(?:integrity|audit|overall|final)\s+)?(?:verdict|status|result|outcome)$/i.test(keyText) ||
     (/\b(?:integrity\s+verdict|audit\s+(?:verdict|status)|verdict)\b/i.test(keyText) &&
       !/\b(?:category|content)\b/i.test(keyText) &&
       !isHistoricalLine(keyText));
   if (!isIntegrityKey) return null;
-  const m = cells[1].match(/^[*_]*(CLEAN|INTEGRITY VIOLATION)\.?[*_]*\.?$/);
-  return m ? m[1] : null;
+  const m = cells[1].match(INTEGRITY_CELL_VERDICT_RE);
+  return m ? (m[1] || m[2]) : null;
 }
 
 const CONTENT_TABLE_CONFIG = {
   isVerdictHeader: h =>
     /\b(?:content\s+verdict|overall(?:\s+verdict)?|verdict)\b/i.test(h) &&
     !/\b(?:category|integrity)\b/i.test(h),
-  cellVerdictRe: /^[*_]*(PASS|FAIL|BLOCKED)\.?[*_]*\.?$/,
+  cellVerdictRe: CONTENT_CELL_VERDICT_RE,
   matchTwoColumn: matchTwoColumnContentVerdict
 };
 
@@ -98,7 +167,7 @@ const INTEGRITY_TABLE_CONFIG = {
   isVerdictHeader: h =>
     /\b(?:integrity\s+verdict|audit\s+(?:verdict|status)|verdict)\b/i.test(h) &&
     !/\b(?:category|content)\b/i.test(h),
-  cellVerdictRe: /^[*_]*(CLEAN|INTEGRITY VIOLATION)\.?[*_]*\.?$/,
+  cellVerdictRe: INTEGRITY_CELL_VERDICT_RE,
   matchTwoColumn: matchTwoColumnIntegrityVerdict
 };
 
@@ -125,9 +194,9 @@ function createTableVerdictScanner(config) {
     const isFirstRow = !inTable;
     if (isFirstRow) {
       inTable = true;
-      headerHistoricalCol = cells.map(isHistoricalLine);
+      headerHistoricalCol = cells.map(c => isHistoricalLine(unwrapOuterCodeSpan(c)));
       headerVerdictCol = cells.map(h => {
-        const cleanHeader = h.replace(/[*_`]+/g, "").trim();
+        const cleanHeader = unwrapOuterCodeSpan(h);
         return config.isVerdictHeader(cleanHeader) && !isHistoricalLine(cleanHeader);
       });
     }
@@ -136,7 +205,7 @@ function createTableVerdictScanner(config) {
       for (let colIdx = 0; colIdx < cells.length; colIdx++) {
         if (!headerVerdictCol[colIdx]) continue;
         const m = cells[colIdx].match(config.cellVerdictRe);
-        if (m) matches.push(m[1]);
+        if (m) matches.push(m[1] || m[2]);
       }
     }
     const kv = !headerHistoricalCol[1] ? config.matchTwoColumn(cells) : null;
@@ -159,7 +228,7 @@ function unwrapBalancedEmphasis(value) {
     let trail = 0;
     while (trail < lead && trimmed[right - 1 - trail] === first) trail++;
     if (trail !== lead || trimmed[right - 1 - trail] === first) break;
-    if (first === "_" && lead >= 2 && lead % 2 === 0) {
+    if (first === "_" && lead >= 2) {
       const innerStart = left + lead - 2;
       const innerEnd = right - trail + 2;
       if (innerEnd - innerStart <= MAX_RESERVED_KEY_LEN && RESERVED_OBJECT_KEYS.has(trimmed.slice(innerStart, innerEnd))) {
@@ -178,10 +247,16 @@ function isHistoricalLine(line) {
   return HISTORICAL_CONTEXT_RE.test(line) && !CURRENT_CONTEXT_RE.test(line);
 }
 
+function trimAsciiSpaceTabEnd(line) {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  return line.slice(0, end);
+}
+
 function isClosingFence(line, fenceChar, fenceLen) {
-  const trimmedEnd = line.trimEnd();
+  const trimmedEnd = trimAsciiSpaceTabEnd(line);
   let i = 0;
-  while (i < trimmedEnd.length && /\s/.test(trimmedEnd[i])) i++;
+  while (i < trimmedEnd.length && trimmedEnd[i] === " ") i++;
   if (i > 3 || trimmedEnd.length - i < fenceLen) return false;
   for (; i < trimmedEnd.length; i++) {
     if (trimmedEnd[i] !== fenceChar) return false;
@@ -205,13 +280,13 @@ function stripFencedCodeBlocks(markdown, { stripIndented = false } = {}) {
 
   for (const line of lines) {
     if (!fenceChar) {
-      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
       if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
         fenceChar = open[1][0];
         fenceLen = open[1].length;
         continue;
       }
-      if (stripIndented && /^(?: {4}|\t)/.test(line)) {
+      if (stripIndented && /^(?: {4}| {0,3}\t)/.test(line)) {
         continue;
       }
       kept.push(line);
@@ -224,7 +299,7 @@ function stripFencedCodeBlocks(markdown, { stripIndented = false } = {}) {
   return kept.join("\n");
 }
 
-function stripInlineCodeLine(line) {
+function stripInlineCodeLine(line, preserveVerdictTokens = false) {
   if (!line.includes("`")) return line;
   const runs = [];
   const byLen = new Map();
@@ -259,6 +334,15 @@ function stripInlineCodeLine(line) {
     if (idx < list.length) {
       const closeRun = runs[list[idx]];
       cursor.set(run.len, idx + 1);
+      if (preserveVerdictTokens) {
+        const inner = line.slice(run.end, closeRun.start).trim();
+        const strippedInner = inner.replace(/^[*_]+|[*_]+$/g, "");
+        if (PRESERVED_VERDICT_TOKENS.has(strippedInner)) {
+          parts.push(line.slice(pos, run.start), inner);
+          pos = closeRun.end;
+          continue;
+        }
+      }
       parts.push(line.slice(pos, run.start), " ");
       pos = closeRun.end;
     }
@@ -277,7 +361,7 @@ function stripInlineCodeLine(line) {
 function stripCode(markdown) {
   return stripFencedCodeBlocks(markdown, { stripIndented: true })
     .split("\n")
-    .map(stripInlineCodeLine)
+    .map(line => stripInlineCodeLine(line))
     .join("\n");
 }
 
@@ -287,7 +371,7 @@ function isCategoryVerdictLine(line) {
   const bareVerdictPrefix = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Verdict${POST_LABEL_EMPH}\\s*:(.*)$`, "i");
   const match = bareVerdictPrefix.exec(line);
   if (!match) return false;
-  const rawVal = match[1].replace(/[*_]+/g, "").trim();
+  const rawVal = stripInlineCodeLine(match[1]).replace(/[*_]+/g, "").trim();
   if (!CATEGORY_VERDICT_RE.test(rawVal)) return false;
   return !/\b(?:PASS|FAIL|BLOCKED)\b/.test(rawVal);
 }
@@ -335,23 +419,25 @@ function parseStrictLines(markdown, labels, allowed) {
  * @returns {boolean}
  */
 function hasContentVerdictAttempt(markdown) {
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const verdictLabelRe = new RegExp(`^\\s*${LINE_ITEM_PREFIX}(?:(?:Content|Overall)\\s+)?Verdict${POST_LABEL_EMPH}\\s*:`, "i");
   const tableScanner = createTableVerdictScanner(CONTENT_TABLE_CONFIG);
-  for (const line of clean.split(/\r?\n/)) {
-    if (isCategoryVerdictLine(line)) {
+  for (const rawLine of clean.split(/\r?\n/)) {
+    if (isCategoryVerdictLine(rawLine)) {
       tableScanner.reset();
       continue;
     }
-    if (verdictLabelRe.test(line)) return true;
-    if (
-      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(?:PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/.test(line) &&
-      !isHistoricalLine(line)
-    ) {
+    if (verdictLabelRe.test(rawLine)) return true;
+    const line = stripInlineCodeLine(rawLine, true);
+    const leading = line.match(
+      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(PASS|FAIL|BLOCKED)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/
+    );
+    if (leading && !isHistoricalLeadingDesc(line.slice(leading[0].length))) {
       return true;
     }
-    if (matchLabeledVerdict(line) && !isHistoricalLine(line)) return true;
-    if (tableScanner.scanLine(line).length > 0) return true;
+    const labeled = matchLabeledVerdict(line);
+    if (labeled && !isHistoricalLine(labeled.prefix)) return true;
+    if (tableScanner.scanLine(rawLine).length > 0) return true;
   }
   return false;
 }
@@ -368,47 +454,48 @@ function parseContentVerdict(markdown) {
     throw new Error("Report must record an unambiguous single-line 'Content Verdict: PASS|FAIL|BLOCKED' (or 'Verdict: ...').");
   }
 
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const tableScanner = createTableVerdictScanner(CONTENT_TABLE_CONFIG);
-  for (const line of clean.split(/\r?\n/)) {
-    if (isCategoryVerdictLine(line)) {
+  for (const rawLine of clean.split(/\r?\n/)) {
+    if (isCategoryVerdictLine(rawLine)) {
       tableScanner.reset();
       continue;
     }
+    const line = stripInlineCodeLine(rawLine, true);
     // Reject explicit verdict-targeted negations of PASS when report claims PASS (excluding historical/negative-test prose)
-    if (found.has("PASS") && !isHistoricalLine(line)) {
+    if (found.has("PASS")) {
+      const tracker = createClauseTracker(line);
       for (const negMatch of line.matchAll(VERDICT_NEGATION_RE)) {
-        const isUppercasePass = negMatch[2] === "PASS";
-        if (isUppercasePass) {
+        const clause = tracker.advanceTo(negMatch.index);
+        const matchEnd = negMatch.index + negMatch[0].length;
+        if (clause.isHistorical) {
+          tracker.markConsumed(matchEnd);
+          continue;
+        }
+        if (negMatch[2] === "PASS") {
           found.add("FAIL");
           break;
         }
-        const rawPrefix = line.slice(0, negMatch.index);
-        const clausePrefix = extractCurrentClause(rawPrefix);
-        const tail = line.slice(negMatch.index + negMatch[0].length);
-        const isClauseEnd = /^\s*(?:[.,;:!?)\]]|$)/.test(tail);
-        const isAdjunctTail = VERDICT_ADJUNCT_TAIL_RE.test(tail);
-        const isLineInitialNeg = /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(clausePrefix);
-        const hasVerdictSubject =
-          VERDICT_SUBJECT_NOUN_RE.test(clausePrefix) && !NEGATIVE_EXPECTATION_RE.test(clausePrefix);
-        if ((isLineInitialNeg && isClauseEnd) || (hasVerdictSubject && (isClauseEnd || isAdjunctTail))) {
+        const { isClauseEnd, isAdjunctTail } = classifyNegationTail(line, matchEnd);
+        if ((clause.isLineInitial && isClauseEnd) || (clause.hasVerdictSubject && (isClauseEnd || isAdjunctTail))) {
           found.add("FAIL");
           break;
         }
+        tracker.markConsumed(matchEnd);
       }
     }
     // Reject secondary labeled verdict/status/check lines asserting conflicting verdicts (excluding historical/compound tokens)
     const labeled = matchLabeledVerdict(line);
-    if (labeled && !isHistoricalLine(line)) {
-      found.add(labeled[1]);
+    if (labeled && !isHistoricalLine(labeled.prefix)) {
+      found.add(labeled.verdict);
     }
     const leading = line.match(
-      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(PASS|FAIL|BLOCKED)[*_]*(?:\s*[:—–]|\s+-(?=\s|$))/
+      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(PASS|FAIL|BLOCKED)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/
     );
-    if (leading && !isHistoricalLine(line)) {
+    if (leading && !isHistoricalLeadingDesc(line.slice(leading[0].length))) {
       found.add(leading[1]);
     }
-    for (const verdict of tableScanner.scanLine(line)) {
+    for (const verdict of tableScanner.scanLine(rawLine)) {
       found.add(verdict);
     }
   }
@@ -431,28 +518,33 @@ function parseIntegrityVerdict(markdown) {
     throw new Error("Integrity audit report must record an unambiguous single-line 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.");
   }
 
-  const clean = stripCode(markdown);
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
   const tableScanner = createTableVerdictScanner(INTEGRITY_TABLE_CONFIG);
-  for (const line of clean.split(/\r?\n/)) {
-    if (found.has("CLEAN") && !isHistoricalLine(line)) {
+  for (const rawLine of clean.split(/\r?\n/)) {
+    const line = stripInlineCodeLine(rawLine, true);
+    if (found.has("CLEAN")) {
+      const tracker = createClauseTracker(line);
       for (const m of line.matchAll(INTEGRITY_NEGATION_RE)) {
-        if (m[1] === "CLEAN") {
+        const clause = tracker.advanceTo(m.index);
+        const matchEnd = m.index + m[0].length;
+        if (m[1] === "CLEAN" && !clause.isHistorical) {
           found.add("INTEGRITY VIOLATION");
           break;
         }
+        tracker.markConsumed(matchEnd);
       }
     }
     const labeled = matchLabeledIntegrityVerdict(line);
-    if (labeled && !isHistoricalLine(line)) {
-      found.add(labeled[1]);
+    if (labeled && !isHistoricalLine(labeled.prefix)) {
+      found.add(labeled.verdict);
     }
     const leading = line.match(
       /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(CLEAN|INTEGRITY VIOLATION)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/
     );
-    if (leading && !isHistoricalLine(line)) {
+    if (leading && !isHistoricalLeadingDesc(line.slice(leading[0].length))) {
       found.add(leading[1]);
     }
-    for (const verdict of tableScanner.scanLine(line)) {
+    for (const verdict of tableScanner.scanLine(rawLine)) {
       found.add(verdict);
     }
   }

@@ -690,8 +690,17 @@ function prepareCohortSnapshot(canonicalRoot, record, { action = "Bundling", ver
   }
   const synthesisSlot = reportPath(squadId, undefined, rootPrefix);
   const relative = bundlePath(squadId, rootPrefix);
+  const auditExclusions = [];
+  if (typeof record.integrityReport === "string" && record.integrityReport.trim()) {
+    auditExclusions.push(record.integrityReport);
+  }
+  if (Array.isArray(record.integrityAuditSlots)) {
+    for (const slot of record.integrityAuditSlots) {
+      if (typeof slot === "string" && slot.trim()) auditExclusions.push(slot);
+    }
+  }
   if (
-    [...assignments.map(({ report }) => report), synthesisSlot, relative].some(report =>
+    [...assignments.map(({ report }) => report), synthesisSlot, relative, ...auditExclusions].some(report =>
       Object.hasOwn(verifiedFiles ?? {}, report)
     )
   ) {
@@ -1333,7 +1342,10 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (entry?.reportSlot !== undefined) {
-        addSlot(entry.reportSlot, plan.executionMode === "swarm" && entry?.slotType === "lead");
+        addSlot(
+          entry.reportSlot,
+          plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit")
+        );
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
@@ -1354,18 +1366,21 @@ function collectReportSlots(root, options = {}) {
     if (squadId !== undefined && squadId !== record.squadId) {
       throw new Error(`Conflicting squad '${squadId}' for record squad '${record.squadId}'.`);
     }
+    if (record.requireIntegrityAudit !== undefined && typeof record.requireIntegrityAudit !== "boolean") {
+      throw new Error("requireIntegrityAudit must be a boolean.");
+    }
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
-    addSlot(reportPath(record.squadId, undefined, rootPrefix));
+    addSlot(reportPath(record.squadId, undefined, rootPrefix), true);
     for (const a of record.assignments ?? []) {
       if (a?.report !== undefined) addSlot(a.report);
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
-      addSlot(slot);
+      addSlot(slot, true);
       hasExplicitAuditSlot = true;
     }
     if (record.integrityReport !== undefined) {
-      addSlot(record.integrityReport);
+      addSlot(record.integrityReport, true);
       hasExplicitAuditSlot = true;
     }
     if (!hasExplicitAuditSlot && record.requireIntegrityAudit !== false) {
@@ -1513,6 +1528,13 @@ function isPlainObject(value) {
 }
 
 function hydratePlanForBundleInit(plan, fallbackRoot) {
+  if (
+    isPlainObject(plan) &&
+    plan.includeIntegrityAuditor !== undefined &&
+    typeof plan.includeIntegrityAuditor !== "boolean"
+  ) {
+    throw new Error("includeIntegrityAuditor must be a boolean.");
+  }
   if (!isPlainObject(plan) || plan.bundleRecordTemplates !== undefined || !Array.isArray(plan.workers)) {
     return plan;
   }
@@ -1715,6 +1737,9 @@ function buildBundleRecordInit(root, options = {}) {
     throw new Error(`Invalid verdict '${resolvedVerdict}': expected PASS, FAIL, or BLOCKED.`);
   }
 
+  if (template.requireIntegrityAudit !== undefined && typeof template.requireIntegrityAudit !== "boolean") {
+    throw new Error("requireIntegrityAudit must be a boolean.");
+  }
   const requireAudit = allowUnaudited ? false : (template.requireIntegrityAudit ?? true);
   let auditSlots = [];
   if (requireAudit) {

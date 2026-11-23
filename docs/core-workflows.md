@@ -15,13 +15,13 @@ For the canonical definition of every role, Task-Spec vs. Execution-Modifier ski
 
 Agy-Squad structures each cohort run into four ordered stages: Pre-Flight Intake, Working Cohort, Independent Integrity Audit, and Acceptance Bundling.
 
-### Phase 0: Pre-flight defaults and optional overrides
+### Phase 0: Step 0 intake and swarm defaults
 
-Native `/swarm` runs default cleanly to **Flat** topology, **`inherit`** workspace isolation, the **coordinator's active model**, and an **independent Integrity Audit** without forcing an upfront 4-question intake pause. Ask via `ask_question` only when a task needs a non-default choice (such as multi-squad layered leads, isolated worktrees for concurrent edits, or explicit model pinning):
+For native `/swarm` runs, call `ask_question` once at Step 0 whenever any of the four swarm settings (`topology`, `model`, `workspaceIsolation`, or report retention) is absent from the user's prompt. Ask only for the missing settings, and skip Step 0 when all four are already specified. Recommended options stay lightweight (inline tasks default to `flat`, manifests with `lead` blocks compile `layered` unless `--topology flat` is passed, `inherit` workspace isolation, the coordinator's active model, and an independent Integrity Audit):
 
 | Decision | Default and options | Governing control |
 | --- | --- | --- |
-| **Topology** | Default: **Flat** (specialists report to parent/coordinator); opt into **Layered** (`all_l1` leads in `dispatch_squad` or domain coordinators in `/swarm`) or single-squad runs when needed | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `<squadId>`) |
+| **Topology** | Inline tasks default to **Flat** (specialists report to coordinator); manifests with `lead` blocks compile **Layered** unless `--topology flat` is passed (`all_l1` leads in `dispatch_squad` or domain coordinators in `/swarm`) | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `<squadId>`) |
 | **Workspace isolation** | Default: `inherit` (shared coordinator root for read-only or disjoint `scopeFiles`); opt into `share` (shared-storage copy) or `branch` (isolated clone) for concurrent edits | `squad_planner` (`workspaceIsolation`, `/swarm` only; `subagent` requires `inherit`) |
 | **Teardown and provenance** | Full retention (`--keep-reports`, preserving `scratch/agy-squad/`) or verified report pruning (`--prune`, plus `rm -rf scratch/agy-squad` after archiving findings) | `agy-squad prune` / `agy-squad finalize --prune` |
 | **Model** | Default: coordinator active model (omit `model`/`--model`); or explicit user-selected model ID (`swarm{action: "models"}`) | `squad_planner` (`model`, `knownModels`) and `swarm{action: "status"}` |

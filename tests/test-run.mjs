@@ -483,14 +483,64 @@ try {
     for (const verdict of ["SHIP NOW", "SHIP WITH MINOR POLISH", "FIX BEFORE RELEASE", "HOLD BEFORE PUBLIC RELEASE"]) {
       assert.ok(txt.includes(verdict), `v0.2.1: ${label} must include 4-tier verdict '${verdict}'`);
     }
-    assert.match(txt, /\[agy-transcript-access: deny\]/, `v0.2.1: ${label} must mandate hook-enforced anti-anchoring`);
+    assert.match(txt, /\[agy-transcript-access: self-only\]/, `v0.2.1: ${label} must mandate hook-enforced self-only anti-anchoring`);
     assert.match(txt, /skipLibCheck:\s*false/, `v0.2.1: ${label} must mandate strict consumer typecheck`);
     assert.match(txt, /Section 8/, `v0.2.1: ${label} must separate Section 8 residuals from auto-fixed P0-P3`);
+    assert.match(txt, /timeout 5/, `v0.2.1: ${label} must bound ReDoS probes with timeout 5`);
     assert.match(txt, /ReDoS/i, `v0.2.1: ${label} must include CodeQL-class ReDoS check`);
+    assert.match(txt, /r3/, `v0.2.1: ${label} must include 2-round escalation stop-rule for r3`);
+    assert.match(txt, /1-line rows/, `v0.2.1: ${label} must compact previously Closed P1/P2 items to 1-line rows in r2+`);
     assert.doesNotMatch(txt, /[\u2013\u2014]/, `v0.2.1: ${label} must not contain prose em/en dashes`);
   }
+  assert.match(dayOneProtoText, /hermetic test scripts/i, "v0.2.1: day-one-protocol.md must note hermetic .system_generated consumer checks");
+  assert.match(dayOneProtoText, /live symlinked plugin\/hook/i, "v0.2.1: day-one-protocol.md must serialize live symlinked plugin/hook edits");
   assert.match(stdText, /ReDoS/i, "v0.2.1: 4.11 SEC in pr-review-standard.md must include ReDoS");
   assert.match(stdText, /permissions:/, "v0.2.1: 4.11 SEC in pr-review-standard.md must include CI workflow permissions");
+
+  // Day-1 r1 regressions: R1-DOC-001, R1-DOC-002, R1-SEC-003, R1-SEC-005
+  const contribText = fs.readFileSync(path.join(repoRoot, "CONTRIBUTING.md"), "utf8");
+  assert.doesNotMatch(contribText, /diagnose\.mjs\s+--markdown/, "R1-DOC-001: CONTRIBUTING.md must not reference removed --markdown flag");
+  assert.match(contribText, /diagnose\.mjs\s+--json/, "R1-DOC-001: CONTRIBUTING.md must reference diagnose.mjs --json");
+  assert.match(contribText, /<= 1200 B.*<= 1800 B/, "R1-DOC-001: CONTRIBUTING.md must match enforced specialist/lead byte budgets");
+  const benchReadme = fs.readFileSync(path.join(repoRoot, "benchmarks/teamwork-vs-squad/README.md"), "utf8");
+  const liveSection = benchReadme.slice(benchReadme.indexOf("## Run a new live experiment"));
+  assert.doesNotMatch(liveSection, /check_context_health/, "R1-DOC-002: live benchmark instructions must not reference retired check_context_health");
+
+  const { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, stripMarkdownLinkSyntax } = await import(
+    "../.agents/skills/self-diagnosis/scripts/diagnose.mjs"
+  );
+  const tDiag = performance.now();
+  assert.deepEqual(extractMarkdownLinks("[a](b".repeat(20_000)), []);
+  assert.deepEqual(extractMarkdownLinks("[a](b ".repeat(20_000) + ")"), []);
+  assert.equal(hasValidSvgEnvelope("<svg>".repeat(20_000)), false);
+  assert.equal(hasValidSvgEnvelope("<svg ".repeat(20_000) + "</svg>"), false);
+  assert.equal(hasValidSvgEnvelope('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>\n'), true);
+  // Day-1 r2 regressions: R2-SEC-003 (linear getHeadingSlugs) & R2-SCRIPT-001 (same-file #fragment formatting)
+  assert.equal(stripMarkdownLinkSyntax("Heading [a](https://example.com) and [b](./x.md)"), "Heading a and b");
+  const slugCache = new Map([["/virtual-redos.md", "# " + "[a](b".repeat(40_000) + "\n## Valid Heading\n"]]);
+  const slugs = getHeadingSlugs("/virtual-redos.md", slugCache);
+  assert.equal(slugs.has("valid-heading"), true);
+  const diagMs = performance.now() - tDiag;
+  assert.ok(diagMs < 100, `R1-SEC-003 / R2-SEC-003: diagnose link/SVG/heading checks took ${diagMs.toFixed(1)} ms (>= 100 ms)`);
+  const virtualSelfFile = path.join(repoRoot, ".agents/skills/pr-review/virtual-r2-check.md");
+  const selfTextCache = new Map([[virtualSelfFile, "# Top\nSee [missing](#foo).\n"]]);
+  assert.deepEqual(
+    checkRelativeLinks(virtualSelfFile, selfTextCache.get(virtualSelfFile), selfTextCache, new Map()),
+    ["#foo"],
+    "R2-SCRIPT-001: broken same-file fragment link must report '#foo' without duplicating '#foo#foo'"
+  );
+
+  const { matchesPackageEntry } = await import("../scripts/release-preflight.mjs");
+  assert.equal(matchesPackageEntry("docs/skills/pr-review.md", "docs/**/*.md"), true);
+  assert.equal(matchesPackageEntry("docs/index.md", "docs/**/*.md"), true);
+  assert.equal(matchesPackageEntry("mcp/handoffs.mjs", "mcp/*.mjs"), true);
+  assert.equal(matchesPackageEntry("mcp/sub/handoffs.mjs", "mcp/*.mjs"), false);
+  assert.equal(matchesPackageEntry("docs/plans/LEDGER.md", "docs/plans/**"), true);
+  const tGlob = performance.now();
+  assert.equal(matchesPackageEntry("a/".repeat(25) + "y", "**/".repeat(15) + "x"), false);
+  assert.equal(matchesPackageEntry("a/".repeat(40) + "y", "**/a/".repeat(15) + "x"), false);
+  const globMs = performance.now() - tGlob;
+  assert.ok(globMs < 100, `R1-SEC-005: release-preflight glob match took ${globMs.toFixed(1)} ms (>= 100 ms)`);
 
   console.log("✓ CLI planner/governance, retired run rejection, read-only diagnose.mjs, preflight, and skill/doc contract checks");
 } finally {

@@ -1,12 +1,12 @@
 # Full Review Report Template
 
-Save to `docs/reviews/<slug>.md` if adopted or requested; else deliver in chat or an Antigravity artifact. Keep every mandatory section (use Not applicable with reason; None identified within reviewed scope or Not assessed per empty bucket). Reserve backticks for identifiers, paths, flags, commands, and literal verdicts.
+Save to `docs/reviews/<slug>.md` if adopted or requested; else deliver in chat or an Antigravity artifact. Keep every mandatory section (use Not applicable with reason; None identified within reviewed scope or Not assessed per empty bucket). Reserve backticks for identifiers, paths, flags, commands, and verdicts quoted in prose; never wrap standalone verdict or metadata declaration lines in backticks.
 
 ---
 
 # <Review title>
 
-**Standard:** Agy-Squad PR Review Standard `v1.5.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md)) | **Type:** `<type>` | **Date:** `<YYYY-MM-DD>` | **Reviewer:** `<name>`
+**Standard:** Agy-Squad PR Review Standard v1.5.0 ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md)) | **Type:** `<type>` | **Date:** `<YYYY-MM-DD>` | **Reviewer:** `<name>`
 
 ## 1. Metadata, Session Provenance & Limits
 

@@ -629,6 +629,73 @@ try {
       escapeWarnings.some(w => /resolves outside workspace root/.test(w)),
       "SEC-004: external symlink normalization must emit workspace-escape warning"
     );
+    assert.equal(
+      scopesOverlap("sym-escape/uncreated/item.js", "real-src/item.js", root, { caseInsensitive: false }),
+      false,
+      "SEC-NEW-01: unrelated external symlink must not overlap internal workspace path"
+    );
+
+    // Session 3 SEC-012: dangling symlinks targeting not-yet-created external files/dirs resolve via readlink + existing ancestor
+    let danglingLinksCreated = false;
+    try {
+      const plannedExternal = path.join(escapeOutsideDir, "planned.js");
+      fs.symlinkSync(plannedExternal, path.join(root, "link-planned-a.js"), "file");
+      fs.symlinkSync(plannedExternal, path.join(root, "link-planned-b.js"), "file");
+      fs.symlinkSync("link-planned-a.js", path.join(root, "link-planned-chain.js"), "file");
+      danglingLinksCreated = true;
+    } catch (err) {
+      if (err?.code !== "EPERM") throw err;
+    }
+    if (danglingLinksCreated) {
+      const danglingWarnings = [];
+      const expectedPlanned = `external:${path.join(escapeOutsideDir, "planned.js").split(path.sep).join("/")}`;
+      assert.equal(
+        normalizeScopePath("link-planned-a.js", root, { caseInsensitive: false, warnings: danglingWarnings }),
+        expectedPlanned
+      );
+      assert.ok(danglingWarnings.some(w => /resolves outside workspace root/.test(w)), "SEC-012: dangling external symlink must warn");
+      assert.equal(scopesOverlap("link-planned-a.js", "link-planned-b.js", root, { caseInsensitive: false }), true);
+      assert.equal(scopesOverlap("link-planned-chain.js", "link-planned-b.js", root, { caseInsensitive: false }), true);
+      const danglingPlan = planSquadCohort({
+        manifest: {
+          squads: {
+            alpha: {
+              specialists: [
+                { role: "Spec A", objective: "A", scopeFiles: ["link-planned-a.js"] },
+                { role: "Spec B", objective: "B", scopeFiles: ["link-planned-b.js"] }
+              ]
+            }
+          }
+        },
+        includeIntegrityAuditor: false
+      }, root);
+      assert.equal(danglingPlan.topology.scopeOverlaps.length, 1, "SEC-012: dangling external symlinks must report overlap");
+      assert.ok(danglingPlan.warnings.some(w => /resolves outside workspace root/.test(w)));
+    }
+
+    // Session 3 SEC-NEW-01: external ancestor symlink (.. or /) overlaps every internal workspace scope
+    fs.symlinkSync(path.dirname(root), path.join(root, "parent-link"), os.platform() === "win32" ? "junction" : "dir");
+    assert.equal(scopesOverlap("parent-link", "real-src/item.js", root, { caseInsensitive: false }), true);
+    const parentPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [
+              { role: "Spec A", objective: "A", scopeFiles: ["parent-link"] },
+              { role: "Spec B", objective: "B", scopeFiles: ["real-src/item.js"] }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(parentPlan.topology.scopeOverlaps.length, 1, "SEC-NEW-01: ancestor external symlink must overlap internal workspace scope");
+    if (os.platform() !== "win32") {
+      fs.symlinkSync("/", path.join(root, "root-link"), "dir");
+      assert.equal(normalizeScopePath("root-link", root, { caseInsensitive: false }), "external:/");
+      assert.equal(scopesOverlap("root-link", "real-src/item.js", root, { caseInsensitive: false }), true);
+      assert.equal(scopesOverlap("root-link", "sym-escape/uncreated/item.js", root, { caseInsensitive: false }), true);
+    }
   } finally {
     fs.rmSync(escapeOutsideDir, { recursive: true, force: true });
   }
@@ -643,6 +710,7 @@ try {
   if (brokenScopeSymCreated) {
     assert.equal(scopesOverlap("sym-broken/Foo.js", "sym-broken/foo.js", root, { caseInsensitive: true }), true);
     assert.equal(scopesOverlap("sym-broken/Foo.js", "sym-broken/foo.js", root, { caseInsensitive: false }), false);
+    assert.equal(scopesOverlap("sym-broken/Foo.js", "does-not-exist-target/Foo.js", root, { caseInsensitive: false }), true);
   }
 
   // RUN-014 & SVC-007 & SVC-001: precompiledSpecialists omits Call dispatch_squad; occupiedWorkerNames deduplicates; integrityAuditPlan populated
