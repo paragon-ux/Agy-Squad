@@ -42,7 +42,7 @@ jobs:
         run: pip install "zensical==0.0.74"
 
       - name: Build documentation
-        run: zensical build
+        run: zensical build --clean --strict
 
       - name: Check GitHub Pages status
         id: pages

@@ -1497,6 +1497,20 @@ try {
         "SEC-008: gh release upload must not pass --clobber"
       );
 
+      // Batch B SEC-009, SEC-010, TEST-004 & Day-1 R1-TEST-001: SHA-pinned workflow actions, exact npm pin, non-main cancel-in-progress, strict docs build
+      const ciWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
+      const docsWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "docs.yml"), "utf8");
+      assert.match(ciWorkflow, /cancel-in-progress:\s*\$\{\{\s*github\.ref != 'refs\/heads\/main'\s*\}\}/, "TEST-004: ci.yml must skip cancel-in-progress on main");
+      assert.match(releaseWorkflow, /npm install --global 'npm@\d+\.\d+\.\d+'/, "SEC-009: release-tag.yml must pin an exact npm version");
+      assert.match(docsWorkflow, /^\s*run:\s*zensical build --clean --strict\s*$/m, "R1-TEST-001: docs.yml must run zensical build --clean --strict");
+      for (const [wfName, wfBody] of [["ci.yml", ciWorkflow], ["docs.yml", docsWorkflow], ["release-tag.yml", releaseWorkflow]]) {
+        const usesLines = [...wfBody.matchAll(/^\s*uses:\s*(\S+)/gm)].map((m) => m[1]);
+        assert.ok(usesLines.length > 0, `SEC-010: expected uses: refs in ${wfName}`);
+        for (const ref of usesLines) {
+          assert.match(ref, /@[0-9a-f]{40}$/, `SEC-010: workflow action '${ref}' in ${wfName} must be pinned to a 40-hex commit SHA`);
+        }
+      }
+
       // Day-1 raw-final RF-SCRIPT-001: stale global mcp_config.json-only profile reports PARTIAL INSTALLATION + Next step (not DISABLED)
       const rfProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rf-status-"));
       try {
