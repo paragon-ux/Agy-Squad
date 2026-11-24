@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
 const outsideFile = path.join(os.tmpdir(), `agy-outside-${process.pid}.md`);
 fs.writeFileSync(outsideFile, "Content Verdict: PASS\n", "utf8");
 
@@ -203,7 +203,9 @@ try {
   assert.match(payload.Subagents[0].Prompt, /squad-integrity_auditor-alpha\/specialist-1\/report\.md/);
   assert.match(payload.Subagents[0].Prompt, /Integrity Verdict: CLEAN/);
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(payload.Subagents[0].Prompt, /agy-context transcript query --id <id> --summary/);
+  assert.match(payload.Subagents[0].Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
+  assert.match(payload.Subagents[0].Prompt, /agy-context transcript/);
+  assert.doesNotMatch(payload.Subagents[0].Prompt, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
   // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
   assert.equal(handleDispatchSquad({ squadId: "integrity_auditor", manifestPath: "squads.json" }, root).isError, true);
@@ -234,8 +236,8 @@ try {
   assert.equal(singlePayload.Subagents.length, 1);
   assert.ok(Array.isArray(singlePayload.warnings) && singlePayload.warnings.some(w => /ignored/.test(w)), "Custom integrity_auditor.lead must emit explicit warning (SQ-RUN-007)");
   assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor Policy/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN.*Integrity Verdict: INTEGRITY VIOLATION/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor:/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
   assert.doesNotMatch(singlePayload.Subagents[0].Prompt, /query_transcript|read_transcript/, "SQ-MCP-002: briefs must not reference retired MCP transcript tools");
 
   // GOV-07: Swarm integrity auditor briefs must not treat workspace re-execution alone as sufficient for CLEAN
@@ -248,9 +250,11 @@ try {
     { executionMode: "swarm" }
   );
   assert.doesNotMatch(swarmAuditSpec.Prompt, /or direct workspace artifact\/command re-execution/);
-  assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript/);
-  assert.match(swarmAuditSpec.Prompt, /coordinator-extracted sanitized transcript index in scratch\//);
-  assert.match(swarmAuditSpec.Prompt, /report 'Integrity Verdict: INTEGRITY VIOLATION' \(never CLEAN\)/);
+  assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript|rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
+  assert.match(swarmAuditSpec.Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
+  assert.match(swarmAuditSpec.Prompt, /sender=<coordId> \+ @<workerName>/);
+  assert.match(swarmAuditSpec.Prompt, /no raw \.system_generated\/ copies/);
+  assert.match(swarmAuditSpec.Prompt, /re-execution cannot satisfy CLEAN.*'Integrity Verdict: INTEGRITY VIOLATION' if traces missing\/tampered/);
 
   // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
   const intLeadCompiled = buildSubagentSpec(
@@ -258,8 +262,9 @@ try {
     "integrity_auditor-alpha",
     "single-squad.json"
   );
-  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof/);
-  assert.match(intLeadCompiled.Prompt, /never emit a content PASS/i);
+  assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof|PASS on proof/);
+  assert.match(intLeadCompiled.Prompt, /Integrity Auditor Lead/);
+  assert.match(intLeadCompiled.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
 
   // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, SCRIPT-P3-04, ARCH-PR4-03, TEST-PR4-01)
   assert.equal(JSON.parse(runCli(["verdict", lead])).verdict, "PASS");
@@ -694,6 +699,448 @@ try {
   assert.equal(cleanOverrideBundleJson.integrityAudit, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudit");
   assert.equal(cleanOverrideBundleJson.integrityAudits, undefined, "S2-SCRIPT-04: unaudited-explicit bundle must not embed contradictory integrityAudits");
   assert.equal(verifyBundle(root, cleanOverrideRes.path).auditPolicy, "unaudited-explicit");
+
+  // ASQ-RUN-002: Category Verdict columns and summary matrix tables do not false-conflict with top-level verdicts
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: FAIL\n| Category | Category Verdict |\n| --- | --- |\n| ARCH | PASS |\n| SEC | FAIL |\n"
+    ),
+    "FAIL",
+    "ASQ-RUN-002: Category Verdict table column with PASS must not false-conflict with Content Verdict: FAIL"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\n| Check | PASS | FAIL |\n| --- | --- | --- |\n| Unit | 10 | 0 |\n"
+    ),
+    "PASS",
+    "ASQ-RUN-002: summary table header '| Check | PASS | FAIL |' must not false-conflict with Content Verdict: PASS"
+  );
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: FAIL\n| Check | PASS | FAIL |\n| --- | --- | --- |\n| Unit | 9 | 1 |\n"
+    ),
+    "FAIL",
+    "ASQ-RUN-002: summary table header '| Check | PASS | FAIL |' must not false-conflict with Content Verdict: FAIL"
+  );
+  assert.equal(
+    parseIntegrityVerdict(
+      "Target Squad: alpha\nIntegrity Verdict: CLEAN\n| Metric | CLEAN | INTEGRITY VIOLATION |\n| --- | --- | --- |\n| Traces | 3 | 0 |\n"
+    ),
+    "CLEAN",
+    "ASQ-RUN-002: summary table header '| Metric | CLEAN | INTEGRITY VIOLATION |' must not false-conflict with Integrity Verdict: CLEAN"
+  );
+  assert.equal(
+    parseIntegrityVerdict(
+      "Target Squad: alpha\nIntegrity Verdict: INTEGRITY VIOLATION\n| Metric | CLEAN | INTEGRITY VIOLATION |\n| --- | --- | --- |\n| Traces | 2 | 1 |\n"
+    ),
+    "INTEGRITY VIOLATION",
+    "ASQ-RUN-002: summary table header '| Metric | CLEAN | INTEGRITY VIOLATION |' must not false-conflict with Integrity Verdict: INTEGRITY VIOLATION"
+  );
+
+  // ASQ-SEC-006: stripCode stays linear-time on 40k consecutive backticks (< 250 ms)
+  const evilTicks = "`".repeat(40_000) + "x";
+  const evilInlineTicks = "a " + evilTicks;
+  const tStrip = performance.now();
+  const strippedFenceTicks = stripCode(evilTicks);
+  const strippedInlineTicks = stripCode(evilInlineTicks);
+  const stripMs = performance.now() - tStrip;
+  assert.equal(strippedFenceTicks, "");
+  assert.equal(strippedInlineTicks, evilInlineTicks);
+  assert.ok(stripMs < 250, `ASQ-SEC-006: stripCode on 40k backticks took ${stripMs.toFixed(1)} ms (>= 250 ms)`);
+  assert.doesNotMatch(stripCode("ok `Content Verdict: FAIL` ok"), /FAIL/);
+
+  // Post-swarm live fix: inline-backtick Evidence Digest/Target Squad + parenthetical provenance + verdict --integrity CLI parity
+  const digestA = "c".repeat(64);
+  const digestB = "d".repeat(64);
+  assert.equal(parseTargetSquad("Target Squad: `core`.\n"), "core");
+  assert.equal(parseEvidenceDigest(`Evidence Digest: \`${digestA}\`\n`), digestA);
+  assert.equal(
+    parseEvidenceDigest(
+      `Evidence Digest: ${digestA}\n- **Evidence Digest**: \`${digestA}\` (matches coordinator brief seq \`#48\` and \`record-core.json\`).\n`
+    ),
+    digestA,
+    "parseEvidenceDigest must accept matching inline-code digest with parenthetical provenance note"
+  );
+  assert.equal(
+    parseEvidenceDigest(`\`\`\`md\nEvidence Digest: not-a-hash\n\`\`\`\nEvidence Digest: \`${digestA}\`\n`),
+    digestA,
+    "parseEvidenceDigest must continue ignoring fenced code blocks"
+  );
+  assert.throws(
+    () => parseEvidenceDigest(`Evidence Digest: ${digestA}\n- **Evidence Digest**: \`${digestB}\` (conflict).\n`),
+    /conflicting Evidence Digest/
+  );
+  assert.throws(
+    () => parseEvidenceDigest(`Evidence Digest: \`${digestA}\n`),
+    /Malformed Evidence Digest/
+  );
+  const validIntRel = "scratch/agy-squad/squad-integrity_auditor/specialist-1/cli-verdict-ok.md";
+  write(
+    validIntRel,
+    `Target Squad: \`core\`\nEvidence Digest: ${digestA}\nIntegrity Verdict: CLEAN\n- **Evidence Digest**: \`${digestA}\` (matches brief seq \`#48\`).\n`
+  );
+  const cliVerdictOk = JSON.parse(runCli(["verdict", "--integrity", validIntRel]));
+  assert.deepEqual(cliVerdictOk, { verdict: "CLEAN", targetSquad: "core", evidenceDigest: digestA });
+  const badDigestRel = "scratch/agy-squad/squad-integrity_auditor/specialist-1/cli-verdict-bad-digest.md";
+  write(badDigestRel, "Target Squad: core\nEvidence Digest: not-a-sha256\nIntegrity Verdict: CLEAN\n");
+  const cliVerdictBad = runCliFail(["verdict", "--integrity", badDigestRel]);
+  assert.notEqual(cliVerdictBad.status, 0, "verdict --integrity must fail closed on malformed Evidence Digest");
+  assert.match(cliVerdictBad.stderr, /Malformed Evidence Digest/);
+
+  // Batch A regressions: SEC-001, RUN-001, RUN-002, SEC-002
+  // SEC-001: inline backticks on verdict lines fail closed as malformed/hedged while stripCode still strips inline code
+  for (const hedgedContent of [
+    "Content Verdict: PASS `(FAIL: 3 P1 blockers open)`\n",
+    "Content Verdict: `FAIL` PASS\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(hedgedContent),
+      /Malformed or hedged verdict line/,
+      `SEC-001: backtick-smuggled content verdict must fail closed: ${JSON.stringify(hedgedContent)}`
+    );
+  }
+  for (const hedgedIntegrity of [
+    "Integrity Verdict: `NOT` CLEAN\n",
+    "Integrity Verdict: CLEAN `(INTEGRITY VIOLATION: traces missing)`\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(hedgedIntegrity),
+      /Malformed or hedged verdict line/,
+      `SEC-001: backtick-smuggled integrity verdict must fail closed: ${JSON.stringify(hedgedIntegrity)}`
+    );
+  }
+  assert.doesNotMatch(stripCode("ok `Content Verdict: FAIL` ok"), /FAIL/);
+
+  // RUN-001: PR #N / Wave N lines are no longer treated as historical bypasses; true historical lines remain allowed
+  for (const badContent of [
+    "Content Verdict: PASS\nFinal PR #15 status: FAIL\n",
+    "Content Verdict: PASS\nTests for PR #15 did not PASS\n",
+    "Content Verdict: PASS\nFAIL — Wave 2 still has P1 blockers\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(badContent),
+      /conflicting content verdicts/,
+      `RUN-001: conflicting PR/Wave verdict line must throw: ${JSON.stringify(badContent)}`
+    );
+  }
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nPR #15 status: PASS\n"),
+    /role conflation/,
+    "RUN-001: PR #15 status: PASS in integrity report must throw role conflation"
+  );
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nPR #15 audit is not CLEAN\n"),
+    /conflicting verdicts/,
+    "RUN-001: PR #15 audit is not CLEAN must throw conflicting verdicts"
+  );
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior baseline check did not pass.\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior status: FAIL\n"), "PASS");
+
+  // RUN-002: 4-space and tab-indented Target Squad / Evidence Digest code blocks are ignored while value-only backticks still parse
+  assert.equal(parseTargetSquad("    Target Squad: alpha\n\tTarget Squad: beta\n"), undefined);
+  assert.equal(parseTargetSquad("Target Squad: `alpha`\n    Target Squad: beta\n\tTarget Squad: gamma\n"), "alpha");
+  assert.equal(parseEvidenceDigest(`    Evidence Digest: ${digestA}\n\tEvidence Digest: ${digestB}\n`), undefined);
+  assert.equal(
+    parseEvidenceDigest(`Evidence Digest: \`${digestA}\`\n    Evidence Digest: ${digestB}\n\tEvidence Digest: not-a-hash\n`),
+    digestA
+  );
+
+  // SEC-002: parseTargetSquad unwrapBalancedEmphasis stays linear-time on N=30,000 runs and preserves reserved-key checks
+  const tEmph = performance.now();
+  assert.equal(parseTargetSquad(`Target Squad: ${"*".repeat(30_000)}alpha${"*".repeat(30_000)}\n`), "alpha");
+  assert.equal(parseTargetSquad(`Target Squad: ${"*_".repeat(15_000)}alpha${"_*".repeat(15_000)}\n`), "alpha");
+  assert.throws(
+    () => parseTargetSquad(`Target Squad: ${"_".repeat(30_000)}__proto__${"_".repeat(30_000)}\n`),
+    /Invalid reserved squad ID/
+  );
+  assert.throws(
+    () => parseTargetSquad(`Target Squad: ${"_*".repeat(15_000)}__proto__${"*_".repeat(15_000)}\n`),
+    /Invalid reserved squad ID/
+  );
+  const emphMs = performance.now() - tEmph;
+  assert.ok(emphMs < 250, `SEC-002: parseTargetSquad on N=30,000 balanced emphasis took ${emphMs.toFixed(1)} ms (>= 250 ms)`);
+
+  // Session 3 regressions: RUN-009, SEC-011, RUN-010
+  // RUN-009: Section 4 category Verdict lines quoting backticked PASS/FAIL/BLOCKED parse cleanly and agree with hasContentVerdictAttempt
+  assert.equal(
+    parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (must emit `PASS` or `FAIL`)\n"),
+    "PASS",
+    "RUN-009: category Verdict line quoting backticked verdict tokens must not throw"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("# Draft\n- **Verdict:** Changes required (must emit `PASS` or `FAIL`)\n"),
+    false,
+    "RUN-009: category Verdict line quoting backticked verdict tokens must not trip hasContentVerdictAttempt"
+  );
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\n- **Verdict:** Changes required (FAIL)\n"),
+    /Malformed or hedged verdict line/,
+    "RUN-009: unbackticked FAIL on category Verdict line must still throw"
+  );
+  assert.equal(
+    hasContentVerdictAttempt("Content Verdict: `PASS`\n"),
+    true,
+    "RUN-009: malformed backticked strict verdict line must still trip hasContentVerdictAttempt"
+  );
+
+  // SEC-011: backticked table/labeled/negated verdict contradictions & role conflation, label-prefix historical scoping, and narrowed 'before'
+  for (const sec11BadContent of [
+    "Content Verdict: PASS\n| Squad | `Verdict` |\n| --- | --- |\n| Alpha | `FAIL` |\n",
+    "Content Verdict: PASS\n| Field | Value |\n| --- | --- |\n| `Content Verdict` | `FAIL` |\n",
+    "Content Verdict: PASS\nSecondary check: `FAIL`\n",
+    "Content Verdict: PASS\nUnit tests did not `PASS`.\n",
+    "Content Verdict: PASS\nSecondary check: FAIL (fix blockers before release)\n",
+    "Content Verdict: PASS\nStatus: FAIL (matches old baseline bug)\n",
+    "Content Verdict: PASS\nUnit tests did not pass before timeout.\n",
+    "Content Verdict: PASS\nUnit tests did not pass; fix blockers before release.\n",
+    "Content Verdict: PASS\nFixed prior bug; unit tests did not pass.\n",
+    "Content Verdict: PASS\n- **FAIL:** Failed before timeout.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(sec11BadContent),
+      /conflicting content verdicts/,
+      `SEC-011: conflicting content verdict must throw: ${JSON.stringify(sec11BadContent)}`
+    );
+  }
+  for (const sec11BadIntegrity of [
+    "Integrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| Audit Status | `INTEGRITY VIOLATION` |\n",
+    "Integrity Verdict: CLEAN\nAudit Status: `INTEGRITY VIOLATION`\n",
+    "Integrity Verdict: CLEAN\nAudit is not `CLEAN`.\n",
+    "Integrity Verdict: CLEAN\nAudit Status: INTEGRITY VIOLATION (fix before release)\n",
+    "Integrity Verdict: CLEAN\nAudit is not CLEAN — fix missing trace before merge.\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(sec11BadIntegrity),
+      /conflicting verdicts/,
+      `SEC-011: conflicting integrity verdict must throw: ${JSON.stringify(sec11BadIntegrity)}`
+    );
+  }
+  for (const sec11RoleConflation of [
+    "Integrity Verdict: CLEAN\n| Field | Value |\n| --- | --- |\n| `Content Verdict` | `PASS` |\n",
+    "Integrity Verdict: CLEAN\nPR #15 status: `PASS`\n",
+    "Integrity Verdict: CLEAN\nStatus: PASS (fix blockers before release)\n"
+  ]) {
+    assert.throws(
+      () => parseIntegrityVerdict(sec11RoleConflation),
+      /role conflation/,
+      `SEC-011: integrity role conflation must throw: ${JSON.stringify(sec11RoleConflation)}`
+    );
+  }
+  assert.equal(
+    parseContentVerdict(
+      "Content Verdict: PASS\nPrior status: FAIL\nBefore the fix, unit tests did not pass.\nQuoted `Content Verdict: FAIL` in prose.\n| Field | Before | Current |\n| --- | --- | --- |\n| Verdict | FAIL | PASS |\n"
+    ),
+    "PASS",
+    "SEC-011: true historical context and prose code quotes must still pass"
+  );
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nLead report recorded `PASS` in prose.\n"),
+    "CLEAN",
+    "SEC-011: integrity prose mentioning backticked PASS must not false-trigger role conflation"
+  );
+
+  // RUN-010: odd balanced underscore emphasis wrapping reserved keys still throws Invalid reserved squad ID
+  for (const oddProto of ["___proto___", "_____proto_____"]) {
+    assert.throws(
+      () => parseTargetSquad(`Target Squad: ${oddProto}\n`),
+      /Invalid reserved squad ID/,
+      `RUN-010: ${oddProto} must throw Invalid reserved squad ID`
+    );
+  }
+  assert.equal(parseTargetSquad("Target Squad: ___alpha___\n"), "alpha");
+
+  // Day-1 r1 regressions: R1-SEC-001 (tab-indented fence spoofing) & R1-SEC-002 (linear-time clause negation scan)
+  for (const tabFence of ["\t```", "\t~~~"]) {
+    // Forward suppression: tab-indented fence outside a fence must be stripped as indented code, not open a fake fence
+    assert.throws(
+      () => parseContentVerdict(`Content Verdict: PASS\n\n${tabFence}\nContent Verdict: FAIL\n`),
+      /conflicting content verdicts/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Content Verdict: FAIL`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`Integrity Verdict: CLEAN\n\n${tabFence}\nIntegrity Verdict: INTEGRITY VIOLATION\n`),
+      /conflicting verdicts/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Integrity Verdict: INTEGRITY VIOLATION`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`Integrity Verdict: CLEAN\n\n${tabFence}\nContent Verdict: PASS\n`),
+      /role conflation/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent role-conflated Content Verdict: PASS`
+    );
+    assert.throws(
+      () => parseTargetSquad(`Target Squad: alpha\n\n${tabFence}\nTarget Squad: beta\n`),
+      /conflicting Target Squad/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Target Squad`
+    );
+    assert.throws(
+      () => parseEvidenceDigest(`Evidence Digest: ${digestA}\n\n${tabFence}\nEvidence Digest: ${digestB}\n`),
+      /conflicting Evidence Digest/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} must not swallow subsequent Evidence Digest`
+    );
+
+    // Reverse injection: tab-indented fence inside an open fence must not prematurely close the fence
+    const openFence = tabFence.includes("`") ? "```md" : "~~~md";
+    const closeFence = tabFence.includes("`") ? "```" : "~~~";
+    assert.throws(
+      () => parseContentVerdict(`${openFence}\n${tabFence}\nContent Verdict: PASS\n${closeFence}\n`),
+      /unambiguous single-line 'Content Verdict:/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} inside an open fence must not allow Content Verdict: PASS injection`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`${openFence}\n${tabFence}\nIntegrity Verdict: CLEAN\n${closeFence}\n`),
+      /unambiguous single-line 'Integrity Verdict:/,
+      `R1-SEC-001: ${JSON.stringify(tabFence)} inside an open fence must not allow Integrity Verdict: CLEAN injection`
+    );
+  }
+  // Valid CommonMark 0-3 ASCII spaces still open/close fences cleanly
+  assert.equal(parseContentVerdict("   ```md\n   Content Verdict: FAIL\n   ```\nContent Verdict: PASS\n"), "PASS");
+
+  // R1-SEC-002: negation scans stay linear-time (< 500 ms) with or without clause separators
+  const tNeg = performance.now();
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "prior not pass; ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "the endpoint does not pass foo; ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseContentVerdict("Content Verdict: PASS\n" + "the endpoint does not pass foo ".repeat(6000) + "\n"), "PASS");
+  assert.equal(parseIntegrityVerdict("Integrity Verdict: CLEAN\n" + "prior not CLEAN; ".repeat(6000) + "\n"), "CLEAN");
+  assert.equal(parseIntegrityVerdict("Integrity Verdict: CLEAN\n" + "prior not CLEAN ".repeat(6000) + "\n"), "CLEAN");
+  const negMs = performance.now() - tNeg;
+  assert.ok(negMs < 500, `R1-SEC-002: negation scans took ${negMs.toFixed(1)} ms (>= 500 ms)`);
+  // Parity check: same-clause historical exemption still holds across multiple negations
+  assert.equal(parseContentVerdict("Content Verdict: PASS\nPrior check did not pass and still does not pass.\n"), "PASS");
+  assert.throws(
+    () => parseContentVerdict("Content Verdict: PASS\nPrior check did not pass; current check did not pass.\n"),
+    /conflicting content verdicts/
+  );
+
+  // Day-1 r2 regressions: R2-SEC-001 (CommonMark 1-3 spaces + tab indented code) & R2-SEC-002 (ASCII-only closing fence trailing whitespace)
+  for (const spaceTab of [" \t", "  \t", "   \t"]) {
+    assert.throws(
+      () => parseContentVerdict(`${spaceTab}Content Verdict: PASS\n`),
+      /unambiguous single-line 'Content Verdict:/,
+      `R2-SEC-001: ${JSON.stringify(spaceTab)} indented code must not inject Content Verdict: PASS`
+    );
+    assert.throws(
+      () => parseIntegrityVerdict(`${spaceTab}Integrity Verdict: CLEAN\n`),
+      /unambiguous single-line 'Integrity Verdict:/,
+      `R2-SEC-001: ${JSON.stringify(spaceTab)} indented code must not inject Integrity Verdict: CLEAN`
+    );
+    assert.equal(parseTargetSquad(`${spaceTab}Target Squad: alpha\n`), undefined);
+    assert.equal(parseEvidenceDigest(`${spaceTab}Evidence Digest: ${digestA}\n`), undefined);
+    assert.equal(parseContentVerdict(`Content Verdict: PASS\n${spaceTab}Content Verdict: FAIL\n`), "PASS");
+  }
+  // 3 ASCII spaces without tab remain a normal CommonMark paragraph
+  assert.equal(parseContentVerdict("   Content Verdict: PASS\n"), "PASS");
+
+  for (const nonAsciiWs of ["\u00A0", "\uFEFF", "\f", "\v", "\u3000"]) {
+    for (const [openF, closeF] of [["```md", "```"], ["~~~md", "~~~"]]) {
+      assert.throws(
+        () => parseContentVerdict(`${openF}\n${closeF}${nonAsciiWs}\nContent Verdict: PASS\n${closeF}\n`),
+        /unambiguous single-line 'Content Verdict:/,
+        `R2-SEC-002: trailing ${JSON.stringify(nonAsciiWs)} on ${closeF} must not close fence to inject PASS`
+      );
+      assert.throws(
+        () => parseIntegrityVerdict(`${openF}\n${closeF}${nonAsciiWs}\nIntegrity Verdict: CLEAN\n${closeF}\n`),
+        /unambiguous single-line 'Integrity Verdict:/,
+        `R2-SEC-002: trailing ${JSON.stringify(nonAsciiWs)} on ${closeF} must not close fence to inject CLEAN`
+      );
+      assert.equal(parseTargetSquad(`${openF}\n${closeF}${nonAsciiWs}\nTarget Squad: alpha\n${closeF}\n`), undefined);
+      assert.equal(parseEvidenceDigest(`${openF}\n${closeF}${nonAsciiWs}\nEvidence Digest: ${digestA}\n${closeF}\n`), undefined);
+    }
+  }
+  // Trailing ASCII space and tab still close CommonMark fences cleanly
+  assert.equal(parseContentVerdict("```md\nContent Verdict: FAIL\n``` \t \nContent Verdict: PASS\n"), "PASS");
+
+  // PR15-SEC-002 / B-SEC-001: mid-token '.', ':', ';', '!', '?' (filenames, file:line, semver, URL query strings) must not bypass PASS contradiction detection
+  for (const bypassReport of [
+    "Content Verdict: PASS\nThe test suite for src/auth.js did not pass.\n",
+    "Content Verdict: PASS\nVerification of mcp/index.js:120 did not pass.\n",
+    "Content Verdict: PASS\nCheck of package.json did not pass.\n",
+    "Content Verdict: PASS\nCI gate for v0.2.1 did not pass.\n",
+    "Content Verdict: PASS\nThe test suite for https://example.com/run?id=1 did not pass.\n",
+    "Content Verdict: PASS\nVerification of [PR #15](https://github.com/org/repo/pull/15?w=1) did not pass.\n",
+    "Content Verdict: PASS\nThe check for sidecar://swarm/swarm_board/?auto_open=false did not pass.\n",
+    "Content Verdict: PASS\nTest suite: did not pass.\n",
+    "Content Verdict: PASS\nFinal result: did not pass.\n",
+    "Content Verdict: PASS\nFinal outcome: did not pass.\n",
+    "Content Verdict: PASS\nFinal status: did not pass.\n",
+    "Content Verdict: PASS\nFinal result: it did not pass.\n",
+    "Content Verdict: PASS\nTests: Unit tests did not pass.\n",
+    "Content Verdict: PASS\n1. did not pass.\n",
+    "Content Verdict: PASS\nCurrent check: did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not PASS; after the fix: build did not PASS.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not pass. Current tests did not pass.\n",
+    "Content Verdict: PASS\nPrior run: tests did not pass, but current tests did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nNegative test: tests did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nAfter the fix: build did not PASS.\n",
+    "Content Verdict: PASS\nExpected CI checks did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected behavior did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected behaviour did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected result did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected outcome did not pass.\n",
+    "Content Verdict: PASS\nTests for expected error handling did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected behavior: did not pass.\n",
+    "Content Verdict: PASS\nExpected CI checks: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass; final result: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nExpected behavior: tests did not pass. Tests for the expected behavior did not pass.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(bypassReport),
+      /conflicting content verdicts/,
+      `PR15-SEC-002 / PR15-RUN-001: expected contradiction throw for ${JSON.stringify(bypassReport)}`
+    );
+  }
+
+  // PR15-RUN-001 / B-RUN-002: introducer colons and mid-token punctuation preserve historical and negative-expectation context
+  for (const validPassReport of [
+    "Content Verdict: PASS\nBefore the fix: tests did not PASS.\n",
+    "Content Verdict: PASS\n**Before the fix:** tests did not PASS.\n",
+    "Content Verdict: PASS\nPrior run: tests did not PASS.\n",
+    "Content Verdict: PASS\nPrior run: did not pass.\n",
+    "Content Verdict: PASS\nPrior result: did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix in src/auth.js, tests did not PASS.\n",
+    "Content Verdict: PASS\nBefore the fix: check on https://example.com/run?id=1 did not PASS.\n",
+    "Content Verdict: PASS\nNegative test: suite did not pass.\n",
+    "Content Verdict: PASS\nNegative test: did not pass.\n",
+    "Content Verdict: PASS\nNegative result: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass.\n",
+    "Content Verdict: PASS\nExpected outcome: tests did not pass.\n",
+    "Content Verdict: PASS\nExpected failure: suite did not pass.\n",
+    "Content Verdict: PASS\nExpected behavior: tests did not pass.\n",
+    "Content Verdict: PASS\n**Expected behavior:** tests did not pass.\n",
+    "Content Verdict: PASS\n- Expected behavior: tests did not pass.\n",
+    "Content Verdict: PASS\n1. Expected result: did not pass.\n",
+    "Content Verdict: PASS\nPost-fix expected result: did not pass.\n",
+    "Content Verdict: PASS\nExpected: tests did not pass.\n",
+    "Content Verdict: PASS\nThe check is expected to not pass.\n",
+    "Content Verdict: PASS\nFinal negative test: suite did not pass.\n",
+    "Content Verdict: PASS\nPost-fix negative test: suite did not pass.\n",
+    "Content Verdict: PASS\nCurrent invalid-input check: did not pass.\n",
+    "Content Verdict: PASS\nTests: Requests without a token do not pass.\n",
+    "Content Verdict: PASS\nTests: Requests without a token do not pass, still do not pass.\n",
+    "Content Verdict: PASS\n1. Prior run: did not pass.\n"
+  ]) {
+    assert.equal(
+      parseContentVerdict(validPassReport),
+      "PASS",
+      `PR15-RUN-001: expected PASS for ${JSON.stringify(validPassReport)}`
+    );
+  }
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nBefore the fix: the run was not CLEAN.\n"),
+    "CLEAN",
+    "PR15-RUN-001: historical colon before not CLEAN must preserve CLEAN"
+  );
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nPrior run in mcp/index.js:120 was not CLEAN.\n"),
+    "CLEAN",
+    "PR15-RUN-001: mid-token file:line in historical integrity note must preserve CLEAN"
+  );
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nBefore the fix: run was not CLEAN; after the fix: run was not CLEAN.\n"),
+    /conflicting verdicts/,
+    "PR15-RUN-001: post-fix integrity contradiction after semicolon must throw"
+  );
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

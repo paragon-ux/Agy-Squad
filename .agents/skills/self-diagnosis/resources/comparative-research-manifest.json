@@ -10,7 +10,7 @@
           "benchmarks/teamwork-vs-squad/README.md",
           "docs/plans/comparative-harness-architecture-retest.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts via read_board{since|seqs}. Enforce the Squad Lead Patrol Gate: inspect specialist reports via bounded <=150-line read_file slices (reserve 'rtk read' for step spillovers/task logs) and tool traces via agy-context transcript. Verify specialists executed search_web and cited primary sources without parametric guessing or flattering bias. Write the unified synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) at your assigned slot plus the complete dossier at docs/plans/comparative-harness-architecture-retest.md, and post <=500B READY.",
+        "instructions": "Verify specialists ran search_web and cited primary sources without guessing from memory or flattery. Write the complete dossier to docs/plans/comparative-harness-architecture-retest.md alongside your slot synthesis.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, objective 5-Axis Rubric scores, and docs/plans/comparative-harness-architecture-retest.md."
       },
       "specialists": [
@@ -23,7 +23,7 @@
             "mcp/dispatch.mjs",
             "docs/concepts.md"
           ],
-          "instructions": "Execute search_web to audit external architecture documentation and papers for MetaGPT, CrewAI, AutoGen, and LangGraph. Profile token transmission overhead per turn compared to Agy-Squad's 500-byte receipt ceiling. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "instructions": "Run search_web to inspect external docs and papers for MetaGPT, CrewAI, AutoGen, and LangGraph. Profile per-turn token overhead against Agy-Squad's 500-byte receipt ceiling without relying on memory or internal flattery.",
           "expectedDeliverable": "Markdown evidence report with comparative matrix, protocol sequence diagrams, and 5-axis ratings for the 4 general workflow harnesses."
         },
         {
@@ -35,7 +35,7 @@
             "mcp/planner.mjs",
             "benchmarks/teamwork-vs-squad/README.md"
           ],
-          "instructions": "Execute search_web and inspect benchmark files to audit Devin/SWE-agent execution patterns and Antigravity native /teamwork. Measure context consumption under heavy test runs and compare with Agy-Squad's swarm planning and deterministic scratch teardown. Do not rely on parametric memory or internal flattery. Write your detailed markdown report with citations to your specialist slot.",
+          "instructions": "Run search_web and inspect benchmark files for Devin/SWE-agent and Antigravity native /teamwork. Compare context load under test runs with Agy-Squad swarm planning and verified report bundling/pruning without relying on memory or internal flattery.",
           "expectedDeliverable": "Markdown evidence report with comparative matrix, blast-radius analysis, and 5-axis ratings for the 3 coding agent harnesses."
         }
       ]

@@ -2,30 +2,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PACKAGE_VERSION,
+  assertNodeVersion,
+  isDirectEntryPoint,
+  isNodeVersionSupported
+} from "../scripts/install-register.mjs";
 import { defaultManifests, handleDispatchSquad } from "./dispatch.mjs";
+import { isContainedPath, isExpectedRealPath } from "./handoffs.mjs";
 import { handleSquadPlanner } from "./planner.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const realOrSelf = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-function isDirectEntryPoint(argv1 = process.argv[1], selfPath = __filename, platform = process.platform) {
-  if (!argv1) return false;
-  const normalizeForPlatform = (p) => {
-    const resolved = realOrSelf(p);
-    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
-    if (platform === "darwin") return resolved.toLowerCase();
-    return resolved;
-  };
-  return normalizeForPlatform(argv1) === normalizeForPlatform(selfPath);
-}
-const isEntryPoint = isDirectEntryPoint();
-
-const MIN_NODE_MAJOR = 22;
-function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
-  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
-}
-
-const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+const isEntryPoint = isDirectEntryPoint(process.argv[1], import.meta.url);
 
 const SERVER_NAME = "agy-squad";
 let sessionWorkspaces = [];
@@ -37,12 +24,17 @@ function workspacesFromInitializeParams(params) {
     params.rootUri
   ];
   const resolved = [];
-  const seen = new Set();
-  const normalizeKey = (localPath) => {
-    const canonical = path.resolve(localPath);
-    return process.platform === "win32" || process.platform === "darwin"
-      ? canonical.toLowerCase()
-      : canonical;
+  const seenCanonical = [];
+  const addUnique = (localPath) => {
+    const abs = path.resolve(localPath);
+    let canonical = abs;
+    try {
+      canonical = fs.realpathSync.native(abs);
+    } catch {}
+    if (!seenCanonical.some((existing) => isExpectedRealPath(existing, canonical))) {
+      seenCanonical.push(canonical);
+      resolved.push(abs);
+    }
   };
   for (const candidate of candidates) {
     if (typeof candidate !== "string") continue;
@@ -51,23 +43,13 @@ function workspacesFromInitializeParams(params) {
     try {
       const parsedUrl = new URL(trimmed);
       if (!parsedUrl.pathname || parsedUrl.pathname === "/") continue;
-      const canonical = path.resolve(fileURLToPath(parsedUrl));
-      const key = normalizeKey(canonical);
-      if (!seen.has(key)) {
-        seen.add(key);
-        resolved.push(canonical);
-      }
+      addUnique(fileURLToPath(parsedUrl));
     } catch {
       continue;
     }
   }
   if (typeof params.rootPath === "string" && params.rootPath.trim()) {
-    const canonicalRootPath = path.resolve(params.rootPath.trim());
-    const key = normalizeKey(canonicalRootPath);
-    if (!seen.has(key)) {
-      seen.add(key);
-      resolved.push(canonicalRootPath);
-    }
+    addUnique(params.rootPath.trim());
   }
   return resolved;
 }
@@ -92,8 +74,8 @@ function isInstalledPluginDir(dir) {
   const resolved = path.resolve(dir);
   const candidates = [resolved];
   try {
-    const real = fs.realpathSync(resolved);
-    if (real !== resolved) candidates.push(real);
+    const real = fs.realpathSync.native(resolved);
+    if (!isExpectedRealPath(resolved, real)) candidates.push(real);
   } catch {}
   for (const candidate of candidates) {
     const normalized = candidate.replace(/\\/g, "/");
@@ -118,20 +100,59 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
   if (typeof args?.workspace === "string" && args.workspace.trim()) {
     return args.workspace.trim();
   }
-  if (sessionWorkspaces.length > 1 && typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
-    const rel = args.manifestPath.trim();
-    const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
-    if (!path.isAbsolute(rel) && !posixNorm.startsWith("/") && posixNorm !== "." && posixNorm !== ".." && !posixNorm.startsWith("../")) {
-      const matching = sessionWorkspaces.filter((root) => {
+  if (sessionWorkspaces.length > 1) {
+    const isContained = (dir, target, allowEqual = false) => isContainedPath(dir, target, allowEqual);
+    const isContainedRealFile = (root, candidate) => {
+      try {
+        if (!isContained(root, candidate)) return false;
+        const canonicalCandidate = fs.realpathSync.native(candidate);
+        const canonicalRoot = fs.realpathSync.native(root);
+        return isContained(canonicalRoot, canonicalCandidate) && fs.statSync(canonicalCandidate).isFile();
+      } catch {
+        return false;
+      }
+    };
+    if (typeof args?.manifestPath === "string" && args.manifestPath.trim()) {
+      const rel = args.manifestPath.trim();
+      let matching = [];
+      if (path.isAbsolute(rel)) {
+        const candidate = path.resolve(rel);
+        let canonicalCandidate;
+        let canonicalParent;
         try {
-          const candidate = path.resolve(root, posixNorm);
-          const relCheck = path.relative(root, candidate);
-          if (!relCheck || relCheck.startsWith("..") || path.isAbsolute(relCheck)) return false;
-          return fs.existsSync(candidate);
-        } catch {
-          return false;
+          const resolvedCandidate = fs.realpathSync.native(candidate);
+          if (fs.statSync(resolvedCandidate).isFile()) {
+            canonicalCandidate = resolvedCandidate;
+            canonicalParent = fs.realpathSync.native(path.dirname(candidate));
+          }
+        } catch {}
+        if (canonicalCandidate && canonicalParent) {
+          matching = sessionWorkspaces.filter((root) => {
+            try {
+              const canonicalRoot = fs.realpathSync.native(root);
+              if (!isContained(canonicalRoot, canonicalCandidate)) return false;
+              return (
+                isContained(root, candidate) ||
+                isContained(canonicalRoot, candidate) ||
+                isContained(canonicalRoot, canonicalParent, true)
+              );
+            } catch {
+              return false;
+            }
+          });
         }
-      });
+      } else {
+        const posixNorm = path.posix.normalize(rel.replace(/\\/g, "/"));
+        if (
+          !/^[A-Za-z]:/.test(rel) &&
+          !posixNorm.startsWith("/") &&
+          posixNorm !== "." &&
+          posixNorm !== ".." &&
+          !posixNorm.startsWith("../")
+        ) {
+          matching = sessionWorkspaces.filter((root) => isContainedRealFile(root, path.resolve(root, posixNorm)));
+        }
+      }
       if (matching.length === 1) {
         return matching[0];
       }
@@ -141,18 +162,16 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
         );
       }
     }
-  }
-  if (sessionWorkspaces.length > 1 && args?.manifestPath === undefined && args?.manifest === undefined && args?.task === undefined) {
-    const matching = sessionWorkspaces.filter((root) =>
-      defaultManifests.some((rel) => {
-        try { return fs.existsSync(path.join(root, rel)); } catch { return false; }
-      })
-    );
-    if (matching.length === 1) return matching[0];
-    if (matching.length > 1) {
-      throw new Error(
-        `Ambiguous multi-root workspace: default manifest found in multiple roots (${matching.join(", ")}). Pass 'workspace' or 'manifestPath' explicitly.`
+    if (args?.manifestPath === undefined && args?.manifest === undefined && args?.task === undefined) {
+      const matching = sessionWorkspaces.filter((root) =>
+        defaultManifests.some((rel) => isContainedRealFile(root, path.join(root, rel)))
       );
+      if (matching.length === 1) return matching[0];
+      if (matching.length > 1) {
+        throw new Error(
+          `Ambiguous multi-root workspace: default manifest found in multiple roots (${matching.join(", ")}). Pass 'workspace' or 'manifestPath' explicitly.`
+        );
+      }
     }
   }
   if (sessionWorkspaces[0]) return sessionWorkspaces[0];
@@ -169,18 +188,24 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active repo root path (pass explicitly from global plugin installs)."
+  description: "Active repo root (pass from global installs)."
+};
+
+const MANIFEST_PATH_SCHEMA = {
+  type: "string",
+  minLength: 1,
+  description: "Contained manifest path (rel/abs)."
 };
 
 const TOOLS = [
   {
     name: "dispatch_squad",
-    description: "Compile leads (all_l1), integrity_auditor[:<target>], or squad specialists for invoke_subagent.",
+    description: "Compile subagent leads (all_l1), integrity_auditor[:<id>], or squad specs.",
     inputSchema: {
       type: "object",
       properties: {
-        squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<target>]', or squad ID." },
-        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
+        squadId: { type: "string", minLength: 1, description: "'all_l1', 'integrity_auditor[:<id>]', or squad ID." },
+        manifestPath: MANIFEST_PATH_SCHEMA,
         workspace: WORKSPACE_SCHEMA
       },
       required: ["squadId"],
@@ -189,38 +214,39 @@ const TOOLS = [
   },
   {
     name: "squad_planner",
-    description: "Plan /swarm (primary) or subagent cohorts with pinning, overlap checks, transcript-safe provenance, and audit slots.",
+    description: "Plan /swarm or subagent cohorts (pinning, overlap checks, audit slots).",
     inputSchema: {
       type: "object",
       properties: {
-        manifestPath: { type: "string", minLength: 1, description: "Relative manifest path." },
+        manifestPath: MANIFEST_PATH_SCHEMA,
         manifest: {
           type: "object",
-          description: "Inline squads manifest.",
+          description: "Inline manifest.",
           properties: { squads: { type: "object", minProperties: 1 } },
           required: ["squads"]
         },
-        task: { type: "string", minLength: 1, description: "Freeform task string." },
+        task: { type: "string", minLength: 1, description: "Freeform task." },
         workspace: WORKSPACE_SCHEMA,
-        squadId: { type: "string", minLength: 1, description: "Target working squad ID." },
-        topology: { type: "string", enum: ["flat", "layered"], description: "Flat or layered topology." },
-        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (default: swarm)." },
-        model: { type: "string", minLength: 1, description: "Target model ID." },
-        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Swarm isolation." },
+        squadId: { type: "string", minLength: 1, description: "Target squad ID." },
+        topology: { type: "string", enum: ["flat", "layered"], description: "Cohort topology." },
+        executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (swarm|subagent)." },
+        model: { type: "string", minLength: 1, description: "Model ID." },
+        workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Copy isolation." },
         scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task paths." },
-        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task role titles." },
-        readOnly: { type: "boolean", description: "Read-only task workers." },
+        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Role titles." },
+        readOnly: { type: "boolean", description: "Read-only workers." },
         roleScopes: {
           type: "object",
-          description: "Per-role task paths.",
+          minProperties: 1,
+          description: "Per-role paths.",
           additionalProperties: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
         },
-        includeIntegrityAuditor: { type: "boolean", description: "Include integrity audit." },
-        reportRoot: { type: "string", minLength: 1, description: "Relative report root." },
-        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Allowed model IDs." },
-        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Reserved roster names." },
-        boardSince: { type: "integer", minimum: 0, description: "Swarm board since seq." },
-        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Swarm audit board seqs." }
+        includeIntegrityAuditor: { type: "boolean", description: "Include auditor." },
+        reportRoot: { type: "string", minLength: 1, description: "Report root." },
+        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Valid models." },
+        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Used names." },
+        boardSince: { type: "integer", minimum: 0, description: "Board since." },
+        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." }
       },
       oneOf: [
         { required: ["manifestPath"] },
@@ -264,7 +290,7 @@ async function handleRequest(request) {
       id,
       result: {
         protocolVersion: "2024-11-05",
-        serverInfo: { name: SERVER_NAME, version: pkg.version },
+        serverInfo: { name: SERVER_NAME, version: PACKAGE_VERSION },
         capabilities: { tools: {} }
       }
     };
@@ -314,10 +340,10 @@ async function handleRequest(request) {
 }
 
 if (isEntryPoint) {
-  if (!isNodeVersionSupported()) {
-    process.stderr.write(
-      `Agy-Squad MCP server requires Node.js >= ${MIN_NODE_MAJOR}.0.0 (found v${process.versions.node}). Please upgrade Node.js.\n`
-    );
+  try {
+    assertNodeVersion();
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
     process.exit(1);
   }
   const rawMaxBytes = process.env.AGY_MAX_STDIO_PAYLOAD_BYTES;
@@ -338,6 +364,7 @@ if (isEntryPoint) {
       resolve();
       return;
     }
+    let pausedStdin = false;
     const onDone = () => {
       cleanup();
       resolve();
@@ -346,6 +373,9 @@ if (isEntryPoint) {
       process.stdout.off("drain", onDone);
       process.stdout.off("error", onDone);
       process.stdout.off("close", onDone);
+      if (pausedStdin && !shutdownStarted && !process.stdin.destroyed && !process.stdin.readableEnded) {
+        process.stdin.resume();
+      }
     };
     process.stdout.once("error", onDone);
     process.stdout.once("close", onDone);
@@ -354,6 +384,10 @@ if (isEntryPoint) {
       cleanup();
       resolve();
     } else {
+      if (!shutdownStarted && !process.stdin.destroyed && !process.stdin.readableEnded) {
+        pausedStdin = true;
+        process.stdin.pause();
+      }
       process.stdout.once("drain", onDone);
     }
   });
@@ -448,6 +482,22 @@ if (isEntryPoint) {
         droppingOversized = false;
         continue;
       }
+      const totalLen = bufferedBytes + segment.length;
+      const lastByte = segment.length > 0
+        ? segment[segment.length - 1]
+        : (chunks.length > 0 ? chunks[chunks.length - 1][chunks[chunks.length - 1].length - 1] : -1);
+      const cleanLen = totalLen - (lastByte === 0x0d ? 1 : 0);
+      if (cleanLen > MAX_STDIO_PAYLOAD_BYTES) {
+        chunks = [];
+        bufferedBytes = 0;
+        enqueueOversizedError();
+        continue;
+      }
+      if (cleanLen === 0) {
+        chunks = [];
+        bufferedBytes = 0;
+        continue;
+      }
       if (segment.length > 0) {
         chunks.push(segment);
         bufferedBytes += segment.length;
@@ -455,26 +505,30 @@ if (isEntryPoint) {
       const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
       chunks = [];
       bufferedBytes = 0;
-      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
-      if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
-        enqueueOversizedError();
-        continue;
-      }
-      enqueueLine(cleanBuf);
+      enqueueLine(stripSingleTrailingCr(fullLineBuf));
     }
   });
 
   const flushBufferedRemainder = () => {
     if (!droppingOversized && bufferedBytes > 0) {
+      const lastChunk = chunks[chunks.length - 1];
+      const lastByte = lastChunk && lastChunk.length > 0 ? lastChunk[lastChunk.length - 1] : -1;
+      const cleanLen = bufferedBytes - (lastByte === 0x0d ? 1 : 0);
+      if (cleanLen > MAX_STDIO_PAYLOAD_BYTES) {
+        chunks = [];
+        bufferedBytes = 0;
+        enqueueOversizedError();
+        return;
+      }
+      if (cleanLen === 0) {
+        chunks = [];
+        bufferedBytes = 0;
+        return;
+      }
       const fullLineBuf = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, bufferedBytes);
       chunks = [];
       bufferedBytes = 0;
-      const cleanBuf = stripSingleTrailingCr(fullLineBuf);
-      if (cleanBuf.length > MAX_STDIO_PAYLOAD_BYTES) {
-        enqueueOversizedError();
-      } else {
-        enqueueLine(cleanBuf);
-      }
+      enqueueLine(stripSingleTrailingCr(fullLineBuf));
     }
   };
 

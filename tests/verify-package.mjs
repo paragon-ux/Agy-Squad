@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { text } from "node:stream/consumers";
+import { fileURLToPath } from "node:url";
+import { stripCode } from "../mcp/verdicts.mjs";
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const REQUIRED = [
   "package.json",
@@ -14,7 +19,6 @@ const REQUIRED = [
   "install.ps1",
   "bin/agy-squad.mjs",
   "scripts/install-register.mjs",
-  "scripts/release-preflight.mjs",
   "mcp/index.js",
   "mcp/dispatch.mjs",
   "mcp/briefs.mjs",
@@ -29,12 +33,6 @@ const REQUIRED = [
   ".agents/skills/full-review/references/review-roles.md",
   ".agents/skills/pr-review/SKILL.md",
   ".agents/skills/pr-review/references/pr-review-standard.md",
-  ".agents/skills/self-diagnosis/SKILL.md",
-  ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
-  ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
-  ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
-  ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
-  ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
   ".agents/skills/swarm-governance/SKILL.md",
   ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
   ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
@@ -67,7 +65,66 @@ const RETIRED_DENYLIST = [
   "mcp/subagent-brief.mjs"
 ];
 
-function validate(packages) {
+function stripHtmlComments(markdown) {
+  let out = "";
+  for (let pos = 0; pos < markdown.length; ) {
+    const start = markdown.indexOf("<!--", pos);
+    if (start === -1) return out + markdown.slice(pos);
+    out += markdown.slice(pos, start);
+    const end = markdown.indexOf("-->", start + 4);
+    if (end === -1) return out;
+    pos = end + 3;
+  }
+  return out;
+}
+
+function extractMarkdownLinks(text) {
+  const links = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) break;
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) break;
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      pos = closeBracket + 1;
+      continue;
+    }
+    let i = closeBracket + 2;
+    const destStart = i;
+    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
+      i++;
+    }
+    const rawDest = text.slice(destStart, i);
+    if (i < text.length && text[i] === ")") {
+      pos = i + 1;
+    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
+      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+      const quote = text[i];
+      if (quote !== '"' && quote !== "'") {
+        pos = i;
+        continue;
+      }
+      const closeQuote = text.indexOf(quote, i + 1);
+      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
+        pos = i + 1;
+        continue;
+      }
+      pos = closeQuote + 2;
+    } else {
+      pos = i;
+      continue;
+    }
+    if (!rawDest) continue;
+    const hashIdx = rawDest.indexOf("#");
+    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
+    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
+    links.push({ target, fragment });
+  }
+  return links;
+}
+
+function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
   assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",
     "Expected one npm pack JSON package record");
   const entries = packages[0].files;
@@ -97,7 +154,11 @@ function validate(packages) {
       lower === "docs/plans" ||
       lower.startsWith("docs/plans/") ||
       lower === "docs/reviews" ||
-      lower.startsWith("docs/reviews/")
+      lower.startsWith("docs/reviews/") ||
+      lower === "scripts/release-preflight.mjs" ||
+      lower === "scripts/diagnose.mjs" ||
+      lower === ".agents/skills/self-diagnosis" ||
+      lower.startsWith(".agents/skills/self-diagnosis/")
     );
   };
   const allowed = names.filter(name =>
@@ -118,11 +179,39 @@ function validate(packages) {
   for (const file of REQUIRED) {
     assert.ok(present.has(file), `Missing required npm package file: ${file}`);
   }
+
+  // SKILL-002: Verify every local relative link in packaged .agents/skills/**/*.md resolves inside the packed file list
+  const brokenSkillLinks = [];
+  for (const name of names) {
+    if (!name.startsWith(".agents/skills/") || !name.endsWith(".md")) continue;
+    const markdown =
+      fileContents && Object.hasOwn(fileContents, name)
+        ? fileContents[name]
+        : fs.readFileSync(path.join(rootDir, name), "utf8");
+    const stripped = stripCode(stripHtmlComments(markdown));
+    const baseDir = path.posix.dirname(name);
+    for (const { target: rawTarget } of extractMarkdownLinks(stripped)) {
+      const cleanTarget = rawTarget.split("?")[0];
+      if (!cleanTarget || /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(cleanTarget)) continue;
+      if (cleanTarget.includes("\\")) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget}`);
+        continue;
+      }
+      const resolved = path.posix.normalize(path.posix.join(baseDir, cleanTarget));
+      if (resolved === ".." || resolved.startsWith("../") || !resolved.startsWith(".agents/skills/")) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget} (escapes .agents/skills/: ${resolved})`);
+      } else if (!present.has(resolved)) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget} (absent from package: ${resolved})`);
+      }
+    }
+  }
+  assert.deepEqual(brokenSkillLinks, [], `Broken or unpackaged relative skill links: ${brokenSkillLinks.join(", ")}`);
+
   return names.length;
 }
 
 function selfTest() {
-  const fixture = extra => [{ files: [...REQUIRED, ...extra].map(path => ({ path })) }];
+  const fixture = extra => [{ files: [...REQUIRED, ...extra].map(p => ({ path: p })) }];
   assert.equal(validate(fixture(["docs/extra-guide.md"])), REQUIRED.length + 1);
   const badCases = [
     "tests/leaked.mjs",
@@ -150,7 +239,12 @@ function selfTest() {
     "../outside.txt",
     "bin/terminal.py",
     "mcp/run-state.mjs",
-    "mcp/subagent-brief.mjs"
+    "mcp/subagent-brief.mjs",
+    "scripts/release-preflight.mjs",
+    "scripts/diagnose.mjs",
+    ".agents/skills/self-diagnosis",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
   ];
   for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
@@ -158,9 +252,63 @@ function selfTest() {
       `Expected synthetic package with ${bad} to be rejected`);
   }
   assert.throws(() => validate([{ files: REQUIRED
-    .filter(path => path !== "mcp/index.js").map(path => ({ path })) }]),
+    .filter(p => p !== "mcp/index.js").map(p => ({ path: p })) }]),
     /Missing required npm package file: mcp\/index.js/);
-  console.log(`Package verifier self-test passed (positive + ${badCases.length + 1} negatives)`);
+
+  // SKILL-002 self-test: broken or excluded relative link in a packaged skill file must fail closed; valid/code-fenced links pass
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/swarm-governance/SKILL.md": "See [self-diagnosis](../self-diagnosis/SKILL.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*\.agents\/skills\/self-diagnosis\/SKILL\.md/,
+    "SKILL-002: relative link to unpackaged ../self-diagnosis/SKILL.md must be rejected"
+  );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md": "See [missing](./references/does-not-exist.md#sec).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*does-not-exist\.md/,
+    "SKILL-002: broken relative link in packaged skill file must be rejected"
+  );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md": "See [tools](../../../docs/tools.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*escapes \.agents\/skills\//,
+    "PR15-TEST-002: relative link escaping .agents/skills/ into packed docs/ must be rejected"
+  );
+  assert.equal(
+    validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md":
+          "See [standard](./references/pr-review-standard.md#top) and [docs](https://paragon-ux.github.io/Agy-Squad/).\n" +
+          "```md\n[ignored](../self-diagnosis/SKILL.md)\n```\n"
+      }
+    }),
+    REQUIRED.length
+  );
+
+  // R1-SEC-004: linear-time Markdown link scanning on pathological unclosed link payloads (< 500 ms)
+  const tLinks = performance.now();
+  assert.equal(
+    validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md":
+          "[a](b".repeat(20_000) + "\n" + "[a](b ".repeat(20_000) + ")\n" + "[a](b \"".repeat(20_000) + "\n"
+      }
+    }),
+    REQUIRED.length
+  );
+  const linksMs = performance.now() - tLinks;
+  assert.ok(linksMs < 500, `R1-SEC-004: verify-package link scanner took ${linksMs.toFixed(1)} ms (>= 500 ms)`);
+
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 4} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

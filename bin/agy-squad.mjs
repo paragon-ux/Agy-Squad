@@ -4,11 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIN_NODE_MAJOR = 22;
 
 function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  const match = typeof versionStr === "string" ? versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/) : null;
+  if (typeof versionStr !== "string") return false;
+  const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
   return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
 }
 
@@ -20,12 +20,41 @@ function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NO
   }
 }
 
-function readPkgVersion() {
+function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8")).version || "0.2.1";
+    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.1";
   } catch {
     return "0.2.1";
   }
+}
+
+function isDirectExecution(
+  argv1 = process.argv[1],
+  selfUrl = import.meta.url,
+  platform = process.platform
+) {
+  if (!argv1 || !selfUrl) return false;
+  const selfPath =
+    selfUrl instanceof URL || (typeof selfUrl === "string" && selfUrl.startsWith("file:"))
+      ? fileURLToPath(selfUrl)
+      : selfUrl;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const normalize = (p) => {
+    let resolved;
+    if (platform === process.platform) {
+      try {
+        resolved = fs.realpathSync.native(path.resolve(p));
+      } catch {
+        resolved = path.resolve(p);
+      }
+    } else {
+      resolved = pathImpl.resolve(p);
+    }
+    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
+    if (platform === "darwin") return resolved.toLowerCase();
+    return resolved;
+  };
+  return normalize(argv1) === normalize(selfPath);
 }
 
 const usage = [
@@ -38,9 +67,9 @@ const usage = [
   "",
   "Lifecycle Commands:",
   "  setup | install [--check]       Install or sync plugin, skills, MCP server, and CLI shim",
-  "  status [--json]                 Check plugin, MCP, shim, PATH, and companion tool health",
+  "  status [--json]                 Check plugin, skills, MCP server, CLI shim, and PATH health",
   "  uninstall [--restore-backups]   Remove plugin link, MCP entry, and CLI shims",
-  "  restore-backups                 Restore configuration backups (*.bak)",
+  "  restore-backups                 Key-merge restore *.agy-squad.bak (preserves foreign entries)",
   "",
   "Planning Commands:",
   "  plan (--manifest <path> | \"<task>\") [options]",
@@ -57,8 +86,8 @@ const usage = [
   "  inspect <record.json>           Reconcile Pointer-Over-Wire handoff receipts",
   "  digest <record.json> [options]  Compute canonical Evidence Digest for integrity auditing",
   "  bundle <record.json> [options]  Create a SHA-256 verified proof bundle (.sources.json)",
-  "  verify <report.sources.json> [--prune [--keep-reports]]",
-  "                                  Verify bundle integrity and optionally prune loose reports",
+  "  verify <report.sources.json> [sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
+  "                                  Verify bundle integrity (+ optional --prune with SHA-256)",
   "  finalize <record.json> [options]",
   "                                  Run inspect -> bundle -> verify (+ optional --prune) in one call",
   "  prune <report.sources.json> <accepted-sha256> [--keep-reports]",
@@ -93,7 +122,7 @@ const SUBCOMMAND_HELP = {
   status: [
     "Usage: agy-squad status [--json]",
     "",
-    "Check plugin link/copy, skills, MCP registration, CLI shim, PATH, and companions.",
+    "Check plugin link/copy, skills, MCP registration, CLI shim, and PATH.",
     "",
     "Options:",
     "  --json               Emit machine-readable JSON status output",
@@ -108,7 +137,7 @@ const SUBCOMMAND_HELP = {
     "Remove the Agy-Squad plugin link/copy, MCP entry, CLI shims, and schema caches.",
     "",
     "Options:",
-    "  --restore-backups    Restore saved *.agy-squad.bak configuration backups after removal",
+    "  --restore-backups    Restore saved *.agy-squad.bak (with legacy *.bak fallback) via key-merge, preserving foreign plugins/MCP entries",
     "",
     "Examples:",
     "  agy-squad uninstall",
@@ -117,7 +146,7 @@ const SUBCOMMAND_HELP = {
   "restore-backups": [
     "Usage: agy-squad restore-backups",
     "",
-    "Restore saved pre-install configuration backups (*.agy-squad.bak / legacy *.bak).",
+    "Restore saved pre-install backups (*.agy-squad.bak, with legacy *.bak fallback) via key-merge, preserving foreign plugins/MCP entries.",
     "",
     "Examples:",
     "  agy-squad restore-backups"
@@ -125,12 +154,12 @@ const SUBCOMMAND_HELP = {
   plan: [
     "Usage: agy-squad plan (--manifest <path> | \"<task>\") [options]",
     "",
-    "Compile a flat or layered /swarm (or invoke_subagent) cohort plan and provenance scaffold.",
+    "Compile a flat or layered /swarm (or invoke_subagent) cohort plan.",
     "",
     "Options:",
     "  --manifest <path>                Load squads from a workspace manifest JSON file",
     "  --squad <id>                     Compile one squad (omit to compile all manifest squads)",
-    "  --topology flat|layered          Override topology (no default bias; ask if unspecified)",
+    "  --topology flat|layered          Override topology (flat for inline task, manifest-defined otherwise; Step 0 asks if unspecified)",
     "  --mode swarm|subagent            Target native /swarm (default) or invoke_subagent",
     "  --model <id>                     Pin an explicit model ID (verified via --known-model)",
     "  --known-model <id>               Repeatable allowed model ID from swarm{action:\"models\"}",
@@ -140,7 +169,7 @@ const SUBCOMMAND_HELP = {
     "  --role <title>                   Repeatable specialist role title (task mode)",
     "  --read-only                      Mark inline task specialists readOnly: true",
     "  --role-scope <role=path>         Repeatable per-role scope override (task mode)",
-    "  --no-integrity                   Omit flat audit-<id> stage for standalone runs",
+    "  --no-integrity                   Omit flat audit-<id> stage when explicitly skipping integrity audits",
     "  --report-root <path>             Custom workspace-relative root (default: scratch/agy-squad)",
     "  --occupied-worker <name>         Repeatable existing roster name to avoid collisions",
     "  --board-since <seq>              Scope read_board{since: <seq>} for working members",
@@ -201,7 +230,7 @@ const SUBCOMMAND_HELP = {
     "  --id-map <worker=id>             Repeatable runtime conversationId mapping",
     "  --handoffs <file.json>           JSON array of { sender, message } handoff receipts",
     "  --handoff <sender=message>       Repeatable inline handoff receipt entry",
-    "  --allow-unaudited                Set requireIntegrityAudit: false for standalone runs",
+    "  --allow-unaudited                Set requireIntegrityAudit: false when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow FAIL/BLOCKED synthesis verdicts",
     "  --allow-partial                  Allow PARTIAL/NO_REPORT specialist handoffs",
     "  --digest                         Compute and output canonical Evidence Digest",
@@ -248,7 +277,7 @@ const SUBCOMMAND_HELP = {
     "Write a SHA-256 verified v2 proof bundle (lead/report.sources.json).",
     "",
     "Options:",
-    "  --allow-unaudited                Opt out of requireIntegrityAudit: true (standalone runs)",
+    "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
     "  --replace                        Overwrite an existing differing report.sources.json",
@@ -259,17 +288,18 @@ const SUBCOMMAND_HELP = {
     "  agy-squad bundle scratch/bundle-record.json --allow-unaudited"
   ].join("\n"),
   verify: [
-    "Usage: agy-squad verify <report.sources.json> [--prune [--keep-reports]]",
+    "Usage: agy-squad verify <report.sources.json> [expected-sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
     "",
     "Verify bundle SHA-256 digests, auditPolicy, verdicts, and optional loose report pruning.",
     "",
     "Options:",
-    "  --prune                          Unlink verified loose specialist reports after verify",
+    "  --expected-sha256 <sha256>       Pin expected 64-hex bundle SHA-256 (required with --prune; or pass as 2nd positional arg)",
+    "  --prune                          Unlink verified loose specialist reports after verify (requires expected SHA-256)",
     "  --keep-reports                   With --prune, retain loose specialist reports on disk",
     "",
     "Examples:",
     "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json",
-    "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json --prune"
+    "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json --expected-sha256 <64-hex-sha256> --prune"
   ].join("\n"),
   finalize: [
     "Usage: agy-squad finalize <record.json> [options]",
@@ -277,7 +307,7 @@ const SUBCOMMAND_HELP = {
     "Run inspect -> bundle -> verify (+ optional --prune) in one deterministic call.",
     "",
     "Options:",
-    "  --allow-unaudited                Opt out of requireIntegrityAudit: true (standalone runs)",
+    "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
     "  --replace                        Overwrite an existing differing report.sources.json",
@@ -307,7 +337,7 @@ const SUBCOMMAND_HELP = {
     "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED) or Integrity Verdict.",
     "",
     "Options:",
-    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION)",
+    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION) plus targetSquad and evidenceDigest when present",
     "",
     "Examples:",
     "  agy-squad verdict scratch/agy-squad/squad-auth/lead/report.md",
@@ -404,7 +434,7 @@ async function runDispatchCommand(rest, root) {
     squad: { type: "string" },
     manifest: { type: "string" }
   });
-  const { handleDispatchSquad } = await import("../mcp/dispatch.mjs");
+  const { dispatchSquadData, formatNotFoundError } = await import("../mcp/dispatch.mjs");
   if (values.squad !== undefined && positionals.length > 0) {
     throw new Error("Pass either --squad <id> or a positional <squadId>, not both.");
   }
@@ -415,17 +445,16 @@ async function runDispatchCommand(rest, root) {
   if (!squadId) {
     throw new Error(usageLine);
   }
-  const result = handleDispatchSquad(
-    {
-      squadId,
-      ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {})
-    },
-    root
-  );
-  if (result.isError) {
-    throw new Error(result.content?.[0]?.text || "dispatch_squad failed.");
+  const dispatchArgs = {
+    squadId,
+    ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {})
+  };
+  try {
+    return JSON.stringify(dispatchSquadData(dispatchArgs, root), null, 2);
+  } catch (error) {
+    const message = error.code === "ENOENT" ? formatNotFoundError(dispatchArgs, root) : error.message;
+    throw new Error(`dispatch_squad: ${message}`);
   }
-  return JSON.stringify(JSON.parse(result.content[0].text), null, 2);
 }
 
 const KNOWN_COMMANDS = new Set([
@@ -450,62 +479,21 @@ const KNOWN_COMMANDS = new Set([
   "run"
 ]);
 
-function resolveWorkspaceRoot(workspaceArg, fallbackRoot) {
+function resolveWorkspaceRoot(workspaceArg, fallbackRoot, resolveCanonicalRoot) {
   if (workspaceArg === undefined) return fallbackRoot;
   const trimmed = String(workspaceArg).trim();
   if (!trimmed) throw new Error("--workspace must be a nonempty directory path.");
-  let real;
   try {
-    real = fs.realpathSync(trimmed);
+    return resolveCanonicalRoot(trimmed);
   } catch (error) {
-    throw new Error(`Workspace directory does not exist (${trimmed}): ${error.message}`);
-  }
-  if (!fs.lstatSync(real).isDirectory()) {
-    throw new Error(`Workspace path is not a directory: ${trimmed}`);
-  }
-  return real;
-}
-
-function readRegularJsonFileSafe(resolvedPath, displayPath, label, decodeUtf8) {
-  const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
-  if (process.platform !== "linux" || !hasONofollow) {
-    const linkStat = fs.lstatSync(resolvedPath);
-    if (linkStat.isSymbolicLink()) {
-      const err = new Error(`${label} path must be a regular non-symlink file: ${displayPath}`);
-      err.code = "ELOOP";
-      throw err;
+    if (error.code === "ENOENT") {
+      throw new Error(`Workspace directory does not exist (${trimmed}): ${error.message}`);
     }
-  }
-  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
-  const fd = fs.openSync(resolvedPath, openFlags);
-  try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile()) {
-      throw new Error(`${label} path must be a regular non-symlink file: ${displayPath}`);
-    }
-    if (process.platform === "linux") {
-      let fdTarget;
-      try {
-        fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
-      } catch {}
-      if (fdTarget && fdTarget !== fs.realpathSync(resolvedPath)) {
-        throw new Error(`${label} path changed during open: ${displayPath}`);
-      }
-    }
-    const chunks = [];
-    const buf = Buffer.allocUnsafe(65536);
-    while (true) {
-      const bytesRead = fs.readSync(fd, buf, 0, buf.length, null);
-      if (bytesRead <= 0) break;
-      chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
-    }
-    return decodeUtf8(Buffer.concat(chunks), displayPath);
-  } finally {
-    fs.closeSync(fd);
+    throw error;
   }
 }
 
-async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFile }) {
+async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpectedRealPath, readFile, readRegularFileSafe }) {
   if (typeof pathOrDash !== "string" || !pathOrDash.trim()) {
     throw new Error(`${label} path must be nonempty.`);
   }
@@ -515,22 +503,32 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, readFi
     const { text: readStreamText } = await import("node:stream/consumers");
     raw = await readStreamText(process.stdin);
   } else {
-    const normalized = trimmedInput.replace(/\\/g, "/");
-    const stripped = normalized.replace(/^(?:\.\/)+/, "");
-    if (!path.isAbsolute(trimmedInput) && stripped && !stripped.split("/").includes("..")) {
+    const normalized = normalizeWorkspaceCliPath(trimmedInput);
+    if (
+      !path.isAbsolute(trimmedInput) &&
+      normalized &&
+      normalized !== "." &&
+      !normalized.includes("\\") &&
+      !normalized.split("/").includes("..")
+    ) {
       try {
-        raw = decodeUtf8(readFile(targetRoot, stripped), stripped);
+        raw = decodeUtf8(readFile(targetRoot, normalized), normalized);
       } catch (err) {
         const cwdResolved = path.resolve(trimmedInput);
-        if (err.code === "ENOENT" && path.dirname(cwdResolved) !== targetRoot && fs.existsSync(cwdResolved)) {
-          raw = readRegularJsonFileSafe(cwdResolved, trimmedInput, label, decodeUtf8);
+        const workspaceCandidate = path.resolve(targetRoot, normalized);
+        if (err.code === "ENOENT" && !isExpectedRealPath(workspaceCandidate, cwdResolved)) {
+          try {
+            raw = decodeUtf8(readRegularFileSafe(cwdResolved, trimmedInput), trimmedInput);
+          } catch (fallbackErr) {
+            throw fallbackErr.code === "ENOENT" ? err : fallbackErr;
+          }
         } else {
           throw err;
         }
       }
     } else {
       const resolved = path.resolve(trimmedInput);
-      raw = readRegularJsonFileSafe(resolved, trimmedInput, label, decodeUtf8);
+      raw = decodeUtf8(readRegularFileSafe(resolved, trimmedInput), trimmedInput);
     }
   }
   try {
@@ -644,13 +642,27 @@ function parseHandoffPairEntries(items) {
   });
 }
 
-function hasHelpFlag(argv) {
+const STRING_OPTIONS_BY_COMMAND = {
+  plan: ["manifest", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq"],
+  dispatch: ["squad", "manifest"],
+  collect: ["plan", "record", "squad", "from", "workspace", "report-root"],
+  "bundle-init": ["plan", "provenance", "squad", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "out"],
+  bundle: ["predecessor"],
+  verify: ["expected-sha256"],
+  finalize: ["predecessor"]
+};
+
+function hasHelpFlag(argv, command) {
+  const options = { help: { type: "boolean", short: "h" } };
+  for (const name of STRING_OPTIONS_BY_COMMAND[command] ?? []) {
+    options[name] = { type: "string", multiple: true };
+  }
   const { tokens } = parseArgs({
     args: argv,
     allowPositionals: true,
     strict: false,
     tokens: true,
-    options: { help: { type: "boolean", short: "h" } }
+    options
   });
   for (const tok of tokens) {
     if (tok.kind === "option-terminator") break;
@@ -688,7 +700,7 @@ async function main(args) {
     if (args.length > 1) {
       throw new Error("Conflicting flags: --version cannot be combined with operational flags or arguments.");
     }
-    console.log(readPkgVersion());
+    console.log(readPackageVersion());
     return 0;
   }
   const [command, ...rest] = args;
@@ -723,7 +735,7 @@ async function main(args) {
   if (command === "run") {
     throw new Error("'agy-squad run' was retired in Phase 2; use 'agy-squad plan' with Antigravity native /swarm + swarm-governance.");
   }
-  if (hasHelpFlag(rest)) {
+  if (hasHelpFlag(rest, command)) {
     if (rest.length > 1 || (rest[0] !== "--help" && rest[0] !== "-h")) {
       throw new Error("Conflicting flags: --help cannot be combined with operational flags or arguments.");
     }
@@ -795,7 +807,7 @@ async function main(args) {
     return 0;
   }
 
-  const root = fs.realpathSync(process.cwd());
+  const root = fs.realpathSync.native(process.cwd());
 
   if (command === "plan") {
     console.log(JSON.stringify(await runPlanCommand(rest, root), null, 2));
@@ -825,12 +837,12 @@ async function main(args) {
     if (values.record !== undefined && values.squad !== undefined) {
       throw new Error("Pass either --record or --squad to 'agy-squad collect', not both.");
     }
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root);
     const sources = [...(values.from ?? []), ...positionals];
     if (!sources.length) {
       throw new Error(usageLine);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
+    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     let plan;
     let record;
     if (values.plan !== undefined) {
@@ -877,8 +889,11 @@ async function main(args) {
     if (values.plan === undefined) {
       throw new Error(usageLine);
     }
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root);
+    if (values.replace && values.out === undefined) {
+      throw new Error(`Flag '--replace' requires '--out <record.json>' on 'agy-squad bundle-init'.\n${usageLine}`);
+    }
     const handoffsMod = await import("../mcp/handoffs.mjs");
+    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     const plan = await readJsonInput(targetRoot, values.plan, "plan", handoffsMod);
     const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, values.provenance, "provenance", handoffsMod) : undefined;
     if (
@@ -903,6 +918,8 @@ async function main(args) {
     }
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
     const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p));
+    const initVerifiedDirs = new Set([targetRoot]);
+    let preReadSynthesis;
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
       provenance,
@@ -914,7 +931,9 @@ async function main(args) {
       handoffs,
       allowUnaudited: values["allow-unaudited"],
       allowNonPassing: values["allow-non-passing"],
-      allowPartial: values["allow-partial"]
+      allowPartial: values["allow-partial"],
+      verifiedDirs: initVerifiedDirs,
+      onLeadRead: info => { preReadSynthesis = info; }
     });
     if (values.digest && (!Array.isArray(record.handoffs) || record.handoffs.length === 0)) {
       throw new Error(
@@ -926,15 +945,21 @@ async function main(args) {
         "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
       );
     }
-    const digestResult = values.digest ? handoffsMod.computeEvidenceDigest(targetRoot, record) : undefined;
+    const digestResult = values.digest
+      ? handoffsMod.computeEvidenceDigest(targetRoot, record, {
+          verifiedDirs: initVerifiedDirs,
+          skipFileRehash: true,
+          preReadSynthesis
+        })
+      : undefined;
     if (values.out !== undefined) {
       const outRel = normalizeBundleOutCliPath(values.out);
       const parentDir = path.posix.dirname(outRel);
       if (parentDir && parentDir !== ".") {
-        handoffsMod.ensureDirectory(targetRoot, parentDir, [], new Set());
+        handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
       }
       const outBytes = Buffer.from(JSON.stringify(record, null, 2) + "\n", "utf8");
-      handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, undefined, undefined, { sync: false });
+      handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
       console.log(JSON.stringify({
         path: outRel,
         squadId: record.squadId,
@@ -1018,22 +1043,30 @@ async function main(args) {
     return 0;
   }
   if (command === "verify") {
-    const usageLine = "Usage: agy-squad verify <report.sources.json> [--prune [--keep-reports]]";
+    const usageLine =
+      "Usage: agy-squad verify <report.sources.json> [expected-sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      "expected-sha256": { type: "string" },
       prune: { type: "boolean", default: false },
       "keep-reports": { type: "boolean", default: false }
     });
-    if (positionals.length !== 1) throw new Error(usageLine);
+    if (positionals.length < 1 || positionals.length > 2) throw new Error(usageLine);
+    if (values["expected-sha256"] !== undefined && positionals.length === 2) {
+      throw new Error("Pass either --expected-sha256 <sha256> or a positional <expected-sha256>, not both.");
+    }
     if (values["keep-reports"] && !values.prune) {
       throw new Error(`Flag '--keep-reports' requires '--prune' on 'agy-squad verify'.\n${usageLine}`);
     }
     const rel = normalizeWorkspaceCliPath(positionals[0]);
+    const expectedSha256 = values["expected-sha256"] ?? positionals[1];
     if (values.prune) {
       const { verifyAndPruneBundle } = await import("../mcp/handoffs.mjs");
-      console.log(JSON.stringify(verifyAndPruneBundle(root, rel, { keepReports: values["keep-reports"] }), null, 2));
+      console.log(
+        JSON.stringify(verifyAndPruneBundle(root, rel, { expectedSha256, keepReports: values["keep-reports"] }), null, 2)
+      );
     } else {
       const { verifyBundle } = await import("../mcp/handoffs.mjs");
-      console.log(JSON.stringify(verifyBundle(root, rel), null, 2));
+      console.log(JSON.stringify(verifyBundle(root, rel, expectedSha256), null, 2));
     }
     return 0;
   }
@@ -1056,17 +1089,17 @@ async function main(args) {
     const {
       bundleReports,
       decodeUtf8,
-      inspectHandoffs,
       readFile,
+      stripReceiptPrefix,
       verifyAndPruneBundle,
       verifyBundle
     } = await import("../mcp/handoffs.mjs");
     const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
+    const verifiedDirs = new Set([root]);
+    const record = JSON.parse(decodeUtf8(readFile(root, recPath, verifiedDirs), recPath));
     if (!record || typeof record !== "object" || Array.isArray(record)) {
       throw new Error("Provide a valid bundle record.");
     }
-    const inspected = inspectHandoffs(root, record);
     const bundleInput = {
       ...record,
       ...(values["allow-unaudited"]
@@ -1077,18 +1110,33 @@ async function main(args) {
       ...(values.replace ? { replaceExisting: true } : {}),
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
-    const bundled = bundleReports(root, bundleInput);
+    // bundleReports already reconciles handoffs and reads every report slot once; derive inspected summary from validated inputs without a duplicate disk pass.
+    const bundled = bundleReports(root, bundleInput, { verifiedDirs });
+    const statusBySender = new Map();
+    for (const h of record.handoffs ?? []) {
+      const stripped = stripReceiptPrefix(h.message);
+      statusBySender.set(
+        h.sender,
+        stripped.startsWith("READY ") ? "READY" : stripped.startsWith("PARTIAL ") ? "PARTIAL" : "NO_REPORT"
+      );
+    }
+    const inspected = (record.assignments ?? []).map(({ conversationId, report }) => ({
+      conversationId,
+      report,
+      status: statusBySender.get(conversationId) ?? "PENDING"
+    }));
     let verified;
     let pruned = null;
     if (values.prune) {
       const vp = verifyAndPruneBundle(root, bundled.path, {
-        acceptedHash: bundled.sha256,
-        keepReports: values["keep-reports"]
+        expectedSha256: bundled.sha256,
+        keepReports: values["keep-reports"],
+        verifiedDirs
       });
       pruned = vp.pruned;
       verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports };
     } else {
-      verified = verifyBundle(root, bundled.path, bundled.sha256);
+      verified = verifyBundle(root, bundled.path, bundled.sha256, { verifiedDirs });
     }
     console.log(JSON.stringify({ inspected, bundled, verified, pruned }, null, 2));
     return 0;
@@ -1114,31 +1162,23 @@ async function main(args) {
       throw new Error(usageLine);
     }
     const { decodeUtf8, readFile } = await import("../mcp/handoffs.mjs");
-    const { parseContentVerdict, parseIntegrityVerdict } = await import("../mcp/verdicts.mjs");
+    const { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } = await import("../mcp/verdicts.mjs");
     const reportRel = normalizeWorkspaceCliPath(positionals[0]);
     const markdown = decodeUtf8(readFile(root, reportRel), reportRel);
-    const verdict = values.integrity ? parseIntegrityVerdict(markdown) : parseContentVerdict(markdown);
-    console.log(JSON.stringify({ verdict }, null, 2));
+    if (values.integrity) {
+      const verdict = parseIntegrityVerdict(markdown);
+      const targetSquad = parseTargetSquad(markdown);
+      const evidenceDigest = parseEvidenceDigest(markdown);
+      console.log(JSON.stringify({
+        verdict,
+        ...(targetSquad !== undefined ? { targetSquad } : {}),
+        ...(evidenceDigest !== undefined ? { evidenceDigest } : {})
+      }, null, 2));
+    } else {
+      console.log(JSON.stringify({ verdict: parseContentVerdict(markdown) }, null, 2));
+    }
     return 0;
   }
-}
-
-function isDirectExecution(argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) {
-  if (!argv1) return false;
-  const tryRealpath = (p) => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const normalizeForPlatform = (p) => {
-    const resolved = tryRealpath(p);
-    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
-    if (platform === "darwin") return resolved.toLowerCase();
-    return resolved;
-  };
-  return normalizeForPlatform(path.resolve(argv1)) === normalizeForPlatform(fileURLToPath(selfUrl));
 }
 
 if (isDirectExecution()) {

@@ -1,165 +1,114 @@
 # Agy-Squad PR Review Standard
 
-Version: 1.5.0
-Status: Active repository workflow standard (enforced by `.agents/skills/pr-review/SKILL.md`, `.agents/skills/full-review/SKILL.md`, `.agents/skills/day-one-review/SKILL.md`, and `.agents/skills/self-diagnosis/SKILL.md`)
-Established: 2026-11-08
+Version: 1.5.0 | Status: Active workflow standard | Established: 2026-11-08
 
-## Purpose and authority
-
-A review must make its coverage, reasoning, findings, and evidence inspectable by category. Passing tests, a polished change document, and a previous approval are inputs; none establishes that the implementation satisfies its architecture.
-
-Use this standard for a PR review. Implementation status updates are separate from that review.
-
-Changes to this standard require a version bump, a rationale, and a PR that identifies which review requirements change. A reviewer cannot silently omit or weaken a category. This is a repository workflow contract, not a claim that GitHub branch protection or an automated merge gate has been installed.
+Reviews must make coverage, reasoning, findings, and evidence inspectable by category. Passing tests, polished docs, and prior approvals never prove architectural conformance. Standard changes require a version bump and rationale; reviewers cannot silently omit or weaken a category.
 
 ## 1. Pin the review
 
-Record:
+Record at the top of the report:
 
-- Repository, PR URL, review date, reviewer, standard version, base SHA, and head SHA (plus any uncommitted working-tree delta).
-- Append-only **Session Provenance** table (`Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`) so parent, resumed, and branched review or `/self-diagnosis` sessions and their exact `HEAD` state are distinguishable at the top of the report.
-- Exact commit or tree executed by each cited CI run. Distinguish a PR head from GitHub's generated merge commit.
-- Changed-file inventory from the base/head comparison, plus unchanged dependencies examined.
-- Evidence actually available: repository sources, normative design records (the target repository's architecture docs, ADRs, or baseline commits if present), prior review, transcript, local reproduction, and cross-platform CI logs (`ubuntu-latest`, `macos-latest`, `windows-latest`). State when an attachment or environment was unavailable.
-- Scope and exclusions. Fetching a file is not the same as reviewing it.
+- Repository, PR URL/target, review date, reviewer, standard (`1.5.0`), base/head SHAs, and uncommitted dirty delta.
+- Append-only **Session Provenance** table: `Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`.
+- Exact commit/tree run by each CI job (distinguish PR head from merge commit), changed-file inventory, unchanged dependencies examined, available evidence (sources, docs/ADRs, prior review, transcript, local runs, cross-platform CI), and explicit exclusions.
 
-A new head invalidates claims about changed behavior until the delta and affected categories are re-reviewed. Retain the previous review and record which findings carry forward.
+A new head invalidates claims about changed behavior until re-reviewed; retain prior findings with carry-forward status.
 
 ## 2. Review architecture before runtime
 
-For every behavior change, trace:
+Trace `design thesis / invariant -> current architecture decision -> public contract -> implementation -> verification` against normative docs/ADRs (if present).
 
-design thesis / invariant -> current architecture decision -> public contract -> implementation -> verification.
-
-Read the target repository's normative architecture docs, ADRs, and baseline records (if present) when assessing preservation or modification of project invariants. Separate historical design records, normative current contracts, as-built descriptions, and external evidence. Existing implementation does not automatically override a higher-priority contract.
-
-When modernization relies on a current ecosystem norm, cite a primary source, its version or date, the exact capability, the demonstrated gap, and why closing that gap benefits the target repository. Unsupported generalizations such as "modern agents expect this" are not evidence.
-
-For each intentional departure from a contract, require a recorded decision, compatibility implications, and acceptance criteria before recommending runtime changes. Do not resolve a mismatch by silently rewriting documentation to match code.
+- Separate normative contracts, historical records, as-built descriptions, and external evidence.
+- Cite primary sources (version/date, capability, demonstrated gap, benefit) when invoking ecosystem norms.
+- Intentional departures require a recorded decision, compatibility impact, and acceptance criteria. Never silently rewrite docs to match defective code.
 
 ## 3. Required categories
 
-Each category has its own coverage statement, independently triaged P1/P2/P3 finding lists, verification gaps, and verdict.
-
-| ID | Category | Required review questions |
+| ID | Category | Core Review Questions |
 | --- | --- | --- |
-| ARCH | Architecture and contracts | Are boundaries, guarantees, ownership, compatibility, and resource limits explicit? Does implementation satisfy the selected decisions? |
-| DOC | Documentation and change records | Do active docs agree with normative contracts and actual behavior? Are historical records distinguished? Are completion and benchmark claims supported? |
-| SKILL | Skills and agent instructions | Are referenced APIs, enums, fields, commands, and guarantees real and current? Do instructions guide correct implementation and review? |
-| MCP | MCP schemas and public API | Do discovery schemas, runtime acceptance, errors, defaults, nullability, bounds, and documented responses agree? |
-| RUN | Core runtime, parsing, and validation | Are inputs untrusted, failures deterministic, workspace/descriptor containment enforced, and stage compilation/reporting accurate? |
-| SVC | Services, orchestration, and audit semantics | Are retries, lineage, request identity, recovery, and shared entry points consistent with the contracts? |
-| DB | Database, migrations, replay, and concurrency | When SQL/database persistence exists, are reads/writes transactionally coherent and migrations verified? When only filesystem state exists (`scratch/agy-squad/`), is state persistence covered under `RUN`/`SVC` and `DB` marked Not applicable? |
-| SCRIPT | Scripts, evaluation, and developer tooling | Do scripts fail on unexpected results? Are exceptions scenario-specific? Are measurement claims limited to what was measured? |
-| TEST | Tests and CI | Do tests prove the guarantees, including adversarial cases? What ran, where, against which revision, and what remains unverified? |
-| DEP | Dependencies, packaging, and configuration | Are installation paths, lockfiles, supported versions, configuration names, and startup assumptions coherent? |
-| SEC | Security, trust boundaries, and vulnerabilities | Are untrusted inputs guarded against injection (shell/command/SQL/template/prompt), path traversal, symlink/TOCTOU escapes, and polynomial regex DoS (ReDoS)? Are authn/authz, least-privilege CI workflow `permissions:` and `concurrency:`, isolation, secret/PII hygiene, supply-chain checksums/timeouts, and fail-closed defaults enforced? |
+| ARCH | Architecture & contracts | Are boundaries, guarantees, ownership, compatibility, and limits explicit and satisfied? |
+| DOC | Docs & change records | Do active docs match contracts and runtime? Are historical records separated and claims supported? |
+| SKILL | Skills & agent instructions | Are referenced APIs, enums, fields, commands, and guarantees real and current? |
+| MCP | MCP schemas & public API | Do discovery schemas, runtime acceptance, errors, defaults, bounds, and responses agree? |
+| RUN | Runtime, parsing & validation | Are inputs untrusted, failures deterministic, containment enforced, and compilation accurate? |
+| SVC | Services & audit semantics | Are retries, lineage, identity, recovery, and entry points consistent with contracts? |
+| DB | Database & concurrency | Are SQL/DB transactions and migrations coherent? Mark Not applicable for filesystem-only state (`RUN`/`SVC`). |
+| SCRIPT | Scripts & tooling | Do scripts fail on unexpected results? Are exceptions narrow and metrics exact? |
+| TEST | Tests & CI | Do tests prove guarantees including adversarial cases? What ran, where, on which SHA, and what is missing? |
+| DEP | Dependencies & packaging | Are install paths, lockfiles, versions, configs, and startup assumptions coherent? |
+| SEC | Security & trust boundaries | Are inputs guarded against injection (shell/SQL/template/prompt), path traversal, symlink/TOCTOU, and ReDoS? Are authn/authz, least-privilege CI `permissions:`/`concurrency:`, isolation, secret hygiene, checksums/timeouts, and fail-closed defaults enforced? |
 
-Map every changed file to one primary category. Cross-reference affected categories without counting the same defect twice: functional parsing or logic bugs belong primarily to `RUN`, `SCRIPT`, or `SVC`, whereas exploitable security vulnerabilities or broken trust boundaries belong primarily to `SEC` and cross-reference affected layers. Split a category into named subsections when necessary; additions cannot replace the required categories. A documentation file defining architecture can belong primarily to ARCH.
-
-"No findings" is permitted. A finding quota is prohibited.
+Map each changed file to **one primary category** and cross-reference affected layers without double-counting (logic bugs own `RUN`/`SCRIPT`/`SVC`; exploitable flaws or broken trust boundaries own `SEC`). "No findings" is valid; finding quotas are banned.
 
 ## 4. Required category record
 
-For each category include:
+Include all 7 fields in every category:
 
-1. **Scope:** changed files and relevant unchanged dependencies examined.
-2. **Coverage:** complete, partial, or not reviewed; specify what remains.
-3. **P1 (high priority):** independently triaged blocking findings, or an explicit empty/unassessed statement.
-4. **P2 (medium priority):** independently triaged actionable findings, or an explicit empty/unassessed statement.
-5. **P3 (low priority):** independently triaged advisory findings, or an explicit empty/unassessed statement.
-6. **Verification:** tests inspected, tests executed, CI evidence inspected, and missing proof.
-7. **Category Verdict:** changes required, no findings within reviewed scope, incomplete, or not applicable with a reason.
+1. **Scope:** changed files and unchanged dependencies examined.
+2. **Coverage:** Complete, Partial, or Not reviewed (state gaps).
+3. **P1 (high priority):** blocking findings, or `None identified within reviewed scope` / `Not assessed`.
+4. **P2 (medium priority):** actionable findings, or `None identified within reviewed scope` / `Not assessed`.
+5. **P3 (low priority):** advisory findings, or `None identified within reviewed scope` / `Not assessed`.
+6. **Verification:** tests inspected/executed, CI evidence, missing proof.
+7. **Category Verdict:** Changes required, No findings within reviewed scope, Incomplete, or Not applicable (with reason).
 
-Every category must contain all three triage headings, even when a bucket is empty. For reviewed scope, write "None identified within reviewed scope"; for unreviewed scope, write "Not assessed." Do not equate an empty bucket with complete coverage. Order findings by severity within their owning category. Classify each finding from its impact and trigger; do not copy priority from a previous review automatically.
-
-Verification gaps and unresolved questions remain separate from the P1/P2/P3 finding buckets unless evidence establishes a concrete defect. Record priority changes with a reason and preserve finding IDs. An exceptional P0 emergency is escalated explicitly in addition to the required three buckets.
-
-A category with findings and partial coverage records both facts. "Not applicable" means the category has no relevant change or dependency, not that it was skipped.
+Keep all 3 triage buckets even when empty; escalate P0 emergencies explicitly. Separate verification gaps from defects, and classify priority from current impact/trigger while preserving IDs.
 
 ## 5. Required finding record
 
-Enforce a strict **`1 ID = 1 Row / Record`** and **zero lead/bundle compression or silent omission** rule: assign one stable ID per independently remediable problem (e.g., `MCP-001`) and preserve IDs across revisions. Because `agy-squad prune` / `agy-squad finalize --prune` (via `mcp/handoffs.mjs`) removes specialist reports and `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-<id>/lead/report.md` during deterministic scratch teardown, the review report is the sole surviving record; compressing findings into multi-defect umbrella IDs (`R5-HARDEN-P3-1`, `R5-OPT-P3-1`), range-compressed IDs (`TEST-2..4`), or multi-ID combined rows (`A & B`), or silently omitting deferred/residual items, is prohibited because it prevents distinguishing solved defects from hidden ones. Only duplicate reports of the exact same underlying defect are merged into one canonical ID (cross-referencing the duplicate report alias in parentheses per Section 3).
+- **`1 ID = 1 Row / Record`:** Assign one stable ID per independently remediable defect (e.g., `MCP-001`) and preserve IDs across revisions. Umbrella IDs, range IDs (`TEST-2..4`), combined rows (`A & B`), and silent omissions are prohibited because pruned loose reports leave this report as the sole record. Merge only exact duplicates (noting aliases in parentheses).
+- **Readability & backticks:** Keep prose and tables clean. Use inline backticks only for code identifiers, paths (`path#L10-L20`), flags, commands, and verdicts quoted inside prose; never wrap plain numbers, English statuses, or multi-sentence quotes. Standalone machine-parsed `Content Verdict:`, `Integrity Verdict:`, `Target Squad:`, and `Evidence Digest:` declaration lines must NEVER wrap the declaration (or verdict token) in backticks (use plain text or balanced `**...**` emphasis only).
+- **Six canonical statuses:** Open (Pre-Remediation), Closed, Residual (Open), Closed (Post-Remediation), Deferred / Won't Fix, Closed (By Design) (+ Informational in Section 8). Route the last 4 + Informational **exclusively to Section 8** (never Sections 4-7, Section 9, or buried inside a Closed row).
 
-**Report readability & backtick discipline:** Keep review reports scannable in plain prose and Markdown tables. Reserve inline backticks strictly for exact code identifiers, file paths (`path#L10-L20`), CLI flags, commands, and literal machine-parsed verdict declarations (such as `Content Verdict: PASS`); never wrap plain numbers (0, 1, 42), standalone English status/disposition labels (Closed, Open, Changes required, Approve, PASS), or multi-sentence quotations inside inline backticks or fenced code blocks inside prose or table cells. Use fenced code blocks sparingly for multi-line command invocations or exact diff hunks only.
+**Tiered density:**
 
-Every surfaced P0–P3 item must carry one explicit canonical status: Open (Pre-Remediation), Closed, Residual (Open), Closed (Post-Remediation), Deferred / Won't Fix, or Closed (By Design) (with Informational permitted for non-defect observations in Section 8). Section 8 is the mandatory sink for all Residual (Open) / Closed (Post-Remediation), Deferred / Won't Fix, and Closed (By Design) / Informational items; never bury them inside a Closed row's prose or omit them.
+- **P0 / P1 / P2** require 1-line entries for all 10 fields under ``#### `<ID>`: <Title> | <Priority> | <Status>``:
+  1. Title, priority, status
+  2. Contract provenance (invariant, doc/ADR, contract, or norm)
+  3. Source evidence (commit-pinned links, lines, symbol)
+  4. Trigger (input, state, interleaving, or instruction)
+  5. Expected / actual (observed vs source-derived)
+  6. Impact (consequence and scope)
+  7. Required remediation (behavior, compatibility, affected surfaces)
+  8. Acceptance evidence (regression assertions, or source reconciliation for low-impact prose)
+  9. Root cause / related IDs (cross-layer links)
+  10. Closure (fix commit, fixed-revision evidence, recheck, residual limits)
+- **P3** uses a 1-row-per-ID table: `ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`.
 
-Tiered record density (instead of row compression):
-
-- **P0 / P1 / P2 defects** require all 10 fields below, written as concise 1-line entries without repeating multi-paragraph prose across sections (pipe-delimited headings ``#### `<ID>`: <Title> | <Priority> | <Status>`` are parsed directly by `diagnose.mjs` alongside Markdown finding tables):
-  - **Title, priority, status.**
-  - **Contract provenance:** exact invariant, architecture decision (target repository architecture doc or ADR, if present), public contract, or evidenced external norm.
-  - **Source evidence:** immutable commit-pinned file links and relevant line ranges, plus the affected symbol.
-  - **Trigger:** concrete input, state, interleaving, or document instruction that exposes the issue.
-  - **Expected / actual:** explain the mismatch and distinguish observed execution from source-derived inference.
-  - **Impact:** concrete consequence and affected scope.
-  - **Required remediation:** precise behavior to restore, compatibility constraints, and affected contract surfaces.
-  - **Acceptance evidence:** regression case and assertions; use source reconciliation for low-impact prose changes where a test would add no value.
-  - **Root cause / related IDs:** connect cross-layer defects without duplicating the finding.
-  - **Closure:** fix commit, evidence at that revision, reviewer recheck, and residual limitations.
-- **P3 advisories and optimizations** use a compact **1-row-per-ID** structured table schema (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`), preserving 100% per-finding granularity without prose bloat.
-
-Priorities:
-
-- P0: immediate critical failure requiring emergency handling.
-- P1: high-impact correctness, data loss, security, or reliability failure.
-- P2: actionable correctness or contract problem that should be fixed.
-- P3: lower-impact issue or improvement; identify whether it is advisory.
-
-A verification gap alone is not proof of a production defect. Label it as a gap. Do not inflate severity or finding counts to fill categories.
+**Priorities:** `P0` emergency critical failure; `P1` high-impact correctness, data loss, security, or reliability failure; `P2` actionable correctness/contract issue; `P3` advisory/improvement.
 
 ## 6. Evidence rules
 
-- Separate source inspection, attempted reproduction, local execution, and inspected CI logs.
-- Give reproduction steps even when execution is unavailable; label the expected failure as source-derived.
-- Test names, comments, string-presence assertions, and a green summary do not prove the named guarantee. Inspect what is asserted.
-- Never inherit a previous review's verdict. Revalidate its findings and explicitly accept, revise, or reject them.
-- Identify assumptions, unresolved questions, and unverified external claims.
-- Do not claim that a transcript, attachment, or design record was read unless its contents were accessible and examined.
-
-When reviewing `Agy-Squad` itself, also verify:
-
-- **Schema & Stdio Framing:** exercise documented omitted/null/valid/invalid values through `request.jsonrpc === "2.0"` validation (`Number.isSafeInteger`), actual `tools/list` schemas (`mcp/index.js`), and the `dispatch_squad` (`mcp/dispatch.mjs`) and `squad_planner` (`mcp/planner.mjs`) runtime boundaries, including positive-integer `AGY_MAX_STDIO_PAYLOAD_BYTES` and the `10 MiB` stdio frame limit.
-- **Workspace & Descriptor Containment:** verify workspace-internal symlink resolution (`fs.realpathSync` + `O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, and Linux `/proc/self/fd/${fd}` regular-file verification) for manifests in `mcp/dispatch.mjs`; canonical root resolution + strict symlink rejection (`O_NOFOLLOW ?? 0`, `O_NONBLOCK ?? 0`, symlink directory rejection, Linux `/proc/self/fd/${fd}` check, and macOS/Windows case-insensitive realpath parity) for reports and bundles in `mcp/handoffs.mjs`.
-- **Subagent Capability, Model Provenance & Input Guards:** verify built-in `TypeName` rejection (`research`, `browser`, `image-generator`; default `"self"`), manifest `workspace === "inherit"` in `dispatch_squad` and `squad_planner` (with `/swarm` copy isolation via top-level `workspaceIsolation`), honest `modelProvenance` disclosure vs. `/swarm` pinning, `scopeFiles` path normalization and writable overlap warnings, and camelCase/PascalCase conflict rejection (`mcp/briefs.mjs`, `mcp/planner.mjs`).
-- **Pointer-Over-Wire Handoffs, Integrity Audits & Bundling:** verify single-line `<= 500` UTF-8 byte `READY`/`PARTIAL`/`NO_REPORT` receipt grammar, custom `reportRoot` alignment in `inspectReports`/`bundleReports`, atomic `publish()` link/rename semantics, strict single-line verdicts (`mcp/verdicts.mjs`), mandatory `Target Squad: <id>` and `Evidence Digest: <64-hex>` binding (`agy-squad digest` / `bundle-init --digest`), multi-auditor `integrityAudits[]` consensus (alongside `integrityAudit`) across single-squad (`squad-integrity_auditor`) and multi-squad (`squad-integrity_auditor-<id>`) audit slots, persisted bundle `auditPolicy` (`required` vs. `unaudited-explicit`), and `collect`/`bundle-init`/`fingerprint`/`inspect`/`digest`/`bundle`/`verify`/`finalize`/`prune` SHA-256 verification (`mcp/handoffs.mjs`), plus durable ledger schema and cross-section ID-status enforcement via `validateTargetReviewLedger` (`diagnose.mjs`).
-- **External MCP & Governance CLI:** distinguish an in-process adapter call from a real stdio subprocess and CLI execution (`agy-squad setup|install|status|uninstall|restore-backups|plan|dispatch|collect|bundle-init|fingerprint|inspect|digest|bundle|verify|finalize|prune|verdict`).
-
-Run checks appropriate to the change. A documentation-only review-standard change does not require rerunning the product suite.
+- Separate source inspection, reproduction, local runs, and CI logs; label unexecuted expectations as source-derived with repro steps.
+- Inspect test assertions (names and green summaries never prove a guarantee). Never inherit prior verdicts; explicitly accept, revise, or reject carried findings.
+- State assumptions, gaps, and unavailable artifacts; never claim to have read unexamined files.
+- *When reviewing `Agy-Squad` itself:* also check JSON-RPC/`AGY_MAX_STDIO_PAYLOAD_BYTES` framing, `O_NOFOLLOW`/realpath/fd containment, `TypeName`/`workspace: "inherit"` guards, `<= 500` B handoff/verdict/`Evidence Digest`/bundle checks, and real stdio/CLI subprocess parity.
 
 ## 7. Verdict and closure
 
-Keep coverage and merge disposition separate.
-
-- Request changes when blocking correctness or contract findings remain.
-- Mark the review incomplete when a material category is unreviewed; this can coexist with request changes.
-- Recommend approval only after all material categories are covered, blocking findings are resolved and rechecked, and required verification has evidence.
-- Never calculate approval from a pass percentage, number of findings, test count, or absence of findings in an unreviewed category.
-
-Re-review each fix in its primary category and all affected categories. A fix commit is not closure by itself. Every closed finding needs the relevant evidence and reviewer recheck.
+Keep coverage and disposition separate: **Request changes** on open blockers; **Incomplete** on any unreviewed material category (coexists with Request changes); **Approve** only after full material coverage, fixed-revision recheck across primary and affected categories, and evidence. Never approve from pass percentages or counts.
 
 ## 8. Required report structure
 
 1. Review metadata, Session Provenance table, and evidence limits.
 2. File-to-category inventory and coverage matrix.
 3. Architecture-to-implementation trace.
-4. Eleven category sections (`ARCH`..`DEP`, `SEC`), each with separate P1, P2, and P3 triage, verification status, and verdict.
-5. Atomic P0–P3 findings (whether embedded in category tables/pipe-delimited headings in Section 4 or consolidated in Section 5 ahead of cross-category root causes in Section 6; `diagnose.mjs` validates Sections 4–7 uniformly).
-6. Cross-category root causes, verification record, and remaining gaps.
-7. Overall disposition, Direction decision (when requested), and finding closure table.
-8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): atomic 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`) recording every advisory surfaced during re-verification (Residual (Open) -> Closed (Post-Remediation)), Deferred / Won't Fix item, and Closed (By Design) / Informational item; never buried inside a Closed row's prose cell. Record `None (0 open residuals, 0 deferred items)` when empty.
-9. **`/self-diagnosis` Cohort & Bundle Ledger** (mandatory whenever `/self-diagnosis` cohorts are dispatched against the target branch/PR): one canonical **Cohort Provenance** table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) plus one atomic 1-ID-per-row **Wave Finding Ledger**, keeping `docs/reviews/` to one clean file per PR review cycle rather than bespoke per-wave sections or proliferating files.
+4. Eleven category sections (`ARCH`..`DEP`, `SEC`) with P1/P2/P3 triage, verification, and verdict.
+5. Atomic P0-P3 findings (in Section 4 or consolidated in Section 5).
+6. Cross-category root causes, verification record, and gaps.
+7. Overall disposition, Direction decision (if requested), and finding closure table.
+8. **Post-Remediation Residuals & Deferred Dispositions** (mandatory): 1-ID-per-row table (`ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA`), or `None (0 open residuals, 0 deferred items)`.
+9. **`/self-diagnosis` Cohort & Bundle Ledger** (only when `/self-diagnosis` cohorts ran): Cohort Provenance table (`Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown`) + 1-ID-per-row Wave Finding Ledger.
 
-Save in-repo review reports under `docs/reviews/` when the target repository already maintains `docs/reviews/` or the user explicitly asks for a committed ledger; otherwise deliver the structured report in chat or the Antigravity artifact directory. Cite the reviewed base and head, category coverage, findings, evidence and verdict in the PR. Identify the previous review when recording a follow-up.
+Save to `docs/reviews/<review-slug>.md` when the repo adopts `docs/reviews/` or the user asks; otherwise deliver in chat or an Antigravity artifact.
 
 ## Change history
 
-| Version | Date | Change |
+| Ver | Date | Summary |
 | --- | --- | --- |
-| 1.5.0 | 2026-11-19 | Add mandatory 11th category `4.11 SEC` (Security, trust boundaries, and vulnerabilities) at the end of the category list (`ARCH`..`DEP`, `SEC`) with explicit non-double-counting boundaries; align `diagnose.mjs` and review skills (`pr-review`, `full-review`, `day-one-review`, `self-diagnosis`) while keeping legacy `v1.4.0` ledgers valid. |
-| 1.4.0 | 2026-11-14 | Enforce mandatory Sections 1–8 and cross-section ID-status consistency in `validateTargetReviewLedger`; surface open P0–P2 ledger blockers explicitly; require `Evidence Digest: <64-hex>` binding (`agy-squad digest`), multi-auditor `integrityAudits[]` consensus, persisted bundle `auditPolicy`, atomic pre-delete teardown preflight, and documented single- vs multi-squad audit slots (`squad-integrity_auditor` vs `squad-integrity_auditor-<id>`). |
-| 1.3.0 | 2026-11-08 | Enforce `1 ID = 1 Row` (ban umbrella/range IDs) and 6-status enum, add tiered record density for P3 tables, require Section 1 Session Provenance and mandatory Section 8 (Post-Remediation Residuals & Deferred Dispositions), and standardize Section 9 (`/self-diagnosis` Cohort & Bundle Ledger). |
-| 1.2.0 | 2026-11-08 | Adapt standard to Agy-Squad with 5 WSL runtime verification boundaries, durable review ledger coupling with `/self-diagnosis`, and distinct version bump per Section 0. |
-| 1.1.0 | 2026-10-20 | Require explicit P1/P2/P3 triage inside every category, including empty versus unassessed buckets; preserve separate verification gaps. |
-| 1.0.0 | 2026-10-20 | Establish category-separated review, provenance, explicit coverage, evidence distinctions, and finding closure. |
+| 1.5.0 | 2026-11-19 | Added mandatory 11th category `4.11 SEC` (ReDoS, CI permissions, trust boundaries); `v1.4.0` ledgers remain valid. |
+| 1.4.0 | 2026-11-14 | Added Sections 1-8 cross-section ID checks, `Evidence Digest`, `integrityAudits[]`, `auditPolicy`, and audit slots. |
+| 1.3.0 | 2026-11-08 | Enforced `1 ID = 1 Row`, 6-status enum, P3 table density, Session Provenance, Section 8, and Section 9. |
+| 1.2.0 | 2026-11-08 | Added Agy-Squad runtime boundaries and review ledger coupling. |
+| 1.1.0 | 2026-10-20 | Required explicit P1/P2/P3 triage buckets inside every category. |
+| 1.0.0 | 2026-10-20 | Established category-separated review, provenance, evidence rules, and closure. |

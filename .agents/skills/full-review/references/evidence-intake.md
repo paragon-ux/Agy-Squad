@@ -1,146 +1,63 @@
-# Evidence intake for full reviews
+# Evidence Intake for Full Reviews
 
-This reference supports Step 1 and Step 2 of [../SKILL.md](../SKILL.md). It is a procedure, not a substitute for the [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md).
+Procedure for [../SKILL.md](../SKILL.md) under [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md).
 
-## 0. Target types and minimum evidence
+## 0. Target Types and Minimum Evidence
 
-| Target type | Baseline to pin | Minimum evidence |
+| Target | Baseline | Minimum Evidence |
 | --- | --- | --- |
-| Pull request / branch | merge-base and head SHA | diff, changed-file inventory, CI commit, prior review ledger |
-| Working tree | `HEAD` plus dirty delta | tracked diff, untracked inventory, commands run |
-| Commit range | base..head | changed files, affected contracts, tests |
-| Whole repository or subsystem | one pinned SHA | inventory, dependencies, normative records |
-| Evidence bundle | artifact hashes and locators | transcript/log/CI plus the claims they are meant to prove |
-| Direction question | pinned state plus decision constraints | options, prior decisions, evidence for and against each option |
-| Incident / regression | last known good..bad | reproduction, logs, timeline, blast radius |
+| PR / branch | merge-base & head SHA | diff, inventory, CI commit, prior review |
+| Working tree | `HEAD` + dirty delta | tracked diff, untracked list, commands run |
+| Commit range | `base..head` | changed files, contracts, tests |
+| Repo / subsystem | pinned SHA | inventory, deps, normative docs |
+| Evidence bundle | hashes & locators | transcript/log/CI + claims they prove |
+| Direction question | pinned state + constraints | options, prior decisions, pro/con evidence |
+| Incident / regression | last good..bad | repro, logs, timeline, blast radius |
 
-## 1. Build the evidence manifest first
+## 1. Evidence Manifest
 
-Every artifact that will be cited gets an `EID`, a locator, a content hash or size, a class, an access status, and an examined scope. The manifest is part of the report, not private scratch work.
+Record every cited artifact in Section 1.3 (`EID | Artifact | Locator | SHA-256 / size | Class | Access | Examined`):
 
-| Field | Meaning |
-| --- | --- |
-| `EID` | Stable ID such as `E01`; findings cite it. |
-| `Artifact` | File name, transcript, CI run, URL, or command output. |
-| `Locator` | Path, URL, commit, step range, or line range. |
-| `SHA-256 / size` | Content identity; use the hash when available, size plus date otherwise. |
-| `Class` | Repository source, normative design record, user-provided evidence, local execution, CI log, external source, or prior review. |
-| `Access` | `Examined`, `Partially examined`, `Unavailable`, or `Not examined`. |
-| `Examined` | Exact sections, steps, lines, or queries actually read. |
+- **Classes:** Repo source, normative record, user evidence, local run, CI log, external source, prior review.
+- **Access:** Examined, Partially examined, Unavailable, Not examined.
+- **Rules:** Hashes prove identity, not truth. State gaps explicitly. Transcripts record claims, not normative specs. Record the index and windows read.
 
-Rules:
-
-- A hash proves identity, not truth. It does not prove that the content was read or that its claims are correct.
-- State when an attachment, environment, CI run, or external source was unavailable. Do not fill the gap with inference.
-- Keep user-provided evidence separate from repository evidence. A transcript is a record of claims, not an authoritative design record.
-- If the evidence is large, record the index you built and the windows you read. Do not imply full coverage from targeted reads.
-
-## 2. Pin revisions and working state
-
-For a Git target, record at minimum:
+## 2. Pin Git & Local Runs
 
 ```bash
-git rev-parse HEAD
-git rev-parse <base>
-git status --porcelain
-git diff --stat <base>..HEAD
-git diff --name-status <base>..HEAD
+git rev-parse HEAD && git rev-parse <base>
+git status --porcelain && git diff --stat <base>..HEAD && git diff --name-status <base>..HEAD
 ```
 
-For a working-tree review, also capture the tracked diff and the untracked inventory. For a PR, record the PR URL, base branch, head branch, head SHA, mergeability, and the exact commit each CI run executed. Distinguish the PR head from GitHub's generated merge commit.
+For PRs, pin URL, base/head, mergeability, and CI commit (PR head vs merge commit). For local runs, record `cwd`, runtime/OS, exact `command`, `exit`, and relevant excerpt.
 
-For local execution, record the runtime and environment, not just the command:
+## 3. Transcript Protocol (Batch, Never Poll)
 
-```text
-cwd: <path>
-runtime: <node/python version, OS, sandbox mode>
-command: <exact command>
-exit: <code>
-output: <relevant excerpt, with truncation marked>
-```
-
-## 3. Transcript protocol (batch, never poll)
-
-A typical JSONL transcript has one object per step with fields such as `step_index`, `source`, `type`, `status`, `created_at`, `content`, `thinking`, and `tool_calls`. Do not assume that schema; inspect the first and last records and the key distribution.
-
-### 3.1 Index once
-
-Use one batch pass to produce:
-
-- total records, byte size, hash, first and last timestamps;
-- counts by `type` and `source`;
-- every user turn with step and timestamp;
-- every assistant message with non-empty `content`, with length and a short prefix;
-- tool call counts by name and error counts;
-- a step/time index around quoted evidence.
-
-A compact Node recipe for user-supplied or exported JSONL files (for internal Antigravity `.system_generated/` transcripts, direct shell reads are hook-blocked under transcript isolation; run `agy-context transcript list --parent <id> --lineage`, `agy-context transcript query --id <id> --summary`, `agy-context transcript read --id <id> --last-turns 10`, or coordinator `agy-context transcript export --parent <id> --sanitized --out scratch/...` in one batch pass via `run_command` if `/swarm` workers lack transcript access):
+Index in **one batch pass** (counts by `type`/`source`, user turns, assistant messages, tool calls, errors). For Antigravity traces (standalone JSONL vs optional `Agy-Context-Saver`), follow [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection).
 
 ```bash
 node -e '
-const fs = require("node:fs");
-const p = process.argv[1];
-const rows = fs.readFileSync(p, "utf8").trim().split(/\r?\n/).map(JSON.parse);
+const rows = require("node:fs").readFileSync(process.argv[1], "utf8").trim().split(/\r?\n/).map(JSON.parse);
 const counts = {};
 for (const r of rows) counts[r.type] = (counts[r.type] ?? 0) + 1;
-console.log(JSON.stringify({ rows: rows.length, counts }, null, 2));
-for (const r of rows) {
-  if (r.type === "USER_INPUT") console.log(`USER step=${r.step_index} at=${r.created_at}\n${String(r.content ?? "").slice(0, 500)}\n`);
-}
+console.log(JSON.stringify({ rows: rows.length, counts }));
+for (const r of rows) if (r.type === "USER_INPUT") console.log(`USER ${r.step_index} @ ${r.created_at}: ${String(r.content ?? "").slice(0, 300)}`);
 ' transcript_full.jsonl
 ```
 
-Add a second pass for assistant messages and tool calls only when the index shows they matter. Never call a transcript-reading tool once per step; that is the quadratic pattern this protocol exists to prevent.
+Read targeted +/-3-step windows only where the index shows key claims. Separate layers:
 
-### 3.2 Read targeted windows
-
-For each key step, read a bounded window (for example ±3 steps) and record:
-
-- the exact user request or model claim, quoted;
-- whether it is a user assertion, a model claim, a tool result, or an external-source claim;
-- the tool command and result if the claim depends on execution;
-- the timestamp and step;
-- what the surrounding window does not establish.
-
-### 3.3 Separate the four evidence layers
-
-| Layer | What it proves | What it does not prove |
+| Layer | Proves | Does not prove |
 | --- | --- | --- |
-| User statement | The user's requirement, verdict, or constraint | That the claim is factually correct |
-| Model statement | What the model asserted or proposed | That the assertion was executed or verified |
-| Tool result | What the tool returned in that run | That the run was representative or complete |
-| Repository source | What the code or document currently says | That it behaves that way at runtime |
+| User | Requirement, verdict, or constraint | Factual truth |
+| Model | Claim or proposal | Execution or verification |
+| Tool | Returned output in that run | Representativeness or completeness |
+| Source | Current file contents | Runtime behavior |
 
-Do not cite a model's summary of a transcript as if it were the transcript. Quote the underlying step or tool result.
+Never cite a model summary as the underlying transcript step or tool output.
 
-## 4. Logs, CI, and command output
+## 4. Logs, CI & Citations
 
-- Record the exact revision, job, command, and environment.
-- Distinguish a passing summary from the assertions that were executed. A green suite that never exercises the named guarantee is not evidence for that guarantee.
-- A failure caused by the review environment (missing OS feature, sandbox denial, unavailable service) is an environment limitation, not a product defect. State it as such and do not count it against the target.
-- If a test cannot run, give the reproduction steps and label the expected result as source-derived. Do not claim it passed or failed.
-
-## 5. Citation formats
-
-| Evidence | Format |
-| --- | --- |
-| Code at a commit | `https://github.com/<owner>/<repo>/blob/<sha>/path#Lx-Ly` |
-| Local code | `path#Lx-Ly` with the SHA pinned in Section 1 |
-| Transcript | `transcript_full.jsonl step 1375 @ 2026-11-10T06:29:55Z` plus a short quote |
-| Command | `cwd`, command, exit code, output excerpt |
-| CI | workflow, job, revision, URL, conclusion, and the asserted check |
-| External | title, URL, version/date, access date |
-| Prior review | report path, finding ID, and the prior revision |
-
-Mark `Observed` for execution you performed or output you inspected, and `Source-derived inference` for conclusions drawn from code or documents without execution. Never blur the two.
-
-## 6. Intake failure modes to avoid
-
-- Reading the first and last transcript entries and calling it a review.
-- Polling a transcript one or two steps at a time and inflating the token cost.
-- Treating a model's self-report ("I ran the tests", "I searched the web") as execution evidence.
-- Treating a green test summary as proof of the guarantee the test names.
-- Treating a hash as proof of correctness rather than identity.
-- Citing a file you fetched but did not read, or a section you read but did not understand.
-- Letting a prior review's verdict stand without revalidating its findings.
-- Hiding unavailable evidence inside a confident narrative.
+- Separate green summaries from asserted checks; mark environment limits distinctly from defects; label unrun checks `Source-derived inference` with repro steps.
+- **Citations:** Commit URL (`.../blob/<sha>/path#Lx-Ly`) or local (`path#Lx-Ly` + pinned SHA); Transcript (`step N @ ISO` + quote); Command (`cwd`, command, exit, excerpt); CI (workflow, job, SHA, URL, check); External (title, URL, date); Prior review (path, ID, SHA).
+- **Avoid:** Reading only endpoints, step-by-step polling, trusting self-reports, equating hashes with truth, inheriting verdicts, or hiding missing evidence.

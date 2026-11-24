@@ -1,217 +1,157 @@
-# Full review report template
+# Full Review Report Template
 
-Copy this skeleton into `docs/reviews/<review-slug>.md` when the target repository already maintains `docs/reviews/` or the user explicitly requests an in-repo ledger (otherwise deliver the filled report in chat or the Antigravity artifact directory), and replace every `<...>` placeholder. Delete no mandatory section; use Not applicable with a reason where a section does not apply, and None identified within reviewed scope or Not assessed inside each triage bucket as the standard requires.
-
-**Formatting & Readability:** Keep reports scannable in plain prose and Markdown tables. Reserve backticks strictly for exact code identifiers, file paths, CLI flags, and commands; never wrap plain numbers, statuses (Closed, Open, PASS), or quoted sentences inside inline backticks or fenced code blocks inside table cells.
+Save to `docs/reviews/<slug>.md` if adopted or requested; else deliver in chat or an Antigravity artifact. Keep every mandatory section (use Not applicable with reason; None identified within reviewed scope or Not assessed per empty bucket). Reserve backticks for identifiers, paths, flags, commands, and verdicts quoted in prose; never wrap standalone verdict or metadata declaration lines in backticks.
 
 ---
 
 # <Review title>
 
-**Governing Standard:** Agy-Squad PR Review Standard `v1.5.0` ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md))
-**Review type:** `<PR / branch / working tree / subsystem / evidence bundle / direction decision>`
-**Review date:** `<YYYY-MM-DD>`
-**Reviewer:** `<name / agent>`
-**Standard version:** `1.5.0`
+**Standard:** Agy-Squad PR Review Standard v1.5.0 ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md)) | **Type:** `<type>` | **Date:** `<YYYY-MM-DD>` | **Reviewer:** `<name>`
 
-## 1. Review metadata, Session Provenance, and evidence limits
+## 1. Metadata, Session Provenance & Limits
 
 ### 1.1 Target
 
 | Field | Value |
 | --- | --- |
 | Repository | `<owner/repo>` |
-| Target | `<PR URL / branch / commit / working tree / evidence bundle>` |
-| Comparison base | `<base SHA / tag / none>` |
-| Head / tree | `<head SHA / tree>` |
-| Working-tree state | `<clean / dirty delta / untracked files>` |
-| CI revision | `<exact commit / run URL>` |
-| Prior review | `<path and finding IDs, or None>` |
+| Target | `<PR/branch/commit/tree/bundle>` |
+| Base / Head | `<base SHA>` / `<head SHA>` |
+| Working tree | `<clean/dirty delta>` |
+| CI revision | `<commit/run URL>` |
+| Prior review | `<path + IDs, or None>` |
 
 ### 1.2 Session Provenance
 
-| Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked |
+| Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology |
 | --- | --- | --- | --- | --- | --- |
-| `<n>` | `<id or Unavailable>` | `<parent or None>` | `<YYYY-MM-DD>` | `<base..head + state>` | `<skill / single-agent / cohort>` |
+| `<n>` | `<id>` | `<parent/None>` | `<date>` | `<base..head + state>` | `<skill/topology>` |
 
-### 1.3 Evidence manifest
+### 1.3 Evidence Manifest & Limits
 
-| EID | Artifact | Locator | SHA-256 / size | Class | Access | Examined |
+| EID | Artifact | Locator | SHA-256 / Size | Class | Access | Examined |
 | --- | --- | --- | --- | --- | --- | --- |
-| `E01` | `<file/transcript/CI>` | `<path/URL/step>` | `<hash/size>` | `<class>` | `<Examined / Partial / Unavailable>` | `<lines/steps>` |
+| `E01` | `<item>` | `<path/URL/step>` | `<hash/size>` | `<class>` | `<Examined/Partial/Unavailable>` | `<scope>` |
 
-### 1.4 Evidence limits
+Limits: `<unavailable/partial evidence, environment limits, source-derived claims>`
 
-- `<Unavailable or partial evidence, with reason>`
-- `<Environment limitations, e.g. WSL unavailable, sandbox denial>`
-- `<Claims that remain source-derived rather than observed>`
+## 2. Inventory & Coverage Matrix
 
-## 2. File/artifact-to-category inventory and coverage matrix
-
-| Artifact | Change / role | Primary category | Cross-references | Coverage |
+| Artifact | Role | Primary Cat | Cross-Refs | Coverage |
 | --- | --- | --- | --- | --- |
-| `<path>` | `<added/modified/unchanged>` | `<ARCH...DEP, SEC>` | `<categories>` | `<Complete/Partial/Not reviewed>` |
+| `<path>` | `<added/mod/unchanged>` | `<ARCH..DEP, SEC>` | `<cats>` | `<Complete/Partial/Not reviewed>` |
 
-| Category | Scope covered | Coverage | Verdict |
+| Cat | Scope | Coverage | Verdict |
 | --- | --- | --- | --- |
-| `ARCH` | `<files/evidence>` | `<Complete/Partial/Not reviewed>` | `<Changes required / No findings / Incomplete / Not applicable>` |
-| `DOC` | | | |
-| `SKILL` | | | |
-| `MCP` | | | |
-| `RUN` | | | |
-| `SVC` | | | |
-| `DB` | | | |
-| `SCRIPT` | | | |
-| `TEST` | | | |
-| `DEP` | | | |
-| `SEC` | | | |
+| `ARCH` | `<scope>` | `<cov>` | `<Changes required/No findings/Incomplete/N/A>` |
+| `DOC` / `SKILL` / `MCP` / `RUN` / `SVC` / `DB` / `SCRIPT` / `TEST` / `DEP` / `SEC` | `<expand 1 row per cat>` | | |
 
-## 3. Architecture-to-implementation trace
-
-For each behavior or claim:
+## 3. Architecture Trace
 
 `design thesis / invariant -> architecture decision -> public contract -> implementation -> verification`
 
-| Claim | Normative source | Architecture decision | Public contract | Implementation | Verification | Result |
+| Claim | Source | Decision | Contract | Code | Verification | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| `<claim>` | `<architecture doc / ADR / standard / user requirement>` | `<decision>` | `<schema/docs>` | `<code>` | `<test/run/evidence>` | `<satisfied / mismatch / unverified>` |
+| `<claim>` | `<doc/ADR>` | `<decision>` | `<schema/doc>` | `<code>` | `<test/run>` | `<satisfied/mismatch/unverified>` |
 
-Narrative: `<what the trace establishes and what it does not>`
-
-## 4. Category reviews
+## 4. Category Reviews
 
 ### 4.1 `ARCH`: Architecture and contracts
+- **Scope:** `<files>` | **Coverage:** `<Complete/Partial/Not reviewed>`
+- **P1 / P2 / P3:** `<IDs or None identified within reviewed scope / Not assessed>` (separate bucket per priority)
+- **Verification:** `<tests/CI/gaps>` | **Verdict:** `<Changes required/No findings within reviewed scope/Incomplete/Not applicable>`
 
-- **Scope:** `<changed and unchanged artifacts examined>`
-- **Coverage:** `<Complete / Partial / Not reviewed; what remains>`
-- **P1 (high priority):** `<finding IDs or None identified within reviewed scope / Not assessed>`
-- **P2 (medium priority):** `<finding IDs or ...>`
-- **P3 (low priority):** `<finding IDs or ...>`
-- **Verification:** `<tests inspected/executed, CI, missing proof>`
-- **Category Verdict:** `<Changes required / No findings within reviewed scope / Incomplete / Not applicable>`
+Repeat for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (`4.6`), `DB` (`4.7`), `SCRIPT` (`4.8`), `TEST` (`4.9`), `DEP` (`4.10`), `SEC` (`4.11`).
 
-Repeat this seven-item record for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (`4.6`), `DB` (`4.7`), `SCRIPT` (`4.8`), `TEST` (`4.9`), `DEP` (`4.10`), and `SEC` (`4.11`: Security, trust boundaries, and vulnerabilities).
-
-### 4.12 Integrity audit record (when an integrity audit is used)
-
-- **Role contract:** see [review roles](review-roles.md).
-- **Auditor / independence:** `<who, parent, independence from the reviewed work>`
-- **Verdict enum:** `CLEAN` / `INTEGRITY VIOLATION`
-- **Coverage:** `<transcripts and step ranges, tool traces, artifacts, evidence classes; what was not covered>`
-- **Findings:** `<IDs or None identified within reviewed scope / Not assessed>`
-- **Lead re-review after CLEAN:** `<who re-reviewed the final artifacts and the resulting content verdict>`
-- **Enforcement:** `<violation block, rejection/re-run, penalty or ledger record>`
-- **Audit Outcome:** `<CLEAN / INTEGRITY VIOLATION / Not applicable>`
+### 4.12 Integrity Audit Record (when used)
+- **Role contract:** [review roles](review-roles.md) | **Auditor / independence:** `<who/parent>`
+- **Coverage & Findings:** `<traces/ranges/gaps; IDs or None>`
+- **Lead recheck after CLEAN:** `<reviewer + final verdict>` | **Outcome:** `<CLEAN / INTEGRITY VIOLATION / N/A>`
 
 ## 5. Findings
 
-### 5.1 P0/P1/P2 finding records
+### 5.1 P0/P1/P2 Records
 
 #### `<ID>`: <title> | P1 | Open (Pre-Remediation)
-
 1. **Title, priority, status:** `<...>`
-2. **Contract provenance:** `<exact invariant / decision / contract / external norm>`
-3. **Source evidence:** `<commit-pinned links, lines, symbol, transcript step>`
-4. **Trigger:** `<concrete input/state/interleaving/instruction>`
-5. **Expected / actual:** `<mismatch; observed vs source-derived>`
-6. **Impact:** `<consequence and scope>`
-7. **Required remediation:** `<behavior to restore, compatibility constraints, affected surfaces>`
-8. **Acceptance evidence:** `<regression case and assertions, or source reconciliation>`
-9. **Root cause / related IDs:** `<cross-layer connection>`
-10. **Closure:** `<fix commit, evidence at that revision, recheck, residual limits>`
+2. **Contract provenance:** `<invariant/ADR/contract/norm>`
+3. **Source evidence:** `<pinned links, lines, symbol, step>`
+4. **Trigger:** `<input/state/instruction>`
+5. **Expected / actual:** `<mismatch; observed vs inferred>`
+6. **Impact:** `<consequence/scope>`
+7. **Required remediation:** `<behavior, compatibility, surfaces>`
+8. **Acceptance evidence:** `<regression test or source reconciliation>`
+9. **Root cause / related IDs:** `<links>`
+10. **Closure:** `<commit, revision evidence, recheck, limits>`
 
-### 5.2 P3 advisory table
+### 5.2 P3 Advisory Table
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `<ID>` | &lt;wave/session&gt; | &lt;cat&gt; | &lt;status&gt; | `<path#line>` | &lt;defect summary&gt; | &lt;fix summary&gt; | `<evidence or sha>` |
+| `<ID>` | `<wave>` | `<cat>` | `<status>` | `<path#line>` | `<defect>` | `<fix>` | `<evidence/sha>` |
 
-## 6. Cross-category root causes and remediation order
+## 6. Cross-Category Root Causes & Order
+- **Root cause:** `<desc>` (`<cats/IDs>`) | **Order:** `<steps>`
 
-- **Root cause 1:** `<description>` (`<categories and IDs>`)
-- **Remediation order:** `<ordered steps with dependencies and rationale>`
+## 7. Overall Disposition, Direction Decision & Closure
 
-## 7. Overall disposition, Direction decision, and finding closure
+### 7.1 Overall Disposition
+- **Coverage:** `<status across N cats>` | **Blockers:** `<IDs or None>` | **Disposition:** `<Approve/Request changes/Incomplete>` | **Reason:** `<basis>`
 
-### 7.1 Overall disposition
+### 7.2 Direction Decision (when requested)
+- **Question:** `<1 sentence>` | **Role separation:** `<owner/auditor/recheck or N/A>`
+- **Hard constraints:** `<constraints>` | **Preferences:** `<prefs>`
 
-- **Coverage:** `<complete / partial / incomplete>` across `<n>` material categories.
-- **Blocking findings:** `<IDs>` or `None`.
-- **Disposition:** `<Approve / Request changes / Incomplete / Not applicable>`.
-- **Reason:** `<coverage and blocking-finding basis; never a pass percentage>`.
-
-### 7.2 Direction decision (required when the user asks what to do)
-
-- **Decision question:** `<one sentence>`
-- **Role separation:** `<content owner / integrity auditor / lead re-review after CLEAN, or Not applicable>`
-- **Hard constraints:** `<constraint>` (`<citation>`)
-- **Preferences:** `<preference>` (`<citation>`)
-
-| Option | Preserves | Costs / risks | Dependencies | Reversibility | Evidence for | Evidence against |
+| Option | Preserves | Costs / Risks | Deps | Reversibility | For | Against |
 | --- | --- | --- | --- | --- | --- | --- |
 | `<status quo>` | | | | | | |
-| `<option B>` | | | | | | |
-| `<option C>` | | | | | | |
+| `<minimal>` | | | | | | |
 
-- **Recommendation:** `<option and rationale>`
-- **Load-bearing evidence:** `<IDs and citations>`
-- **Falsifiers:** `<what evidence would change the recommendation>`
-- **Immediate next actions:** `<ordered actions with acceptance tests>`
-- **What not to do:** `<ruled-out action and evidence>`
+- **Recommendation & evidence:** `<option + IDs>` | **Falsifiers:** `<triggers>`
+- **Next actions:** `<ordered + tests>` | **What not to do:** `<ruled-out>`
 
-### 7.3 Finding closure table
+### 7.3 Finding Closure Table
 
-| ID | Category | Priority | Status | Fix / evidence at revision | Recheck result |
+| ID | Cat | Prio | Status | Fix / Revision Evidence | Recheck |
 | --- | --- | --- | --- | --- | --- |
 | `<ID>` | `<cat>` | `<P#>` | `<status>` | `<commit/link>` | `<closed/residual>` |
 
 ## 8. Post-Remediation Residuals & Deferred Dispositions
 
-`<None (0 open residuals, 0 deferred items)>` or the atomic table:
+`None (0 open residuals, 0 deferred items)` or:
 
 | ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `<ID>` | `<wave>` | `<cat>` | `<Residual (Open) / Closed (Post-Remediation) / Deferred / Won't Fix / Closed (By Design) / Informational>` | `<link>` | `<defect>` | `<disposition>` | `<evidence>` |
+| `<ID>` | `<wave>` | `<cat>` | `<Residual (Open)/Closed (Post-Remediation)/Deferred / Won't Fix/Closed (By Design)/Informational>` | `<link>` | `<defect>` | `<disposition>` | `<evidence>` |
 
 ## 9. `/self-diagnosis` Cohort & Bundle Ledger
 
-Include only when cohorts were dispatched.
+*(Include only when `/self-diagnosis` cohorts ran.)*
 
-### 9.1 Cohort Provenance
-
-| Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown |
+| Wave | Session ID | Stage | Subagent IDs | Pre-Fix SHA | Re-Verify SHA | Teardown |
 | --- | --- | --- | --- | --- | --- | --- |
-| `<wave>` | `<id>` | `<stage>` | `<ids>` | `<sha or N/A>` | `<sha>` | `<retained/torn down>` |
+| `<wave>` | `<id>` | `<stage>` | `<ids>` | `<sha/N/A>` | `<sha>` | `<retained/pruned>` |
 
-### 9.2 Wave Finding Ledger
-
-| ID | Category | Priority | Status | Specialist / Cohort Verification |
+| ID | Cat | Prio | Status | Cohort Verification |
 | --- | --- | --- | --- | --- |
 | `<ID>` | `<cat>` | `<P#>` | `<status>` | `<evidence>` |
 
-## Appendix A: Verification record
+## Appendix A & B: Verification & Quoted Evidence
 
-| Check | Revision | Environment | Result | Evidence |
+| Check | Revision | Env | Result | Evidence |
 | --- | --- | --- | --- | --- |
-| `<command>` | `<sha>` | `<OS/runtime>` | `<pass/fail/blocked>` | `<output/link>` |
+| `<cmd>` | `<sha>` | `<OS>` | `<pass/fail/blocked>` | `<output>` |
 
-## Appendix B: Quoted evidence
-
-| EID / locator | Quote | Class | What it establishes |
+| EID / Locator | Quote | Class | Establishes |
 | --- | --- | --- | --- |
-| `<step/line>` | &lt;short verbatim quote&gt; | &lt;user/model/tool/source&gt; | &lt;bounded claim&gt; |
+| `<step/line>` | `<quote>` | `<user/model/tool/source>` | `<claim>` |
 
 ## Quality gates
 
-- [ ] The standard was read; target, base, dirty state, evidence manifest, and exclusions are pinned.
-- [ ] Every changed file or artifact is mapped to one primary category; all eleven categories (`ARCH`..`DEP`, `SEC`) have scope, coverage, P1/P2/P3, verification, and verdict.
-- [ ] Every finding has one ID, one status, and the required fields; no umbrella or range IDs.
-- [ ] Every material claim has a locator; observed and inferred are separated.
-- [ ] Prior findings are explicitly accepted, revised, or rejected.
-- [ ] Verification gaps are separate from defects; unavailable evidence is stated.
-- [ ] Section 8 contains every residual, deferred, by-design, and informational item.
-- [ ] A requested direction decision has constraints, options, a recommendation, and falsifiers.
-- [ ] When an integrity audit is used: the content and integrity verdicts are separate, the auditor did not approve content, the lead re-reviewed after `CLEAN`, and `INTEGRITY VIOLATION` hard-blocks acceptance.
-- [ ] The disposition matches coverage and open findings; no approval from a pass rate or an unreviewed category.
-- [ ] Formatting & Readability: prose and table cells avoid unnecessary inline backticks on numbers, statuses, and quoted sentences, and avoid fenced code blocks inside narrative/tables.
-- [ ] The report is saved at a stable path and linked from the response.
+- [ ] Standard read; target, base, dirty state, evidence manifest, and exclusions pinned.
+- [ ] All artifacts mapped to one primary category; all 11 categories (`ARCH`..`DEP`, `SEC`) complete.
+- [ ] `1 ID = 1 Row`; no umbrella/range IDs; Section 8 holds every residual, deferred, by-design, and informational item.
+- [ ] Locators on all claims; observed vs inferred separated; prior findings revalidated; gaps separate from defects.
+- [ ] Direction decision (if asked) has constraints, options, recommendation, and falsifiers.
+- [ ] If audited: separate verdicts, auditor never approved content, lead rechecked after `CLEAN`, `INTEGRITY VIOLATION` hard-blocks.
+- [ ] Disposition matches coverage/blockers; clean formatting; report delivered/linked.

@@ -1,118 +1,56 @@
-# Swarm Governance: Step 0 Intake, Planning Commands & Turn Lifecycle
+# Swarm Governance: Defaults, Planning & Lifecycle
 
-Reference details for [`.agents/skills/swarm-governance/SKILL.md`](../SKILL.md). Links use section anchors so [`SKILL.md`](../SKILL.md) remains concise while preserving full CLI flags, model caveats, and UI lifecycle rules.
+Reference for [`SKILL.md`](../SKILL.md).
 
-## Step 0 Intake Question Templates
+## Step 0: Sensible Defaults and Overrides
 
-When launching `/swarm` and any of the four execution choices below are unspecified by the user or Task Spec, ask once via `ask_question` without biasing `Flat` vs. `Layered` topology (`squad_planner` sets `topology.defaultBias: "none (ask user if unspecified)"`):
+Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/swarm` prompt explicitly specifies all four settings below. Trigger a single `ask_question` call **iff ANY** of the four settings is missing, asking **only** for the missing setting(s) with the recommended default listed first. Skip Step 0 **only** when all four settings are explicitly specified in the prompt.
 
-```json
-{
-  "questions": [
-    {
-      "question": "Which swarm topology should coordinate this run?",
-      "is_multi_select": false,
-      "options": [
-        "Flat: specialists report directly to the swarm coordinator (fewer coordination hops)",
-        "Layered: domain squad leads review specialists before reporting to the coordinator (isolates multi-domain syntheses)"
-      ]
-    },
-    {
-      "question": "Which workspaceIsolation mode should workers use?",
-      "is_multi_select": false,
-      "options": [
-        "inherit: shared coordinator workspace (use for read-only audits or strictly disjoint scopeFiles)",
-        "share: isolated per-worker working copy sharing repository storage (use for concurrent edits)",
-        "branch: isolated clone per worker (use when independent git history/branches are required)"
-      ]
-    },
-    {
-      "question": "Which evidence retention policy should apply after verification?",
-      "is_multi_select": false,
-      "options": [
-        "Keep loose specialist reports (`--keep-reports` on prune / defer `--teardown` during active waves)",
-        "Prune loose specialist reports after SHA-256 bundle + verify succeed (and `--teardown` after ledger update)"
-      ]
-    },
-    {
-      "question": "Which model should spawned workers use?",
-      "is_multi_select": false,
-      "options": [
-        "(Recommended) Coordinator default: omit `model` / `--model` so workers inherit the active session model",
-        "Custom explicit model ID: inspect `swarm{action: \"models\"}` first and pin the chosen ID"
-      ]
-    }
-  ]
-}
-```
+| Setting | Recommended Default (first option) | Alternatives / Override |
+| --- | --- | --- |
+| **Topology** | `flat` for inline tasks; `layered` for multi-squad manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (domain leads). |
+| **Model** | Coordinator model (omit `--model`) | `--model <id> --known-model <id>` (validated via `swarm{action: "models"}`). |
+| **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
+| **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
+
+- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (skipping Stage 2 auditor wakeup and Stage 3 `verdict --integrity`) and close with `finalize --allow-unaudited [--prune]`, while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
 
 ## Planner and Dispatch Commands
 
-`Agy-Squad` can be invoked either over MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` when running from a global plugin install so relative `manifestPath` resolves to the active repository) or from the workspace root via the global `agy-squad` CLI shim (legacy `agy-squad run` and the standalone `node mcp/handoffs.mjs` CLI are retired; `mcp/handoffs.mjs` is an internal JS library only). Skill references use canonical hosted Zensical documentation URLs and skill-local `./references/` links so every reference resolves cleanly at any plugin mount depth and under Windows copy-fallback.
-
-### Manifest & Task Planning (`squad_planner` / `agy-squad plan`)
+Run via MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI:
 
 ```bash
-# Plan all working squads from a manifest, inheriting coordinator default model:
-agy-squad plan \
-  --manifest swarm-manifest.json \
-  --topology flat \
-  --workspace-isolation inherit
+# Plan all manifest squads (omit --squad; never pass all_l1):
+agy-squad plan --manifest swarm-manifest.json --topology flat --workspace-isolation inherit
 
-# Plan from a manifest while pinning an explicit user-requested model ID:
-agy-squad plan \
-  --manifest swarm-manifest.json \
-  --model gemini-4-hydrogen-high \
-  --known-model gemini-4-hydrogen-high
+# Inline read-only task + follow-up scoping:
+agy-squad plan --mode swarm --read-only --scope src/app.js --role "Security Reviewer" \
+  --role-scope "Security Reviewer=src/app.js" --occupied-worker prev-1 --board-since 60 \
+  --report-root scratch/agy-squad-wave2 "Audit auth flow."
 
-# Plan a freeform task with custom roles, per-role scopes, read-only overlap exemption, or shared worktrees:
-agy-squad plan \
-  --mode swarm \
-  --read-only \
-  --scope src/app.js --scope docs/tools.md \
-  --role "Security Reviewer" --role "Docs Checker" \
-  --role-scope "Security Reviewer=src/app.js" \
-  --role-scope "Docs Checker=docs/tools.md" \
-  "Audit authentication flow and update documentation."
-
-# Add a follow-up wave onto an already-active /swarm board without name collisions or full-board reads:
-agy-squad plan \
-  --manifest docs/custom-manifest.json \
-  --occupied-worker storage-lead --occupied-worker audit-storage \
-  --board-since 60 \
-  --report-root scratch/agy-squad-wave2
-```
-
-- **Multi-squad vs. single-squad:** Omit `squadId` (`--squad`) to compile all non-audit squads in the manifest; never pass `all_l1` to `squad_planner` or `agy-squad plan`.
-- **Board message scoping (`boardSince` / `boardSeqs`):** Record the board sequence cursor (`<cohortBaseSeq>`) before spawning workers and pass `boardSince` (`--board-since`) or explicit `boardSeqs` (`--board-seq`) so compiled briefs instruct `read_board{since: ...}` or `read_board{seqs: [...]}` and forbid bare unfiltered `read_board()`.
-- **Custom per-worker roles, scopes, models, and `readOnly`:** Inline `task` compiles a flat `task_squad` (exposing `workers[0].synthesisSlot` for the coordinator-authored `lead/report.md`) and supports repeatable `--role` (`roles`), shared `--scope` (`scopeFiles`), `--read-only` (`readOnly: true` overlap exemptions), and repeatable `--role-scope <role=path>` (`roleScopes` per-role `scopeFiles` overrides). Use `manifest` (inline) or `--manifest <path>` when workers need custom per-worker `objective`/`instructions`, per-worker `model`, domain `lead`s, or multiple parallel squads. Never pass `roles`, `scopeFiles`, `readOnly`, or `roleScopes` alongside `manifest` or `manifestPath`.
-- **Hard planner/wire caps ([docs/tools.md](https://paragon-ux.github.io/Agy-Squad/tools/#manifest-structure-rules)):** There is no hardcoded cap on squad count or workers per squad, but code enforces `MAX_SWARM_NAME_LENGTH = 24` chars (deduplicated with `-2`, `-3`, ...), `squad-<encodeURIComponent(id)>` directory names `<= 255` UTF-8 bytes, `reportPath()` headroom so `PARTIAL <path> — ` plus `SWARM_MENTION_RESERVE_BYTES = 26` and `MIN_OBSERVATION_BYTES = 16` stays `<= 500` UTF-8 bytes, and `10 MiB` (`AGY_MAX_STDIO_PAYLOAD_BYTES`) on MCP stdio.
-
-### `invoke_subagent` Fallback (`dispatch_squad` / `agy-squad dispatch`)
-
-Use `dispatch_squad` (MCP) or `agy-squad dispatch` only when explicitly targeting `invoke_subagent` (`executionMode: "subagent"`):
-
-```bash
+# invoke_subagent fallback only:
 agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
-agy-squad dispatch --squad storage --manifest task-01-manifest.json
-agy-squad dispatch --squad integrity_auditor:storage --manifest task-01-manifest.json
 ```
 
-## Model Pinning and Subagent Caveats
+- Inline `task` builds a flat `task_squad` (`--role`, `--scope`, `--read-only`, `--role-scope`); use `manifest` for custom per-worker objectives/models, leads, or multiple squads (never mix).
+- Caps ([tools](https://paragon-ux.github.io/Agy-Squad/tools/#manifest-structure-rules)): `24`-char `workerName`, `<= 255` B `squad-<id>` dir, `<= 451` B prefix budget (reserves `33` B for `@<24-char> [done] ` + `16` B min observation), `10 MiB` MCP stdio.
 
-- **Under `executionMode: "swarm"` (default):** `squad_planner` emits `swarmAdd` payloads. When pinning an explicit non-default model (`model` / `--model`), call `swarm{action: "models"}` upfront (or pass `knownModels` / `--known-model`) so typos fail before spawn, then run `swarm{action: "status"}` immediately after `swarm{action: "add"}` to verify each running worker's actual model ID. When inheriting the coordinator default, omit `model` / `--model`.
-- **Under `executionMode: "subagent"`:** `invoke_subagent` accepts only the four aliases `inherit`, `flash_lite`, `flash`, or `pro`. Any exact model ID other than those four aliases falls back to `inherit`, and `modelProvenance` warns that neither `agy-context transcript read` nor `manage_subagents` exposes resolved per-child model IDs.
-- **Transcript isolation (`provenanceScaffold`):** Record parent-known worker roster names, report slots, and native `conversationId`s in `provenanceScaffold` and pass them to the flat integrity auditor (`audit-<id>`). **Never** copy raw `.system_generated/` transcripts into `scratch/` or lead/leaf directories; compiled briefs stamp `[agy-transcript-access: allow]` on leads/auditors and `[agy-transcript-access: deny]` on leaf specialists so auditors use single-pass `agy-context transcript query --id <id> --summary` / `agy-context transcript read --id <id> --last-turns 10` or `read_board` / `swarm{action: "status"}`.
+## Models, Subagents & ACS Opt-In
 
-## Swarm UI and Turn Lifecycle
+- **`/swarm`:** Validate explicit models via `swarm{action: "models"}` (`knownModels`) and confirm with `swarm{action: "status"}`.
+- **`invoke_subagent`:** Accepts only `inherit`, `flash_lite`, `flash`, `pro`; other IDs fall back to `inherit`.
+- **ACS opt-in:** Share roster names, slots, and `conversationId`s with `audit-<id>` (never copy `.system_generated/` into `scratch/`). `Agy-Squad` emits zero `[agy-transcript-access: ...]` tags by default; with optional `Agy-Context-Saver`, opt in via line-1 `[agy-transcript-access: allow|deny]` on worker prompts or `agy-context transcript access`.
 
-1. **Follow `native_swarm` for `open_board` (launch turn & explicit user asks only):**
-   - Defer Swarm UI link emission to `native_swarm`: emit the exact verbatim `open_board` string returned by `swarm` only on the turn that creates the swarm and when the user explicitly asks what the swarm is doing while workers remain active (never fabricate a `sidecar://...` link, and **do not** emit `open_board` on Reactive Wakeup turns or progress replies).
-   - **Antigravity tool-availability note:** Because `swarm_wait`, `post_message`, and `read_board` arrive one turn after the first `swarm add`, ending the launch turn with verbatim `open_board` renders the Swarm UI pill right away, and the UI may show `"waiting for my reply"` / `"waiting for user reply"` until a worker message (`@coordinator`) or `swarm_monitor` trigger wakes you (**never** create a one-shot `schedule` watchdog timer to poll `/swarm`, which `Agy-Context-Saver` denies). Park subsequent quiet turns with `swarm_wait` (`since` = highest board `seq` seen).
-2. **Pausing for User Decision & Multi-Cycle Continuation (`[done]` before user handoff):**
-   - Whenever queued worker tasks finish and you yield to report findings or ask the user whether to remediate or close (keeping `/swarm` workers `waiting` with preserved context), **first post a single-line `[done] <summary>` with NO `@` anywhere in it** before answering the user. Otherwise `monitor` keeps running its `*/3 * * * *` cron tick every 3 minutes, burning quota and posting `@coordinator [stall]` alerts. (Note: because an active monitor sleeps on `mentions_only: true`, it cancels its cron on its next `*/3` tick after `[done]` unless explicitly `kill`ed; any later `@worker` post wakes a kept-dormant monitor and re-arms its cron.)
-   - When waking idle `/swarm` workers for follow-up fixes, target those specialists via `post_message` so they re-verify deltas with preserved context; if adding extra cohorts onto an already-active board, pass existing roster names via `occupiedWorkerNames` (`--occupied-worker`) to prevent 24-character name collisions.
-   - Because Antigravity keeps one append-only board (`board: "local"`) per conversation (and `channel` is host-gated), close the finished swarm and start a **fresh conversation** between major waves when you want a clean Swarm UI board.
-3. **Final Shutdown (`[done]` -> immediate `kill`):**
-   - If the user asks to stop or kill workers, call `swarm{action: "kill"}` immediately without delaying for bundling or worktree collection.
-   - Otherwise, on normal coordinator completion (after verified bundles are saved and any `share`/`branch` worktree slots/diffs are collected), post `[done] <summary>`, immediately call `swarm{action: "kill"}` on all workers **including `monitor` / `monitor-*`** (stopping its cron right away instead of waiting for its next 3-minute tick), and complete the 4-check runtime closure checklist.
+## Turn Lifecycle and `[done]` Control
+
+1. Emit verbatim `open_board` (`[Open the Swarm UI](sidecar://swarm/swarm_board/?auto_open=false)`) on its own line on **launch turns, resume turns**, and whenever asked while active (never fabricate other `sidecar://...` URLs or repeat on routine wakeups).
+2. Park quiet turns via `swarm_wait` (`since` = highest seen `seq`); never add `schedule` timers on `/swarm`.
+3. Post single-line `[done] <summary>` (no `@`) before pausing `waiting` workers so `monitor` cron stops.
+4. **Top-down resume:** Resume paused swarms strictly top-down (**coordinator -> leads -> workers** layered; **coordinator -> workers** flat) via `post_message` with a plain prompt (`resume your assigned work from where you left off`; never tell unfinished workers to jump straight to posting reports), and re-emit verbatim `open_board` on its own line (`occupiedWorkerNames` if adding workers; fresh chat between major waves).
+5. On close: collect worktrees + verify bundles, post `[done]`, `swarm{action: "kill"}` workers + `monitor`, pass [Section 5](../SKILL.md#5-runtime-closure-checklist-pre-handoff-gate).
+
+## Deliverable-First Closing
+
+- Governance (`verdict`, `bundle`, `audit-*`, `finalize`, Section 5 closure) verifies the work; it is never a substitute for the user's deliverable.
+- For research, analysis, review, or architecture swarms (especially multi-squad cohorts whose `lead/report.md` files sit in separate `scratch/` folders), synthesize all verified squad reports into one complete user-facing deliverable (an Antigravity artifact for substantial reports, or directly in chat for short tasks) integrating reconciled findings, citations/URLs, cross-squad trade-offs, and prioritized recommendations.
+- Lead the final reply with the deliverable (or direct link to the synthesized artifact) and collapse verdicts, bundle SHA-256 digests, pruned counts, and Section 5 closure into a compact verification footer. Never reply with governance telemetry alone.

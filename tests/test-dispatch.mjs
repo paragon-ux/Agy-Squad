@@ -6,7 +6,7 @@ import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { reportPath } from "../mcp/handoffs.mjs";
 
-const testDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-test-")));
+const testDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-test-")));
 const workspace = path.join(testDir, "workspace");
 fs.mkdirSync(workspace);
 const manifestPath = path.join(workspace, "swarm-manifest.json");
@@ -50,7 +50,8 @@ try {
     assert.deepEqual(Object.keys(leaf).sort(), ["Model", "Prompt", "Role", "TypeName", "Workspace"]);
     const pointer = leaf.Prompt.match(/^Report slot: (\S+)$/m)?.[1];
     assert.equal(pointer, reportPath("alpha", index + 1));
-    assert.ok(leaf.Prompt.includes(`READY ${pointer} — <concrete observation>`));
+    assert.ok(leaf.Prompt.includes("READY <Report slot> - <obs>"));
+    assert.doesNotMatch(leaf.Prompt, /—/);
     assert.match(leaf.Prompt, /500 UTF-8 bytes/);
     assert.match(leaf.Prompt, /Retry when inputs change/);
     assert.match(leaf.Prompt, /Subagent Alignment Policy: Follow squad lead policy/);
@@ -251,7 +252,7 @@ try {
   assert.equal(delegatedSpecialists.isError, undefined, delegatedSpecialists.content[0].text);
   assert.equal(JSON.parse(delegatedSpecialists.content[0].text).Subagents[0].Role, "First");
 
-  assert.match(leaves[0].Prompt, /bounded <=150-line read_file slices \(StartLine\/EndLine\), never unbounded read_file/);
+  assert.match(leaves[0].Prompt, /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/);
 
   const emptyWs = path.join(testDir, "empty-ws");
   fs.mkdirSync(emptyWs);
@@ -273,6 +274,25 @@ try {
     ).isError,
     undefined
   );
+  // Session 3 MCP-004: canonical workspace + symlink-aliased absolute manifestPath succeeds; external file symlink pointing in fails
+  assert.equal(
+    handleDispatchSquad(
+      { squadId: "alpha", workspace, manifestPath: path.join(linkWs, "swarm-manifest.json") },
+      testDir
+    ).isError,
+    undefined
+  );
+  let inboundEscapeCreated = false;
+  const externalInboundLink = path.join(testDir, "inbound-escape.json");
+  try {
+    fs.symlinkSync(manifestPath, externalInboundLink, "file");
+    inboundEscapeCreated = true;
+  } catch (err) {
+    if (err?.code !== "EPERM") throw err;
+  }
+  if (inboundEscapeCreated) {
+    rejects({ squadId: "alpha", manifestPath: externalInboundLink }, /inside the workspace/);
+  }
   if (escapeLinkCreated) {
     assert.equal(
       handleDispatchSquad(
@@ -421,18 +441,169 @@ try {
   assert.match(missingRes.content[0].text, /agy-squad plan.*agy-squad dispatch/);
   assert.doesNotMatch(missingRes.content[0].text, /node bin\/agy-squad\.mjs/);
 
-  // UX-SQ-006: compiled briefs align with Agy-Context-Saver v2.0.4 (rtk grep/find + bounded <=150-line read_file; rtk read for spillovers/task logs only)
+  // Decoupled native fungibility: briefs use native search/read guidance (zero hardcoded rtk/<=150-line), omit foreign hook tags, and include standalone native JSONL traces on auditors
   const uxSpecBrief = buildSubagentSpec(agent("Spec", "src/a.js"), "alpha", "swarm-manifest.json", 1).Prompt;
   const uxLeadBrief = buildSubagentSpec(agent("Lead", "src/a.js"), "alpha", "swarm-manifest.json").Prompt;
   const uxAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1).Prompt;
+  const uxSwarmAuditBrief = buildSubagentSpec(agent("Audit", "src/a.js"), "integrity_auditor", "swarm-manifest.json", 1, undefined, { executionMode: "swarm" }).Prompt;
   for (const [label, promptText] of [
     ["specialist", uxSpecBrief],
     ["lead", uxLeadBrief],
-    ["auditor", uxAuditBrief]
+    ["auditor", uxAuditBrief],
+    ["swarm-auditor", uxSwarmAuditBrief]
   ]) {
-    assert.match(promptText, /'rtk grep'\/'rtk find'/, `UX-SQ-006: ${label} brief must recommend rtk grep/find`);
-    assert.match(promptText, /<=150-line read_file slices \(StartLine\/EndLine\)/, `UX-SQ-006: ${label} brief must recommend bounded read_file slices`);
-    assert.doesNotMatch(promptText, /via 'rtk read'\/'rtk grep'|or 'rtk read'\/'rtk grep'/, `UX-SQ-006: ${label} brief must not recommend rtk read for workspace files`);
+    assert.match(
+      promptText,
+      /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/,
+      `${label} brief must use native search/read guidance`
+    );
+    assert.doesNotMatch(
+      promptText,
+      /rtk grep|rtk find|rtk read|<=150-line/,
+      `${label} brief must not hardcode rtk or <=150-line rules`
+    );
+    assert.doesNotMatch(
+      promptText,
+      /^\[agy-transcript-access:/m,
+      `${label} brief must not inject [agy-transcript-access: ...] by default in standalone mode`
+    );
+    assert.ok(promptText.startsWith("Role: "), `${label} default prompt should begin directly with Role:`);
+  }
+  assert.doesNotMatch(uxLeadBrief, /sender=<coordId>/, "OPT-BRIEF-01: subagent lead must omit swarm-only trace suffix");
+  assert.doesNotMatch(uxAuditBrief, /sender=<coordId>/, "OPT-BRIEF-01: subagent auditor must omit swarm-only trace suffix");
+  assert.doesNotMatch(uxSpecBrief, /Write shared slot \(no overwrite\); cite checks/, "OPT-BRIEF-03: non-auditor specialist must omit duplicate cite checks");
+  assert.match(
+    uxAuditBrief,
+    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
+    "subagent Integrity Auditor brief must include standalone native JSONL trace path"
+  );
+  assert.match(
+    uxSwarmAuditBrief,
+    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
+    "swarm Integrity Auditor brief must include standalone native JSONL trace path"
+  );
+  assert.match(
+    uxSwarmAuditBrief,
+    /sender=<coordId> \+ @<workerName>/,
+    "swarm Integrity Auditor brief must explain standalone Step 0/1 worker trace matching"
+  );
+  assert.match(
+    uxAuditBrief,
+    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION' \(plain text, no backticks\)/,
+    "Integrity Auditor brief must explicitly disallow backticks on verdict lines"
+  );
+  assert.match(
+    scopedAuditor[0].Prompt,
+    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION \(plain text, no backticks\)\./,
+    "Default integrity_auditor deliverable must explicitly disallow backticks on verdict lines"
+  );
+  const standaloneDispatch = handleDispatchSquad(
+    { squadId: "alpha", manifestPath: "swarm-manifest.json" },
+    workspace
+  );
+  assert.equal(standaloneDispatch.isError, undefined);
+  assert.doesNotMatch(
+    JSON.parse(standaloneDispatch.content[0].text).Subagents[0].Prompt,
+    /^\[agy-transcript-access:/m,
+    "dispatched brief must omit [agy-transcript-access:] by default"
+  );
+
+  // Batch A SEC-003: forged _synthesized: true on integrity_auditor must not bypass custom auditor validation
+  fs.writeFileSync(path.join(workspace, "forged-synthesized-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: { _synthesized: true, specialists: "invalid" }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "forged-synthesized-auditor.json" },
+    /children or specialists must be a non-empty array/
+  );
+
+  // Batch B RUN-006 & RUN-007: custom auditor lead readOnly/ReadOnly conflict + reportRoot propagation + POSIX selectedManifest
+  fs.writeFileSync(path.join(workspace, "conflict-ro-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: {
+        lead: { ...agent("Ignored Lead", "."), readOnly: true, ReadOnly: false },
+        specialists: [agent("Auditor", ".")]
+      }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "conflict-ro-auditor.json" },
+    /cannot define both 'readOnly' and 'ReadOnly'/
+  );
+  fs.writeFileSync(path.join(workspace, "nonbool-ro-auditor.json"), JSON.stringify({
+    squads: {
+      alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+      integrity_auditor: {
+        lead: { ...agent("Ignored Lead", "."), readOnly: "yes" },
+        specialists: [agent("Auditor", ".")]
+      }
+    }
+  }));
+  rejects(
+    { squadId: "integrity_auditor:alpha", manifestPath: "nonbool-ro-auditor.json" },
+    /readOnly must be a boolean/
+  );
+  const { readManifest, resolveIntegrityAuditor } = await import("../mcp/dispatch.mjs");
+  assert.throws(
+    () =>
+      resolveIntegrityAuditor(
+        {
+          alpha: { lead: agent("Lead", "src"), specialists: [agent("First", "src/a.js")] },
+          integrity_auditor: { lead: agent("Ignored Lead", "."), specialists: [agent("Auditor", ".")] }
+        },
+        "alpha",
+        [],
+        { reportRoot: "a/".repeat(220) + "root" }
+      ),
+    /500-byte Pointer-Over-Wire prefix budget/,
+    "RUN-006: resolveIntegrityAuditor must pass custom reportRoot when validating custom auditor lead"
+  );
+  const nestedManifestDir = path.join(workspace, "nested");
+  fs.mkdirSync(nestedManifestDir, { recursive: true });
+  fs.writeFileSync(path.join(nestedManifestDir, "m.json"), JSON.stringify(manifest));
+  const nestedLoaded = readManifest(workspace, path.join("nested", "m.json"));
+  assert.equal(nestedLoaded.selectedManifest, "nested/m.json", "RUN-007: selectedManifest must use POSIX / separators");
+  rejects({ squadId: "all_l1", manifestPath: "C:swarm-manifest.json" }, /drive-relative/);
+
+  // PR15-RUN-002 / CWE-22: POSIX (linux and darwin) containment stays strictly case-sensitive on canonical paths; win32 normalizes case
+  const { isContainedPath } = await import("../mcp/handoffs.mjs");
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/myrepo/swarm-manifest.json", true, "darwin"), false);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/myrepo", true, "darwin"), false);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo/swarm-manifest.json", true, "darwin"), true);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo", true, "darwin"), true);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo", false, "darwin"), false);
+  assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "c:\\users\\dev\\myrepo\\swarm-manifest.json", true, "win32"), true);
+  assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "D:\\Users\\Dev\\MyRepo\\swarm-manifest.json", true, "win32"), false);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo/swarm-manifest.json", true, "linux"), false);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/MyRepo/swarm-manifest.json", true, "linux"), true);
+
+  // Case-sensitive volume check: symlink from MyRepo into sibling case-variant myrepo must be rejected
+  const caseBase = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-case-")));
+  try {
+    const upperDir = path.join(caseBase, "CaseRepo");
+    const lowerDir = path.join(caseBase, "caserepo");
+    fs.mkdirSync(upperDir, { recursive: true });
+    if (!fs.existsSync(lowerDir)) {
+      fs.mkdirSync(lowerDir, { recursive: true });
+      const siblingManifest = path.join(lowerDir, "swarm-manifest.json");
+      fs.writeFileSync(siblingManifest, JSON.stringify(manifest));
+      const escapeLink = path.join(upperDir, "escape-case.json");
+      fs.symlinkSync(siblingManifest, escapeLink, "file");
+      assert.throws(
+        () => readManifest(upperDir, "escape-case.json"),
+        /Manifest path must stay inside the workspace/,
+        "CWE-22: symlink to distinct case-variant sibling directory must be rejected"
+      );
+      const dispEsc = handleDispatchSquad({ squadId: "all_l1", manifestPath: "escape-case.json" }, upperDir);
+      assert.equal(dispEsc.isError, true);
+      assert.match(dispEsc.content[0].text, /Manifest path must stay inside the workspace/);
+    }
+  } finally {
+    fs.rmSync(caseBase, { recursive: true, force: true });
   }
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");

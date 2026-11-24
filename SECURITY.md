@@ -2,7 +2,7 @@
 
 ## Supported releases
 
-Security fixes target the latest `0.1.x` release series.
+Security fixes target the latest `0.2.x` release series.
 
 ## Reporting a vulnerability
 

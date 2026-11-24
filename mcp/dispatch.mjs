@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildSubagentSpec } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, buildSubagentSpec } from "./briefs.mjs";
+import { isContainedPath, readRegularFileSafe, resolveCanonicalRoot } from "./handoffs.mjs";
 import { validateSquadId } from "./verdicts.mjs";
 
 const RETIRED_ADVERSARIAL_RE = /^adversarial_(?:review|l1|flat)$|^adversarial_/i;
@@ -12,9 +13,8 @@ const defaultManifests = [
   "suite-manifest.json"
 ];
 
-function isWithinWorkspace(root, file) {
-  const relative = path.relative(root, file);
-  return !(relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative));
+function isWithinWorkspace(root, file, platform = process.platform) {
+  return isContainedPath(root, file, true, platform);
 }
 
 function assertWithinWorkspace(root, file) {
@@ -24,45 +24,39 @@ function assertWithinWorkspace(root, file) {
 }
 
 function readManifest(root, filename, logicalRoot = root) {
+  if (/^[A-Za-z]:(?![\\/])/.test(filename)) {
+    throw new Error("Manifest path must not be a Windows drive-relative path.");
+  }
   const candidate = path.resolve(root, filename);
   if (path.isAbsolute(filename)) {
     if (!isWithinWorkspace(root, candidate) && !isWithinWorkspace(logicalRoot, candidate)) {
-      throw new Error("Manifest path must stay inside the workspace.");
+      let realParent;
+      try {
+        realParent = fs.realpathSync.native(path.dirname(candidate));
+      } catch {
+        throw new Error("Manifest path must stay inside the workspace.");
+      }
+      assertWithinWorkspace(root, realParent);
     }
   } else {
     assertWithinWorkspace(root, candidate);
   }
-  const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
-  let file = candidate;
-  let fd;
-  try {
-    fd = fs.openSync(candidate, openFlags);
-  } catch (error) {
-    if (error.code !== "ELOOP") throw error;
-    file = fs.realpathSync(candidate);
-    assertWithinWorkspace(root, file);
-    fd = fs.openSync(file, openFlags);
+  const realFile = fs.realpathSync.native(candidate);
+  assertWithinWorkspace(root, realFile);
+  const manifest = JSON.parse(
+    readRegularFileSafe(realFile, filename, {
+      allowedRoot: root,
+      containmentError: "Manifest path must stay inside the workspace."
+    }).toString("utf8")
+  );
+  let relManifest = path.relative(root, realFile);
+  if (
+    process.platform === "win32" &&
+    (relManifest === ".." || relManifest.startsWith(`..${path.sep}`))
+  ) {
+    relManifest = path.relative(fs.realpathSync.native(root), realFile);
   }
-  let manifest;
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
-      throw new Error("Manifest path must name a regular file.");
-    }
-    if (process.platform === "linux") {
-      // On Linux/WSL, verify the opened fd target stays inside workspace (catches symlinked ancestor dirs).
-      const fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
-      assertWithinWorkspace(root, fdTarget);
-      file = fdTarget;
-    } else {
-      const realFile = fs.realpathSync(file);
-      assertWithinWorkspace(root, realFile);
-      file = realFile;
-    }
-    manifest = JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally {
-    fs.closeSync(fd);
-  }
-  return { squads: manifestSquads(manifest), selectedManifest: path.relative(root, file) };
+  return { squads: manifestSquads(manifest), selectedManifest: relManifest.split(path.sep).join("/") };
 }
 
 function manifestSquads(manifest) {
@@ -139,45 +133,43 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
     if (!auditSquad || typeof auditSquad !== "object" || Array.isArray(auditSquad)) {
       throw new Error(`Squad '${auditKey}' must be an object.`);
     }
-    if (!auditSquad._synthesized) {
-      const { validatedAuditKeys } = options;
-      const alreadyValidated = Boolean(validatedAuditKeys?.has(auditKey));
-      if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
-        throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
+    const { validatedAuditKeys, reportRoot } = options;
+    const alreadyValidated = Boolean(validatedAuditKeys?.has(auditKey));
+    if (auditSquad.children !== undefined && auditSquad.specialists !== undefined) {
+      throw new Error(`Squad '${auditKey}' cannot define both 'children' and 'specialists'.`);
+    }
+    const customSpecs = auditSquad.children ?? auditSquad.specialists;
+    const customLead = resolveSquadLead(auditSquad, auditKey, false);
+    if (customSpecs !== undefined) {
+      if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
+        throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
       }
-      const customSpecs = auditSquad.children ?? auditSquad.specialists;
-      const customLead = resolveSquadLead(auditSquad, auditKey, false);
-      if (customSpecs !== undefined) {
-        if (!Array.isArray(customSpecs) || customSpecs.length === 0) {
-          throw new Error(`Custom '${auditKey}' children or specialists must be a non-empty array.`);
+      if (customLead && !alreadyValidated) {
+        buildSubagentSpec(customLead, slotId, undefined, undefined, reportRoot, { isIntegrityAuditor: true, validateOnly: true });
+        if (Array.isArray(warnings)) {
+          warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
         }
-        if (customLead && !alreadyValidated) {
-          buildSubagentSpec(customLead, slotId, undefined, undefined, undefined, { isIntegrityAuditor: true, validateOnly: true });
-          if (Array.isArray(warnings)) {
-            warnings.push(`Custom '${auditKey}' lead is ignored in flat integrity_auditor execution; only its specialists run.`);
-          }
-        }
-        validatedAuditKeys?.add(auditKey);
-        return customSpecs.map((spec, index) => ({
-          spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
-          id: slotId,
-          number: index + 1
-        }));
       }
-      if (customLead) {
-        throw new Error(
-          `Custom '${auditKey}' defines a lead without specialists or children; add specialists/children or omit the lead.`
-        );
-      }
+      validatedAuditKeys?.add(auditKey);
+      return customSpecs.map((spec, index) => ({
+        spec: appendTargetInstruction(spec, `Target Squad: ${resolvedTarget}`),
+        id: slotId,
+        number: index + 1
+      }));
+    }
+    if (customLead) {
+      throw new Error(
+        `Custom '${auditKey}' defines a lead without specialists or children; add specialists/children or omit the lead.`
+      );
     }
   }
   return [
     {
       spec: {
         role: "Integrity Auditor",
-        objective: `Audit working squad (${resolvedTarget}) for Subagent Alignment Policy compliance, empirical execution, absence of guessing or sycophancy, and truthfulness of reported evidence.`,
+        objective: `Audit squad '${resolvedTarget}' alignment, traces, and evidence.`,
         scopeFiles: ["."],
-        expectedDeliverable: `Markdown audit report recording 'Target Squad: ${resolvedTarget}', 'Evidence Digest: <sha256>' (via 'agy-squad digest <record.json>'), and strictly 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.`
+        expectedDeliverable: `Target Squad: ${resolvedTarget}; Evidence Digest: <sha256> (agy-squad digest); Integrity Verdict: CLEAN | INTEGRITY VIOLATION (plain text, no backticks).`
       },
       id: slotId,
       number: 1
@@ -203,24 +195,7 @@ function loadSquads(root, manifestPath, logicalRoot = root) {
   throw firstError ?? notFound;
 }
 
-const inlineLeadKeys = [
-  "role",
-  "Role",
-  "objective",
-  "Objective",
-  "scopeFiles",
-  "ScopeFiles",
-  "instructions",
-  "Instructions",
-  "expectedDeliverable",
-  "ExpectedDeliverable",
-  "typeName",
-  "TypeName",
-  "model",
-  "Model",
-  "workspace",
-  "Workspace"
-];
+const inlineLeadKeys = AGENT_ALIAS_PAIRS.flat();
 
 function resolveSquadLead(squad, squadId, requireLead) {
   if (!squad || typeof squad !== "object" || Array.isArray(squad)) {
@@ -278,17 +253,17 @@ function resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace) {
   return candidate;
 }
 
+function resolveWorkspaceRoots(argsWorkspace, fallbackWorkspace) {
+  const candidate = resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace);
+  return { root: resolveCanonicalRoot(candidate), logicalRoot: path.resolve(candidate) };
+}
+
 function logicalWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
   return path.resolve(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
 }
 
 function resolveWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
-  const candidate = resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace);
-  const root = fs.realpathSync(candidate);
-  if (!fs.statSync(root).isDirectory()) {
-    throw new Error(`Workspace path must be a directory: '${candidate}'.`);
-  }
-  return root;
+  return resolveCanonicalRoot(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
 }
 
 function formatNotFoundError(args, fallbackWorkspace) {
@@ -304,82 +279,91 @@ function formatNotFoundError(args, fallbackWorkspace) {
   return `Manifest or workspace not found (workspace: '${attemptedWorkspace}'${manifestDetail}). Pass 'workspace' set to your active repository root, set AGY_SQUAD_WORKSPACE, or run 'agy-squad plan' / 'agy-squad dispatch' from the repository root.`;
 }
 
-function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
+function dispatchSquadData(
+  args = {},
+  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()
+) {
+  if (!args || typeof args !== "object" || Array.isArray(args) ||
+      Object.keys(args).some(key => !ALLOWED_DISPATCH_KEYS.has(key))) {
+    throw new Error("Only squadId, manifestPath, and workspace are supported.");
+  }
+  const { squadId, manifestPath, workspace: argWorkspace } = args;
+  if (typeof squadId !== "string" || !squadId.trim()) {
+    throw new Error("Provide a squadId or use all_l1 for the leads.");
+  }
+  if (manifestPath !== undefined && (typeof manifestPath !== "string" || !manifestPath.trim())) {
+    throw new Error("manifestPath must be a nonempty string.");
+  }
+  const { root, logicalRoot } = resolveWorkspaceRoots(argWorkspace, workspace);
+  const { squads: loadedSquads, selectedManifest } = loadSquads(root, manifestPath, logicalRoot);
+  const squads = { ...loadedSquads };
+  const isIntegrityAuditor = squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor:");
+  const hasTargetColon = isIntegrityAuditor && squadId.includes(":");
+  const flatTarget = hasTargetColon ? squadId.slice(squadId.indexOf(":") + 1).trim() : undefined;
+  if (hasTargetColon && !flatTarget) {
+    throw new Error(`Specify a non-empty target squad after ':' in '${squadId}'.`);
+  }
+  if (
+    flatTarget &&
+    (flatTarget === "integrity_auditor" ||
+      flatTarget.startsWith("integrity_auditor-") ||
+      !Object.hasOwn(squads, flatTarget))
+  ) {
+    throw new Error(`Unknown targetSquad '${flatTarget}'.`);
+  }
+
+  if (!isIntegrityAuditor && (squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-"))) {
+    const colonTarget =
+      squadId === "integrity_auditor" ? "integrity_auditor" : `integrity_auditor:${squadId.slice("integrity_auditor-".length)}`;
+    throw new Error(`Squad ID '${squadId}' is reserved for integrity audit overrides; dispatch it via '${colonTarget}'.`);
+  }
+
+  const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
+  const warnings = [];
+  const build = ({ spec, id, number }, emitWarnings = false, validateOnly = false) =>
+    buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
+      isIntegrityAuditor,
+      workspace: delegateWorkspace,
+      validateOnly,
+      ...(emitWarnings ? { warnings } : {})
+    });
+  let assignments;
+  if (squadId === "all_l1") {
+    const workingSquads = Object.entries(squads).filter(
+      ([id]) => id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
+    );
+    if (workingSquads.length === 0) {
+      throw new Error("Manifest must define at least one non-audit working squad.");
+    }
+    assignments = workingSquads.map(([id, squad]) => ({
+      spec: resolveSquadLead(squad, id, true),
+      id
+    }));
+  } else if (isIntegrityAuditor) {
+    assignments = resolveIntegrityAuditor(squads, flatTarget, warnings);
+  } else {
+    assignments = specialistAssignments(squads, squadId);
+  }
+  const Subagents = assignments.map(item => build(item, true, false));
+  if (squadId === "all_l1") {
+    const children = assignments.flatMap(({ id }) => specialistAssignments(squads, id));
+    for (const child of children) build(child, false, true);
+  } else if (!isIntegrityAuditor) {
+    // Validate only the target squad's own lead (when present) without rebuilding unrelated sibling squads (S2-OPT2).
+    const leadSpec = resolveSquadLead(squads[squadId], squadId, false);
+    if (leadSpec) build({ spec: leadSpec, id: squadId }, false, true);
+  }
+  const uniqueWarnings = [...new Set(warnings)];
+  return { Subagents, ...(uniqueWarnings.length > 0 ? { warnings: uniqueWarnings } : {}) };
+}
+
+function handleDispatchSquad(
+  args = {},
+  workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()
+) {
   try {
-    if (!args || typeof args !== "object" || Array.isArray(args) ||
-        Object.keys(args).some(key => !ALLOWED_DISPATCH_KEYS.has(key))) {
-      throw new Error("Only squadId, manifestPath, and workspace are supported.");
-    }
-    const { squadId, manifestPath, workspace: argWorkspace } = args;
-    if (typeof squadId !== "string" || !squadId.trim()) {
-      throw new Error("Provide a squadId or use all_l1 for the leads.");
-    }
-    if (manifestPath !== undefined && (typeof manifestPath !== "string" || !manifestPath.trim())) {
-      throw new Error("manifestPath must be a nonempty string.");
-    }
-    const root = resolveWorkspaceRoot(argWorkspace, workspace);
-    const logicalRoot = logicalWorkspaceRoot(argWorkspace, workspace);
-    const { squads: loadedSquads, selectedManifest } = loadSquads(root, manifestPath, logicalRoot);
-    const squads = { ...loadedSquads };
-    const isIntegrityAuditor = squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor:");
-    const hasTargetColon = isIntegrityAuditor && squadId.includes(":");
-    const flatTarget = hasTargetColon ? squadId.slice(squadId.indexOf(":") + 1).trim() : undefined;
-    if (hasTargetColon && !flatTarget) {
-      throw new Error(`Specify a non-empty target squad after ':' in '${squadId}'.`);
-    }
-    if (
-      flatTarget &&
-      (flatTarget === "integrity_auditor" ||
-        flatTarget.startsWith("integrity_auditor-") ||
-        !Object.hasOwn(squads, flatTarget))
-    ) {
-      throw new Error(`Unknown targetSquad '${flatTarget}'.`);
-    }
-
-    if (!isIntegrityAuditor && (squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-"))) {
-      const colonTarget =
-        squadId === "integrity_auditor" ? "integrity_auditor" : `integrity_auditor:${squadId.slice("integrity_auditor-".length)}`;
-      throw new Error(`Squad ID '${squadId}' is reserved for integrity audit overrides; dispatch it via '${colonTarget}'.`);
-    }
-
-    const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
-    const warnings = [];
-    const build = ({ spec, id, number }, emitWarnings = false, validateOnly = false) =>
-      buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
-        isIntegrityAuditor,
-        workspace: delegateWorkspace,
-        validateOnly,
-        ...(emitWarnings ? { warnings } : {})
-      });
-    let assignments;
-    if (squadId === "all_l1") {
-      const workingSquads = Object.entries(squads).filter(
-        ([id]) => id !== "integrity_auditor" && !id.startsWith("integrity_auditor-")
-      );
-      if (workingSquads.length === 0) {
-        throw new Error("Manifest must define at least one non-audit working squad.");
-      }
-      assignments = workingSquads.map(([id, squad]) => ({
-        spec: resolveSquadLead(squad, id, true),
-        id
-      }));
-    } else if (isIntegrityAuditor) {
-      assignments = resolveIntegrityAuditor(squads, flatTarget, warnings);
-    } else {
-      assignments = specialistAssignments(squads, squadId);
-    }
-    const Subagents = assignments.map(item => build(item, true, false));
-    if (squadId === "all_l1") {
-      const children = assignments.flatMap(({ id }) => specialistAssignments(squads, id));
-      for (const child of children) build(child, false, true);
-    } else if (!isIntegrityAuditor) {
-      // Validate only the target squad's own lead (when present) without rebuilding unrelated sibling squads (S2-OPT2).
-      const leadSpec = resolveSquadLead(squads[squadId], squadId, false);
-      if (leadSpec) build({ spec: leadSpec, id: squadId }, false, true);
-    }
-    const uniqueWarnings = [...new Set(warnings)];
     return {
-      content: [{ type: "text", text: JSON.stringify({ Subagents, ...(uniqueWarnings.length > 0 ? { warnings: uniqueWarnings } : {}) }) }]
+      content: [{ type: "text", text: JSON.stringify(dispatchSquadData(args, workspace)) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;
@@ -390,6 +374,7 @@ function handleDispatchSquad(args = {}, workspace = process.env.AGY_SQUAD_WORKSP
 export {
   assertWithinWorkspace,
   defaultManifests,
+  dispatchSquadData,
   formatNotFoundError,
   handleDispatchSquad,
   loadSquads,
@@ -399,5 +384,6 @@ export {
   resolveIntegrityAuditor,
   resolveSquadLead,
   resolveWorkspaceRoot,
+  resolveWorkspaceRoots,
   specialistAssignments
 };

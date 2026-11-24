@@ -133,5 +133,5 @@ To run a fresh live comparison on an authenticated WSL2 / Linux host with `Agy-C
      --squad ab_audit --topology flat --mode swarm --model <model-id>
    ```
    Execute the emitted `swarm add` calls (or `invoke_subagent` under `--mode subagent`), wait via `swarm_wait`, verify `audit-ab-audit` (`Integrity Verdict: CLEAN`), compute `digest`, `bundle`, and `verify` (`node bin/agy-squad.mjs verify scratch/agy-squad/squad-ab_audit/lead/report.sources.json`), and collect per-agent metrics via `agy-context transcript health --json`.
-3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `check_context_health`.
+3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `agy-context transcript health --json` (or native JSONL transcript inspection).
 4. Grade both arms' findings against the six-defect rubric (`N1` through `N6`) in `results/telemetry.json`.

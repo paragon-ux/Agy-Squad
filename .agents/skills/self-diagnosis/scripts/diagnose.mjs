@@ -1,2220 +1,65 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
-import { handleDispatchSquad } from "../../../../mcp/dispatch.mjs";
+import { normalizeReportRoot, trimTrailingSlashes } from "../../../../mcp/handoffs.mjs";
 import { TOOLS } from "../../../../mcp/index.js";
-import {
-  bundleReports,
-  computeEvidenceDigest,
-  ensureDirectory,
-  fingerprint,
-  inspectHandoffs,
-  messageLimit,
-  pruneReports,
-  reportPath,
-  verifyBundle
-} from "../../../../mcp/handoffs.mjs";
-import { planSquadCohort, scopesOverlap } from "../../../../mcp/planner.mjs";
+import { planSquadCohort } from "../../../../mcp/planner.mjs";
+import { stripCode, stripFencedCodeBlocks } from "../../../../mcp/verdicts.mjs";
+import { SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = fs.realpathSync(path.resolve(scriptDir, "../../../.."));
-const manifestRelative = ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json";
-const manifestAbsolute = path.join(repoRoot, manifestRelative);
-const scratchBase = (process.env.AGY_SQUAD_SCRATCH_ROOT || "scratch").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-if (!scratchBase || scratchBase.includes("..")) {
-  throw new Error("AGY_SQUAD_SCRATCH_ROOT must be a workspace-relative path without '..'.");
-}
-const scratchSquadRel = `${scratchBase}/agy-squad`;
-
-const estimateTokens = bytes => Math.ceil(bytes / 4);
-
-function removeEmpty(directory) {
-  try {
-    fs.rmdirSync(directory);
-    return true;
-  } catch (error) {
-    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error;
-    return false;
-  }
-}
-
-function listArtifacts(directory) {
-  const found = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      found.push(...listArtifacts(absolute));
-    } else {
-      // REVIEW: JSON, logs, zero-byte files, and symlinks are all artifacts.
-      // Do not silently treat a non-report file as disposable.
-      found.push(path.relative(repoRoot, absolute).split(path.sep).join("/"));
-    }
-  }
-  return found;
-}
-
-function assertSafeDeleteTarget(relative) {
-  if (
-    typeof relative !== "string" ||
-    !relative ||
-    path.posix.isAbsolute(relative) ||
-    relative.includes("\\") ||
-    relative.split("/").some(part => !part || part === "." || part === "..")
-  ) {
-    throw new Error(`Invalid cleanup path: ${relative}`);
-  }
-  let absolute = repoRoot;
-  for (const part of relative.split("/")) {
-    absolute = path.join(absolute, part);
-    const info = fs.lstatSync(absolute); // REVIEW: lstat does NOT follow a symlink.
-    if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) {
-      throw new Error(`Refusing cleanup through a symlink/non-directory: ${absolute}`);
-    }
-  }
-  return absolute;
-}
-
-function resolveTargetReviewLedger(ledgerArg) {
-  const reviewsDir = path.join(repoRoot, "docs/reviews");
-  const reviewsReal = fs.existsSync(reviewsDir) ? fs.realpathSync(reviewsDir) : null;
-  if (ledgerArg) {
-    const clean = ledgerArg.replace(/\\/g, "/").replace(/^\.\/+/, "");
-    if (!clean.startsWith("docs/reviews/") || !clean.endsWith(".md") || clean.includes("..")) {
-      throw new Error("Flag '--ledger' must name a Markdown file under docs/reviews/ (e.g., docs/reviews/rebuild-wsl-dispatch-review-r2.md).");
-    }
-    const abs = path.resolve(repoRoot, clean);
-    if (!reviewsReal || !fs.existsSync(abs)) {
-      throw new Error(`Target PR review ledger '${clean}' does not exist.`);
-    }
-    const real = fs.realpathSync(abs);
-    const stat = fs.statSync(real);
-    if (path.dirname(real) !== reviewsReal || !stat.isFile()) {
-      throw new Error(`Target PR review ledger '${clean}' must be a regular file inside docs/reviews/.`);
-    }
-    return { relative: path.relative(repoRoot, real).replace(/\\/g, "/"), absolute: real, stat };
-  }
-  if (!reviewsReal) return null;
-  const candidates = [];
-  for (const entry of fs.readdirSync(reviewsReal, { withFileTypes: true })) {
-    if (!entry.isFile() || entry.name.startsWith(".") || !entry.name.endsWith(".md")) continue;
-    const absolute = path.join(reviewsReal, entry.name);
-    const real = fs.realpathSync(absolute);
-    if (path.dirname(real) !== reviewsReal) continue;
-    const stat = fs.statSync(real);
-    if (stat.isFile()) {
-      const revMatch = /-r(\d+)\.md$/i.exec(entry.name);
-      const revision = revMatch ? Number.parseInt(revMatch[1], 10) : 1;
-      const verMatch = /^v(\d+)\.(\d+)\.(\d+)\b/i.exec(entry.name);
-      const semver = verMatch
-        ? [Number.parseInt(verMatch[1], 10), Number.parseInt(verMatch[2], 10), Number.parseInt(verMatch[3], 10)]
-        : [0, 0, 0];
-      const prMatch = /^pr(\d+)-/i.exec(entry.name);
-      const prNumber = prMatch ? Number.parseInt(prMatch[1], 10) : 0;
-      const isReconciled = /-reconciled(?:-review)?(?:-r\d+)?\.md$/i.test(entry.name);
-      const isRemediation = /(?:remediation|fix-p[0-9]|self-diagnosis-review)/i.test(entry.name);
-      const ledgerTier = verMatch ? 3 : isRemediation && !prMatch ? 2 : prMatch ? 1 : 0;
-      const family = entry.name.replace(/-r\d+(?=\.md$)/i, "").toLowerCase();
-      candidates.push({
-        relative: `docs/reviews/${entry.name}`,
-        absolute: real,
-        stat,
-        family,
-        revision,
-        semver,
-        ledgerTier,
-        prNumber,
-        isReconciled
-      });
-    }
-  }
-  const latestByFamily = new Map();
-  for (const item of candidates) {
-    const prev = latestByFamily.get(item.family);
-    if (!prev || item.revision > prev.revision || (item.revision === prev.revision && item.stat.mtimeMs > prev.stat.mtimeMs)) {
-      latestByFamily.set(item.family, item);
-    }
-  }
-  const activeCandidates = [...latestByFamily.values()];
-  activeCandidates.sort((a, b) => {
-    if (Math.abs(b.stat.mtimeMs - a.stat.mtimeMs) > 2000) {
-      return b.stat.mtimeMs - a.stat.mtimeMs;
-    }
-    if (b.ledgerTier !== a.ledgerTier) {
-      return b.ledgerTier - a.ledgerTier;
-    }
-    for (let idx = 0; idx < 3; idx += 1) {
-      if (b.semver[idx] !== a.semver[idx]) {
-        return b.semver[idx] - a.semver[idx];
-      }
-    }
-    if (b.prNumber !== a.prNumber) {
-      return b.prNumber - a.prNumber;
-    }
-    if (b.isReconciled !== a.isReconciled) {
-      return b.isReconciled ? 1 : -1;
-    }
-    if (b.revision !== a.revision) {
-      return b.revision - a.revision;
-    }
-    return b.relative.localeCompare(a.relative);
-  });
-  return activeCandidates[0] ?? null;
-}
-
-const ALLOWED_LEDGER_STATUSES = new Set([
-  "Open (Pre-Remediation)",
-  "Closed",
-  "Residual (Open)",
-  "Closed (Post-Remediation)",
-  "Deferred / Won't Fix",
-  "Closed (By Design)",
-  "Informational"
-]);
-
-const SECTION8_STATUSES = new Set([
-  "Residual (Open)",
-  "Closed (Post-Remediation)",
-  "Deferred / Won't Fix",
-  "Closed (By Design)",
-  "Informational"
-]);
-
-function splitMarkdownRow(line) {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split(/(?<!\\)\|/)
-    .map(cell => cell.trim());
-}
-
-function parseMarkdownTables(sectionText) {
-  const lines = stripFencedCodeBlocks(sectionText).split(/\r?\n/);
-  const tables = [];
-  for (let i = 0; i + 1 < lines.length; i += 1) {
-    const hdrLine = lines[i].trim();
-    const sepLine = lines[i + 1].trim();
-    if (!hdrLine.startsWith("|") || !hdrLine.endsWith("|")) continue;
-    if (!/^\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|$/.test(sepLine)) continue;
-    const headers = splitMarkdownRow(hdrLine);
-    const rows = [];
-    let j = i + 2;
-    while (j < lines.length && lines[j].trim().startsWith("|") && lines[j].trim().endsWith("|")) {
-      rows.push(splitMarkdownRow(lines[j]));
-      j += 1;
-    }
-    tables.push({ headers, rows });
-    i = j - 1;
-  }
-  return tables;
-}
-
-function stripFencedCodeBlocks(markdown) {
-  const lines = markdown.split(/\r?\n/);
-  const kept = [];
-  let fenceChar = "";
-  let fenceLen = 0;
-  for (const line of lines) {
-    if (!fenceChar) {
-      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
-        fenceChar = open[1][0];
-        fenceLen = open[1].length;
-        continue;
-      }
-      kept.push(line);
-    } else {
-      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
-      if (closeRe.test(line)) {
-        fenceChar = "";
-        fenceLen = 0;
-      }
-    }
-  }
-  return kept.join("\n");
-}
-
-function extractTopLevelSection(markdown, sectionNum) {
-  const lines = markdown.split(/\r?\n/);
-  const targetRe = new RegExp(`^##\\s+${sectionNum}\\.\\s+.*$`);
-  let fenceChar = "";
-  let fenceLen = 0;
-  let heading = null;
-  const bodyLines = [];
-  for (const line of lines) {
-    if (!fenceChar) {
-      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
-        fenceChar = open[1][0];
-        fenceLen = open[1].length;
-        if (heading !== null) bodyLines.push(line);
-        continue;
-      }
-      if (heading === null) {
-        if (targetRe.test(line)) {
-          heading = line.trim();
-        }
-      } else {
-        if (/^##\s+\d+\.\s+/.test(line)) {
-          break;
-        }
-        bodyLines.push(line);
-      }
-    } else {
-      if (heading !== null) bodyLines.push(line);
-      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
-      if (closeRe.test(line)) {
-        fenceChar = "";
-        fenceLen = 0;
-      }
-    }
-  }
-  if (heading === null) return null;
-  return { heading, body: bodyLines.join("\n") };
-}
-
-const NON_FINDING_HYPHEN_TOKENS = new Set([
-  "UTF-8",
-  "UTF-16",
-  "SHA-1",
-  "SHA-256",
-  "SHA-384",
-  "SHA-512",
-  "JSON-RPC",
-  "CTRL-C",
-  "CTRL-D",
-  "PRE-FIX",
-  "RE-VERIFY",
-  "NON-ZERO",
-  "NON-EMPTY",
-  "READ-ONLY",
-  "FAIL-FAST",
-  "FAIL-SAFE",
-  "OPT-IN",
-  "END-TO-END",
-  "ONE-TO-ONE",
-  "STEP-BY-STEP",
-  "LINE-BY-LINE",
-  "MULTI-BYTE",
-  "SUB-AGENT",
-  "SELF-DIAGNOSIS",
-  "CLI-FLAGS",
-  "L1-L50",
-  "L1-L51",
-  "P0-P2",
-  "P1-P2",
-  "P1-P3",
-  "FAIL-CLOSED",
-  "PRE-FLIGHT",
-  "BUILT-IN",
-  "IN-FLIGHT",
-  "MID-COHORT",
-  "NO-BIAS",
-  "PR-REVIEW",
-  "POST-REMEDIATION",
-  "PRE-REMEDIATION",
-  "SWARM-GOVERNANCE",
-  "AGY-SQUAD",
-  "AGY-CONTEXT",
-  "AGY-CONTEXT-SAVER",
-  "CROSS-CUTTING",
-  "POINTER-OVER-WIRE"
-]);
-
-function extractCohortFindingIds(markdown, { includeProseHeadingsAndBullets = false } = {}) {
-  const ids = new Set();
-  if (typeof markdown !== "string" || !markdown.trim()) return ids;
-  const idPattern = /^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})$/;
-  const addCandidate = raw => {
-    const clean = raw.replace(/\([^)]*\)/g, "").replace(/[`*]/g, "").trim();
-    if (
-      idPattern.test(clean) &&
-      !/^L\d+-L\d+$/i.test(clean) &&
-      !NON_FINDING_HYPHEN_TOKENS.has(clean.toUpperCase())
-    ) {
-      ids.add(clean);
-    }
-  };
-  const stripped = stripFencedCodeBlocks(markdown);
-  for (const table of parseMarkdownTables(stripped)) {
-    if (table.headers[0] !== "ID" && table.headers[0] !== "Finding ID") continue;
-    for (const row of table.rows) {
-      if (!row.length) continue;
-      addCandidate(row[0]);
-    }
-  }
-  for (const match of stripped.matchAll(/^#{3,4}\s+`([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`/gm)) {
-    addCandidate(match[1]);
-  }
-  if (includeProseHeadingsAndBullets) {
-    // Plain, numbered, or styled headings (e.g., "### SD-TEST-01 — ...", "#### **SD-TEST-01:** ...", "### 2.1 SD-HEAD-02: ...")
-    const headingRe =
-      /^#{2,6}\s+(?:\d+(?:\.\d+)*[.)]?\s+)?(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?=$|\s*(?:[:—–`*,.)\]/]|\(|-\s))/gm;
-    for (const match of stripped.matchAll(headingRe)) {
-      addCandidate(match[1]);
-    }
-    // Plain or styled bullets / numbered items (e.g., "- SD-TEST-01 — ...", "- **SD-TEST-01:** ...", "- **[P2] `SD-TEST-01` (`SVC`):** ...")
-    const bulletRe =
-      /^\s*(?:[*+-]|\d+[.)])\s+(?:[*`\s]*(?:\[P[0-3]\]|\(P[0-3]\)|Finding)[*`\s]*[:—–-]?\s*)?[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})(?![A-Za-z0-9_-])[*`]*(?:\s*\([^)]*\))?[*`]*(?=$|\s*(?:[:—–`*,.)\]/]|-\s))/gm;
-    for (const match of stripped.matchAll(bulletRe)) {
-      addCandidate(match[1]);
-    }
-  }
-  return ids;
-}
-
-function validateTargetReviewLedger(targetLedger, { requireCohortSection = false } = {}) {
-  const markdown = fs.readFileSync(targetLedger.absolute, "utf8");
-  const errors = [];
-  const openResiduals = [];
-  const openBlockingFindings = [];
-  const recordedFindingIds = extractCohortFindingIds(markdown);
-  const recordedBundleShas = [];
-  const statusById = new Map();
-
-  const recordIdStatus = (primaryId, cleanStatus, label) => {
-    if (!primaryId) return;
-    const prev = statusById.get(primaryId);
-    if (prev && prev.status !== cleanStatus) {
-      errors.push(
-        `${label} assigns conflicting status '${cleanStatus}' to '${primaryId}' (already recorded as '${prev.status}' in ${prev.label}).`
-      );
-    } else if (!prev) {
-      statusById.set(primaryId, { status: cleanStatus, label });
-    }
-  };
-
-  for (const reqSec of [1, 2, 3, 4, 5, 6, 7]) {
-    const sec = extractTopLevelSection(markdown, reqSec);
-    if (!sec) {
-      errors.push(`Missing mandatory '## ${reqSec}.' ledger section.`);
-    }
-  }
-
-  const sec1 = extractTopLevelSection(markdown, 1);
-  const expectedSessionHeaders = [
-    "Session #",
-    "Operator Conversation ID",
-    "Parent Session",
-    "Date",
-    "Base..Head + Working-Tree State",
-    "Skill / Topology Invoked"
-  ];
-  if (sec1) {
-    const sessionTable = parseMarkdownTables(sec1.body).find(
-      t => t.headers.length === expectedSessionHeaders.length && t.headers.every((h, idx) => h === expectedSessionHeaders[idx])
-    );
-    if (!sessionTable || sessionTable.rows.length === 0) {
-      errors.push(
-        "Section 1 must contain a populated Session Provenance table ('Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked')."
-      );
-    }
-  }
-
-  const inferPriorityFromHeading = (text, fallback = "P2") => {
-    const m = /\b(P[0-3])\b/.exec(text);
-    return m ? m[1] : fallback;
-  };
-
-  const validateFindingTable = (table, label, { section8Only = false, defaultPriority = "P2" } = {}) => {
-    const idIdx = 0;
-    const statusIdx = table.headers.indexOf("Status");
-    const prioIdx = table.headers.findIndex(h => /^(?:Priority|Severity|Sev|Prio)$/i.test(h));
-    if (statusIdx === -1) {
-      errors.push(`${label} finding table is missing a 'Status' column.`);
-      return;
-    }
-    const seenIds = new Set();
-    for (const row of table.rows) {
-      if (row.length !== table.headers.length) {
-        errors.push(`${label} row '${row[0] ?? ""}' has ${row.length} columns (expected ${table.headers.length}).`);
-        continue;
-      }
-      const rawId = row[idIdx];
-      const primaryId = rawId.replace(/\([^)]*\)/g, "").replace(/[`*]/g, "").trim();
-      for (const aliasMatch of rawId.matchAll(/\(\s*(?:alias(?:es)?(?:\s+of)?|merged\s+(?:with|into)|superseded\s+by)?\s*`?([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})`?\s*\)/gi)) {
-        recordedFindingIds.add(aliasMatch[1].trim());
-      }
-      if (
-        !primaryId ||
-        /\.\.|[&+,/]/.test(primaryId) ||
-        /(?:^|-)(?:HARDEN|UMBRELLA|BATCH|MISC)(?:-|$)/i.test(primaryId) ||
-        /^R\d+-OPT-P3-\d+$/i.test(primaryId)
-      ) {
-        errors.push(`${label} violates '1 ID = 1 Row' with compressed/umbrella ID '${rawId}'.`);
-      } else if (seenIds.has(primaryId)) {
-        errors.push(`${label} contains duplicate finding ID '${primaryId}'.`);
-      } else {
-        seenIds.add(primaryId);
-      }
-
-      const cleanStatus = row[statusIdx].replace(/[*`]/g, "").trim();
-      if (!ALLOWED_LEDGER_STATUSES.has(cleanStatus)) {
-        errors.push(`${label} row '${primaryId || rawId}' uses non-canonical status '${cleanStatus}'.`);
-      } else if (section8Only && !SECTION8_STATUSES.has(cleanStatus)) {
-        errors.push(`Section 8 row '${primaryId || rawId}' must use a residual/deferred/by-design status (found '${cleanStatus}').`);
-      } else if (!section8Only && SECTION8_STATUSES.has(cleanStatus)) {
-        errors.push(`${label} row '${primaryId || rawId}' has status '${cleanStatus}', which belongs in Section 8.`);
-      } else if (primaryId) {
-        recordIdStatus(primaryId, cleanStatus, label);
-      }
-
-      if (section8Only && cleanStatus === "Residual (Open)" && primaryId) {
-        openResiduals.push(primaryId);
-      } else if (!section8Only && cleanStatus === "Open (Pre-Remediation)" && primaryId) {
-        const prioText = prioIdx !== -1 ? row[prioIdx] : row.find(c => /\bP[0-3]\b/.test(c)) || defaultPriority;
-        const prio = /\b(P[0-3])\b/.exec(prioText)?.[1] ?? defaultPriority;
-        if (prio !== "P3") {
-          openBlockingFindings.push({ id: primaryId, priority: prio, label });
-        }
-      }
-    }
-  };
-
-  for (const secNum of [4, 5, 6, 7]) {
-    const sec = extractTopLevelSection(markdown, secNum);
-    if (!sec) continue;
-    // Track subsections so tables under "### 5.4 P3" inherit P3 rather than P2
-    const chunks = stripFencedCodeBlocks(sec.body).split(/^(###\s+[^\r\n]+)$/m);
-    let currentSubPrio = "P2";
-    for (const chunk of chunks) {
-      if (/^###\s+/.test(chunk)) {
-        currentSubPrio = inferPriorityFromHeading(chunk, "P2");
-        continue;
-      }
-      for (const table of parseMarkdownTables(chunk)) {
-        if ((table.headers[0] === "ID" || table.headers[0] === "Finding ID") && table.headers.includes("Status")) {
-          validateFindingTable(table, `Section ${secNum}`, { section8Only: false, defaultPriority: currentSubPrio });
-        }
-      }
-      // Also inspect atomic "#### `ID`: Title | P1 | Open (Pre-Remediation)" heading records
-      const recRe = /^#{3,4}\s+[*`]*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|F\d{2,})[*`]*[^|\r\n]*\|\s*(P[0-3])\s*\|\s*([^\r\n|]+)$/gm;
-      for (const match of chunk.matchAll(recRe)) {
-        const recId = match[1].trim();
-        const recPrio = match[2].trim();
-        const recStatus = match[3].replace(/[*`]/g, "").trim();
-        recordedFindingIds.add(recId);
-        if (!ALLOWED_LEDGER_STATUSES.has(recStatus)) {
-          errors.push(`Section ${secNum} record '${recId}' uses non-canonical status '${recStatus}'.`);
-        } else if (SECTION8_STATUSES.has(recStatus)) {
-          errors.push(`Section ${secNum} record '${recId}' has status '${recStatus}', which belongs in Section 8.`);
-        } else {
-          recordIdStatus(recId, recStatus, `Section ${secNum}`);
-          if (recStatus === "Open (Pre-Remediation)" && recPrio !== "P3") {
-            openBlockingFindings.push({ id: recId, priority: recPrio, label: `Section ${secNum}` });
-          }
-        }
-      }
-    }
-  }
-
-  const declaredV15 = /(?:PR Review Standard\s+`?v?1\.5\.0`?|Standard\s+version\*?\*?:\s*`?v?1\.5\.0`?)/i.test(markdown);
-  if (declaredV15) {
-    const sec2 = extractTopLevelSection(markdown, 2);
-    const sec3 = extractTopLevelSection(markdown, 3);
-    const sec4 = extractTopLevelSection(markdown, 4);
-    const hasSecHeading = Boolean(sec4 && /^###\s+(?:4\.11\b[^\r\n]*\bSEC\b|`?SEC`?\b)/im.test(sec4.body));
-    const hasSecRow = Boolean(
-      (sec2 && /\|\s*`?SEC`?\s*\|/i.test(sec2.body)) ||
-      (sec3 && /\|\s*`?SEC`?\s*\|/i.test(sec3.body)) ||
-      (sec4 && /\|\s*`?SEC`?\s*\|/i.test(sec4.body))
-    );
-    if (!hasSecHeading && !hasSecRow) {
-      errors.push(
-        "PR Review Standard v1.5.0 ledger is missing required 'SEC' category coverage (Section 4.11 / category coverage matrix)."
-      );
-    }
-  }
-
-  const sec8 = extractTopLevelSection(markdown, 8);
-  const expectedSec8Headers = [
-    "ID",
-    "Wave/Session",
-    "Cat",
-    "Status",
-    "Source",
-    "Defect / Proposal",
-    "Disposition / Fix",
-    "Verification & Bundle SHA"
-  ];
-  if (!sec8 || !/^##\s+8\.\s+Post-Remediation Residuals & Deferred Dispositions\b/.test(sec8.heading)) {
-    errors.push("Missing mandatory '## 8. Post-Remediation Residuals & Deferred Dispositions' section.");
-  } else {
-    const sec8Tables = parseMarkdownTables(sec8.body);
-    const hasEmptyMarker = /None \(0 open residuals, 0 deferred items\)/.test(sec8.body);
-    const sec8Table = sec8Tables.find(
-      t => t.headers.length === expectedSec8Headers.length && t.headers.every((h, idx) => h === expectedSec8Headers[idx])
-    );
-    if (!sec8Table && !hasEmptyMarker) {
-      errors.push(
-        "Section 8 must contain either 'None (0 open residuals, 0 deferred items)' or the 8-column table ('ID | Wave/Session | Cat | Status | Source | Defect / Proposal | Disposition / Fix | Verification & Bundle SHA')."
-      );
-    } else if (sec8Table) {
-      if (sec8Table.rows.length === 0) {
-        errors.push("Section 8 table has 0 rows; use 'None (0 open residuals, 0 deferred items)' when empty.");
-      }
-      validateFindingTable(sec8Table, "Section 8", { section8Only: true });
-    }
-  }
-
-  if (/^##\s+(?:[1-9]\d+)\.\s+/m.test(stripFencedCodeBlocks(markdown))) {
-    errors.push("Ad-hoc top-level sections beyond Section 9 are prohibited; consolidate all /self-diagnosis waves into Section 9.");
-  }
-
-  const sec9 = extractTopLevelSection(markdown, 9);
-  const expectedCohortHeaders = [
-    "Wave",
-    "Session ID",
-    "Stage",
-    "Subagent IDs",
-    "Pre-Fix Bundle SHA",
-    "Re-Verify Bundle SHA",
-    "Teardown"
-  ];
-  if (!sec9 && requireCohortSection) {
-    errors.push("Missing mandatory '## 9. `/self-diagnosis` Cohort & Bundle Ledger' section required before --teardown.");
-  } else if (sec9) {
-    if (!/^##\s+9\.\s+`?\/self-diagnosis`?\s+Cohort & Bundle Ledger\b/.test(sec9.heading)) {
-      errors.push("Section 9 must be titled '## 9. `/self-diagnosis` Cohort & Bundle Ledger'.");
-    }
-    const sec9Tables = parseMarkdownTables(sec9.body);
-    const cohortTable = sec9Tables.find(
-      t => t.headers.length === expectedCohortHeaders.length && t.headers.every((h, idx) => h === expectedCohortHeaders[idx])
-    );
-    if (!cohortTable || cohortTable.rows.length === 0) {
-      errors.push(
-        "Section 9 must contain a populated Cohort Provenance table ('Wave | Session ID | Stage | Subagent IDs | Pre-Fix Bundle SHA | Re-Verify Bundle SHA | Teardown')."
-      );
-    } else {
-      for (const row of cohortTable.rows) {
-        for (const colIdx of [4, 5]) {
-          const cell = row[colIdx] ?? "";
-          for (const match of cell.matchAll(/(?<![0-9a-f-])[0-9a-f]{12,64}(?![0-9a-f-])/gi)) {
-            recordedBundleShas.push(match[0].toLowerCase());
-          }
-        }
-      }
-    }
-    const findingTables = sec9Tables.filter(t => t !== cohortTable && (t.headers[0] === "ID" || t.headers[0] === "Finding ID"));
-    if (findingTables.length === 0 && !/None \(0 wave findings\)/.test(sec9.body)) {
-      errors.push("Section 9 must contain an atomic Wave Finding Ledger table (or 'None (0 wave findings)').");
-    }
-    for (const ft of findingTables) {
-      validateFindingTable(ft, "Section 9");
-    }
-  }
-
-  return { errors, openResiduals, openBlockingFindings, recordedFindingIds, recordedBundleShas };
-}
-
-function isCanaryPidAlive(canaryAbsDir) {
-  const ownerFile = path.join(canaryAbsDir, "canary-owner.json");
-  if (!fs.existsSync(ownerFile)) {
-    return false;
-  }
-  try {
-    const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
-    if (!Number.isInteger(owner?.pid) || owner.pid <= 0) {
-      return false;
-    }
-    process.kill(owner.pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-function teardownSelfDiagnosisDirs({ squadId = "all", acceptedHash, force = false, ledgerPath } = {}) {
-  const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-  const knownSquads = [...Object.keys(manifest.squads), "self_diagnosis"];
-  if (squadId !== "all" && !knownSquads.includes(squadId)) {
-    throw new Error(`Unknown self-diagnosis squadId '${squadId}'. Expected 'all' or one of: ${knownSquads.join(", ")}`);
-  }
-  if (acceptedHash && squadId === "all") {
-    throw new Error("Flag '--accept' requires a single squadId (not 'all').");
-  }
-  const targetLedger = resolveTargetReviewLedger(ledgerPath);
-  const targetSquads = squadId === "all" ? knownSquads : [squadId];
-  const scratchSquadRoot = path.join(repoRoot, scratchSquadRel);
-  const validatedDirs = [];
-  const tornDown = [];
-  const removedParents = [];
-  const accountedAuditFiles = new Set();
-  let ledgerCheck = null;
-
-  const ensureLedgerValid = failingRelDir => {
-    if (!targetLedger) {
-      throw new Error(
-        `Refusing to tear down ${failingRelDir}: no durable target PR review ledger found under docs/reviews/. Export or update docs/reviews/<slug>.md before --teardown.`
-      );
-    }
-    if (!ledgerCheck) {
-      ledgerCheck = validateTargetReviewLedger(targetLedger, { requireCohortSection: true });
-      if (ledgerCheck.errors.length > 0) {
-        throw new Error(
-          `Refusing to tear down ${failingRelDir}: ${targetLedger.relative} violates PR Review Standard v1.5.0 schema: ${ledgerCheck.errors.join(" ")}`
-        );
-      }
-    }
-    return ledgerCheck;
-  };
-
-  for (const id of targetSquads) {
-    const relDir = `${scratchSquadRel}/squad-${encodeURIComponent(id)}`;
-    const absDir = path.join(repoRoot, relDir);
-    const auditId = `integrity_auditor-${id}`;
-    const auditRelDir = `${scratchSquadRel}/squad-${encodeURIComponent(auditId)}`;
-    const auditAbsDir = path.join(repoRoot, auditRelDir);
-    const hasWorking = fs.existsSync(absDir);
-    const hasAudit = fs.existsSync(auditAbsDir);
-    if (!hasWorking && !hasAudit) {
-      if (acceptedHash && !force) {
-        throw new Error(`Cannot verify accepted hash for '${id}': directory ${relDir} does not exist.`);
-      }
-      continue;
-    }
-    if (hasWorking) assertSafeDeleteTarget(relDir); // REVIEW: --force skips evidence gates, never path safety.
-    if (hasAudit) assertSafeDeleteTarget(auditRelDir);
-    const bundleRel = reportPath(id, undefined, scratchSquadRel).replace(/\.md$/, ".sources.json");
-    const bundleAbs = path.join(repoRoot, bundleRel);
-
-    if (!force) {
-      const activeLedger = ensureLedgerValid(hasWorking ? relDir : auditRelDir);
-      if (hasWorking && fs.existsSync(bundleAbs)) {
-        const verified = verifyBundle(repoRoot, bundleRel, acceptedHash);
-        const bundleStat = fs.statSync(bundleAbs);
-        if (targetLedger.stat.mtimeMs + 1000 < bundleStat.mtimeMs) {
-          throw new Error(
-            `Refusing to tear down ${relDir} before updating the durable target PR review ledger (${targetLedger.relative}). Update ${targetLedger.relative} with this cohort's findings and bundle digest before running --teardown.`
-          );
-        }
-        const digestRecorded = activeLedger.recordedBundleShas.some(
-          token => verified.sha256 === token || verified.sha256.startsWith(token)
-        );
-        if (!digestRecorded) {
-          throw new Error(
-            `Refusing to tear down ${relDir}: bundle digest ${verified.sha256} is not recorded in Section 9 of ${targetLedger.relative}.`
-          );
-        }
-        const bundleJson = JSON.parse(fs.readFileSync(bundleAbs, "utf8"));
-        const leadReportAbs = path.join(repoRoot, reportPath(id, undefined, scratchSquadRel));
-        const looseReports = [];
-        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-          if (entry.isDirectory() && /^specialist-[1-9]\d*$/.test(entry.name)) {
-            const repPath = path.join(absDir, entry.name, "report.md");
-            if (fs.existsSync(repPath)) {
-              looseReports.push(fs.readFileSync(repPath, "utf8"));
-            }
-          }
-        }
-        const bundledAudits = [
-          ...(bundleJson.integrityAudit ? [bundleJson.integrityAudit] : []),
-          ...(Array.isArray(bundleJson.integrityAudits) ? bundleJson.integrityAudits : [])
-        ];
-        const auditMarkdowns = [];
-        const bundledAuditPaths = new Set();
-        for (const auditEntry of bundledAudits) {
-          if (auditEntry?.path) {
-            bundledAuditPaths.add(auditEntry.path);
-            accountedAuditFiles.add(auditEntry.path);
-          }
-          if (typeof auditEntry?.markdown === "string" && auditEntry.markdown.trim()) {
-            auditMarkdowns.push(auditEntry.markdown);
-          } else if (auditEntry?.path) {
-            const absAuditReport = path.join(repoRoot, auditEntry.path);
-            if (fs.existsSync(absAuditReport)) {
-              auditMarkdowns.push(fs.readFileSync(absAuditReport, "utf8"));
-            }
-          }
-        }
-        if (hasAudit) {
-          for (const entry of fs.readdirSync(auditAbsDir, { withFileTypes: true })) {
-            if (entry.isDirectory() && /^specialist-[1-9]\d*$/.test(entry.name)) {
-              const repPath = path.join(auditAbsDir, entry.name, "report.md");
-              if (fs.existsSync(repPath)) {
-                auditMarkdowns.push(fs.readFileSync(repPath, "utf8"));
-              }
-            }
-          }
-        }
-        const cohortMarkdowns = [
-          ...(fs.existsSync(leadReportAbs) ? [fs.readFileSync(leadReportAbs, "utf8")] : []),
-          ...(Array.isArray(bundleJson.reports) ? bundleJson.reports.map(r => r.markdown || "") : []),
-          ...looseReports,
-          ...auditMarkdowns
-        ];
-        const cohortFindingIds = new Set();
-        for (const md of cohortMarkdowns) {
-          for (const fid of extractCohortFindingIds(md, { includeProseHeadingsAndBullets: true })) {
-            cohortFindingIds.add(fid);
-          }
-        }
-        const missingIds = [...cohortFindingIds].filter(fid => !activeLedger.recordedFindingIds.has(fid));
-        if (missingIds.length > 0) {
-          throw new Error(
-            `Refusing to tear down ${relDir}: cohort finding ID(s) [${missingIds.join(", ")}] are missing from ${targetLedger.relative}.`
-          );
-        }
-        // REVIEW: Bundle verification does not attest arbitrary new files in the squad folder.
-        // Never delete diagnostics.json, trace.log, or an unlisted specialist report.
-        const expectedArtifacts = new Set([
-          bundleRel,
-          reportPath(id, undefined, scratchSquadRel),
-          ...bundleJson.reports.map(({ path: report }) => report)
-        ]);
-        const unexpectedArtifacts = listArtifacts(absDir).filter(file => !expectedArtifacts.has(file));
-        if (unexpectedArtifacts.length) {
-          throw new Error(
-            `Refusing to tear down ${relDir}: unbundled artifacts remain: ${unexpectedArtifacts.join(", ")}`
-          );
-        }
-        if (hasAudit) {
-          const unexpectedAuditArtifacts = listArtifacts(auditAbsDir).filter(file => !bundledAuditPaths.has(file));
-          if (unexpectedAuditArtifacts.length) {
-            throw new Error(
-              `Refusing to tear down ${auditRelDir}: unbundled artifacts remain: ${unexpectedAuditArtifacts.join(", ")}`
-            );
-          }
-        }
-      } else if (acceptedHash) {
-        throw new Error(`Cannot verify accepted hash for '${id}': missing bundle at ${bundleRel}`);
-      } else {
-        if (hasWorking && listArtifacts(absDir).length > 0) {
-          throw new Error(
-            `Refusing to tear down unbundled evidence in ${relDir} without bundle verification or --force.`
-          );
-        }
-        if (hasAudit && listArtifacts(auditAbsDir).length > 0) {
-          throw new Error(
-            `Refusing to tear down unbundled evidence in ${auditRelDir} without bundle verification or --force.`
-          );
-        }
-      }
-    }
-    if (hasWorking) validatedDirs.push({ absDir, relDir });
-    if (hasAudit) validatedDirs.push({ absDir: auditAbsDir, relDir: auditRelDir });
-  }
-
-  // Preflight flat unscoped squad-integrity_auditor and canary directories BEFORE deleting anything (SVC-002, SVC-006, SD-SCRIPT-FLAT-AUDIT-TD)
-  if (fs.existsSync(scratchSquadRoot)) {
-    assertSafeDeleteTarget(scratchSquadRel); // REVIEW: don't enumerate external symlink trees.
-    const flatAuditRel = `${scratchSquadRel}/squad-integrity_auditor`;
-    const flatAuditAbs = path.join(repoRoot, flatAuditRel);
-    const hasSelfDiagBundleMatch = [...accountedAuditFiles].some(f => f.startsWith(`${flatAuditRel}/`));
-    if (fs.existsSync(flatAuditAbs) && (squadId === "all" || squadId === "self_diagnosis" || hasSelfDiagBundleMatch)) {
-      assertSafeDeleteTarget(flatAuditRel);
-      const flatAuditArtifacts = listArtifacts(flatAuditAbs);
-      const unbundledFlatAudit = flatAuditArtifacts.filter(file => !accountedAuditFiles.has(file));
-      if (!force && unbundledFlatAudit.length > 0) {
-        throw new Error(
-          `Refusing to tear down unbundled evidence in ${flatAuditRel} without bundle verification or --force.`
-        );
-      }
-      if (!force && flatAuditArtifacts.length > 0) {
-        const activeLedger = ensureLedgerValid(flatAuditRel);
-        const flatAuditFindingIds = new Set();
-        for (const relFile of flatAuditArtifacts) {
-          const absFile = path.join(repoRoot, relFile);
-          if (relFile.endsWith(".md") && fs.existsSync(absFile)) {
-            const md = fs.readFileSync(absFile, "utf8");
-            for (const fid of extractCohortFindingIds(md, { includeProseHeadingsAndBullets: true })) {
-              flatAuditFindingIds.add(fid);
-            }
-          }
-        }
-        const missingFlatIds = [...flatAuditFindingIds].filter(fid => !activeLedger.recordedFindingIds.has(fid));
-        if (missingFlatIds.length > 0) {
-          throw new Error(
-            `Refusing to tear down ${flatAuditRel}: cohort finding ID(s) [${missingFlatIds.join(", ")}] are missing from ${targetLedger.relative}.`
-          );
-        }
-      }
-      validatedDirs.push({ absDir: flatAuditAbs, relDir: flatAuditRel });
-    }
-  }
-
-  if (squadId === "all" && fs.existsSync(scratchSquadRoot)) {
-    for (const entry of fs.readdirSync(scratchSquadRoot, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith("self-diag-canary-")) {
-        const relCanary = `${scratchSquadRel}/${entry.name}`;
-        const absCanary = path.join(repoRoot, relCanary);
-        assertSafeDeleteTarget(relCanary);
-        if (!force && isCanaryPidAlive(absCanary)) {
-          continue;
-        }
-        validatedDirs.push({ absDir: absCanary, relDir: relCanary });
-      }
-    }
-  }
-
-  for (const { relDir } of validatedDirs) {
-    // REVIEW: Recheck the full parent chain immediately before destructive cleanup.
-    fs.rmSync(assertSafeDeleteTarget(relDir), { recursive: true, force: true });
-    tornDown.push(relDir);
-  }
-
-  for (const parentRel of [scratchSquadRel, scratchBase]) {
-    if (removeEmpty(path.join(repoRoot, parentRel))) {
-      removedParents.push(parentRel);
-    }
-  }
-
-  return { status: "TORN_DOWN", targetReviewLedger: targetLedger?.relative ?? null, tornDown, removedParents };
-}
-
-function parseFrontmatter(markdown) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(markdown);
-  if (!match) return null;
-  const raw = match[1];
-  let name = /^name:\s*(.+)$/m.exec(raw)?.[1]?.trim();
-  if (name && ((name.startsWith('"') && name.endsWith('"')) || (name.startsWith("'") && name.endsWith("'")))) {
-    name = name.slice(1, -1).trim();
-  }
-  const fmLines = raw.split(/\r?\n/);
-  let descBody = "";
-  for (let i = 0; i < fmLines.length; i += 1) {
-    const m = /^description:\s*(.*)$/.exec(fmLines[i]);
-    if (!m) continue;
-    const inlineVal = m[1].trim();
-    if (/^[>|][-+]?$/.test(inlineVal)) {
-      const blockLines = [];
-      for (let j = i + 1; j < fmLines.length; j += 1) {
-        const nextLine = fmLines[j];
-        if (/^\s*$/.test(nextLine)) continue;
-        if (!/^\s+/.test(nextLine)) break;
-        blockLines.push(nextLine.trim());
-      }
-      descBody = blockLines.join(" ").trim();
-    } else {
-      let unquoted = inlineVal;
-      if ((unquoted.startsWith('"') && unquoted.endsWith('"')) || (unquoted.startsWith("'") && unquoted.endsWith("'"))) {
-        unquoted = unquoted.slice(1, -1).trim();
-      }
-      descBody = unquoted;
-    }
-    break;
-  }
-  const hasDescription = descBody.length > 0;
-  return { name, hasDescription };
-}
-
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const HOSTED_DOCS_PREFIX = "https://paragon-ux.github.io/Agy-Squad/";
-
-function extractMarkdownLinks(sourceFile, markdown) {
-  const dir = path.dirname(sourceFile);
-  const stripped = markdown
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "")
-    .replace(/(`+)([^\r\n]*?)\1/g, "CODE");
-  const links = [];
-  const linkRegex = /\[[^\]]+\]\(([^)#\s]*)(?:#([^)\s]*))?\)/g;
-  for (const match of stripped.matchAll(linkRegex)) {
-    const rawTarget = match[1];
-    const fragment = match[2] ?? "";
-    if (!rawTarget && !fragment) continue;
-    if (rawTarget && rawTarget.startsWith(HOSTED_DOCS_PREFIX)) {
-      const slug = rawTarget.slice(HOSTED_DOCS_PREFIX.length).replace(/^\/+|\/+$/g, "");
-      if (slug && (slug.includes("..") || slug.includes("\\"))) {
-        links.push({
-          link: rawTarget,
-          fragment,
-          resolved: null,
-          isHostedDocs: true,
-          invalidReason: "malformed hosted docs URL"
-        });
-        continue;
-      }
-      const docSlug = slug ? slug.replace(/\.md$/i, "") : "index";
-      links.push({
-        link: rawTarget,
-        fragment,
-        resolved: path.join(repoRoot, "docs", `${docSlug}.md`),
-        isHostedDocs: true
-      });
-      continue;
-    }
-    if (rawTarget && /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(rawTarget)) continue;
-    links.push({
-      link: rawTarget || `#${fragment}`,
-      fragment,
-      resolved: rawTarget ? path.resolve(dir, rawTarget) : sourceFile,
-      isHostedDocs: false
-    });
-  }
-  return links;
-}
-
-function slugifyHeading(heading) {
-  return heading
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .toLowerCase()
-    .replace(/`/g, "")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .replace(/\s/g, "-");
-}
-
-function extractHeadingSlugs(markdown) {
-  const slugs = new Set();
-  const counts = new Map();
-  const body = markdown.replace(/(?:```[\s\S]*?```|~~~[\s\S]*?~~~)/g, "");
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^#{1,6}\s+(.+)$/.exec(line);
-    if (!match) continue;
-    const base = slugifyHeading(match[1]);
-    if (!base) continue;
-    const seen = counts.get(base) ?? 0;
-    counts.set(base, seen + 1);
-    slugs.add(seen === 0 ? base : `${base}-${seen}`);
-  }
-  return slugs;
-}
-
-const headingSlugCache = new Map();
-
-function getCachedHeadingSlugs(filePath) {
-  if (!headingSlugCache.has(filePath)) {
-    headingSlugCache.set(filePath, extractHeadingSlugs(fs.readFileSync(filePath, "utf8")));
-  }
-  return headingSlugCache.get(filePath);
-}
-
-function extractHeadingSection(markdown, headingRegex) {
-  const lines = markdown.split(/\r?\n/);
-  let startIndex = -1;
-  let startLevel = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const headingMatch = /^(#{1,6})\s+(.+)$/.exec(lines[i]);
-    if (!headingMatch) continue;
-    if (startIndex === -1) {
-      if (headingRegex.test(lines[i])) {
-        startIndex = i;
-        startLevel = headingMatch[1].length;
-      }
-    } else if (headingMatch[1].length <= startLevel) {
-      return lines.slice(startIndex, i).join("\n");
-    }
-  }
-  return startIndex === -1 ? "" : lines.slice(startIndex).join("\n");
-}
-
-function checkRelativeLinks(skillFile, markdown) {
-  const broken = [];
-  const skillsRootDir = path.join(repoRoot, ".agents", "skills");
-  const isInsideSkills =
-    skillFile === skillsRootDir || skillFile.startsWith(skillsRootDir + path.sep);
-  for (const item of extractMarkdownLinks(skillFile, markdown)) {
-    if (item.invalidReason) {
-      broken.push({
-        link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (${item.invalidReason})`,
-        resolved: item.link
-      });
-      continue;
-    }
-    if (!item.isHostedDocs && isInsideSkills) {
-      const relFromSkills = path.relative(skillsRootDir, item.resolved);
-      if (
-        relFromSkills === ".." ||
-        relFromSkills.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(relFromSkills)
-      ) {
-        broken.push({
-          link: `${item.link}${item.fragment ? `#${item.fragment}` : ""} (non-portable link escaping .agents/skills/; use hosted Zensical URL or intra-skill relative link)`,
-          resolved: path.relative(repoRoot, item.resolved)
-        });
-        continue;
-      }
-    }
-    if (!fs.existsSync(item.resolved)) {
-      broken.push({ link: item.link, resolved: path.relative(repoRoot, item.resolved) });
-    } else if (item.fragment && item.resolved.endsWith(".md")) {
-      const slugs = getCachedHeadingSlugs(item.resolved);
-      if (!slugs.has(item.fragment.toLowerCase())) {
-        broken.push({
-          link: `${item.link}#${item.fragment}`,
-          resolved: `${path.relative(repoRoot, item.resolved)}#${item.fragment}`
-        });
-      }
-    }
-  }
-  return broken;
-}
-
-function walkFiles(dir) {
-  const results = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results.push(...walkFiles(full));
-    else if (entry.isFile()) results.push(full);
-  }
-  return results;
-}
-
-const RETIRED_SKILL_SYMBOL_RE =
+const RETIRED_SYMBOL_RE =
   /\b(?:subagent_brief|spawnPacingMs|agy-squad(?:\.mjs)?\s+run|terminal\.py|run-state\.mjs|AGY_SQUAD_RUN_DIR|AGY_SQUAD_SESSION|managed\s+`?manifest`?|adversarial_l1|adversarial_flat|adversarial_review|integrity-auditor|query_transcript|read_transcript|check_context_health)\b|\bnode\s+mcp\/handoffs\.mjs\b|(?<![a-zA-Z0-9_-])\.mcp-ready(?![a-zA-Z0-9_-])/gi;
 const HISTORICAL_NOTICE_RE =
   /\b(?:retired|historical|deprecated|removed|superseded|obsolete|replaced\s+by|do\s+not\s+use|never\s+use)\b/i;
-
-function findSkillDriftMatches(markdown) {
-  const matched = new Set();
-  let activeHistoricalBlock = false;
-  let fenceChar = "";
-  let fenceLen = 0;
-  for (const line of markdown.split(/\r?\n/)) {
-    if (!fenceChar) {
-      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
-        fenceChar = open[1][0];
-        fenceLen = open[1].length;
-        continue;
-      }
-      if (/^\s*#{1,6}\s+/.test(line)) {
-        activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
-      }
-    } else {
-      const closeRe = new RegExp(`^\\s{0,3}${fenceChar}{${fenceLen},}\\s*$`);
-      if (closeRe.test(line)) {
-        fenceChar = "";
-        fenceLen = 0;
-        continue;
-      }
-    }
-    if (activeHistoricalBlock) continue;
-    const segments = line.trim().startsWith("|")
-      ? line.split(/(?<!\\)\|/)
-      : line.split(/(?<=[.!?;])\s+/);
-    for (const segment of segments) {
-      RETIRED_SKILL_SYMBOL_RE.lastIndex = 0;
-      if (!RETIRED_SKILL_SYMBOL_RE.test(segment)) continue;
-      if (HISTORICAL_NOTICE_RE.test(segment)) continue;
-      RETIRED_SKILL_SYMBOL_RE.lastIndex = 0;
-      for (const match of segment.matchAll(RETIRED_SKILL_SYMBOL_RE)) {
-        matched.add(match[0].replace(/`/g, "").replace(/\s+/g, " ").trim());
-      }
-    }
-  }
-  return [...matched];
-}
-
-function auditSkills(ledgerArg) {
-  const skillsRoot = path.join(repoRoot, ".agents/skills");
-  const skillDirs = fs.readdirSync(skillsRoot, { withFileTypes: true }).filter(d => d.isDirectory());
-  const skills = [];
-  const findings = [];
-  const targetLedger = resolveTargetReviewLedger(ledgerArg);
-
-  const isPackagedDistribution =
-    !fs.existsSync(path.join(repoRoot, ".git")) &&
-    !fs.existsSync(path.join(repoRoot, "tests")) &&
-    !fs.existsSync(path.join(repoRoot, ".github"));
-
-  let ledgerDisposition = "CLEAN";
-  let openLedgerBlockers = [];
-  if (!targetLedger) {
-    if (isPackagedDistribution && !ledgerArg) {
-      ledgerDisposition = "PACKAGED_OMITTED";
-      findings.push({
-        id: "DOC-PACKAGED-LEDGER-OMITTED",
-        category: "DOC",
-        priority: "P3",
-        summary: "Running inside packaged distribution without git checkout; historical docs/reviews/*.md ledgers are omitted by package.json files allowlist."
-      });
-    } else {
-      ledgerDisposition = "MISSING";
-      findings.push({
-        id: "DOC-LEDGER-MISSING",
-        category: "DOC",
-        priority: "P1",
-        summary: "No durable target PR review ledger found under docs/reviews/ (required pre-remediation and pre-teardown target)."
-      });
-    }
-  } else {
-    const ledgerCheck = validateTargetReviewLedger(targetLedger);
-    if (ledgerCheck.errors.length > 0) {
-      ledgerDisposition = "INVALID";
-      findings.push({
-        id: "DOC-LEDGER-SCHEMA",
-        category: "DOC",
-        priority: "P2",
-        summary: `${targetLedger.relative} violates PR Review Standard v1.5.0 ledger structure: ${ledgerCheck.errors.join(" ")}`
-      });
-    }
-    if (ledgerCheck.openBlockingFindings.length > 0) {
-      if (ledgerDisposition === "CLEAN") ledgerDisposition = "OPEN_BLOCKERS";
-      openLedgerBlockers = ledgerCheck.openBlockingFindings.map(item => `${item.id} (${item.priority})`);
-      const preview = openLedgerBlockers.slice(0, 10).join(", ");
-      findings.push({
-        id: "DOC-LEDGER-OPEN-BLOCKERS",
-        category: "DOC",
-        priority: "P2",
-        summary: `${targetLedger.relative} declares ${ledgerCheck.openBlockingFindings.length} Open (Pre-Remediation) blocking finding(s): ${preview}${openLedgerBlockers.length > 10 ? ", ..." : ""}.`
-      });
-    } else if (ledgerCheck.openResiduals.length > 0) {
-      if (ledgerDisposition === "CLEAN") ledgerDisposition = "RESIDUALS_ONLY";
-      findings.push({
-        id: "DOC-LEDGER-RESIDUALS-OPEN",
-        category: "DOC",
-        priority: "P3",
-        summary: `${targetLedger.relative} Section 8 tracks ${ledgerCheck.openResiduals.length} Residual (Open) item(s) awaiting post-remediation closure: ${ledgerCheck.openResiduals.join(", ")}.`
-      });
-    }
-  }
-
-  const rolesDocPath = path.join(repoRoot, "docs/roles-and-workflows.md");
-  const rolesDocExists = fs.existsSync(rolesDocPath);
-  const rolesSlugs = rolesDocExists
-    ? extractHeadingSlugs(fs.readFileSync(rolesDocPath, "utf8"))
-    : new Set();
-
-  if (!rolesDocExists) {
-    findings.push({
-      id: "DOC-ROLES-MISSING",
-      category: "DOC",
-      priority: "P2",
-      summary: "Canonical role and skill workflow reference docs/roles-and-workflows.md is missing."
-    });
-  }
-
-  for (const entry of skillDirs) {
-    const dir = path.join(skillsRoot, entry.name);
-    const skillMd = path.join(dir, "SKILL.md");
-    if (!fs.existsSync(skillMd)) {
-      findings.push({
-        id: `SKILL-DIAG-${entry.name}`,
-        category: "SKILL",
-        priority: "P1",
-        summary: `Missing SKILL.md in .agents/skills/${entry.name}`
-      });
-      continue;
-    }
-    const content = fs.readFileSync(skillMd, "utf8");
-    const bytes = Buffer.byteLength(content, "utf8");
-    const lines = content.replace(/\r?\n$/, "").split(/\r?\n/).length;
-    const fm = parseFrontmatter(content);
-    const brokenLinks = checkRelativeLinks(skillMd, content);
-    const allFiles = walkFiles(dir);
-    let totalBytes = 0;
-    let markdownBytes = 0;
-    for (const f of allFiles) {
-      const sz = fs.statSync(f).size;
-      totalBytes += sz;
-      if (f.endsWith(".md")) markdownBytes += sz;
-    }
-    const entryShare = totalBytes > 0 ? Number((bytes / totalBytes).toFixed(2)) : 1;
-    const proseShare = markdownBytes > 0 ? Number((bytes / markdownBytes).toFixed(2)) : 1;
-
-    if (!fm?.name || fm.name !== entry.name || !fm.hasDescription) {
-      findings.push({
-        id: `SKILL-FM-${entry.name}`,
-        category: "SKILL",
-        priority: "P1",
-        summary: `Invalid YAML frontmatter in .agents/skills/${entry.name}/SKILL.md (expected name '${entry.name}' and non-empty description).`
-      });
-    }
-    const refsDir = path.join(dir, "references");
-    const driftTargets = [
-      skillMd,
-      ...allFiles.filter(f => f.endsWith(".md") && f.startsWith(refsDir + path.sep))
-    ];
-    const driftEntries = [];
-    for (const targetFile of driftTargets) {
-      const fileText = targetFile === skillMd ? content : fs.readFileSync(targetFile, "utf8");
-      const symbols = findSkillDriftMatches(fileText);
-      if (symbols.length > 0) {
-        driftEntries.push(`${path.relative(repoRoot, targetFile)} (${symbols.join(", ")})`);
-      }
-    }
-    if (driftEntries.length > 0) {
-      findings.push({
-        id: `SKILL-DRIFT-${entry.name}`,
-        category: "SKILL",
-        priority: "P2",
-        summary: `Skill instructions in ${driftEntries.join("; ")} reference retired Phase 1/2 symbol(s) without an explicit retired/historical notice.`
-      });
-    }
-    if (brokenLinks.length) {
-      findings.push({
-        id: `SKILL-LINKS-${entry.name}`,
-        category: "SKILL",
-        priority: "P1",
-        summary: `Broken relative links in .agents/skills/${entry.name}/SKILL.md: ${brokenLinks.map(b => b.link).join(", ")}`
-      });
-    }
-    if (lines > 300 || bytes > 12288) {
-      findings.push({
-        id: `SKILL-BUDGET-${entry.name}`,
-        category: "SKILL",
-        priority: "P3",
-        summary: `.agents/skills/${entry.name}/SKILL.md exceeds progressive-disclosure warn threshold (${lines} lines, ${bytes} bytes; warn > 300 lines / > 12,288 bytes; rubric target <= 250 lines / <= 10,240 bytes).`
-      });
-    }
-    if (proseShare > 0.7 && markdownBytes > 8192) {
-      findings.push({
-        id: `SKILL-SHARE-${entry.name}`,
-        category: "SKILL",
-        priority: "P3",
-        summary: `.agents/skills/${entry.name}/SKILL.md prose share is ${Math.round(proseShare * 100)}% of ${markdownBytes} B Markdown bytes (${Math.round(entryShare * 100)}% of ${totalBytes} B total; target <= 70% prose share when skill Markdown > 8 KB).`
-      });
-    }
-
-    let refBrokenCount = 0;
-    let refBrokenIndex = 0;
-    for (const f of allFiles.filter(file => file.endsWith(".md"))) {
-      if (f === skillMd) continue;
-      const refBroken = checkRelativeLinks(f, fs.readFileSync(f, "utf8"));
-      if (refBroken.length) {
-        refBrokenCount += refBroken.length;
-        refBrokenIndex += 1;
-        const refSlug = path.basename(f, ".md").replace(/[^A-Za-z0-9_-]+/g, "-");
-        findings.push({
-          id: `SKILL-REFLINKS-${entry.name}-${refSlug}-${refBrokenIndex}`,
-          category: "SKILL",
-          priority: "P2",
-          summary: `Broken relative links in ${path.relative(repoRoot, f)}: ${refBroken.map(b => b.link).join(", ")}`
-        });
-      }
-    }
-
-    const rolesLinks = extractMarkdownLinks(skillMd, content).filter(
-      item => item.resolved === rolesDocPath && fs.existsSync(item.resolved)
-    );
-    const hasValidRolesLink = rolesLinks.some(
-      item => !item.fragment || rolesSlugs.has(item.fragment.toLowerCase())
-    );
-    if (!hasValidRolesLink) {
-      findings.push({
-        id: `SKILL-ROLES-LINK-${entry.name}`,
-        category: "SKILL",
-        priority: "P2",
-        summary: `.agents/skills/${entry.name}/SKILL.md must contain a valid Markdown link to docs/roles-and-workflows.md or https://paragon-ux.github.io/Agy-Squad/roles-and-workflows/ (with valid #anchor if specified).`
-      });
-    }
-
-    skills.push({
-      name: entry.name,
-      path: path.relative(repoRoot, skillMd),
-      lines,
-      bytes,
-      estimatedTokens: estimateTokens(bytes),
-      totalSkillBytes: totalBytes,
-      markdownSkillBytes: markdownBytes,
-      entryShareOfTotal: entryShare,
-      proseShareOfMarkdown: proseShare,
-      brokenLinksCount: brokenLinks.length + refBrokenCount
-    });
-  }
-
-  const closureChecks = [
-    { label: "swarm status & monitor kill", test: s => /swarm\{action:\s*["']status["']\}|`?swarm\s+status`?/i.test(s) && /monitor(?:-\*)?/i.test(s) && /kill/i.test(s) },
-    { label: "manage_subagents", test: s => /manage_subagents/i.test(s) },
-    { label: "manage_task", test: s => /manage_task/i.test(s) },
-    { label: "child command cleanup", test: s => /child\s+commands?|builds,\s*servers,\s*or\s*watchers/i.test(s) }
-  ];
-  for (const [checkId, relPath, category, sectionRe] of [
-    ["SKILL-CLOSURE-CHECKLIST", ".agents/skills/swarm-governance/SKILL.md", "SKILL", /^##\s+5\.\s+Runtime Closure Checklist\b/i],
-    ["DOC-CLOSURE-CHECKLIST-stopping-agents", "docs/stopping-agents.md", "DOC", /^##\s+Four-check runtime closure checklist\b/i],
-    ["DOC-CLOSURE-CHECKLIST-roles-and-workflows", "docs/roles-and-workflows.md", "DOC", /^###\s+Four-check runtime closure gate\b/i]
-  ]) {
-    const absCheck = path.join(repoRoot, relPath);
-    const checkRaw = fs.existsSync(absCheck) ? fs.readFileSync(absCheck, "utf8") : "";
-    const section = extractHeadingSection(checkRaw, sectionRe);
-    if (!section) {
-      findings.push({
-        id: checkId,
-        category,
-        priority: "P2",
-        summary: `${relPath} is missing its dedicated runtime closure checklist section.`
-      });
-      continue;
-    }
-    const missingControls = closureChecks.filter(c => !c.test(section)).map(c => c.label);
-    if (missingControls.length) {
-      findings.push({
-        id: checkId,
-        category,
-        priority: "P2",
-        summary: `${relPath} runtime closure checklist is missing: ${missingControls.join(", ")}.`
-      });
-    }
-  }
-
-  // Zensical nav & docs/assets/*.svg structural checks (SCRIPT-PR5-04)
-  const zensicalPath = path.join(repoRoot, "zensical.toml");
-  const docsRoot = path.join(repoRoot, "docs");
-  if (fs.existsSync(zensicalPath) && fs.existsSync(docsRoot)) {
-    const zensicalRaw = fs.readFileSync(zensicalPath, "utf8");
-    const navMatch = zensicalRaw.match(/^nav\s*=\s*\[([\s\S]*?)^\]/m);
-    const navFiles = new Set();
-    if (navMatch) {
-      for (const m of navMatch[1].matchAll(/=\s*"([^"]+\.md)"/g)) {
-        navFiles.add(m[1]);
-        if (!fs.existsSync(path.join(docsRoot, m[1]))) {
-          findings.push({
-            id: `DOC-ZENSICAL-MISSING-${m[1].replace(/[^a-zA-Z0-9]+/g, "-")}`,
-            category: "DOC",
-            priority: "P2",
-            summary: `zensical.toml nav references missing file docs/${m[1]}.`
-          });
-        }
-      }
-      for (const entry of fs.readdirSync(docsRoot, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith(".md") && !navFiles.has(entry.name)) {
-          findings.push({
-            id: `DOC-ZENSICAL-UNLISTED-${entry.name.replace(/\.md$/, "")}`,
-            category: "DOC",
-            priority: "P3",
-            summary: `Top-level doc docs/${entry.name} is omitted from zensical.toml nav.`
-          });
-        }
-      }
-    }
-    const assetsDir = path.join(docsRoot, "assets");
-    if (fs.existsSync(assetsDir)) {
-      const reviewsPrefix = path.join(docsRoot, "reviews") + path.sep;
-      const docsMarkdownContents = walkFiles(docsRoot)
-        .filter(f => f.endsWith(".md") && !f.startsWith(reviewsPrefix))
-        .map(f => fs.readFileSync(f, "utf8"));
-      for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
-        const svgPath = path.join(assetsDir, entry.name);
-        const svgRaw = fs.readFileSync(svgPath, "utf8");
-        const hasRootSvg = /<svg\b[^>]*>[\s\S]*<\/svg>\s*$/i.test(svgRaw);
-        const hasBareAmp = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw);
-        if (!hasRootSvg || hasBareAmp) {
-          findings.push({
-            id: `DOC-SVG-XML-${entry.name.replace(/\.svg$/, "")}`,
-            category: "DOC",
-            priority: "P2",
-            summary: `docs/assets/${entry.name} failed SVG XML sanity check (root <svg> envelope or unescaped '&').`
-          });
-        }
-        if (!docsMarkdownContents.some(text => text.includes(entry.name))) {
-          findings.push({
-            id: `DOC-SVG-ORPHAN-${entry.name.replace(/\.svg$/, "")}`,
-            category: "DOC",
-            priority: "P3",
-            summary: `docs/assets/${entry.name} is not referenced by any file under docs/.`
-          });
-        }
-      }
-    }
-  }
-
-  // Scan active MCP prompt builders and top-level docs/ pages for retired Phase 1/v1.x symbols (SQ-SCRIPT-001)
-  const runtimeDriftTargets = [
-    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
-      .map(rel => path.join(repoRoot, rel))
-      .filter(abs => fs.existsSync(abs)),
-    ...(fs.existsSync(docsRoot)
-      ? fs.readdirSync(docsRoot, { withFileTypes: true })
-          .filter(entry => entry.isFile() && entry.name.endsWith(".md"))
-          .map(entry => path.join(docsRoot, entry.name))
-      : [])
-  ];
-  const runtimeDriftHits = [];
-  for (const absFile of runtimeDriftTargets) {
-    const symbols = findSkillDriftMatches(fs.readFileSync(absFile, "utf8"));
-    if (symbols.length > 0) {
-      runtimeDriftHits.push(`${path.relative(repoRoot, absFile)} (${symbols.join(", ")})`);
-    }
-  }
-  if (runtimeDriftHits.length > 0) {
-    findings.push({
-      id: "DOC-MCP-DRIFT",
-      category: "DOC",
-      priority: "P2",
-      summary: `Active runtime/docs files in ${runtimeDriftHits.join("; ")} reference retired Phase 1 or v1.x symbol(s) without an explicit retired/historical notice.`
-    });
-  }
-
-  return {
-    skills,
-    findings,
-    targetReviewLedger: targetLedger?.relative ?? null,
-    ledgerDisposition,
-    openLedgerBlockers
-  };
-}
-
-function runSquadCanaryAndOptimization({ allowActiveCohort = false, skipMcpSpawn = false } = {}) {
-  const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-  const squadIds = Object.keys(manifest.squads);
-  const findings = [];
-  const timings = {};
-
-  // 0. Check for lingering untorn-down self-diagnosis directories
-  const scratchSquadRoot = path.join(repoRoot, scratchSquadRel);
-  if (fs.existsSync(scratchSquadRoot)) {
-    const checkDirs = [
-      ...squadIds.map(id => ({ id, relDir: `${scratchSquadRel}/squad-${encodeURIComponent(id)}` })),
-      ...squadIds.map(id => ({
-        id: `integrity_auditor-${id}`,
-        relDir: `${scratchSquadRel}/squad-${encodeURIComponent(`integrity_auditor-${id}`)}`
-      })),
-      { id: "integrity_auditor", relDir: `${scratchSquadRel}/squad-integrity_auditor` },
-      { id: "self_diagnosis", relDir: `${scratchSquadRel}/squad-self_diagnosis` },
-      { id: "integrity_auditor-self_diagnosis", relDir: `${scratchSquadRel}/squad-integrity_auditor-self_diagnosis` }
-    ];
-    for (const { id, relDir } of checkDirs) {
-      if (fs.existsSync(path.join(repoRoot, relDir))) {
-        findings.push({
-          id: allowActiveCohort ? `SVC-ACTIVE-COHORT-${id}` : `SVC-TEARDOWN-${id}`,
-          category: "SVC",
-          priority: allowActiveCohort ? "P3" : "P2",
-          summary: allowActiveCohort
-            ? `Active self-diagnosis cohort directory '${relDir}' present (--allow-active-cohort set; tear down via '--teardown' after final verification).`
-            : `Lingering self-diagnosis directory '${relDir}' was not torn down (deterministic scratch teardown required). Run 'node .agents/skills/self-diagnosis/scripts/diagnose.mjs --teardown' after bundle verification (or pass '--allow-active-cohort' during an in-flight cohort).`
-        });
-      }
-    }
-    for (const entry of fs.readdirSync(scratchSquadRoot, { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith("self-diag-canary-")) {
-        findings.push({
-          id: allowActiveCohort ? `SVC-ACTIVE-CANARY-${entry.name}` : `SVC-TEARDOWN-${entry.name}`,
-          category: "SVC",
-          priority: allowActiveCohort ? "P3" : "P2",
-          summary: allowActiveCohort
-            ? `Concurrent self-diagnosis canary directory '${scratchSquadRel}/${entry.name}' present (--allow-active-cohort set).`
-            : `Lingering self-diagnosis canary directory '${scratchSquadRel}/${entry.name}' was not torn down (deterministic scratch teardown required).`
-        });
-      }
-    }
-  }
-
-  // 1. Measure dispatch_squad & squad_planner latency + validate payloads
-  const t0 = performance.now();
-  const leadRes = handleDispatchSquad({ squadId: "all_l1", manifestPath: manifestRelative }, repoRoot);
-  if (leadRes.isError) {
-    throw new Error(`Self-diagnosis all_l1 dispatch failed: ${leadRes.content[0].text}`);
-  }
-  const leads = JSON.parse(leadRes.content[0].text).Subagents;
-  const stagePayloads = {};
-  for (const id of squadIds) {
-    const res = handleDispatchSquad({ squadId: id, manifestPath: manifestRelative }, repoRoot);
-    if (res.isError) {
-      throw new Error(`Self-diagnosis specialist dispatch failed for '${id}': ${res.content[0].text}`);
-    }
-    stagePayloads[id] = JSON.parse(res.content[0].text).Subagents;
-  }
-  timings.dispatchCompileMs = Number((performance.now() - t0).toFixed(2));
-  const dispatchCallCount = 1 + squadIds.length;
-  timings.dispatchCompilePerCallMs = Number((timings.dispatchCompileMs / dispatchCallCount).toFixed(2));
-  if (timings.dispatchCompilePerCallMs > 25) {
-    findings.push({
-      id: "RUN-LATENCY-COMPILE",
-      category: "RUN",
-      priority: "P3",
-      summary: `Stage compilation averaged ${timings.dispatchCompilePerCallMs} ms/call (${timings.dispatchCompileMs} ms total across ${dispatchCallCount} calls; target < 10 ms/call, flag > 25 ms/call).`
-    });
-  }
-  const tPlan = performance.now();
-  const planned = planSquadCohort({ manifestPath: manifestRelative, executionMode: "swarm" }, repoRoot);
-  timings.squadPlannerMs = Number((performance.now() - tPlan).toFixed(2));
-  if (timings.squadPlannerMs > 25) {
-    findings.push({
-      id: "RUN-LATENCY-PLANNER",
-      category: "RUN",
-      priority: "P3",
-      summary: `squad_planner compilation took ${timings.squadPlannerMs} ms (target < 10 ms, flag > 25 ms).`
-    });
-  }
-  if (!planned?.provenanceScaffold?.entries?.length) {
-    findings.push({
-      id: "RUN-PLANNER-SCAFFOLD",
-      category: "RUN",
-      priority: "P2",
-      summary: "squad_planner returned an empty provenanceScaffold."
-    });
-  }
-
-  // 2. Check scopeFiles existence (lead + specialists) and overlap within each squad
-  const isPackagedDistribution =
-    !fs.existsSync(path.join(repoRoot, ".git")) &&
-    !fs.existsSync(path.join(repoRoot, "tests")) &&
-    !fs.existsSync(path.join(repoRoot, ".github"));
-  const isCheckoutOnlyPath = relPath => /^(?:tests|\.github|benchmarks|docs\/plans|docs\/reviews)\//.test(relPath);
-  const packagedCheckoutOmissions = new Set();
-  const topology = [];
-  for (const [id, squad] of Object.entries(manifest.squads)) {
-    const leadSpec = squad.lead ?? squad;
-    let leadScopeMissingIdx = 0;
-    for (const file of leadSpec.scopeFiles ?? []) {
-      if (!fs.existsSync(path.join(repoRoot, file))) {
-        if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
-          packagedCheckoutOmissions.add(file);
-        } else {
-          leadScopeMissingIdx += 1;
-          findings.push({
-            id: `RUN-LEADSCOPE-${id}-${leadScopeMissingIdx}`,
-            category: "RUN",
-            priority: "P2",
-            summary: `Missing lead scopeFile '${file}' in self-diagnosis squad '${id}'.`
-          });
-        }
-      }
-    }
-    const specialists = squad.specialists ?? squad.children ?? [];
-    const seen = new Set();
-    const overlaps = new Set();
-    const readOnlyOverlaps = new Set();
-    let writableTotalFiles = 0;
-    let readOnlyTotalFiles = 0;
-    const writableScopes = [];
-    const readOnlyScopes = [];
-    let specScopeMissingIdx = 0;
-    for (const sp of specialists) {
-      for (const file of sp.scopeFiles) {
-        seen.add(file);
-        if (!fs.existsSync(path.join(repoRoot, file))) {
-          if (isPackagedDistribution && isCheckoutOnlyPath(file)) {
-            packagedCheckoutOmissions.add(file);
-          } else {
-            specScopeMissingIdx += 1;
-            findings.push({
-              id: `RUN-SCOPE-${id}-${specScopeMissingIdx}`,
-              category: "RUN",
-              priority: "P2",
-              summary: `Missing specialist scopeFile '${file}' in self-diagnosis squad '${id}'.`
-            });
-          }
-        }
-      }
-      if (sp.readOnly !== true) {
-        writableTotalFiles += sp.scopeFiles.length;
-        writableScopes.push(sp.scopeFiles);
-      } else {
-        readOnlyTotalFiles += sp.scopeFiles.length;
-        readOnlyScopes.push(sp.scopeFiles);
-      }
-    }
-    for (let i = 0; i < writableScopes.length; i += 1) {
-      for (let j = i + 1; j < writableScopes.length; j += 1) {
-        for (const a of writableScopes[i]) {
-          for (const b of writableScopes[j]) {
-            if (scopesOverlap(a, b, repoRoot)) overlaps.add(`${a} <-> ${b}`);
-          }
-        }
-      }
-    }
-    for (let i = 0; i < readOnlyScopes.length; i += 1) {
-      for (let j = i + 1; j < readOnlyScopes.length; j += 1) {
-        for (const a of readOnlyScopes[i]) {
-          for (const b of readOnlyScopes[j]) {
-            if (scopesOverlap(a, b, repoRoot)) readOnlyOverlaps.add(`${a} <-> ${b}`);
-          }
-        }
-      }
-    }
-    const overlapRatio = writableTotalFiles > 0 ? Number((overlaps.size / writableTotalFiles).toFixed(2)) : 0;
-    const readOnlyOverlapRatio =
-      readOnlyTotalFiles > 0 ? Number((readOnlyOverlaps.size / readOnlyTotalFiles).toFixed(2)) : 0;
-    if (overlapRatio > 0.25) {
-      findings.push({
-        id: `ARCH-OVERLAP-${id}`,
-        category: "ARCH",
-        priority: "P2",
-        summary: `Squad '${id}' has ${Math.round(overlapRatio * 100)}% writable scopeFiles overlap across specialists (${[...overlaps].join(", ")}).`
-      });
-    }
-    if (readOnlyOverlapRatio > 0.25) {
-      findings.push({
-        id: `ARCH-READ-OVERLAP-${id}`,
-        category: "ARCH",
-        priority: "P3",
-        summary: `Squad '${id}' has ${Math.round(readOnlyOverlapRatio * 100)}% read-only scopeFiles overlap across specialists (${[...readOnlyOverlaps].join(", ")}) (Advisory).`
-      });
-    }
-    topology.push({
-      squadId: id,
-      specialistsCount: specialists.length,
-      uniqueScopeFiles: seen.size,
-      overlappingScopeFiles: [...overlaps],
-      overlapRatio,
-      readOnlyOverlappingScopeFiles: [...readOnlyOverlaps],
-      readOnlyOverlapRatio
-    });
-  }
-  if (packagedCheckoutOmissions.size > 0) {
-    findings.push({
-      id: "DEP-PACKAGED-CHECKOUT-SCOPE",
-      category: "DEP",
-      priority: "P3",
-      summary: `Running inside packaged distribution without git checkout; ${packagedCheckoutOmissions.size} checkout-only scopeFile(s) (${[...packagedCheckoutOmissions].join(", ")}) are omitted by package.json files allowlist.`
-    });
-  }
-
-  // 3. Measure prompt overhead budgets (subagent + minimal /swarm + auditor + precompiled templates)
-  const minimalAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
-  const specialistTemplateBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", 1).Prompt,
-    "utf8"
-  );
-  const leadTemplateBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", undefined).Prompt,
-    "utf8"
-  );
-  const precompiledLeadTemplateBytes = Buffer.byteLength(
-    buildSubagentSpec(minimalAgent, "s", "m.json", undefined, undefined, { precompiledSpecialists: true }).Prompt,
-    "utf8"
-  );
-  const minSwarmPlan = planSquadCohort(
-    {
-      manifest: { squads: { s: { lead: minimalAgent, specialists: [minimalAgent] } } },
-      executionMode: "swarm"
-    },
-    repoRoot
-  );
-  const swarmSpecialistTemplateBytes = Buffer.byteLength(
-    minSwarmPlan.workers[0].specialists[0].swarmAdd.brief,
-    "utf8"
-  );
-  const swarmLeadTemplateBytes = Buffer.byteLength(
-    minSwarmPlan.workers[0].lead.swarmAdd.brief,
-    "utf8"
-  );
-  const swarmAuditorTemplateBytes = Buffer.byteLength(
-    minSwarmPlan.integrityAuditPlan[0].swarmAdd.brief,
-    "utf8"
-  );
-
-  for (const [budgetId, actual, limit, label] of [
-    ["RUN-BUDGET-SPEC", specialistTemplateBytes, 1800, "Subagent specialist brief template"],
-    ["RUN-BUDGET-LEAD", leadTemplateBytes, 3300, "Subagent lead brief template"],
-    ["RUN-BUDGET-PRECOMPILED-LEAD", precompiledLeadTemplateBytes, 3300, "Subagent precompiled lead brief template"],
-    ["RUN-BUDGET-SWARM-SPEC", swarmSpecialistTemplateBytes, 1800, "/swarm specialist brief template"],
-    ["RUN-BUDGET-SWARM-LEAD", swarmLeadTemplateBytes, 3300, "/swarm lead brief template"],
-    ["RUN-BUDGET-SWARM-AUDIT", swarmAuditorTemplateBytes, 3300, "/swarm integrity auditor brief template"]
-  ]) {
-    if (actual > limit) {
-      findings.push({
-        id: budgetId,
-        category: "RUN",
-        priority: "P3",
-        summary: `${label} is ${actual} UTF-8 bytes (exceeds ${limit} B warn budget; rubric target ${limit - 200} B).`
-      });
-    }
-  }
-
-  // 4. Execute isolated workspace-local Pointer-Over-Wire & squad_planner canary with deterministic scratch teardown
-  const created = [];
-  const canaryRel = `${scratchSquadRel}/self-diag-canary-${randomUUID()}`;
-  const canaryDir = ensureDirectory(repoRoot, canaryRel, created);
-  fs.writeFileSync(path.join(canaryDir, "canary-owner.json"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-  const cleanupCanary = () => {
-    fs.rmSync(canaryDir, { recursive: true, force: true });
-    for (const dir of [...created].reverse()) {
-      removeEmpty(dir);
-    }
-  };
-  process.once("exit", cleanupCanary);
-  try {
-    fs.writeFileSync(path.join(canaryDir, "target.txt"), "self-diagnosis-canary\n");
-    const canaryPlan = planSquadCohort({
-      manifest,
-      executionMode: "swarm",
-      model: "gemini-4-hydrogen-high",
-      includeIntegrityAuditor: true
-    }, canaryDir);
-    if (!canaryPlan.modelProvenance?.pinningSupported || !canaryPlan.integrityAuditPlan?.length) {
-      throw new Error("Self-diagnosis squad_planner swarm canary validation failed.");
-    }
-
-    for (const id of squadIds) {
-      const s1 = reportPath(id, 1);
-      const s2 = reportPath(id, 2);
-      const leadSlot = reportPath(id);
-      for (const [slot, text] of [
-        [s1, `# ${id} Specialist 1\nVerified target.txt.\n`],
-        [s2, `# ${id} Specialist 2\nVerified target.txt.\n`],
-        [leadSlot, `# ${id} Lead Synthesis\nContent Verdict: PASS\nVerified both specialist reports against target.txt.\n`]
-      ]) {
-        const full = path.join(canaryDir, slot);
-        fs.mkdirSync(path.dirname(full), { recursive: true });
-        fs.writeFileSync(full, text);
-      }
-    }
-
-    const tFingerprint = performance.now();
-    const verifiedFiles = fingerprint(canaryDir, ["target.txt"]);
-    timings.canaryFingerprintMs = Number((performance.now() - tFingerprint).toFixed(2));
-    const leadAssignments = [];
-    const leadHandoffs = [];
-    const squadRecords = [];
-    let digestAccumMs = 0;
-
-    for (const id of squadIds) {
-      const s1 = reportPath(id, 1);
-      const s2 = reportPath(id, 2);
-      const leadSlot = reportPath(id);
-      const auditSlot = reportPath(`integrity_auditor-${id}`, 1);
-      const record = {
-        workspace: canaryDir,
-        squadId: id,
-        verdict: "PASS",
-        verifiedFiles,
-        assignments: [
-          { conversationId: `${id}-child-1`, report: s1 },
-          { conversationId: `${id}-child-2`, report: s2 }
-        ],
-        handoffs: [
-          { sender: `${id}-child-1`, message: `READY ${s1} — Specialist 1 verified ${id}.` },
-          { sender: `${id}-child-2`, message: `READY ${s2} — Specialist 2 verified ${id}.` }
-        ]
-      };
-      const tDig = performance.now();
-      const { evidenceDigest } = computeEvidenceDigest(canaryDir, record);
-      digestAccumMs += performance.now() - tDig;
-      const auditFull = path.join(canaryDir, auditSlot);
-      fs.mkdirSync(path.dirname(auditFull), { recursive: true });
-      fs.writeFileSync(
-        auditFull,
-        `# ${id} Integrity Audit\nTarget Squad: ${id}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${evidenceDigest}\n`
-      );
-      squadRecords.push({ id, leadSlot, record });
-    }
-
-    // Prepare custom reportRoot canary fixtures and digest BEFORE starting handoff latency timer
-    const customId = squadIds[0];
-    const customRoot = "scratch/agy-squad/custom-cohort";
-    const cs1 = reportPath(customId, 1, customRoot);
-    const cs2 = reportPath(customId, 2, customRoot);
-    const cLead = reportPath(customId, undefined, customRoot);
-    const cAudit = reportPath(`integrity_auditor-${customId}`, 1, customRoot);
-    for (const [slot, text] of [
-      [cs1, `# ${customId} Custom 1\nVerified target.txt.\n`],
-      [cs2, `# ${customId} Custom 2\nVerified target.txt.\n`],
-      [cLead, `# ${customId} Custom Lead\nContent Verdict: PASS\nVerified custom reportRoot.\n`]
-    ]) {
-      const full = path.join(canaryDir, slot);
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.writeFileSync(full, text);
-    }
-    const customRecord = {
-      workspace: canaryDir,
-      squadId: customId,
-      reportRoot: customRoot,
-      verdict: "PASS",
-      verifiedFiles,
-      assignments: [
-        { conversationId: `${customId}-c1`, report: cs1 },
-        { conversationId: `${customId}-c2`, report: cs2 }
-      ],
-      handoffs: [
-        { sender: `${customId}-c1`, message: `READY ${cs1} — Custom 1 verified.` },
-        { sender: `${customId}-c2`, message: `READY ${cs2} — Custom 2 verified.` }
-      ]
-    };
-    const tCustomDig = performance.now();
-    const { evidenceDigest: customDigest } = computeEvidenceDigest(canaryDir, customRecord);
-    digestAccumMs += performance.now() - tCustomDig;
-    const cAuditFull = path.join(canaryDir, cAudit);
-    fs.mkdirSync(path.dirname(cAuditFull), { recursive: true });
-    fs.writeFileSync(
-      cAuditFull,
-      `# ${customId} Custom Integrity Audit\nTarget Squad: ${customId}\nIntegrity Verdict: CLEAN\nEvidence Digest: ${customDigest}\n`
-    );
-    timings.digestMs = Number(digestAccumMs.toFixed(2));
-
-    const tHandoff = performance.now();
-    for (const { id, leadSlot, record } of squadRecords) {
-      inspectHandoffs(canaryDir, record);
-      const bundled = bundleReports(canaryDir, record);
-      const verified = verifyBundle(canaryDir, bundled.path, bundled.sha256);
-      const pruned = pruneReports(canaryDir, bundled.path, verified.sha256);
-      if (pruned.removed.length !== 2) {
-        throw new Error(`Expected 2 pruned reports in self-diagnosis canary for '${id}', got ${pruned.removed.length}`);
-      }
-      leadAssignments.push({ conversationId: `${id}-lead`, report: leadSlot });
-      leadHandoffs.push({
-        sender: `${id}-lead`,
-        message: `READY ${leadSlot} — Lead synthesized and bundled ${id} (${verified.sha256.slice(0, 12)}).`
-      });
-    }
-
-    inspectHandoffs(canaryDir, customRecord);
-    const customBundled = bundleReports(canaryDir, customRecord);
-    const customVerified = verifyBundle(canaryDir, customBundled.path, customBundled.sha256);
-    const customPruned = pruneReports(canaryDir, customBundled.path, customVerified.sha256);
-    if (customPruned.removed.length !== 2) {
-      throw new Error(`Expected 2 pruned custom-root reports for '${customId}', got ${customPruned.removed.length}`);
-    }
-
-    // Verify Layered Full-Squad (all_l1) 3-lead receipt reconciliation
-    const layeredInspected = inspectHandoffs(canaryDir, {
-      workspace: canaryDir,
-      assignments: leadAssignments,
-      handoffs: leadHandoffs
-    });
-    if (layeredInspected.some(item => item.status !== "READY") || layeredInspected.length !== 3) {
-      throw new Error("Layered 3-lead canary reconciliation failed.");
-    }
-    const totalCanarySquads = squadIds.length + 1;
-    timings.handoffPipelineMs = Number((performance.now() - tHandoff).toFixed(2));
-    timings.perSquadHandoffMs = Number((timings.handoffPipelineMs / totalCanarySquads).toFixed(2));
-    if (timings.perSquadHandoffMs > 50) {
-      findings.push({
-        id: "SVC-LATENCY-HANDOFF",
-        category: "SVC",
-        priority: "P3",
-        summary: `Handoff/bundle/verify/prune canary took ${timings.perSquadHandoffMs} ms per 2-specialist squad (${timings.handoffPipelineMs} ms total across ${totalCanarySquads} squads; target < 20 ms, flag > 50 ms per squad).`
-      });
-    }
-  } finally {
-    process.removeListener("exit", cleanupCanary);
-    cleanupCanary();
-  }
-
-  // 5. Measure MCP tools/list schema payload size (real child stdio default; --skip-mcp-spawn uses in-process TOOLS)
-  const tMcp = performance.now();
-  let toolsPayload;
-  let schemaBytes;
-  timings.mcpSpawnSkipped = Boolean(skipMcpSpawn);
-  if (skipMcpSpawn) {
-    const rawResp = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } });
-    timings.mcpSpawnMs = Number((performance.now() - tMcp).toFixed(2));
-    toolsPayload = JSON.parse(rawResp);
-    schemaBytes = Buffer.byteLength(rawResp, "utf8");
-  } else {
-    const serverRes = spawnSync(process.execPath, [path.join(repoRoot, "mcp/index.js")], {
-      cwd: repoRoot,
-      input: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n",
-      encoding: "utf8"
-    });
-    timings.mcpSpawnMs = Number((performance.now() - tMcp).toFixed(2));
-    if (serverRes.status !== 0) {
-      throw new Error(`MCP server tools/list check failed: ${serverRes.stderr}`);
-    }
-    try {
-      toolsPayload = JSON.parse(serverRes.stdout.trim());
-    } catch (error) {
-      throw new Error(`MCP server tools/list returned invalid JSON: ${error.message}`);
-    }
-    schemaBytes = Buffer.byteLength(serverRes.stdout.trim(), "utf8");
-  }
-  const advertisedTools = Array.isArray(toolsPayload?.result?.tools)
-    ? toolsPayload.result.tools.map(tool => tool?.name)
-    : [];
-  for (const requiredTool of ["dispatch_squad", "squad_planner"]) {
-    if (!advertisedTools.includes(requiredTool)) {
-      throw new Error(`MCP server tools/list is missing required tool '${requiredTool}'.`);
-    }
-  }
-  if (schemaBytes > 4096) {
-    findings.push({
-      id: "MCP-BUDGET-SCHEMA",
-      category: "MCP",
-      priority: "P3",
-      summary: `MCP tools/list response is ${schemaBytes} UTF-8 bytes (exceeds 4,096 B warn budget; rubric target 3,072 B).`
-    });
-  }
-
-  const SWARM_MENTION_RESERVE_BYTES = 26;
-  const checkHeadroom = (slot, id, label) => {
-    const prefixBytes = Buffer.byteLength(`PARTIAL ${slot} — `, "utf8") + SWARM_MENTION_RESERVE_BYTES;
-    const receiptHeadroomBytes = messageLimit - prefixBytes;
-    if (receiptHeadroomBytes < 312) {
-      findings.push({
-        id,
-        category: "SVC",
-        priority: "P2",
-        summary: `${label} has only ${receiptHeadroomBytes} B receipt headroom (PARTIAL + @24-char prefix ${prefixBytes} B > 188 B limit).`
-      });
-    }
-    return receiptHeadroomBytes;
-  };
-
-  for (let i = 0; i < leads.length; i += 1) {
-    const slot = leads[i].Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
-    if (slot) checkHeadroom(slot, `SVC-HEADROOM-LEAD-${i + 1}`, `Lead ${leads[i].Role}`);
-  }
-  for (let i = 0; i < (planned.integrityAuditPlan ?? []).length; i += 1) {
-    const audit = planned.integrityAuditPlan[i];
-    if (audit?.reportSlot) {
-      checkHeadroom(audit.reportSlot, `SVC-HEADROOM-AUDIT-${audit.targetSquad}-${i + 1}`, `Auditor '${audit.workerName}'`);
-    }
-  }
-
-  const compiledSquads = Object.fromEntries(
-    Object.entries(stagePayloads).map(([id, agents]) => [
-      id,
-      agents.map((a, idx) => {
-        const slot = a.Prompt.match(/^Report slot: (.+)$/m)?.[1]?.trim();
-        const receiptHeadroomBytes = slot ? checkHeadroom(slot, `SVC-HEADROOM-${id}-${idx + 1}`, `Specialist ${idx + 1} in '${id}'`) : null;
-        return {
-          Role: a.Role,
-          TypeName: a.TypeName,
-          Workspace: a.Workspace,
-          reportSlot: slot,
-          promptBytes: Buffer.byteLength(a.Prompt, "utf8"),
-          receiptHeadroomBytes
-        };
-      })
-    ])
-  );
-
-  return {
-    compiledStages: {
-      leadsCount: leads.length,
-      squads: compiledSquads
-    },
-    promptBudgets: {
-      specialistTemplateBytes,
-      specialistEstimatedTokens: estimateTokens(specialistTemplateBytes),
-      leadTemplateBytes,
-      leadEstimatedTokens: estimateTokens(leadTemplateBytes),
-      precompiledLeadTemplateBytes,
-      swarmSpecialistTemplateBytes,
-      swarmLeadTemplateBytes,
-      swarmAuditorTemplateBytes,
-      mcpToolsListResponseBytes: schemaBytes,
-      mcpToolsListEstimatedTokens: estimateTokens(schemaBytes),
-      budgetTargets: { specialist: 1600, lead: 3100, mcpToolsList: 3072 },
-      budgetWarns: { specialist: 1800, lead: 3300, mcpToolsList: 4096 }
-    },
-    topology,
-    timings,
-    findings
-  };
-}
-
-function buildPrReviewCategoryMatrix(allFindings) {
-  const categories = ["ARCH", "DOC", "SKILL", "MCP", "RUN", "SVC", "DB", "SCRIPT", "TEST", "DEP", "SEC"];
-  return categories.map(cat => {
-    const items = allFindings.filter(f => f.category === cat);
-    const p1 = items.filter(f => f.priority === "P1").length;
-    const p2 = items.filter(f => f.priority === "P2").length;
-    const p3 = items.filter(f => f.priority === "P3").length;
-    return {
-      category: cat,
-      p1,
-      p2,
-      p3,
-      verdict:
-        cat === "DB"
-          ? "Not applicable"
-          : p1 > 0 || p2 > 0
-            ? "Changes required"
-            : "No findings within reviewed scope"
-    };
-  });
-}
-
-function parseCliArgs(argv) {
-  let markdown = false;
-  let printDispatch = false;
-  let printPlan = false;
-  let teardown = false;
-  let squadId = "all_l1";
-  let planSquadId;
-  let topology;
-  let sawTopologyFlag = false;
-  let sawFlatFlag = false;
-  let sawModeFlag = false;
-  let sawIsolationFlag = false;
-  let executionMode = "swarm";
-  let workspaceIsolation = "inherit";
-  let teardownTarget = "all";
-  let parentId;
-  let acceptedHash;
-  let ledgerPath;
-  let force = false;
-  let allowActiveCohort = false;
-  let skipMcpSpawn = false;
-  let help = false;
-  const positionalArgs = [];
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--help" || arg === "-h") {
-      help = true;
-    } else if (arg === "--markdown") {
-      markdown = true;
-    } else if (arg === "--allow-active-cohort") {
-      allowActiveCohort = true;
-    } else if (arg === "--skip-mcp-spawn") {
-      skipMcpSpawn = true;
-    } else if (arg === "--print-plan") {
-      printPlan = true;
-      const next = argv[i + 1];
-      if (next && !next.startsWith("-")) {
-        positionalArgs.push(next);
-        i += 1;
-      }
-    } else if (arg === "--topology") {
-      const next = argv[i + 1];
-      if (next !== "flat" && next !== "layered") {
-        throw new Error("Flag '--topology' requires 'flat' or 'layered'.");
-      }
-      if (sawFlatFlag || (sawTopologyFlag && topology !== next)) {
-        throw new Error("Conflicting topology flags: use either '--topology flat|layered' or '--flat', not both.");
-      }
-      sawTopologyFlag = true;
-      topology = next;
-      i += 1;
-    } else if (arg === "--flat") {
-      if (sawTopologyFlag && topology !== "flat") {
-        throw new Error("Conflicting topology flags: '--topology' cannot be combined with '--flat'.");
-      }
-      if (sawTopologyFlag) {
-        throw new Error("Conflicting topology flags: specify either '--topology flat' or '--flat', not both.");
-      }
-      sawFlatFlag = true;
-      topology = "flat";
-    } else if (arg === "--mode") {
-      const next = argv[i + 1];
-      if (next !== "swarm" && next !== "subagent") {
-        throw new Error("Flag '--mode' requires 'swarm' or 'subagent'.");
-      }
-      sawModeFlag = true;
-      executionMode = next;
-      i += 1;
-    } else if (arg === "--workspace-isolation") {
-      const next = argv[i + 1];
-      if (next !== "inherit" && next !== "share" && next !== "branch") {
-        throw new Error("Flag '--workspace-isolation' requires 'inherit', 'share', or 'branch'.");
-      }
-      sawIsolationFlag = true;
-      workspaceIsolation = next;
-      i += 1;
-    } else if (arg === "--print-dispatch") {
-      printDispatch = true;
-      const next = argv[i + 1];
-      if (next && !next.startsWith("-")) {
-        positionalArgs.push(next);
-        i += 1;
-      }
-    } else if (arg === "--parent-id") {
-      const next = argv[i + 1];
-      if (!next || next.startsWith("-") || !/^[A-Za-z0-9._:-]+$/.test(next)) {
-        throw new Error("Flag '--parent-id' requires a valid conversationId value (alphanumeric, '.', '_', ':', '-').");
-      }
-      parentId = next;
-      i += 1;
-    } else if (arg === "--teardown") {
-      teardown = true;
-      const next = argv[i + 1];
-      if (next && !next.startsWith("-")) {
-        positionalArgs.push(next);
-        i += 1;
-      }
-    } else if (arg === "--accept") {
-      const next = argv[i + 1];
-      if (!next || !/^[0-9a-f]{64}$/.test(next)) {
-        throw new Error("Flag '--accept' requires a 64-character lowercase hex SHA-256 bundle digest.");
-      }
-      acceptedHash = next;
-      i += 1;
-    } else if (arg === "--ledger") {
-      const next = argv[i + 1];
-      if (!next || next.startsWith("-")) {
-        throw new Error("Flag '--ledger' requires a path under docs/reviews/.");
-      }
-      ledgerPath = next;
-      i += 1;
-    } else if (arg === "--force") {
-      force = true;
-    } else if (!arg.startsWith("-")) {
-      positionalArgs.push(arg);
-    } else {
-      throw new Error(
-        `Unknown argument '${arg}'. Usage: diagnose.mjs [--markdown] [--allow-active-cohort] [--skip-mcp-spawn] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]]`
-      );
-    }
-  }
-  if ([markdown, printPlan, printDispatch, teardown].filter(Boolean).length > 1) {
-    throw new Error("Flags '--markdown', '--print-plan', '--print-dispatch', and '--teardown' are mutually exclusive.");
-  }
-  if (positionalArgs.length > 0) {
-    if (positionalArgs.length > 1 || (!printPlan && !printDispatch && !teardown)) {
-      throw new Error(
-        `Unexpected positional argument '${positionalArgs[0]}'. Positional squadId/target is only accepted with '--print-plan', '--print-dispatch', or '--teardown'.`
-      );
-    }
-    if (printPlan) planSquadId = positionalArgs[0];
-    else if (printDispatch) squadId = positionalArgs[0];
-    else if (teardown) teardownTarget = positionalArgs[0];
-  }
-  if (parentId && !printDispatch) {
-    throw new Error("Flag '--parent-id' is only valid with '--print-dispatch'.");
-  }
-  if (topology && !printPlan) {
-    throw new Error("Flags '--topology' and '--flat' are only valid with '--print-plan'.");
-  }
-  if ((sawModeFlag || sawIsolationFlag) && !printPlan) {
-    throw new Error("Flags '--mode' and '--workspace-isolation' are only valid with '--print-plan'.");
-  }
-  if (ledgerPath && (printPlan || printDispatch)) {
-    throw new Error("Flag '--ledger' is not valid with '--print-plan' or '--print-dispatch'.");
-  }
-  if ((allowActiveCohort || skipMcpSpawn) && (printPlan || printDispatch || teardown)) {
-    throw new Error("Flags '--allow-active-cohort' and '--skip-mcp-spawn' are only valid in audit mode.");
-  }
-  if ((acceptedHash || force) && !teardown) {
-    throw new Error("Flags '--accept' and '--force' are only valid with '--teardown'.");
-  }
-  if (acceptedHash && teardownTarget === "all") {
-    throw new Error("Flag '--accept' requires a single squadId (not 'all').");
-  }
-  return {
-    markdown,
-    printPlan,
-    printDispatch,
-    teardown,
-    squadId,
-    planSquadId,
-    topology,
-    executionMode,
-    workspaceIsolation,
-    teardownTarget,
-    parentId,
-    acceptedHash,
-    ledgerPath,
-    force,
-    allowActiveCohort,
-    skipMcpSpawn,
-    help
-  };
-}
-
+const STRAY_FLAG_EMDASH_RE = /(?:^|\s)—[a-z][a-z0-9-]*/i;
 const USAGE =
-  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--markdown] [--allow-active-cohort] [--skip-mcp-spawn] [--ledger <docs/reviews/...>] | [--print-plan [squadId] [--topology flat|layered | --flat] [--mode swarm|subagent] [--workspace-isolation inherit|share|branch]] | [--print-dispatch [squadId] [--parent-id <id>]] | [--teardown [all | <squadId> [--accept <sha256>]] [--ledger <docs/reviews/...>] [--force]] | [--help]";
+  "Usage: node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json] [-h|--help]\n" +
+  "Read-only Agy-Squad maintainer check: audits shipped skills, links, hygiene, and brief/MCP byte budgets.\n" +
+  "Options:\n" +
+  "  --json        Emit JSON report (default output format; retained as a compatibility alias)\n" +
+  "  -h, --help    Show this help message";
 
-let cli;
-try {
-  cli = parseCliArgs(process.argv.slice(2));
-} catch (error) {
-  console.error(error.message);
-  process.exit(1);
+const estimateTokens = bytes => Math.ceil(bytes / 4);
+const trimLeadingSlashes = s => { let i = 0; while (i < s.length && s[i] === "/") i++; return s.slice(i); };
+
+function toFindingSlug(value) {
+  const raw = value.replace(/\.(?:md|mjs|js|svg)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  let start = 0;
+  let end = raw.length;
+  while (start < end && raw[start] === "-") start++;
+  while (end > start && raw[end - 1] === "-") end--;
+  return raw.slice(start, end) || "file";
 }
 
-if (cli.help) {
-  console.log(USAGE);
-  process.exit(0);
+function stripHtmlComments(text) {
+  let out = "";
+  for (let pos = 0; pos < text.length; ) {
+    const start = text.indexOf("<!--", pos);
+    if (start === -1) return out + text.slice(pos);
+    out += text.slice(pos, start);
+    const end = text.indexOf("-->", start + 4);
+    if (end === -1) return out;
+    pos = end + 3;
+  }
+  return out;
 }
 
 function assertAgySquadWorkspace() {
   const rawCwd = process.cwd();
-  let dir;
-  try {
-    dir = fs.realpathSync(rawCwd);
-  } catch {
-    dir = path.resolve(rawCwd);
-  }
+  let cursor;
+  try { cursor = fs.realpathSync.native(rawCwd); } catch { cursor = path.resolve(rawCwd); }
   let foundPkgName = null;
-  let cursor = dir;
   while (true) {
     const pkgPath = path.join(cursor, "package.json");
     if (fs.existsSync(pkgPath)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-        if (parsed && typeof parsed.name === "string" && parsed.name === "agy-squad") {
-          return;
-        }
+        if (parsed?.name === "agy-squad") return;
         foundPkgName = typeof parsed?.name === "string" ? parsed.name : "(unnamed package)";
       } catch {
         foundPkgName = "(unreadable package.json)";
@@ -2225,195 +70,485 @@ function assertAgySquadWorkspace() {
     if (parent === cursor) break;
     cursor = parent;
   }
-  const detail = foundPkgName
-    ? ` (found package "${foundPkgName}")`
-    : ' (no package.json with name "agy-squad" found)';
+  const detail = foundPkgName ? ` (found package "${foundPkgName}")` : ' (no package.json with name "agy-squad" found)';
   console.error(
-    [
-      "Error: diagnose.mjs is an Agy-Squad repository maintainer profiler and must be run inside an Agy-Squad checkout.",
-      `Current working directory: ${rawCwd}${detail}`,
-      "To review or govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', '/day-one-review', or '/swarm-governance' instead."
-    ].join("\n")
+    `Error: diagnose.mjs is an Agy-Squad maintainer check and must be run inside an Agy-Squad checkout.\n` +
+    `Current working directory: ${rawCwd}${detail}\n` +
+    `To govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', '/day-one-review', or '/swarm-governance'.`
   );
   process.exit(1);
 }
 
-assertAgySquadWorkspace();
-
-if (cli.teardown) {
-  try {
-    const res = teardownSelfDiagnosisDirs({
-      squadId: cli.teardownTarget,
-      acceptedHash: cli.acceptedHash,
-      force: cli.force,
-      ledgerPath: cli.ledgerPath
-    });
-    console.log(JSON.stringify(res, null, 2));
-    process.exit(0);
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
+function unquote(value) {
+  return (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+    ? value.slice(1, -1).trim()
+    : value;
 }
 
-if (cli.printPlan) {
-  try {
-    let planInput;
-    if (cli.topology === "flat" && !cli.planSquadId) {
-      const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-      const flatSpecialists = Object.values(manifest.squads).flatMap(
-        squad => squad.specialists ?? squad.children ?? []
-      );
-      planInput = {
-        manifest: { squads: { self_diagnosis: { specialists: flatSpecialists } } },
-        topology: "flat",
-        executionMode: cli.executionMode,
-        workspaceIsolation: cli.workspaceIsolation,
-        includeIntegrityAuditor: true
-      };
+function parseFrontmatter(markdown) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(markdown);
+  if (!match) return null;
+  const raw = match[1];
+  const rawName = /^name:\s*(.+)$/m.exec(raw)?.[1]?.trim();
+  const name = rawName ? unquote(rawName) : undefined;
+  const fmLines = raw.split(/\r?\n/);
+  let descBody = "";
+  for (let i = 0; i < fmLines.length; i++) {
+    const m = /^description:\s*(.*)$/.exec(fmLines[i]);
+    if (!m) continue;
+    const inlineVal = m[1].trim();
+    if (/^[>|](?:[-+]?[1-9]|[1-9]?[-+]?)$/.test(inlineVal)) {
+      const block = [];
+      for (let j = i + 1; j < fmLines.length; j++) {
+        if (/^\s*$/.test(fmLines[j])) continue;
+        if (!/^\s+/.test(fmLines[j])) break;
+        block.push(fmLines[j].trim());
+      }
+      descBody = block.join(" ").trim();
     } else {
-      planInput = {
-        manifestPath: manifestRelative,
-        ...(cli.planSquadId ? { squadId: cli.planSquadId } : {}),
-        ...(cli.topology ? { topology: cli.topology } : {}),
-        executionMode: cli.executionMode,
-        workspaceIsolation: cli.workspaceIsolation,
-        includeIntegrityAuditor: true
-      };
+      descBody = unquote(inlineVal);
     }
-    const plan = planSquadCohort(planInput, repoRoot);
-    console.log(JSON.stringify(plan, null, 2));
-    process.exit(0);
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
+    break;
   }
+  return { name, hasDescription: descBody.length > 0 };
 }
 
-if (cli.printDispatch) {
-  try {
-    let parsed;
-    if (cli.squadId === "all_specialists") {
-      const manifest = JSON.parse(fs.readFileSync(manifestAbsolute, "utf8"));
-      const Subagents = [];
-      for (const id of Object.keys(manifest.squads)) {
-        const res = handleDispatchSquad({ squadId: id, manifestPath: manifestRelative }, repoRoot);
-        if (res.isError) {
-          console.error(res.content[0].text);
-          process.exit(1);
-        }
-        Subagents.push(...JSON.parse(res.content[0].text).Subagents);
+function readMarkdownCached(filePath, markdownTextCache) {
+  if (markdownTextCache?.has(filePath)) return markdownTextCache.get(filePath);
+  const text = fs.readFileSync(filePath, "utf8");
+  markdownTextCache?.set(filePath, text);
+  return text;
+}
+
+function existsCached(filePath, markdownTextCache, existsCache) {
+  if (markdownTextCache?.has(filePath)) return true;
+  if (existsCache?.has(filePath)) return existsCache.get(filePath);
+  const ok = fs.existsSync(filePath);
+  existsCache?.set(filePath, ok);
+  return ok;
+}
+
+function trimAsciiSpaceTabEnd(line) {
+  let end = line.length;
+  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+  return line.slice(0, end);
+}
+
+function stripMarkdownLinkSyntax(text) {
+  if (!text.includes("[")) return text;
+  let out = "";
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) return out + text.slice(pos);
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) return out + text.slice(pos);
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      out += text.slice(pos, closeBracket + 1);
+      pos = closeBracket + 1;
+      continue;
+    }
+    const closeParen = text.indexOf(")", closeBracket + 2);
+    if (closeParen === -1) return out + text.slice(pos);
+    if (closeParen === closeBracket + 2) {
+      out += text.slice(pos, closeParen + 1);
+      pos = closeParen + 1;
+      continue;
+    }
+    out += text.slice(pos, openBracket) + text.slice(openBracket + 1, closeBracket);
+    pos = closeParen + 1;
+  }
+  return out;
+}
+
+function getHeadingSlugs(filePath, markdownTextCache, headingSlugCache = null) {
+  if (headingSlugCache?.has(filePath)) return headingSlugCache.get(filePath);
+  const slugs = new Set();
+  const counts = new Map();
+  for (const line of stripFencedCodeBlocks(readMarkdownCached(filePath, markdownTextCache)).split(/\r?\n/)) {
+    const match = /^#{1,6}\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const base = stripMarkdownLinkSyntax(match[1])
+      .toLowerCase()
+      .replace(/`/g, "")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s/g, "-");
+    if (!base) continue;
+    const seen = counts.get(base) ?? 0;
+    counts.set(base, seen + 1);
+    slugs.add(seen === 0 ? base : `${base}-${seen}`);
+  }
+  headingSlugCache?.set(filePath, slugs);
+  return slugs;
+}
+
+function extractMarkdownLinks(text) {
+  const links = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const openBracket = text.indexOf("[", pos);
+    if (openBracket === -1) break;
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) break;
+    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
+      pos = closeBracket + 1;
+      continue;
+    }
+    let i = closeBracket + 2;
+    const destStart = i;
+    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
+      i++;
+    }
+    const rawDest = text.slice(destStart, i);
+    if (i < text.length && text[i] === ")") {
+      pos = i + 1;
+    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
+      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+      const quote = text[i];
+      if (quote !== '"' && quote !== "'") {
+        pos = i;
+        continue;
       }
-      parsed = { Subagents };
+      const closeQuote = text.indexOf(quote, i + 1);
+      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
+        pos = i + 1;
+        continue;
+      }
+      pos = closeQuote + 2;
     } else {
-      const result = handleDispatchSquad({ squadId: cli.squadId, manifestPath: manifestRelative }, repoRoot);
-      if (result.isError) {
-        console.error(result.content[0].text);
-        process.exit(1);
-      }
-      parsed = JSON.parse(result.content[0].text);
+      pos = i;
+      continue;
     }
-    if (cli.parentId) {
-      for (const agent of parsed.Subagents) {
-        agent.Prompt += `\nParent conversation ID (send_message Recipient): ${cli.parentId}`;
-      }
-    }
-    console.log(JSON.stringify(parsed, null, 2));
-    process.exit(0);
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
+    if (!rawDest) continue;
+    const hashIdx = rawDest.indexOf("#");
+    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
+    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
+    links.push({ target, fragment });
   }
+  return links;
 }
 
-let skillAudit;
-let squadAudit;
-try {
-  skillAudit = auditSkills(cli.ledgerPath);
-  squadAudit = runSquadCanaryAndOptimization({
-    allowActiveCohort: cli.allowActiveCohort,
-    skipMcpSpawn: cli.skipMcpSpawn
-  });
-} catch (error) {
-  console.error(error.message);
-  process.exit(1);
+function hasValidSvgEnvelope(svgRaw) {
+  const lower = svgRaw.trimEnd().toLowerCase();
+  if (!lower.endsWith("</svg>")) return false;
+  const bodyEnd = lower.length - 6;
+  let idx = 0;
+  while (idx < bodyEnd) {
+    const start = lower.indexOf("<svg", idx);
+    if (start === -1 || start >= bodyEnd) return false;
+    const next = lower[start + 4];
+    if (next === ">" || next === " " || next === "\t" || next === "\n" || next === "\r") {
+      const closeGt = lower.indexOf(">", start + 4);
+      return closeGt !== -1 && closeGt < bodyEnd;
+    }
+    idx = start + 4;
+  }
+  return false;
 }
-const findings = [...skillAudit.findings, ...squadAudit.findings];
-const prReviewMatrix = buildPrReviewCategoryMatrix(findings);
-const blockingCount = findings.filter(f => f.priority === "P1" || f.priority === "P2").length;
-const LEDGER_DIAGNOSTIC_IDS = new Set(["DOC-LEDGER-OPEN-BLOCKERS", "DOC-LEDGER-SCHEMA", "DOC-LEDGER-MISSING"]);
-const profilerBlockingCount = findings.filter(
-  f => !LEDGER_DIAGNOSTIC_IDS.has(f.id) && (f.priority === "P1" || f.priority === "P2")
-).length;
 
-const report = {
-  status: blockingCount === 0 ? "HEALTHY" : "CHANGES_REQUIRED",
-  profilerHealth: profilerBlockingCount === 0 ? "HEALTHY" : "CHANGES_REQUIRED",
-  ledgerDisposition: skillAudit.ledgerDisposition,
-  openLedgerBlockers: skillAudit.openLedgerBlockers,
-  standardVersion: "1.5.0",
-  manifestPath: manifestRelative,
-  targetReviewLedger: skillAudit.targetReviewLedger,
-  skills: skillAudit.skills,
-  promptBudgets: squadAudit.promptBudgets,
-  topology: squadAudit.topology,
-  timings: squadAudit.timings,
-  compiledStages: squadAudit.compiledStages,
-  prReviewCategoryMatrix: prReviewMatrix,
-  findings
-};
+function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache, headingSlugCache = new Map()) {
+  const broken = [];
+  const dir = path.dirname(skillFile);
+  const skillsRootDir = path.join(repoRoot, ".agents", "skills");
+  const isInsideSkills = skillFile === skillsRootDir || skillFile.startsWith(skillsRootDir + path.sep);
+  const stripped = stripCode(stripHtmlComments(markdown));
 
-if (cli.markdown) {
-  const findingLines =
-    report.findings.length === 0
-      ? ["- None (all rubric thresholds and contract checks passed)."]
-      : report.findings.map(f => `- **[${f.priority}] \`${f.id}\` (\`${f.category}\`):** ${f.summary}`);
-  const lines = [
-    "# Agy-Squad Self-Diagnosis & Optimization Report",
-    "",
-    `- **Status:** \`${report.status}\` (Profiler: \`${report.profilerHealth}\`, Ledger: \`${report.ledgerDisposition}\`, PR Review Standard \`v${report.standardVersion}\`)`,
-    `- **Self-Diagnosis Manifest:** \`${report.manifestPath}\``,
-    `- **Target PR Review Ledger:** \`${report.targetReviewLedger ?? (report.ledgerDisposition === "PACKAGED_OMITTED" ? "OMITTED (PACKAGED)" : "MISSING")}\``,
-    `- **Timings:** dispatch \`${report.timings.dispatchCompilePerCallMs} ms/call\` (\`${report.timings.dispatchCompileMs} ms\` total), squad_planner \`${report.timings.squadPlannerMs} ms\`, handoff+bundle+verify+prune \`${report.timings.handoffPipelineMs} ms\` (\`${report.timings.perSquadHandoffMs} ms/squad\`), mcp-stdio \`${report.timings.mcpSpawnMs} ms\``,
-    "",
-    "## 1. Workspace Skills Progressive Disclosure & Token Audit",
-    "",
-    "| Skill | Path | Lines | UTF-8 Bytes | Est. Tokens | Entry Share (All / Prose) | Broken Links |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
-    ...report.skills.map(
-      s =>
-        `| \`${s.name}\` | \`${s.path}\` | ${s.lines} | ${s.bytes} | ~${s.estimatedTokens} | ${Math.round(
-          s.entryShareOfTotal * 100
-        )}% / ${Math.round(s.proseShareOfMarkdown * 100)}% | ${s.brokenLinksCount} |`
-    ),
-    "",
-    "## 2. Compiled Brief & MCP Schema Budgets",
-    "",
-    `- **Specialist Template:** \`${report.promptBudgets.specialistTemplateBytes} B\` (~${report.promptBudgets.specialistEstimatedTokens} tokens)`,
-    `- **Lead Template:** \`${report.promptBudgets.leadTemplateBytes} B\` (~${report.promptBudgets.leadEstimatedTokens} tokens)`,
-    `- **Precompiled Lead Template:** \`${report.promptBudgets.precompiledLeadTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.precompiledLeadTemplateBytes)} tokens)`,
-    `- **/swarm Specialist Template:** \`${report.promptBudgets.swarmSpecialistTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmSpecialistTemplateBytes)} tokens)`,
-    `- **/swarm Lead Template:** \`${report.promptBudgets.swarmLeadTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmLeadTemplateBytes)} tokens)`,
-    `- **/swarm Auditor Template:** \`${report.promptBudgets.swarmAuditorTemplateBytes} B\` (~${estimateTokens(report.promptBudgets.swarmAuditorTemplateBytes)} tokens)`,
-    `- **MCP \`tools/list\` Response:** \`${report.promptBudgets.mcpToolsListResponseBytes} B\` (~${report.promptBudgets.mcpToolsListEstimatedTokens} tokens)`,
-    "",
-    "## 3. PR-Review Standard v1.5.0 Category Matrix",
-    "",
-    "| Category | P1 | P2 | P3 (Advisory) | Verdict |",
-    "| --- | ---: | ---: | ---: | --- |",
-    ...report.prReviewCategoryMatrix.map(
-      c => `| \`${c.category}\` | ${c.p1} | ${c.p2} | ${c.p3} | **${c.verdict}** |`
-    ),
-    "",
-    "## 4. Findings",
-    "",
-    ...findingLines
+  for (const { target: rawTarget, fragment } of extractMarkdownLinks(stripped)) {
+    if (!rawTarget && !fragment) continue;
+    let resolved;
+    let isHostedDocs = false;
+    if (rawTarget.startsWith(HOSTED_DOCS_PREFIX)) {
+      isHostedDocs = true;
+      const slug = trimTrailingSlashes(trimLeadingSlashes(rawTarget.slice(HOSTED_DOCS_PREFIX.length)));
+      if (slug && (slug.includes("..") || slug.includes("\\"))) {
+        broken.push(`${rawTarget}${fragment ? `#${fragment}` : ""} (malformed hosted docs URL)`);
+        continue;
+      }
+      resolved = path.join(repoRoot, "docs", `${slug ? slug.replace(/\.md$/i, "") : "index"}.md`);
+    } else if (rawTarget && /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/)/.test(rawTarget)) {
+      continue;
+    } else {
+      resolved = rawTarget ? path.resolve(dir, rawTarget) : skillFile;
+    }
+    const label = rawTarget || `#${fragment}`;
+    const displayLink = rawTarget ? `${rawTarget}${fragment ? `#${fragment}` : ""}` : `#${fragment}`;
+    if (!isHostedDocs && isInsideSkills) {
+      const rel = path.relative(skillsRootDir, resolved);
+      if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+        broken.push(`${displayLink} (escapes .agents/skills/)`);
+        continue;
+      }
+    }
+    if (!existsCached(resolved, markdownTextCache, existsCache)) {
+      broken.push(label);
+    } else if (
+      fragment &&
+      resolved.endsWith(".md") &&
+      !getHeadingSlugs(resolved, markdownTextCache, headingSlugCache).has(fragment.toLowerCase())
+    ) {
+      broken.push(displayLink);
+    }
+  }
+  return broken;
+}
+
+function walkMarkdownFiles(dir, excludedDirs = null) {
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!excludedDirs?.has(full)) results.push(...walkMarkdownFiles(full, excludedDirs));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+function findRetiredSymbolMatches(markdown) {
+  const matched = new Set();
+  const normalized = markdown.startsWith("\uFEFF") ? markdown.slice(1) : markdown;
+  let activeHistoricalBlock = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  for (const line of normalized.split(/\r?\n/)) {
+    if (!fenceChar) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (open && !(open[1][0] === "`" && line.slice(open[0].length).includes("`"))) {
+        fenceChar = open[1][0];
+        fenceLen = open[1].length;
+        continue;
+      }
+      if (/^\s*#{1,6}\s+/.test(line)) activeHistoricalBlock = HISTORICAL_NOTICE_RE.test(line);
+    } else {
+      const trimmed = trimAsciiSpaceTabEnd(line);
+      let spaces = 0;
+      while (spaces < trimmed.length && trimmed[spaces] === " ") spaces++;
+      const body = trimmed.slice(spaces);
+      if (spaces <= 3 && body.length >= fenceLen && [...body].every(c => c === fenceChar)) {
+        fenceChar = "";
+        fenceLen = 0;
+        continue;
+      }
+    }
+    if (activeHistoricalBlock) continue;
+    const segments = line.trim().startsWith("|") ? line.split(/(?<!\\)\|/) : line.split(/(?<=[.!?;])\s+/);
+    for (const seg of segments) {
+      RETIRED_SYMBOL_RE.lastIndex = 0;
+      if (!RETIRED_SYMBOL_RE.test(seg) || HISTORICAL_NOTICE_RE.test(seg)) continue;
+      RETIRED_SYMBOL_RE.lastIndex = 0;
+      for (const m of seg.matchAll(RETIRED_SYMBOL_RE)) {
+        matched.add(m[0].replace(/`/g, "").replace(/\s+/g, " ").trim());
+      }
+    }
+  }
+  return [...matched];
+}
+
+function runDiagnostics() {
+  if (process.env.AGY_SQUAD_SCRATCH_ROOT) {
+    normalizeReportRoot(process.env.AGY_SQUAD_SCRATCH_ROOT);
+  }
+
+  const findings = [];
+  const skills = [];
+  const markdownTextCache = new Map();
+  const existsCache = new Map();
+  const headingSlugCache = new Map();
+  const docsRoot = path.join(repoRoot, "docs");
+  const excludedDocDirs = new Set([path.join(docsRoot, "reviews"), path.join(docsRoot, "plans")]);
+  const activeDocs = fs.existsSync(docsRoot)
+    ? walkMarkdownFiles(docsRoot, excludedDocDirs).map(filePath => ({
+        path: filePath,
+        text: readMarkdownCached(filePath, markdownTextCache)
+      }))
+    : [];
+  const skillsRoot = path.join(repoRoot, ".agents", "skills");
+  const skillNames = [...SHIPPED_SKILLS];
+  if (fs.existsSync(path.join(skillsRoot, "self-diagnosis"))) skillNames.push("self-diagnosis");
+  const skillDirs = new Map();
+  for (const name of skillNames) {
+    const dir = path.join(skillsRoot, name);
+    const skillMd = path.join(dir, "SKILL.md");
+    if (!fs.existsSync(skillMd)) {
+      skillDirs.set(name, null);
+      continue;
+    }
+    const files = walkMarkdownFiles(dir);
+    for (const f of files) readMarkdownCached(f, markdownTextCache);
+    skillDirs.set(name, { dir, skillMd, files });
+  }
+
+  for (const name of skillNames) {
+    const entry = skillDirs.get(name);
+    if (!entry) {
+      findings.push({ id: `SKILL-MISSING-${name}`, priority: "P1", summary: `Missing .agents/skills/${name}/SKILL.md` });
+      continue;
+    }
+    const { dir, skillMd, files } = entry;
+    const content = readMarkdownCached(skillMd, markdownTextCache);
+    const bytes = Buffer.byteLength(content, "utf8");
+    const lines = content.replace(/\r?\n$/, "").split(/\r?\n/).length;
+    const fm = parseFrontmatter(content);
+    if (!fm?.name || fm.name !== name || !fm.hasDescription) {
+      findings.push({ id: `SKILL-FM-${name}`, priority: "P1", summary: `Invalid frontmatter in .agents/skills/${name}/SKILL.md` });
+    }
+    let brokenLinksCount = 0;
+    for (const f of files) {
+      const isSkillMd = f === skillMd;
+      const text = readMarkdownCached(f, markdownTextCache);
+      const relFile = path.relative(repoRoot, f).replace(/\\/g, "/");
+      const relInSkill = path.relative(dir, f).replace(/\\/g, "/");
+      const fileSlug = isSkillMd ? "" : toFindingSlug(relInSkill.replace(/^references\//, ""));
+      const broken = checkRelativeLinks(f, text, markdownTextCache, existsCache, headingSlugCache);
+      if (broken.length) {
+        brokenLinksCount += broken.length;
+        findings.push({
+          id: isSkillMd ? `SKILL-LINKS-${name}` : `SKILL-REFLINKS-${name}-${fileSlug}`,
+          priority: "P1",
+          summary: `Broken links in ${relFile}: ${broken.join(", ")}`
+        });
+      }
+      const retired = findRetiredSymbolMatches(text);
+      if (retired.length) {
+        findings.push({
+          id: isSkillMd ? `SKILL-DRIFT-${name}` : `SKILL-DRIFT-${name}-${fileSlug}`,
+          priority: "P2",
+          summary: `Retired symbol(s) in ${relFile}: ${retired.join(", ")}`
+        });
+      }
+      if (STRAY_FLAG_EMDASH_RE.test(stripHtmlComments(text))) {
+        findings.push({
+          id: isSkillMd ? `SKILL-EMDASH-${name}` : `SKILL-EMDASH-${name}-${fileSlug}`,
+          priority: "P2",
+          summary: `Stray em-dash attached to CLI flag in ${relFile}`
+        });
+      }
+    }
+    if (lines > 300 || bytes > 12288) {
+      findings.push({ id: `SKILL-BUDGET-${name}`, priority: "P2", summary: `.agents/skills/${name}/SKILL.md exceeds budget (${lines} lines, ${bytes} B)` });
+    }
+    skills.push({ name, path: path.relative(repoRoot, skillMd), lines, bytes, estimatedTokens: estimateTokens(bytes), brokenLinksCount });
+  }
+
+  const driftTargets = [
+    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
+      .map(rel => path.join(repoRoot, rel))
+      .filter(abs => fs.existsSync(abs))
+      .map(filePath => ({ path: filePath, text: fs.readFileSync(filePath, "utf8") })),
+    ...activeDocs
   ];
-  console.log(lines.join("\n"));
-} else {
-  console.log(JSON.stringify(report, null, 2));
+  for (const { path: abs, text } of driftTargets) {
+    const retired = findRetiredSymbolMatches(text);
+    if (retired.length) {
+      const rel = path.relative(repoRoot, abs).replace(/\\/g, "/");
+      findings.push({
+        id: `DOC-MCP-DRIFT-${toFindingSlug(rel)}`,
+        priority: "P2",
+        summary: `Retired symbol(s) in ${rel}: ${retired.join(", ")}`
+      });
+    }
+  }
+
+  const assetsDir = path.join(docsRoot, "assets");
+  if (fs.existsSync(assetsDir)) {
+    for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".svg")) continue;
+      const svgRaw = fs.readFileSync(path.join(assetsDir, entry.name), "utf8");
+      if (!hasValidSvgEnvelope(svgRaw) || /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g.test(svgRaw)) {
+        findings.push({ id: `DOC-SVG-XML-${entry.name.replace(/\.svg$/, "")}`, priority: "P2", summary: `docs/assets/${entry.name} failed SVG XML check` });
+      }
+      if (activeDocs.length && !activeDocs.some(d => d.text.includes(entry.name))) {
+        findings.push({ id: `DOC-SVG-ORPHAN-${entry.name.replace(/\.svg$/, "")}`, priority: "P3", summary: `docs/assets/${entry.name} is unreferenced under docs/` });
+      }
+    }
+  }
+
+  const minAgent = { role: "R", objective: "O", scopeFiles: ["a"] };
+  const subSpecPrompt = buildSubagentSpec(minAgent, "s", "m.json", 1).Prompt;
+  const subLeadPrompt = buildSubagentSpec(minAgent, "s", "m.json", undefined).Prompt;
+  const subPreLeadPrompt = buildSubagentSpec(minAgent, "s", "m.json", undefined, undefined, { precompiledSpecialists: true }).Prompt;
+  const minSwarm = planSquadCohort(
+    { manifest: { squads: { s: { lead: minAgent, specialists: [minAgent] } } }, executionMode: "swarm" },
+    repoRoot
+  );
+  const swarmSpecBrief = minSwarm.workers[0].specialists[0].swarmAdd.brief;
+  const swarmLeadBrief = minSwarm.workers[0].lead.swarmAdd.brief;
+  const swarmAuditBrief = minSwarm.integrityAuditPlan[0].swarmAdd.brief;
+  const mcpToolsListResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } }), "utf8");
+
+  for (const [label, text] of [
+    ["subagent specialist", subSpecPrompt],
+    ["subagent lead", subLeadPrompt],
+    ["precompiled lead", subPreLeadPrompt],
+    ["swarm specialist", swarmSpecBrief],
+    ["swarm lead", swarmLeadBrief],
+    ["swarm auditor", swarmAuditBrief]
+  ]) {
+    if (text.includes("——") || STRAY_FLAG_EMDASH_RE.test(text)) {
+      findings.push({
+        id: `BRIEF-EMDASH-${toFindingSlug(label)}`,
+        priority: "P2",
+        summary: `Malformed em-dash in ${label} brief`
+      });
+    }
+  }
+
+  const promptBudgets = {
+    specialistTemplateBytes: Buffer.byteLength(subSpecPrompt, "utf8"),
+    leadTemplateBytes: Buffer.byteLength(subLeadPrompt, "utf8"),
+    precompiledLeadTemplateBytes: Buffer.byteLength(subPreLeadPrompt, "utf8"),
+    swarmSpecialistTemplateBytes: Buffer.byteLength(swarmSpecBrief, "utf8"),
+    swarmLeadTemplateBytes: Buffer.byteLength(swarmLeadBrief, "utf8"),
+    swarmAuditorTemplateBytes: Buffer.byteLength(swarmAuditBrief, "utf8"),
+    mcpToolsListResponseBytes
+  };
+  for (const [id, actual, limit, label] of [
+    ["RUN-BUDGET-SPEC", promptBudgets.specialistTemplateBytes, 1200, "Subagent specialist brief"],
+    ["RUN-BUDGET-LEAD", promptBudgets.leadTemplateBytes, 1800, "Subagent lead brief"],
+    ["RUN-BUDGET-PRECOMPILED-LEAD", promptBudgets.precompiledLeadTemplateBytes, 1800, "Precompiled lead brief"],
+    ["RUN-BUDGET-SWARM-SPEC", promptBudgets.swarmSpecialistTemplateBytes, 1200, "/swarm specialist brief"],
+    ["RUN-BUDGET-SWARM-LEAD", promptBudgets.swarmLeadTemplateBytes, 1800, "/swarm lead brief"],
+    ["RUN-BUDGET-SWARM-AUDIT", promptBudgets.swarmAuditorTemplateBytes, 2000, "/swarm integrity auditor brief"],
+    ["MCP-BUDGET-SCHEMA", promptBudgets.mcpToolsListResponseBytes, 4096, "MCP tools/list schema"]
+  ]) {
+    if (actual > limit) findings.push({ id, priority: "P2", summary: `${label} is ${actual} B (exceeds ${limit} B budget)` });
+  }
+
+  return { status: findings.length === 0 ? "HEALTHY" : "ISSUES", skills, promptBudgets, findings };
 }
 
-if (blockingCount > 0) {
-  process.exitCode = 1;
+function runCli() {
+  let cli;
+  try {
+    cli = parseArgs({
+      args: process.argv.slice(2),
+      strict: true,
+      allowPositionals: false,
+      options: { json: { type: "boolean", default: false }, help: { type: "boolean", short: "h", default: false } }
+    });
+  } catch (error) {
+    console.error(`${error.message}\n${USAGE}`);
+    process.exit(1);
+  }
+  if (cli.values.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  assertAgySquadWorkspace();
+  try {
+    const report = runDiagnostics();
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = report.status === "HEALTHY" ? 0 : 1;
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
 }
+
+if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
+  runCli();
+}
+
+export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripMarkdownLinkSyntax };

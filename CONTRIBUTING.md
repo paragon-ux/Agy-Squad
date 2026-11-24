@@ -14,11 +14,11 @@ Thank you for contributing to `Agy-Squad`!
    npm run preflight
    npm test
    npm run verify:package
-   node .agents/skills/self-diagnosis/scripts/diagnose.mjs --markdown
+   node .agents/skills/self-diagnosis/scripts/diagnose.mjs --json
    ```
 
 ## Pull Request Guidelines
 
-- Keep specialist and lead prompt templates within the byte budgets enforced by `diagnose.mjs` (`<= 1800 B` for specialists, `<= 3300 B` for leads).
+- Keep specialist, lead, auditor, and MCP schema templates within the byte budgets enforced by `diagnose.mjs` (`<= 1200 B` for specialists, `<= 1800 B` for leads, `<= 2000 B` for `/swarm` integrity auditors, `<= 4096 B` for MCP `tools/list`).
 - Ensure zero external runtime `dependencies` in `package.json`.
 - Update tests in `tests/` and verify `npm run verify:package` passes before submitting a pull request.

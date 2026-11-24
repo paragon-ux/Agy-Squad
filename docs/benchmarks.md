@@ -133,7 +133,7 @@ After Phase 2, **Agy-Squad's evidence-retention contract (handoff bundle and sel
 
 1. **Native `/swarm` worker lifecycle (Antigravity):** Worker spawning, worktree isolation, and `kill` cleanup belong to Antigravity `/swarm`. `agy-squad` writes no temporary plugin or agent-profile registrations.
 2. **Handoff bundle scope:** `agy-squad` (`finalize` or `inspect -> bundle -> verify -> prune`, backed by `mcp/handoffs.mjs`; the standalone `node mcp/handoffs.mjs` CLI from Phase 1 has since been retired) records SHA-256 digests of every input file and specialist report in `lead/report.sources.json` before pruning loose `specialist-N/report.md` files.
-3. **Self-diagnosis review scope:** `.agents/skills/self-diagnosis/SKILL.md` requires 1-ID-per-row transcription into a durable `docs/reviews/` ledger and bundle digest verification before `diagnose.mjs --teardown` removes `scratch/agy-squad/squad-*` directories and `manage_subagents` terminates child sessions.
+3. **Self-diagnosis review scope:** `.agents/skills/self-diagnosis/SKILL.md` requires 1-ID-per-row transcription into a durable `docs/reviews/` ledger and bundle digest verification before `agy-squad finalize --prune` and scratch cleanup remove finished `scratch/agy-squad/squad-*` directories and `manage_subagents` terminates child sessions.
 
 The recorded `0` vs. `41` (`207.9 KB`) Git-untracked file counts come from `git status` after run completion (Agy-Squad's `.gitignore` excludes `scratch/`).
 

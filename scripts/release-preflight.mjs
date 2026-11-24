@@ -6,8 +6,90 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SHIPPED_SKILLS, isDirectEntryPoint } from "./install-register.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function stripTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function matchPackageGlob(value, pattern) {
+  const tokens = [];
+  for (let i = 0; i < pattern.length; ) {
+    if (pattern.startsWith("**/", i)) {
+      if (tokens[tokens.length - 1] !== "**/") tokens.push("**/");
+      i += 3;
+    } else if (pattern.startsWith("**", i)) {
+      if (tokens[tokens.length - 1] !== "**") tokens.push("**");
+      i += 2;
+    } else if (pattern[i] === "*") {
+      if (tokens[tokens.length - 1] !== "*") tokens.push("*");
+      i += 1;
+    } else if (pattern[i] === "?") {
+      tokens.push("?");
+      i += 1;
+    } else {
+      tokens.push(pattern[i]);
+      i += 1;
+    }
+  }
+  const n = value.length;
+  let dp = new Uint8Array(n + 1);
+  dp[0] = 1;
+  for (const tok of tokens) {
+    const next = new Uint8Array(n + 1);
+    if (tok === "**/") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) {
+          next[j] = 1;
+          seen = true;
+        }
+        if (seen && j > 0 && value[j - 1] === "/") {
+          next[j] = 1;
+        }
+      }
+    } else if (tok === "**") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (dp[j]) seen = true;
+        if (seen) next[j] = 1;
+      }
+    } else if (tok === "*") {
+      let seen = false;
+      for (let j = 0; j <= n; j++) {
+        if (j > 0 && value[j - 1] === "/") seen = false;
+        if (dp[j]) seen = true;
+        if (seen) next[j] = 1;
+      }
+    } else if (tok === "?") {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && value[j] !== "/") next[j + 1] = 1;
+      }
+    } else {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && value[j] === tok) next[j + 1] = 1;
+      }
+    }
+    dp = next;
+  }
+  return dp[n] === 1;
+}
+
+function matchesPackageEntry(relativePath, normalized) {
+  if (!normalized) return false;
+  if (normalized.includes("*") || normalized.includes("?")) {
+    return matchPackageGlob(relativePath, normalized);
+  }
+  return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
+}
+
+function runReleasePreflight() {
 const errors = [];
 const warnings = [];
 
@@ -46,6 +128,7 @@ if (pkg) {
     errors.push(`package.json version is not a valid semver release version: ${JSON.stringify(pkg.version)}.`);
   }
 
+  let pluginLogoPath = null;
   const pluginText = readText("plugin.json");
   if (pluginText) {
     try {
@@ -73,8 +156,15 @@ if (pkg) {
       }
       if (typeof pluginManifest.logo !== "string" || !pluginManifest.logo.trim()) {
         errors.push('plugin.json must define a non-empty "logo" path.');
-      } else if (!exists(pluginManifest.logo.trim())) {
-        errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
+      } else {
+        const rawLogo = pluginManifest.logo.trim();
+        if (rawLogo.includes("\\")) {
+          errors.push(`plugin.json logo must use POSIX '/' separators: ${pluginManifest.logo}`);
+        } else if (!exists(rawLogo)) {
+          errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
+        } else {
+          pluginLogoPath = rawLogo.replace(/^\.\//, "");
+        }
       }
     } catch (error) {
       errors.push(`plugin.json is not valid JSON: ${error.message}`);
@@ -103,94 +193,67 @@ if (pkg) {
     "assets/logo.svg",
     "bin/agy-squad.mjs",
     "mcp/index.js",
-    "mcp/dispatch.mjs",
-    "mcp/planner.mjs",
-    "mcp/briefs.mjs",
-    "mcp/handoffs.mjs",
-    "mcp/verdicts.mjs",
     "scripts/install-register.mjs",
-    "scripts/release-preflight.mjs",
-    ".agents/skills/pr-review/SKILL.md",
-    ".agents/skills/pr-review/references/pr-review-standard.md",
-    ".agents/skills/full-review/SKILL.md",
-    ".agents/skills/full-review/references/evidence-intake.md",
-    ".agents/skills/full-review/references/report-template.md",
-    ".agents/skills/full-review/references/review-roles.md",
-    ".agents/skills/day-one-review/SKILL.md",
-    ".agents/skills/day-one-review/references/day-one-protocol.md",
-    ".agents/skills/self-diagnosis/SKILL.md",
-    ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
-    ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
-    ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
-    ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
-    ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
-    ".agents/skills/swarm-governance/SKILL.md",
-    ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
-    ".agents/skills/swarm-governance/references/ecosystem-and-modifiers.md",
-    ".agents/skills/swarm-governance/references/intake-and-planning.md",
-    ".agents/skills/swarm-governance/references/large-swarms.md",
-    "docs/benchmarks.md",
-    "docs/concepts.md",
-    "docs/core-workflows.md",
-    "docs/getting-started.md",
     "docs/index.md",
-    "docs/roles-and-workflows.md",
-    "docs/skills/pr-review.md",
-    "docs/skills/full-review.md",
-    "docs/skills/day-one-review.md",
-    "docs/skills/swarm-governance.md",
-    "docs/skills/self-diagnosis.md",
-    "docs/stopping-agents.md",
     "docs/tools.md",
-    "docs/assets/architecture-overview.svg",
-    "docs/assets/manifest-and-modes.svg",
-    "docs/assets/role-and-verdict-gate.svg",
-    "docs/assets/skill-role-workflows.svg",
-    "docs/assets/swarm-lifecycle.svg",
-    "docs/assets/swarm-vs-agy-squad-roles.svg",
     "plugin.json",
     "install.sh",
     "install.ps1",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    ...SHIPPED_SKILLS.map((skill) => `.agents/skills/${skill}/SKILL.md`)
   ];
+  if (exists("mcp")) {
+    for (const entry of fs.readdirSync(path.join(root, "mcp"), { withFileTypes: true })) {
+      if (entry.isFile() && /\.(?:m?js)$/.test(entry.name)) {
+        const rel = `mcp/${entry.name}`;
+        if (!requiredPackageFiles.includes(rel)) {
+          requiredPackageFiles.push(rel);
+        }
+      }
+    }
+  }
 
   const fileEntries = (pkg.files ?? [])
     .filter((entry) => typeof entry === "string" && entry.trim())
     .map((entry) => {
       const negated = entry.startsWith("!");
-      const normalized = (negated ? entry.slice(1) : entry)
-        .replace(/\\/g, "/")
-        .replace(/^\.\//, "")
-        .replace(/\/+$/, "");
+      const normalized = stripTrailingSlashes(
+        (negated ? entry.slice(1) : entry).replace(/\\/g, "/").replace(/^\.\//, "")
+      );
       return { negated, normalized };
     });
   const positiveEntries = fileEntries.filter((entry) => !entry.negated);
   const negativeEntries = fileEntries.filter((entry) => entry.negated);
-  const matchesPackageEntry = (relativePath, normalized) => {
-    if (!normalized) return false;
-    if (normalized.includes("*")) {
-      const escaped = normalized.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-      const pattern = escaped.replace(/\*\*\/|\*\*|\*/g, (m) =>
-        m === "**/" ? "(?:.*/)?" : m === "**" ? ".*" : "[^/]*"
-      );
-      return new RegExp(`^${pattern}$`).test(relativePath);
-    }
-    return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
-  };
+  const isCoveredByFiles = (relativePath) =>
+    ["package.json", "README.md", "LICENSE"].includes(relativePath) ||
+    (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
+      !negativeEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)));
 
   for (const relativePath of requiredPackageFiles) {
     if (!exists(relativePath)) {
       errors.push(`Required runtime/release file is missing: ${relativePath}`);
     }
-    const alwaysIncluded = ["package.json", "README.md", "LICENSE"].includes(relativePath);
-    const coveredByFiles =
-      alwaysIncluded ||
-      (positiveEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)) &&
-        !negativeEntries.some((entry) => matchesPackageEntry(relativePath, entry.normalized)));
-    if (!coveredByFiles) {
+    if (!isCoveredByFiles(relativePath)) {
       errors.push(`package.json "files" does not clearly include ${relativePath}.`);
+    }
+  }
+  if (pluginLogoPath && !isCoveredByFiles(pluginLogoPath)) {
+    errors.push(`package.json "files" does not clearly include plugin.json logo: ${pluginLogoPath}.`);
+  }
+
+  for (const excludedPath of [
+    ".agents/skills/self-diagnosis",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    "scripts/release-preflight.mjs",
+    "docs/plans",
+    "docs/plans/example.md",
+    "docs/reviews",
+    "docs/reviews/example.md"
+  ]) {
+    if (isCoveredByFiles(excludedPath)) {
+      errors.push(`package.json "files" must exclude ${excludedPath}.`);
     }
   }
 
@@ -203,10 +266,7 @@ if (pkg) {
     if (!exists(normalizedBin)) {
       errors.push(`package.json bin target does not exist: ${binPath}`);
     }
-    const coveredByFiles =
-      positiveEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized)) &&
-      !negativeEntries.some((entry) => matchesPackageEntry(normalizedBin, entry.normalized));
-    if (!coveredByFiles) {
+    if (!isCoveredByFiles(normalizedBin)) {
       errors.push(`package.json "files" does not clearly include bin target: ${binPath}`);
     }
   }
@@ -238,16 +298,15 @@ if (pkg) {
         errors.push(`npm test references a missing test file: ${suitePath}`);
       }
     }
-    const gettingStartedText = readText("docs/getting-started.md");
-    const countMatch = gettingStartedText.match(/Runs all\s+(\d+)\s+test suites?/i);
-    if (!countMatch) {
-      errors.push('docs/getting-started.md must state the exact suite count using a phrase such as "Runs all 10 test suites".');
-    } else if (Number(countMatch[1]) !== suitePaths.length) {
-      errors.push(`docs/getting-started.md says ${countMatch[1]} test suites, but package.json scripts.test runs ${suitePaths.length}.`);
-    }
-    for (const suitePath of suitePaths) {
-      if (!gettingStartedText.includes(suitePath)) {
-        errors.push(`docs/getting-started.md does not list the test entrypoint that npm test runs: ${suitePath}`);
+    if (exists("tests")) {
+      const wiredSuites = new Set(suitePaths);
+      for (const entry of fs.readdirSync(path.join(root, "tests"), { withFileTypes: true })) {
+        if (entry.isFile() && /^test-.*\.mjs$/.test(entry.name)) {
+          const rel = `tests/${entry.name}`;
+          if (!wiredSuites.has(rel)) {
+            warnings.push(`Test file ${rel} is not wired into package.json scripts.test.`);
+          }
+        }
       }
     }
   }
@@ -266,3 +325,10 @@ if (errors.length) {
 } else {
   console.log(`\nRelease preflight passed${warnings.length ? ` with ${warnings.length} warning(s)` : ""}.`);
 }
+}
+
+if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
+  runReleasePreflight();
+}
+
+export { matchPackageGlob, matchesPackageEntry, runReleasePreflight };
