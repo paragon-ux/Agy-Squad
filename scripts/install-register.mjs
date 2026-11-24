@@ -101,7 +101,7 @@ export function isDirectEntryPoint(
     let resolved;
     if (platform === process.platform) {
       try {
-        resolved = fs.realpathSync(path.resolve(p));
+        resolved = fs.realpathSync.native(path.resolve(p));
       } catch {
         resolved = path.resolve(p);
       }
@@ -165,7 +165,7 @@ function normalizePathEntry(entry, platform = os.platform(), homeDir = os.homedi
   let resolved = pathImpl.resolve(trimmed);
   if (platform === os.platform()) {
     try {
-      resolved = fs.realpathSync(resolved);
+      resolved = fs.realpathSync.native(resolved);
     } catch {}
   }
   resolved = stripTrailingSeparators(resolved);
@@ -339,7 +339,7 @@ export function detectExistingInstallation(options = {}) {
         }
         if (isLocalCheckout) {
           try {
-            details.plugin.pointsElsewhere = !pathsEqual(fs.realpathSync(pluginDest), fs.realpathSync(repoRoot));
+            details.plugin.pointsElsewhere = !pathsEqual(fs.realpathSync.native(pluginDest), fs.realpathSync.native(repoRoot));
           } catch {
             details.plugin.pointsElsewhere = true;
           }
@@ -370,7 +370,7 @@ export function detectExistingInstallation(options = {}) {
                 const localAgentsSkills = path.join(pluginDest, ".agents", "skills");
                 if (
                   fs.existsSync(localAgentsSkills) &&
-                  pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(localAgentsSkills))
+                  pathsEqual(fs.realpathSync.native(linkPath), fs.realpathSync.native(localAgentsSkills))
                 ) {
                   continue;
                 }
@@ -380,7 +380,7 @@ export function detectExistingInstallation(options = {}) {
             let subdirRedirected = false;
             if (isLocalCheckout) {
               try {
-                if (!pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(path.join(repoRoot, repoRel)))) {
+                if (!pathsEqual(fs.realpathSync.native(linkPath), fs.realpathSync.native(path.join(repoRoot, repoRel)))) {
                   details.plugin.pointsElsewhere = true;
                   subdirRedirected = true;
                 }

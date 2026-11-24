@@ -6,7 +6,7 @@ import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { reportPath } from "../mcp/handoffs.mjs";
 
-const testDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-test-")));
+const testDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-test-")));
 const workspace = path.join(testDir, "workspace");
 fs.mkdirSync(workspace);
 const manifestPath = path.join(workspace, "swarm-manifest.json");

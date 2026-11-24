@@ -9,7 +9,7 @@ import { findScopeOverlaps, handleSquadPlanner, normalizeScopePath, planSquadCoh
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-")));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-")));
 
 try {
   // 1. Scope overlap primitive checks
@@ -181,7 +181,7 @@ try {
     }
     for (const s of w.specialists) assert.equal(s.swarmAdd.name, s.workerName);
   }
-  assert.equal(selfDiagPlan.workspace, fs.realpathSync(repoRoot));
+  assert.equal(selfDiagPlan.workspace, fs.realpathSync.native(repoRoot));
   assert.equal(selfDiagPlan.provenanceScaffold, undefined);
   assert.equal(selfDiagPlan.bundleRecordTemplates, undefined);
   assert.equal(selfDiagPlan.notes, undefined);
@@ -753,7 +753,7 @@ try {
   assert.ok(longNamePlan.warnings.some((w) => /24 characters/.test(w) && /occupiedWorkerNames/.test(w)));
 
   // 11. Workspace argument, symlinked workspaces, handleSquadPlanner errors, and bounded-read/budget checks
-  const altDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-alt-")));
+  const altDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-planner-alt-")));
   const linkRoot = path.join(path.dirname(root), `${path.basename(root)}-link`);
   fs.symlinkSync(root, linkRoot, os.platform() === "win32" ? "junction" : "dir");
   try {

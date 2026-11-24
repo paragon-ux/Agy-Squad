@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprint } from "../mcp/handoffs.mjs";
 
-const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cli-diag-")));
+const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cli-diag-")));
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 

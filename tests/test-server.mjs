@@ -315,7 +315,7 @@ console.log("Agy-Squad MCP server tests\n");
   console.log("✓ default 10 MiB framing ceiling, split CRLF, invalid UTF-8 -32700, and >500 KB early-EOF stdout drain");
 }
 {
-  const repoRoot = fs.realpathSync(path.resolve(path.dirname(server), ".."));
+  const repoRoot = fs.realpathSync.native(path.resolve(path.dirname(server), ".."));
   const runTmpSession = (requests, extraEnv = {}) => {
     const env = { ...process.env };
     delete env.AGY_SQUAD_WORKSPACE;
@@ -377,7 +377,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(JSON.parse(explicitWsResponses[3].result.content[0].text).Subagents.length >= 1);
 
   // Client initialize rootUri sets default workspace across subsequent calls and takes precedence over AGY_SQUAD_WORKSPACE
-  const tmpAlt = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-env-override-")));
+  const tmpAlt = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-env-override-")));
   try {
     const rootUriResponses = runTmpSession([
       { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", rootUri: pathToFileURL(repoRoot).href } },
@@ -473,8 +473,8 @@ console.log("Agy-Squad MCP server tests\n");
   assert.doesNotMatch(blankEnvResponses[1].result.content[0].text, /workspace: '   '/);
 
   // SQ-MCP-001: Multi-root workspaceFolders matches manifestPath on secondary workspace root & surfaces multi-root ambiguity
-  const emptySecondary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-empty-")));
-  const dupManifestRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-dup-")));
+  const emptySecondary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-empty-")));
+  const dupManifestRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-multiroot-dup-")));
   try {
     fs.mkdirSync(path.join(dupManifestRoot, ".agents", "skills", "self-diagnosis", "resources"), { recursive: true });
     fs.copyFileSync(
@@ -604,8 +604,8 @@ console.log("Agy-Squad MCP server tests\n");
   const unsafeIdRes = await handleRequest({ jsonrpc: "2.0", id: 1e25, method: "ping" });
   assert.equal(unsafeIdRes.error?.code, -32600, "MCP-003: unsafe integer request id must be rejected with -32600");
 
-  const dupSlashRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-slash-root-")));
-  const secondaryWs = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rel-norm-")));
+  const dupSlashRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-slash-root-")));
+  const secondaryWs = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rel-norm-")));
   try {
     fs.mkdirSync(path.join(dupSlashRoot, "sub"), { recursive: true });
     fs.writeFileSync(path.join(dupSlashRoot, "swarm-manifest.json"), JSON.stringify({
@@ -909,8 +909,8 @@ console.log("Agy-Squad MCP server tests\n");
       }
 
       // Cross-OS multi-root directory shadowing, escaping dir junction/symlink, drive-relative guard, and omitted-manifestPath defaultManifests containment
-      const shadowRootA = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-a-")));
-      const shadowRootB = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-b-")));
+      const shadowRootA = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-a-")));
+      const shadowRootB = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-b-")));
       const dirLinkType = os.platform() === "win32" ? "junction" : "dir";
       const escapeSubLink = path.join(shadowRootA, "sub-escape");
       const escapeScratchLink = path.join(shadowRootA, ".scratch");
@@ -1060,7 +1060,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(isInstalledPluginDir(repoRoot), false, "Source checkout with .git/tests must not be treated as an installed plugin directory");
   assert.equal(isInstalledPluginDir(path.join(repoRoot, "mcp")), false, "Subdirectory inside source checkout must not be treated as an installed plugin directory");
 
-  const simHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-plugin-cwd-")));
+  const simHome = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-plugin-cwd-")));
   const simPluginDir = path.join(simHome, ".gemini", "config", "plugins", "agy-squad");
   const simCustomPkgPlugin = path.join(simHome, "custom-plugin-copy");
   try {

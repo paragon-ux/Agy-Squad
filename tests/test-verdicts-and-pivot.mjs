@@ -10,7 +10,7 @@ import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, report
 import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
 const outsideFile = path.join(os.tmpdir(), `agy-outside-${process.pid}.md`);
 fs.writeFileSync(outsideFile, "Content Verdict: PASS\n", "utf8");
 

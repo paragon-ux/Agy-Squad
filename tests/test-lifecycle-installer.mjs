@@ -9,7 +9,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const cli = path.join(repoRoot, "bin", "agy-squad.mjs");
 const preflightScript = path.join(repoRoot, "scripts", "release-preflight.mjs");
 
-const tmpProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-installer-test-")));
+const tmpProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-installer-test-")));
 const prevProfileEnv = process.env.AGY_TEST_PROFILE_DIR;
 process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
 const testEnv = { ...process.env, AGY_TEST_PROFILE_DIR: tmpProfile };
@@ -35,7 +35,7 @@ try {
   assert.match(preflight.stdout, /Release preflight passed/);
 
   // Negative release-preflight check (SCRIPT-001/002: detects negated mcp/dispatch.mjs in package.json files)
-  const negRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-preflight-neg-")));
+  const negRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-preflight-neg-")));
   try {
     fs.cpSync(repoRoot, negRoot, {
       recursive: true,
@@ -558,9 +558,9 @@ try {
     process.env.AGY_TEST_PROFILE_DIR = isolatedSkillsProfile;
     await runAgySquadInstall({ silent: true, forceCopyFallback: true });
     const copyPluginDir = path.join(isolatedSkillsProfile, ".gemini", "config", "plugins", "agy-squad");
-    const resolvedCopySkillsDir = fs.realpathSync(path.join(copyPluginDir, "skills"));
+    const resolvedCopySkillsDir = fs.realpathSync.native(path.join(copyPluginDir, "skills"));
     assert.ok(
-      resolvedCopySkillsDir.startsWith(fs.realpathSync(copyPluginDir) + path.sep),
+      resolvedCopySkillsDir.startsWith(fs.realpathSync.native(copyPluginDir) + path.sep),
       `PR15-TEST-001: copy-mode skills dir must stay inside isolated pluginDir, got ${resolvedCopySkillsDir}`
     );
 
@@ -646,7 +646,7 @@ try {
 
   // SQ-DEP-006: detectExistingInstallation resolves AGY_TEST_PROFILE_DIR dynamically
   const installerMod = await import(new URL("../scripts/install-register.mjs", import.meta.url));
-  const emptyDynProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-dyn-prof-")));
+  const emptyDynProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-dyn-prof-")));
   try {
     process.env.AGY_TEST_PROFILE_DIR = emptyDynProfile;
     const dynEmpty = installerMod.detectExistingInstallation();
@@ -736,7 +736,7 @@ try {
   }
 
   // S2-SCRIPT-01..03 & S2-TEST-01: Zero filesystem mutation on rejected setup (plugins: [], mcpServers: []) and setup --check rejects corrupt profiles
-  const noMutProf = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-nomut-")));
+  const noMutProf = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-nomut-")));
   try {
     const nmCfgDir = path.join(noMutProf, ".gemini", "config");
     const nmPluginDir = path.join(nmCfgDir, "plugins", "agy-squad");
@@ -806,7 +806,7 @@ try {
   }
 
   // S2-TEST-006 (S2-DEP-001): Coexistence with Agy-Context-Saver .bak and read-only legacy .bak fallback
-  const coexistProf = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-coexist-")));
+  const coexistProf = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-coexist-")));
   try {
     const cCfgDir = path.join(coexistProf, ".gemini", "config");
     fs.mkdirSync(cCfgDir, { recursive: true });
@@ -841,7 +841,7 @@ try {
     assert.equal(fs.existsSync(cLegacyBak), true, "Legacy fallback must stay read-only without deleting shared .bak");
 
     // Key-scoped merge-restore on uninstall --restore-backups preserves foreign plugins in config.json and foreign servers in mcp_config.json
-    const mergeProf = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-merge-restore-")));
+    const mergeProf = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-merge-restore-")));
     try {
       const mCfgDir = path.join(mergeProf, ".gemini", "config");
       fs.mkdirSync(mCfgDir, { recursive: true });
@@ -1056,7 +1056,7 @@ try {
 
   // UX-SQ-004, UX-SQ-005, UX-SQ-012, UX-SQ-014: PATH & companion onboarding in setup/status, NOT INSTALLED hint, copy-fallback skill link safety
   {
-    const uxProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ux-onboarding-")));
+    const uxProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-ux-onboarding-")));
     const uxEmptyPath = path.join(uxProfile, "empty-bin");
     fs.mkdirSync(uxEmptyPath, { recursive: true });
     const uxBaseEnv = withEnvPath(uxEmptyPath, { ...process.env, AGY_TEST_PROFILE_DIR: uxProfile });
@@ -1310,7 +1310,7 @@ try {
   // ASQ-TEST-001 regressions: ASQ-SEC-001, ASQ-SCRIPT-001, ASQ-DEP-001, ASQ-SCRIPT-002, ASQ-SEC-007, ASQ-SCRIPT-006, A1
   {
     const installerMod = await import("../scripts/install-register.mjs");
-    const asqProfile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-asq-reg-")));
+    const asqProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-asq-reg-")));
     const asqEnv = { ...process.env, AGY_TEST_PROFILE_DIR: asqProfile };
     process.env.AGY_TEST_PROFILE_DIR = asqProfile;
     try {

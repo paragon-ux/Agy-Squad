@@ -11,7 +11,7 @@ import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEviden
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-handoffs-")));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-handoffs-")));
 const squadId = "trial-a";
 const first = reportPath(squadId, 1);
 const second = reportPath(squadId, 2);
@@ -712,7 +712,7 @@ try {
   }
 
   // SQ-SVC-001: agy-squad collect + bundle-init end-to-end & edge cases
-  const svcRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-svc-001-")));
+  const svcRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-svc-001-")));
   try {
     const svcCoord = path.join(svcRoot, "coord");
     const svcWt1 = path.join(svcRoot, "wt1");
@@ -1111,7 +1111,7 @@ try {
   }
 
   // W2 Regressions (SVC-003, LEAD-SVC-001, LEAD-SVC-002, S2-SCRIPT-001, S2-SCRIPT-002, RUN-009..011, SVC-010, S2-SCRIPT-007..009, S2-DEP-003)
-  const w2Root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-w2-handoffs-")));
+  const w2Root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-w2-handoffs-")));
   try {
     const w2Write = (rel, contents) => {
       const target = path.join(w2Root, rel);
@@ -2144,8 +2144,8 @@ try {
   assert.ok(performance.now() - tNorm < 250, "normalizeReportRoot must stay linear-time on repeated slashes");
 
   // ASQ-TEST-001 regressions: ASQ-SEC-002, ASQ-RUN-001, ASQ-SVC-001, ASQ-SVC-002, ASQ-SEC-008
-  const asqDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-handoffs-")));
-  const asqWt = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-wt-")));
+  const asqDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-handoffs-")));
+  const asqWt = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-wt-")));
   try {
     const writeAtAsq = (base, rel, data) => {
       const dest = path.join(base, rel);

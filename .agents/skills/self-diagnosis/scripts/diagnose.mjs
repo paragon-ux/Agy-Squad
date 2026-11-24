@@ -52,7 +52,7 @@ function stripHtmlComments(text) {
 function assertAgySquadWorkspace() {
   const rawCwd = process.cwd();
   let cursor;
-  try { cursor = fs.realpathSync(rawCwd); } catch { cursor = path.resolve(rawCwd); }
+  try { cursor = fs.realpathSync.native(rawCwd); } catch { cursor = path.resolve(rawCwd); }
   let foundPkgName = null;
   while (true) {
     const pkgPath = path.join(cursor, "package.json");
