@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_SKILLS, isDirectEntryPoint } from "./install-register.mjs";
+import { MAINTAINER_SKILLS, SHIPPED_SKILLS, isDirectEntryPoint } from "./install-register.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -244,8 +244,7 @@ if (pkg) {
   }
 
   for (const excludedPath of [
-    ".agents/skills/self-diagnosis",
-    ".agents/skills/self-diagnosis/SKILL.md",
+    ...MAINTAINER_SKILLS.flatMap((skill) => [`.agents/skills/${skill}`, `.agents/skills/${skill}/SKILL.md`]),
     "scripts/release-preflight.mjs",
     "docs/plans",
     "docs/plans/example.md",

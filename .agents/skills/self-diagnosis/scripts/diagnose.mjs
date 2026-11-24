@@ -8,7 +8,7 @@ import { normalizeReportRoot, trimTrailingSlashes } from "../../../../mcp/handof
 import { TOOLS } from "../../../../mcp/index.js";
 import { planSquadCohort } from "../../../../mcp/planner.mjs";
 import { stripCode, stripFencedCodeBlocks } from "../../../../mcp/verdicts.mjs";
-import { SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
+import { MAINTAINER_SKILLS, SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const HOSTED_DOCS_PREFIX = "https://paragon-ux.github.io/Agy-Squad/";
@@ -366,7 +366,9 @@ function runDiagnostics() {
     : [];
   const skillsRoot = path.join(repoRoot, ".agents", "skills");
   const skillNames = [...SHIPPED_SKILLS];
-  if (fs.existsSync(path.join(skillsRoot, "self-diagnosis"))) skillNames.push("self-diagnosis");
+  for (const maintainerSkill of MAINTAINER_SKILLS) {
+    if (fs.existsSync(path.join(skillsRoot, maintainerSkill))) skillNames.push(maintainerSkill);
+  }
   const skillDirs = new Map();
   for (const name of skillNames) {
     const dir = path.join(skillsRoot, name);

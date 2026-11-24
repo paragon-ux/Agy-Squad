@@ -88,7 +88,7 @@ try {
     assert.deepEqual(diagParsed.findings, []);
     assert.deepEqual(
       diagParsed.skills.map(s => s.name),
-      ["pr-review", "full-review", "day-one-review", "swarm-governance", "self-diagnosis"]
+      ["pr-review", "full-review", "day-one-review", "swarm-governance", "self-diagnosis", "platform-fit"]
     );
     for (const s of diagParsed.skills) {
       assert.equal(s.brokenLinksCount, 0, `${s.name} must have 0 broken links`);
@@ -379,6 +379,12 @@ try {
   const preflightNoChangelog = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
   assert.notEqual(preflightNoChangelog.status, 0, "S2-DEP-02: release-preflight must fail when 'CHANGELOG.md' is dropped from package.json files");
   assert.match(preflightNoChangelog.stderr, /CHANGELOG\.md/);
+  const pkgNoPlatformFitExclusion = JSON.parse(origPkg);
+  pkgNoPlatformFitExclusion.files = pkgNoPlatformFitExclusion.files.filter(f => !f.includes("platform-fit"));
+  writeIso("package.json", JSON.stringify(pkgNoPlatformFitExclusion, null, 2) + "\n");
+  const preflightLeakPlatformFit = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightLeakPlatformFit.status, 0, "platform-fit: release-preflight must fail if platform-fit exclusion is dropped from package.json files");
+  assert.match(preflightLeakPlatformFit.stderr, /\.agents\/skills\/platform-fit/);
   writeIso("package.json", origPkg);
 
   // UX-SQ-010 & UX-SQ-013: grouped top-level --help (<= 100 chars/line) and focused per-subcommand --help
@@ -454,7 +460,7 @@ try {
     const text = fs.readFileSync(mdFile, "utf8");
     assert.doesNotMatch(text, /\/home\/paragon-ux/i, `UX-SQ-003: hardcoded author path in ${rel}`);
     assert.doesNotMatch(text, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: broken relative ../../../docs/ link in ${rel}`);
-    if (!rel.startsWith(".agents/skills/self-diagnosis/")) {
+    if (!rel.startsWith(".agents/skills/self-diagnosis/") && !rel.startsWith(".agents/skills/platform-fit/")) {
       assert.doesNotMatch(text, /node bin\/agy-squad\.mjs/, `UX-SQ-003: checkout-only 'node bin/agy-squad.mjs' in portable skill ${rel}`);
     }
   }
@@ -473,6 +479,46 @@ try {
     assert.match(txt, /--no-integrity.*--allow-unaudited/i, `${label} must document lightweight research opt-out`);
   }
   assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
+
+  // Repo-only platform-fit meta-skill contract checks
+  const platformFitSkill = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/SKILL.md"), "utf8");
+  const platformFitPreflight = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/preflight-snapshot.md"), "utf8");
+  const platformFitRubric = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/specialist-rubric.md"), "utf8");
+  const platformFitScorecard = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/scorecard-template.md"), "utf8");
+  assert.match(platformFitSkill, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i);
+  assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self"/s);
+  assert.match(platformFitSkill, /no \/swarm/i);
+  assert.match(platformFitSkill, /\[agy-transcript-access: self-only\]/);
+  assert.match(platformFitSkill, /scratch\/platform-fit\//);
+  assert.match(platformFitSkill, /Empirical Leverage Gate/);
+  assert.match(platformFitSkill, /Invariant Parity Gate/);
+  assert.match(platformFitPreflight, /https:\/\/antigravity\.google\/llms\.txt/);
+  assert.match(platformFitPreflight, /00-platform-baseline\.md/);
+  assert.match(platformFitPreflight, /01-telemetry-extract\.md/);
+  assert.match(platformFitPreflight, /agy-context transcript health/);
+  for (const verdict of [
+    "Differentiated (Retain)",
+    "Align to Native Primitive",
+    "Consolidate / Automate Friction",
+    "Harden Determinism",
+    "Human Product Tradeoff"
+  ]) {
+    assert.ok(platformFitSkill.includes(verdict), `platform-fit/SKILL.md must include verdict '${verdict}'`);
+    assert.ok(platformFitRubric.includes(verdict), `platform-fit specialist-rubric.md must include verdict '${verdict}'`);
+  }
+  assert.match(platformFitRubric, /Never invent or emit a `Delete`/);
+  assert.doesNotMatch(platformFitRubric, /^\|\s*\*\*`Delete/m, "platform-fit rubric must never define a Delete verdict row");
+  assert.match(platformFitRubric, /route automatically to \*\*`Human Product Tradeoff`\*\*/);
+  assert.match(platformFitScorecard, /20-platform-fit-scorecard\.md/);
+  assert.match(platformFitScorecard, /Handoff to `\/self-diagnosis`/);
+  for (const [label, txt] of [
+    ["platform-fit/SKILL.md", platformFitSkill],
+    ["platform-fit/references/preflight-snapshot.md", platformFitPreflight],
+    ["platform-fit/references/specialist-rubric.md", platformFitRubric],
+    ["platform-fit/references/scorecard-template.md", platformFitScorecard]
+  ]) {
+    assert.doesNotMatch(txt, /[\u2013\u2014]/, `${label} must not contain prose em/en dashes`);
+  }
 
   const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
   assert.doesNotMatch(pluginMeta.description, /Pointer-Over-Wire/i, "UX-SQ-009: plugin.json description must be plain English");

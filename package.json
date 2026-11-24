@@ -20,6 +20,8 @@
     ".agents/skills",
     "!.agents/skills/self-diagnosis/**",
     "!.agents/skills/self-diagnosis",
+    "!.agents/skills/platform-fit/**",
+    "!.agents/skills/platform-fit",
     "docs",
     "!docs/plans/**",
     "!docs/plans",

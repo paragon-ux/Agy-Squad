@@ -5,6 +5,7 @@ import path from "node:path";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { stripCode } from "../mcp/verdicts.mjs";
+import { MAINTAINER_SKILLS } from "../scripts/install-register.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -157,8 +158,10 @@ function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
       lower.startsWith("docs/reviews/") ||
       lower === "scripts/release-preflight.mjs" ||
       lower === "scripts/diagnose.mjs" ||
-      lower === ".agents/skills/self-diagnosis" ||
-      lower.startsWith(".agents/skills/self-diagnosis/")
+      MAINTAINER_SKILLS.some((skill) => {
+        const prefix = `.agents/skills/${skill.toLowerCase()}`;
+        return lower === prefix || lower.startsWith(`${prefix}/`);
+      })
     );
   };
   const allowed = names.filter(name =>
@@ -244,7 +247,10 @@ function selfTest() {
     "scripts/diagnose.mjs",
     ".agents/skills/self-diagnosis",
     ".agents/skills/self-diagnosis/SKILL.md",
-    ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
+    ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+    ".agents/skills/platform-fit",
+    ".agents/skills/platform-fit/SKILL.md",
+    ".agents/skills/platform-fit/references/specialist-rubric.md"
   ];
   for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
@@ -264,6 +270,15 @@ function selfTest() {
     }),
     /Broken or unpackaged relative skill links:.*\.agents\/skills\/self-diagnosis\/SKILL\.md/,
     "SKILL-002: relative link to unpackaged ../self-diagnosis/SKILL.md must be rejected"
+  );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/swarm-governance/SKILL.md": "See [platform-fit](../platform-fit/SKILL.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*\.agents\/skills\/platform-fit\/SKILL\.md/,
+    "SKILL-002: relative link to unpackaged ../platform-fit/SKILL.md must be rejected"
   );
   assert.throws(
     () => validate(fixture([]), {

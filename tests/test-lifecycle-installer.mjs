@@ -1389,6 +1389,8 @@ try {
       for (const excludedRel of [
         ".agents/skills/self-diagnosis",
         "skills/self-diagnosis",
+        ".agents/skills/platform-fit",
+        "skills/platform-fit",
         "scripts/release-preflight.mjs",
         "docs/plans",
         "docs/reviews",

@@ -33,9 +33,10 @@ const PLUGIN_KEY = "agy-squad";
 export const MIN_NODE_MAJOR = 22;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
 export const SHIPPED_SKILLS = Object.freeze(["pr-review", "full-review", "day-one-review", "swarm-governance"]);
+export const MAINTAINER_SKILLS = Object.freeze(["self-diagnosis", "platform-fit"]);
 const COPY_EXCLUDED_TOP_DIRS = new Set([".git", ".github", "node_modules", ".venv", ".cache", "scratch", "site", "benchmarks", "tests"]);
 const COPY_EXCLUDED_PATHS = Object.freeze([
-  ".agents/skills/self-diagnosis",
+  ...MAINTAINER_SKILLS.map((skill) => `.agents/skills/${skill}`),
   "scripts/release-preflight.mjs",
   "docs/plans",
   "docs/reviews"
