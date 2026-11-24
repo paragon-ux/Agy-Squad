@@ -1071,7 +1071,9 @@ try {
     "Content Verdict: PASS\nPrior run: tests did not pass, but current tests did not pass.\n",
     "Content Verdict: PASS\nBefore the fix: tests did not pass: after the fix: build did not pass.\n",
     "Content Verdict: PASS\nNegative test: tests did not pass: after the fix: build did not pass.\n",
-    "Content Verdict: PASS\nAfter the fix: build did not PASS.\n"
+    "Content Verdict: PASS\nAfter the fix: build did not PASS.\n",
+    "Content Verdict: PASS\nExpected CI checks did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass; final result: did not pass.\n"
   ]) {
     assert.throws(
       () => parseContentVerdict(bypassReport),
@@ -1092,6 +1094,10 @@ try {
     "Content Verdict: PASS\nNegative test: suite did not pass.\n",
     "Content Verdict: PASS\nNegative test: did not pass.\n",
     "Content Verdict: PASS\nNegative result: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass.\n",
+    "Content Verdict: PASS\nExpected outcome: tests did not pass.\n",
+    "Content Verdict: PASS\nExpected failure: suite did not pass.\n",
+    "Content Verdict: PASS\nExpected: tests did not pass.\n",
     "Content Verdict: PASS\nFinal negative test: suite did not pass.\n",
     "Content Verdict: PASS\nPost-fix negative test: suite did not pass.\n",
     "Content Verdict: PASS\nCurrent invalid-input check: did not pass.\n",
