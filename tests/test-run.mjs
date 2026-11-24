@@ -553,6 +553,11 @@ try {
   const preflightBadLogo = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
   assert.notEqual(preflightBadLogo.status, 0, "SCRIPT-005: plugin.json logo excluded from package.json files must fail preflight");
   assert.match(preflightBadLogo.stderr, /plugin\.json logo: unpacked-logo\.svg/);
+  badLogoPlugin.logo = "assets\\logo.svg";
+  writeIso("plugin.json", JSON.stringify(badLogoPlugin, null, 2) + "\n");
+  const preflightBackslashLogo = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightBackslashLogo.status, 0, "Backslash plugin.json logo must fail preflight on all OSes");
+  assert.match(preflightBackslashLogo.stderr, /plugin\.json logo must use POSIX/);
   writeIso("plugin.json", origPlugin);
   fs.rmSync(path.join(isoRepo, "unpacked-logo.svg"), { force: true });
 

@@ -193,5 +193,5 @@ Optional boolean flags `allowNonPassing: true` and `allowPartial: true` mirror `
 | `--allow-partial` | `digest`, `bundle`, `finalize`, `bundle-init` | Allow archiving/digesting cohorts containing `PARTIAL` or `NO_REPORT` specialist slots (`allowPartial: true`). |
 | `--replace` | `bundle`, `finalize`, `bundle-init` | Allow overwriting an existing `lead/report.sources.json` bundle or `--out` record file (requires `--out` on `bundle-init`). |
 | `--predecessor <sha256>` | `bundle`, `finalize` | Require the existing `lead/report.sources.json` bundle's SHA-256 to match `<sha256>` before overwriting. |
-| `--expected-sha256 <sha256>` | `verify` | Pins the expected 64-hex lowercase bundle SHA-256 digest (optional standalone; required with `--prune` and mutually exclusive with the 2nd positional `[expected-sha256]`). |
+| `--expected-sha256 <sha256>` | `verify` | Pins the expected 64-hex lowercase bundle SHA-256 digest (optional standalone; `--prune` requires either this flag or the 2nd positional `[expected-sha256]`, never both). |
 | `--prune` / `--keep-reports` | `verify`, `finalize`, `prune` | `--prune` (on `verify` with `--expected-sha256 <sha256>` or 2nd positional `[expected-sha256]`, or on `finalize`) prunes verified loose `specialist-<N>/report.md` files in the same process; `--keep-reports` retains loose reports after verification passes. |

@@ -2502,6 +2502,27 @@ try {
       "SVC-005: --strict must still fail when inherit audit slot is absent from both worktree and root"
     );
 
+    // Case-variant slot directory collection on case-insensitive volumes (win32/darwin) vs exact-case volumes
+    const caseSlotCanonical = reportPath("case_slot", 1);
+    const caseSlotVariant = caseSlotCanonical.replace("/specialist-1/", "/Specialist-1/");
+    writeAtAsq(asqWt, caseSlotVariant, "# Case Variant\nVerified.\n");
+    const caseSlotPlan = {
+      executionMode: "swarm",
+      workers: [{ squadId: "case_slot", specialists: [{ reportSlot: caseSlotCanonical }] }]
+    };
+    const isCaseInsensitiveTmp = fs.existsSync(path.join(asqWt, caseSlotCanonical));
+    if (isCaseInsensitiveTmp && (process.platform === "win32" || process.platform === "darwin")) {
+      const caseCollected = collectReportSlots(asqDir, { plan: caseSlotPlan, sources: [asqWt], strict: true });
+      assert.deepEqual(caseCollected.missing, [], "Case-variant Specialist-1 must be collected on case-insensitive volume");
+      assert.deepEqual(caseCollected.collected.map(c => c.slot), [caseSlotCanonical]);
+    } else if (!isCaseInsensitiveTmp) {
+      assert.throws(
+        () => collectReportSlots(asqDir, { plan: caseSlotPlan, sources: [asqWt], strict: true }),
+        /No non-empty report slots|Missing expected report slot/,
+        "Exact-case filesystem must not match Specialist-1 for specialist-1"
+      );
+    }
+
     // RUN-011: non-boolean includeIntegrityAuditor and template/record requireIntegrityAudit must fail closed
     for (const badBool of ["false", 0, "true", null]) {
       assert.throws(

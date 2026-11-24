@@ -157,11 +157,13 @@ if (pkg) {
       if (typeof pluginManifest.logo !== "string" || !pluginManifest.logo.trim()) {
         errors.push('plugin.json must define a non-empty "logo" path.');
       } else {
-        const normalizedLogo = pluginManifest.logo.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-        if (!exists(normalizedLogo)) {
+        const rawLogo = pluginManifest.logo.trim();
+        if (rawLogo.includes("\\")) {
+          errors.push(`plugin.json logo must use POSIX '/' separators: ${pluginManifest.logo}`);
+        } else if (!exists(rawLogo)) {
           errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
         } else {
-          pluginLogoPath = normalizedLogo;
+          pluginLogoPath = rawLogo.replace(/^\.\//, "");
         }
       }
     } catch (error) {

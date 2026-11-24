@@ -1286,8 +1286,11 @@ try {
     assert.doesNotMatch(layeredLeadBrief, /kill finished workers/);
     assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
     assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} initially, then since: <last_read_seq>\./);
-    assert.match(layeredLeadBrief, /Follow Board scope above/);
-    assert.doesNotMatch(layeredLeadBrief, /Park via swarm_wait;/, "OPT-BRIEF-04: layered swarm lead must omit duplicate Park via swarm_wait prefix");
+    assert.match(
+      layeredLeadBrief,
+      /Park via swarm_wait for receipts; follow Board scope above/,
+      "Layered swarm lead must retain pre-receipt swarm_wait distinct from post-handoff Then swarm_wait"
+    );
     assert.ok(
       Buffer.byteLength(superviseSwarmLayeredLead, "utf8") <= 600,
       `OPT-BRIEF-03: expected compact superviseSwarmLayeredLead <= 600 B, got ${Buffer.byteLength(superviseSwarmLayeredLead, "utf8")} B`

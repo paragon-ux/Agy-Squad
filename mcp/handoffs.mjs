@@ -1508,6 +1508,7 @@ function collectReportSlots(root, options = {}) {
   }
 
   const targetSlots = [...targetSlotSet];
+  const foldSlotCase = process.platform === "win32" || process.platform === "darwin";
   const foundBySlot = new Map();
   for (const { raw, real } of resolvedSources) {
     const verifiedSrcDirs = new Set([real]);
@@ -1524,7 +1525,8 @@ function collectReportSlots(root, options = {}) {
           if (st.isSymbolicLink() || !st.isDirectory()) {
             entryNames = "probe";
           } else {
-            entryNames = new Set(fs.readdirSync(fullCohortDir));
+            const names = fs.readdirSync(fullCohortDir);
+            entryNames = new Set(foldSlotCase ? names.map(name => name.toLowerCase()) : names);
           }
         } catch (error) {
           if (error.code === "ENOENT" || error.code === "ENOTDIR") {
@@ -1535,7 +1537,7 @@ function collectReportSlots(root, options = {}) {
         }
         cohortEntriesCache.set(cohortDir, entryNames);
       }
-      return entryNames === "probe" || (entryNames !== null && entryNames.has(slotName));
+      return entryNames === "probe" || (entryNames !== null && entryNames.has(foldSlotCase ? slotName.toLowerCase() : slotName));
     };
     for (const slotRel of targetSlots) {
       if (!cohortHasSlotDir(slotRel)) continue;

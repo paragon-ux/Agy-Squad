@@ -26,7 +26,7 @@ const superviseCohort = [
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
-  "Follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
+  "Park via swarm_wait for receipts; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
   `Squad Lead Patrol & Alignment Gate: verify swarm status, batch-read traces (${TRANSCRIPT_FORENSICS_SWARM}), and artifacts via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
