@@ -1124,8 +1124,11 @@ try {
     assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
     assert.match(swarmAuditLeadSpec.Prompt, /read-only '\|' pipes/);
-    assert.match(swarmAuditLeadSpec.Prompt, /query --id <uuid> --summary --include-tools --full/);
-    assert.match(swarmAuditLeadSpec.Prompt, /read\|step --id <uuid> --full/);
+    assert.match(swarmAuditLeadSpec.Prompt, /list --parent <coordId> --lineage --json/);
+    assert.match(swarmAuditLeadSpec.Prompt, /health --id u1,u2 --json/);
+    assert.match(swarmAuditLeadSpec.Prompt, /outline --id <uuid> --full --out <scratch>\/t-<w>\.txt/);
+    assert.match(swarmAuditLeadSpec.Prompt, /step <N,M> --id <uuid> --field content --full/);
+    assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
 
     // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and /swarm lead wording
     const compPlan = planSquadCohort(
@@ -1137,13 +1140,21 @@ try {
     assert.match(compLeadBrief, /read_board\{since:/);
     assert.doesNotMatch(compLeadBrief, /batch-read traces|agy-context transcript|transcript\.jsonl/);
     assert.match(compLeadBrief, /content only; no trace forensics/);
+    assert.match(compLeadBrief, /FIRST ACTION: Park via swarm_wait for receipts/);
+    assert.match(compLeadBrief, /Do NOT read repo files or run tests before receipts arrive/);
+    assert.match(compLeadBrief, /Spot-check scope \(park via swarm_wait first; do NOT pre-read\):/);
+    assert.match(compLeadBrief, /spot-check ONLY cited file:line\/checks.*no bulk repo re-reads/);
     assert.match(compLeadBrief, /Content Verdict/);
     assert.match(compLeadBrief, /post_message <= 500 UTF-8 bytes.*READY/);
     assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line|deterministic scratch teardown/);
     const compAuditBrief = compPlan.integrityAuditPlan[0].swarmAdd.brief;
     assert.match(compAuditBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
     assert.match(compAuditBrief, /agy-context transcript/);
-    assert.match(compAuditBrief, /query --id <uuid> --summary --include-tools --full/);
+    assert.match(compAuditBrief, /list --parent <coordId> --lineage --json/);
+    assert.match(compAuditBrief, /outline --id <uuid> --full --out <scratch>\/t-<w>\.txt/);
+    assert.match(compAuditBrief, /agy-squad digest <rel-record>/);
+    assert.match(compAuditBrief, /agy-squad verdict --integrity <rel-slot>/);
+    assert.match(compAuditBrief, /no unrelated repo source reads/);
     assert.match(compAuditBrief, /read-only '\|' pipes/);
 
     const selfDiagDecoupledPlan = planSquadCohort(
@@ -1151,6 +1162,30 @@ try {
       repoRoot
     );
     assert.doesNotMatch(JSON.stringify(selfDiagDecoupledPlan), /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
+    assert.equal(selfDiagDecoupledPlan.workers.length, 3, "self-diagnosis-manifest must retain 3 working squads");
+    assert.equal(selfDiagDecoupledPlan.topology.totalSpecialists, 6, "self-diagnosis-manifest must retain 6 specialists");
+    assert.equal(selfDiagDecoupledPlan.integrityAuditPlan.length, 3, "self-diagnosis-manifest must retain 3 flat integrity auditors (12 workers total)");
+    for (const w of selfDiagDecoupledPlan.workers) {
+      assert.ok(w.lead, `self-diagnosis squad '${w.squadId}' must retain its layered lead`);
+      assert.ok(Array.isArray(w.lead.scopeFiles) && w.lead.scopeFiles.length > 0, `lead '${w.squadId}' must emit structured scopeFiles`);
+      assert.match(w.lead.swarmAdd.brief, /Park on swarm_wait for your 2 specialists' reports/);
+      assert.match(w.lead.swarmAdd.brief, /FIRST ACTION: Park via swarm_wait for receipts/);
+      for (const sp of w.specialists) {
+        assert.ok(Array.isArray(sp.scopeFiles) && sp.scopeFiles.length > 0, `specialist '${sp.workerName}' must emit structured scopeFiles`);
+      }
+    }
+    assert.ok(
+      selfDiagDecoupledPlan.verificationPipeline.some(step => /--from-scope/.test(step)),
+      "verificationPipeline must surface --from-scope on bundle-init"
+    );
+    assert.ok(
+      selfDiagDecoupledPlan.verificationPipeline.some(step => /--strict-citations/.test(step)),
+      "verificationPipeline must surface --strict-citations on finalize"
+    );
+    assert.ok(
+      selfDiagDecoupledPlan.verificationPipeline.some(step => /agy-squad prune <bundle\.sources\.json> <sha256>/.test(step)),
+      "verificationPipeline must surface non-circular post-synthesis prune order"
+    );
 
     // v0.1.3 Remediation Regressions: MCP-001, OPT-IO-6, OPT-BRIEF-03
     // MCP-001: Subagent modelProvenance reflects per-worker manifest models (aliases and non-aliases) when top-level model is omitted or 'inherit'

@@ -2717,15 +2717,177 @@ try {
       citeLeadSlot,
       "Content Verdict: PASS\n\n## Sources\n- [Kept](https://example.com/kept)\n- [Dropped](https://example.com/dropped)\n"
     );
-    const strictPassCli = spawnSync(
+    // CLI bundle --strict-citations passes when all URLs are carried, and fails closed when dropped
+    writeAtAsq(asqDir, citeLeadSlot, "Content Verdict: PASS\n\n## Sources\n- [Kept](https://example.com/kept)\n");
+    const bundleStrictFail = spawnSync(
       process.execPath,
-      [agySquadCli, "finalize", citeRecPath, "--allow-unaudited", "--strict-citations", "--replace", "--prune"],
+      [agySquadCli, "bundle", citeRecPath, "--allow-unaudited", "--strict-citations", "--replace"],
       { cwd: asqDir, encoding: "utf8" }
     );
-    assert.equal(strictPassCli.status, 0, strictPassCli.stderr);
-    assert.doesNotMatch(strictPassCli.stderr, /\[WARN\]/);
-    assert.deepEqual(JSON.parse(strictPassCli.stdout).bundled.citations.uncarriedUrls, []);
-    assert.equal(fs.existsSync(path.join(asqDir, citeSpecSlot)), false, "v0.2.2: passing --strict-citations --prune must prune loose specialist report");
+    assert.notEqual(bundleStrictFail.status, 0, "bundle --strict-citations must fail closed on uncarried URLs");
+    assert.match(citeDigCli.stderr, /pass --strict-citations on bundle\/finalize to fail closed/);
+
+    // Non-circular workflow: finalize --strict-citations (without --prune) yields bundle SHA-256 while keeping specialist report, then prune removes it
+    writeAtAsq(
+      asqDir,
+      citeLeadSlot,
+      "Content Verdict: PASS\n\n## Sources\n- [Kept](https://example.com/kept)\n- [Dropped](https://example.com/dropped)\n"
+    );
+    const nonCircularFin = spawnSync(
+      process.execPath,
+      [agySquadCli, "finalize", citeRecPath, "--allow-unaudited", "--strict-citations", "--replace"],
+      { cwd: asqDir, encoding: "utf8" }
+    );
+    assert.equal(nonCircularFin.status, 0, nonCircularFin.stderr);
+    assert.doesNotMatch(nonCircularFin.stderr, /\[WARN\]/);
+    const nonCircularOut = JSON.parse(nonCircularFin.stdout);
+    assert.deepEqual(nonCircularOut.bundled.citations.uncarriedUrls, []);
+    assert.equal(nonCircularOut.pruned, null);
+    assert.equal(fs.existsSync(path.join(asqDir, citeSpecSlot)), true, "finalize without --prune must leave loose specialist report readable for synthesis");
+    const postSynthPrune = spawnSync(
+      process.execPath,
+      [agySquadCli, "prune", nonCircularOut.bundled.path, nonCircularOut.bundled.sha256],
+      { cwd: asqDir, encoding: "utf8" }
+    );
+    assert.equal(postSynthPrune.status, 0, postSynthPrune.stderr);
+    assert.deepEqual(JSON.parse(postSynthPrune.stdout).removed, [citeSpecSlot]);
+    assert.equal(fs.existsSync(path.join(asqDir, citeSpecSlot)), false, "post-synthesis prune must remove loose specialist report");
+
+    // bundle-init --from-scope: expands files + subdirs, deduplicates lead/spec overlaps, skips .git/node_modules/reportRoot, merges explicit --file, supports legacy plans, and fails closed on '.', symlinks, empty dirs, missing files, and >256 file cap
+    const scopeDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-from-scope-")));
+    try {
+      writeAtAsq(scopeDir, "src/a.mjs", "export const a = 1;\n");
+      writeAtAsq(scopeDir, "src/nested/b.mjs", "export const b = 2;\n");
+      writeAtAsq(scopeDir, "src/.git/HEAD", "ref: refs/heads/main\n");
+      writeAtAsq(scopeDir, "src/node_modules/pkg/index.js", "module.exports = 1;\n");
+      writeAtAsq(scopeDir, "docs/guide.md", "# Guide\n");
+      writeAtAsq(scopeDir, "extra.txt", "extra\n");
+      writeAtAsq(scopeDir, "scratch/agy-squad/squad-scoped/specialist-1/report.md", "# S1\nChecked.\n");
+      writeAtAsq(scopeDir, "scratch/agy-squad/squad-scoped/lead/report.md", "Content Verdict: PASS\nChecked.\n");
+      writeAtAsq(scopeDir, "scope-manifest.json", JSON.stringify({
+        squads: {
+          scoped: {
+            lead: { role: "Scoped Lead", readOnly: true, objective: "Synthesize", scopeFiles: ["src", "docs/guide.md"] },
+            specialists: [
+              { role: "Core Spec", readOnly: true, objective: "Check src", scopeFiles: ["src/a.mjs", "src/nested"] }
+            ]
+          },
+          wildcard: {
+            specialists: [
+              { role: "Wide Spec", readOnly: true, objective: "Wide", scopeFiles: ["."] }
+            ]
+          },
+          missing: {
+            specialists: [
+              { role: "Missing Spec", readOnly: true, objective: "Missing", scopeFiles: ["does-not-exist.js"] }
+            ]
+          }
+        }
+      }, null, 2));
+      const scopePlanCli = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--manifest", "scope-manifest.json", "--no-integrity"],
+        { cwd: scopeDir, encoding: "utf8" }
+      );
+      assert.equal(scopePlanCli.status, 0, scopePlanCli.stderr);
+      writeAtAsq(scopeDir, "scratch/scope-plan.json", scopePlanCli.stdout);
+      const scopePlanObj = JSON.parse(scopePlanCli.stdout);
+      const scopedSpecWorker = scopePlanObj.workers[0].specialists[0].workerName;
+      const scopedSlot = scopePlanObj.workers[0].specialists[0].reportSlot;
+
+      const fromScopeCli = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--plan", "scratch/scope-plan.json",
+          "--squad", "scoped",
+          "--from-scope",
+          "--file", "extra.txt",
+          "--handoff", `${scopedSpecWorker}=READY ${scopedSlot} - verified scoped files`,
+          "--digest",
+          "--out", "scratch/scoped-record.json"
+        ],
+        { cwd: scopeDir, encoding: "utf8" }
+      );
+      assert.equal(fromScopeCli.status, 0, fromScopeCli.stderr);
+      const fromScopeOut = JSON.parse(fromScopeCli.stdout);
+      assert.deepEqual(
+        Object.keys(fromScopeOut.record.verifiedFiles),
+        ["docs/guide.md", "extra.txt", "src/a.mjs", "src/nested/b.mjs"],
+        "--from-scope must expand subdirectories, deduplicate overlaps, skip .git/node_modules, and merge explicit --file"
+      );
+      assert.match(fromScopeOut.evidenceDigest, /^[0-9a-f]{64}$/);
+
+      // Legacy plan fallback (no structured scopeFiles on workers) still expands via brief lines
+      const legacyPlan = structuredClone(scopePlanObj);
+      delete legacyPlan.workers[0].lead.scopeFiles;
+      delete legacyPlan.workers[0].specialists[0].scopeFiles;
+      const legacyRec = buildBundleRecordInit(scopeDir, { plan: legacyPlan, squadId: "scoped", fromScope: true });
+      assert.deepEqual(Object.keys(legacyRec.verifiedFiles), ["docs/guide.md", "src/a.mjs", "src/nested/b.mjs"]);
+
+      // Fail closed on repo-wide wildcard '.'
+      const wildcardRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "scratch/scope-plan.json", "--squad", "wildcard", "--from-scope"],
+        { cwd: scopeDir, encoding: "utf8" }
+      );
+      assert.notEqual(wildcardRes.status, 0, "--from-scope must reject repo-wide wildcard '.'");
+      assert.match(wildcardRes.stderr, /wildcard '\.'/);
+
+      // Fail closed on missing scoped file
+      const missingRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--plan", "scratch/scope-plan.json", "--squad", "missing", "--from-scope"],
+        { cwd: scopeDir, encoding: "utf8" }
+      );
+      assert.notEqual(missingRes.status, 0, "--from-scope must reject nonexistent scopeFiles");
+      assert.match(missingRes.stderr, /does not exist/);
+
+      // Fail closed on non-boolean fromScope
+      assert.throws(
+        () => buildBundleRecordInit(scopeDir, { plan: scopePlanObj, squadId: "scoped", fromScope: "yes" }),
+        /fromScope must be a boolean/
+      );
+
+      // Fail closed on empty directory and >256 file safety cap
+      fs.mkdirSync(path.join(scopeDir, "empty-dir"), { recursive: true });
+      const emptyPlan = structuredClone(scopePlanObj);
+      emptyPlan.workers[0].lead.scopeFiles = ["empty-dir"];
+      emptyPlan.workers[0].specialists[0].scopeFiles = ["empty-dir"];
+      assert.throws(
+        () => buildBundleRecordInit(scopeDir, { plan: emptyPlan, squadId: "scoped", fromScope: true }),
+        /resolved 0 regular files/
+      );
+
+      for (let i = 0; i < 257; i += 1) {
+        writeAtAsq(scopeDir, `many/f-${String(i).padStart(3, "0")}.txt`, `${i}\n`);
+      }
+      const manyPlan = structuredClone(scopePlanObj);
+      manyPlan.workers[0].lead.scopeFiles = ["many"];
+      manyPlan.workers[0].specialists[0].scopeFiles = ["many"];
+      assert.throws(
+        () => buildBundleRecordInit(scopeDir, { plan: manyPlan, squadId: "scoped", fromScope: true }),
+        /256-file safety cap/
+      );
+
+      // Fail closed on symlink inside expanded scope directory
+      const symInsideScope = path.join(scopeDir, "src", "leak-link.txt");
+      let createdScopeSym = false;
+      try {
+        fs.symlinkSync(path.join(scopeDir, "extra.txt"), symInsideScope);
+        createdScopeSym = true;
+      } catch (err) {
+        if (err?.code !== "EPERM") throw err;
+      }
+      if (createdScopeSym) {
+        assert.throws(
+          () => buildBundleRecordInit(scopeDir, { plan: scopePlanObj, squadId: "scoped", fromScope: true }),
+          /Refusing to follow symlink/
+        );
+      }
+    } finally {
+      fs.rmSync(scopeDir, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

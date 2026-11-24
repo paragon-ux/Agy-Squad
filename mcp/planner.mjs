@@ -809,10 +809,11 @@ function planSquadCohort(
     let compiledLead;
     let leadModel;
     let leadWorkerName;
+    let leadScope;
     if (leadSpec) {
       leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`, truncatedWorkerNames);
       const { canonical: rawLead, readOnly: leadReadOnly } = canonicalizeAgentSpec(leadSpec, `${id}-lead`);
-      const leadScope = validateScopeFiles(rawLead.scopeFiles, rawLead.role);
+      leadScope = validateScopeFiles(rawLead.scopeFiles, rawLead.role);
       if (leadReadOnly !== true) {
         writableScopeEntries.push({
           label: `${id}-lead (${rawLead.role ?? "Lead"})`,
@@ -899,7 +900,7 @@ function planSquadCohort(
         `${id}-worker-${number}`,
         truncatedWorkerNames
       );
-      compiledSpecialists.push({ slot, workerName, specModel, compiled });
+      compiledSpecialists.push({ slot, workerName, specModel, compiled, scopeFiles: specScope });
     }
 
     workers.push({
@@ -909,6 +910,7 @@ function planSquadCohort(
         ? {
             workerName: leadWorkerName,
             reportSlot: leadSlot,
+            scopeFiles: leadScope,
             ...(executionMode === "swarm"
               ? {
                   swarmAdd: {
@@ -922,9 +924,10 @@ function planSquadCohort(
               : { Subagent: compiledLead })
           }
         : null,
-      specialists: compiledSpecialists.map(({ slot, workerName, specModel, compiled }) => ({
+      specialists: compiledSpecialists.map(({ slot, workerName, specModel, compiled, scopeFiles: specScope }) => ({
         workerName,
         reportSlot: slot,
+        scopeFiles: specScope,
         ...(executionMode === "swarm"
           ? {
               swarmAdd: {
@@ -963,8 +966,8 @@ function planSquadCohort(
           );
           recordSubagentWorkerModel(auditModel);
           const targetScopeNote = executionMode === "swarm"
-            ? `Verify '${id}' verifiedFiles + Evidence Digest.`
-            : `Verify '${id}' verifiedFiles, Evidence Digest & conversationIds.`;
+            ? `From repo root run 'agy-squad digest <rel-record>' & 'agy-squad verdict --integrity <rel-slot>'; read ONLY '${id}' reports, record & traces (no unrelated repo source reads).`
+            : `From repo root run 'agy-squad digest <rel-record>' & 'agy-squad verdict --integrity <rel-slot>'; verify '${id}' reports, record, conversationIds & traces (no unrelated repo source reads).`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -1134,13 +1137,14 @@ function planSquadCohort(
       ...(flatSynthesisSlots.length > 0
         ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
         : []),
-      "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> <verified-files...>",
+      "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> [--from-scope | <verified-files...>]",
       ...(includeIntegrityAuditor
         ? ["agy-squad verdict --integrity <integrity-report.md>"]
         : []),
       includeIntegrityAuditor
-        ? "agy-squad finalize <bundle-record.json> [--prune [--keep-reports]]"
-        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--prune [--keep-reports]]"
+        ? "agy-squad finalize <bundle-record.json> [--strict-citations] [--prune [--keep-reports]]"
+        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--strict-citations] [--prune [--keep-reports]]",
+      "# Single-pass ledger/deliverable order: finalize without --prune to capture bundle SHA-256 first, synthesize once, then run: agy-squad prune <bundle.sources.json> <sha256>"
     ]
   };
 }

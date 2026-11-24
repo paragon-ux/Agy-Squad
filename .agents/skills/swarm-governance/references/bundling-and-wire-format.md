@@ -10,7 +10,7 @@ Reference for [`SKILL.md`](../SKILL.md).
    - `@<target> PARTIAL <slot> -- <note and blocker>`
    - `@<target> NO_REPORT - <reason>`
 3. **Verbatim & scoped:** Copy raw posts verbatim into `handoffs[].message` for `inspect` (verified post-hoc). Always scope `read_board{since|seqs}`.
-4. **Sources & citation carry-forward:** Any specialist or lead report citing external URLs or repository code should include a `## Sources` section with descriptive `[Title](url)` or `path:line` entries (never generic `reference 1` labels). Carry every cited source forward into synthesis (or drop prose claims that depended on omitted sources), synthesize **before** `finalize --prune` (or pass `--keep-reports`), and reconcile any `citations.uncarriedUrls` reported by `bundle-init --digest`, `digest`, `bundle`, or `finalize` (pass `--strict-citations` to fail closed before bundling/pruning when any specialist URL is missing from `lead/report.md`).
+4. **Sources & citation carry-forward:** Any specialist or lead report citing external URLs or repository code should include a `## Sources` section with descriptive `[Title](url)` or `path:line` entries (never generic `reference 1` labels). Carry every cited source forward into synthesis (or drop prose claims that depended on omitted sources), run `finalize [--strict-citations]` without `--prune` before synthesis (or synthesize before `finalize --prune` / pass `--keep-reports`), and reconcile any `citations.uncarriedUrls` reported by `bundle-init --digest`, `digest`, `bundle`, `verify`, or `finalize` (pass `--strict-citations` on `bundle`/`finalize` to fail closed before bundling/pruning when any specialist URL is missing from `lead/report.md`).
 
 ## Canonical Auditor Slots and Verdicts
 
@@ -25,8 +25,10 @@ Reference for [`SKILL.md`](../SKILL.md).
 ## Dual-Path Trace Inspection
 
 - **Standalone native (`agy-context` absent):** Single-pass batch read of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` (+ `transcript_full.jsonl` if `truncated_fields` set), matching child `conversationId`s (`subagent`) or Step 0/1 `sender=<coordId>` + `@<workerName>` (`/swarm`). Never copy raw JSONL into `scratch/` or poll step-by-step.
-- **Optional `Agy-Context-Saver` installed:** Single unchained `agy-context transcript` commands (read-only `|` stdin pipes such as `rg`/`grep`/`head`/`tail`/`jq` allowed; no `&&` or `;`): discover via `list --parent <id> --json` or `health --id u1,u2 --json`, then audit tool traces in parallel via `query --id <uuid> --summary --include-tools --full` (or `--field tool_calls|tool_args`), `read --id <uuid> --full`, and `step <N|N-M> --id <uuid> --full` (use `--out <path>` if raw output exceeds `9 KB`). If restricted, extract a sanitized index before waking `audit-<id>`:
-  - `agy-context transcript export --parent <coord-uuid> --sanitized --out scratch/agy-squad/transcript-index-<id>.md` (or `query --id <uuid> --roles assistant --include-tools --full --limit 50` + `step --id <uuid> --full` on `ERROR`; never rely only on `--roles error`).
+- **Optional `Agy-Context-Saver` installed:** Single unchained `agy-context transcript` commands (read-only `|` stdin pipes such as `rg`/`grep`/`head`/`tail`/`jq` allowed; no `&&` or `;`) in two turns:
+  1. **Turn 1 (parallel):** `agy-context transcript list --parent <coordId> --lineage --json` (verifies `parentConvId`, `@rosterName`, step counts, and sizes in one call) + `agy-context transcript health --id u1,u2 --json` + `agy-squad digest <rel-record>` from repo root.
+  2. **Turn 2 (parallel):** `agy-context transcript outline --id <uuid> --full --out <scratch>/t-<worker>.txt` (or `| tail -n 80` to stay under the `~9 KB` inline ceiling without spilling; never bare `--full` without `--out` or a pipe, and never `read --start`/`--end`), plus targeted `agy-context transcript step <N,M> --id <uuid> --field content --full` only if specific step outputs are needed. Scope auditors strictly to target reports, bundle record, and worker transcripts (no unrelated repo source reads), and confirm the auditor report via `agy-squad verdict --integrity <rel-slot>`.
+  - If restricted, extract a sanitized index before waking `audit-<id>`: `agy-context transcript export --parent <coord-uuid> --sanitized --out scratch/agy-squad/transcript-index-<id>.md`.
 - **Fail closed:** Workspace re-runs alone never justify `CLEAN`. Emit `INTEGRITY VIOLATION` if traces cannot be verified via the active environment's path or tampering/fabrication is found.
 
 ## Bundle Record Schema and CLI
@@ -37,13 +39,16 @@ Verified bundles (`lead/report.sources.json`) prove SHA-256 **file integrity** f
 agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolated
 agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
 agy-squad bundle-init --plan <plan.json> [--squad <id>] (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) \
-  [--id-map <worker=id>] <verified-file...> --out <record.json> --digest
+  [--id-map <worker=id>] (--from-scope | <verified-file...>) --out <record.json> --digest
 agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-agy-squad finalize <record.json> [--replace] [--prune [--keep-reports]]
+agy-squad finalize <record.json> [--strict-citations] [--replace]            # non-destructive; yields bundle SHA-256 before synthesis
+# Synthesize final deliverable / ledger once with verified bundle SHA-256, then prune:
+agy-squad prune scratch/agy-squad/squad-<id>/lead/report.sources.json <sha256> [--keep-reports]
+# Or verify + prune in one step (or pass --prune directly to finalize after synthesis):
 agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune --expected-sha256 <sha256> [--keep-reports]
 ```
 
-*(Passing `--digest` requires `--handoff` or `--handoffs` and at least one `<verified-file>`. Granular `fingerprint`, `inspect`, `digest`, `bundle`, and `prune <bundle> <sha256>` remain available; standalone `verify --prune` requires `--expected-sha256 <sha256>`.)*
+*(Passing `--digest` requires `--handoff` or `--handoffs` and at least one verified file via `--from-scope`, `--file`, or trailing `<verified-file...>`. Granular `fingerprint`, `inspect`, `digest`, `bundle`, and `prune <bundle> <sha256>` remain available; standalone `verify --prune` requires `--expected-sha256 <sha256>`.)*
 
 ```json
 {
@@ -54,4 +59,4 @@ agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune -
 }
 ```
 
-Flags: `--allow-unaudited` (`auditPolicy: "unaudited-explicit"`), `--replace` / `--predecessor <sha256>`, `--keep-reports`.
+Flags: `--allow-unaudited` (`auditPolicy: "unaudited-explicit"`), `--from-scope`, `--strict-citations`, `--replace` / `--predecessor <sha256>`, `--keep-reports`.

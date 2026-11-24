@@ -17,7 +17,7 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 
 const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file)";
 const TRANSCRIPT_FORENSICS_BASE =
-  "if agy-context is installed: single unchained 'agy-context transcript' (read-only '|' pipes ok; no &&/;): 'list --parent <coordId> --json' or 'health --id u1,u2 --json' -> parallel 'query --id <uuid> --summary --include-tools --full' / 'read|step --id <uuid> --full' (--out <path> if >9 KB); else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (+ transcript_full.jsonl)";
+  "if agy-context installed: unchained 'agy-context transcript' (read-only '|' pipes ok; no &&/;): 1) parallel 'list --parent <coordId> --lineage --json' + 'health --id u1,u2 --json'; 2) parallel 'outline --id <uuid> --full --out <scratch>/t-<w>.txt' (or '| tail -n 80'; never bare --full), optional 'step <N,M> --id <uuid> --field content --full'; else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (+ transcript_full.jsonl)";
 const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [
@@ -26,8 +26,8 @@ const superviseCohort = [
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
-  "Park via swarm_wait for receipts; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
-  `Squad Lead Patrol & Alignment Gate: verify swarm status, specialist reports, and cited files/checks via ${NATIVE_READ_TOOLS} (content only; no trace forensics); recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
+  "FIRST ACTION: Park via swarm_wait for receipts; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50). Do NOT read repo files or run tests before receipts arrive; reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
+  `Squad Lead Patrol & Alignment Gate: verify swarm status, read specialist reports, then spot-check ONLY cited file:line/checks via ${NATIVE_READ_TOOLS} (no bulk repo re-reads; content only; no trace forensics); recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
@@ -208,12 +208,17 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>. Then swarm_wait.`
     : `1 send_message <= ${messageLimit} UTF-8 bytes: READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>.`;
 
+  const scopeHeader =
+    isLead && isSwarm && !isIntegrityAuditor
+      ? "Spot-check scope (park via swarm_wait first; do NOT pre-read):"
+      : "Scope:";
+
   return {
     ...payload,
     Prompt: [
       `Role: ${role}`,
       `Objective: ${objective.trim()}`,
-      "Scope:",
+      scopeHeader,
       ...scope.map(file => `- ${file}`),
       ...(instructions ? [`Instructions: ${instructions}`] : []),
       `Deliverable: ${deliverable}`,

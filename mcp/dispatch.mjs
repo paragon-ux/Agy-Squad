@@ -169,7 +169,7 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
         role: "Integrity Auditor",
         objective: `Audit squad '${resolvedTarget}' alignment, traces, and evidence.`,
         scopeFiles: ["."],
-        expectedDeliverable: `Target Squad: ${resolvedTarget}; Evidence Digest: <sha256> (agy-squad digest); Integrity Verdict: CLEAN | INTEGRITY VIOLATION (plain text, no backticks).`
+        expectedDeliverable: `Target Squad: ${resolvedTarget}; Evidence Digest: <sha256>; Integrity Verdict: CLEAN | INTEGRITY VIOLATION (plain text, no backticks).`
       },
       id: slotId,
       number: 1

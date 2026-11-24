@@ -34,11 +34,14 @@ agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolat
 agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
 agy-squad bundle-init --plan <plan.json> --squad <id> \
   (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) [--id-map <worker=id>] \
-  <verified-file...> --digest --out scratch/bundle-record-<id>.json
+  --from-scope --digest --out scratch/bundle-record-<id>.json
 agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-agy-squad finalize scratch/bundle-record-<id>.json [--replace] [--prune [--keep-reports]]
+agy-squad finalize scratch/bundle-record-<id>.json --strict-citations [--replace]
+# Write docs/reviews/<slug>.md once with verified bundle SHA-256 hashes (reading lead/report.md in layered mode unless uncarriedUrls/raw detail requires specialist-N/report.md), then prune:
+agy-squad prune scratch/agy-squad/squad-<id>/lead/report.sources.json <sha256> [--keep-reports]
+# Or verify + prune in one call:
 agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune --expected-sha256 <sha256> [--keep-reports]
 ```
 
 - Write temp `<plan.json>` and `bundle-record-<id>.json` outside `scratch/agy-squad/squad-<id>/` (e.g., `scratch/bundle-record-<id>.json`) and remove once done.
-- Transcribe every finding `1 ID = 1 Row` and each verified bundle SHA-256 into `docs/reviews/<slug>.md` (Standard v1.5.0 Sections 1-9) before removing finished `scratch/agy-squad/` directories.
+- Finalize bundles without `--prune` first so verified bundle SHA-256 hashes are written into `docs/reviews/<slug>.md` (Standard v1.5.0 Sections 1-9, `1 ID = 1 Row`) in a single pass with zero placeholder patching, then run `agy-squad prune` and remove finished `scratch/agy-squad/` directories. On read-only runs where `git status` is clean on the baseline-tested `HEAD`, skip a duplicate closeout `npm test`.

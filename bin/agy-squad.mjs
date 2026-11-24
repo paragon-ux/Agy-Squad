@@ -32,7 +32,7 @@ function warnUncarriedCitations(citations, targetLabel) {
   const uncarried = citations?.uncarriedUrls;
   if (!Array.isArray(uncarried) || uncarried.length === 0) return;
   console.error(
-    `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
+    `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations on bundle/finalize to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
   );
 }
 
@@ -235,6 +235,7 @@ const SUBCOMMAND_HELP = {
     "  --report-root <path>             Custom workspace-relative report root",
     "  --verdict PASS|FAIL|BLOCKED      Explicit lead verdict override",
     "  --file <path>                    Repeatable verified workspace file path",
+    "  --from-scope                     Infer & fingerprint regular files from the squad's plan scopeFiles",
     "  --id-map <worker=id>             Repeatable runtime conversationId mapping",
     "  --handoffs <file.json>           JSON array of { sender, message } handoff receipts",
     "  --handoff <sender=message>       Repeatable inline handoff receipt entry",
@@ -246,7 +247,7 @@ const SUBCOMMAND_HELP = {
     "  --replace                        Overwrite an existing --out file",
     "",
     "Examples:",
-    "  agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json --digest --out scratch/rec.json src/app.js",
+    "  agy-squad bundle-init --plan scratch/plan.json --from-scope --handoffs scratch/handoffs.json --digest --out scratch/rec.json",
     "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json src/auth.js"
   ].join("\n"),
   fingerprint: [
@@ -877,7 +878,7 @@ async function main(args) {
     return 0;
   }
   if (command === "bundle-init") {
-    const usageLine = "Usage: agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id>] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [<file...>]";
+    const usageLine = "Usage: agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id>] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--from-scope] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [<file...>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       plan: { type: "string" },
       provenance: { type: "string" },
@@ -886,6 +887,7 @@ async function main(args) {
       "report-root": { type: "string" },
       verdict: { type: "string" },
       file: { type: "string", multiple: true },
+      "from-scope": { type: "boolean", default: false },
       "id-map": { type: "string", multiple: true },
       handoffs: { type: "string" },
       handoff: { type: "string", multiple: true },
@@ -935,6 +937,7 @@ async function main(args) {
       provenance,
       squadId: values.squad,
       files,
+      fromScope: values["from-scope"],
       reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"]) : undefined,
       verdict: values.verdict,
       idMap,
@@ -952,7 +955,7 @@ async function main(args) {
     }
     if (values.digest && Object.keys(record.verifiedFiles ?? {}).length === 0) {
       throw new Error(
-        "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
+        "bundle-init --digest requires at least one verified workspace file. Pass --from-scope, or one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
       );
     }
     const digestResult = values.digest

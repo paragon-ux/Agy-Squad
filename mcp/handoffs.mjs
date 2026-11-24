@@ -1816,6 +1816,165 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
   };
 }
 
+const MAX_FROM_SCOPE_FILES = 256;
+const SKIPPED_SCOPE_WALK_DIRS = new Set([".git", "node_modules"]);
+const CONTROL_CHAR_SCOPE_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
+
+function extractScopeLinesFromBrief(text) {
+  if (typeof text !== "string" || !text) return [];
+  const lines = text.split(/\r?\n/);
+  const scopes = [];
+  let inScope = false;
+  for (const line of lines) {
+    if (!inScope) {
+      if (line === "Scope:" || line.startsWith("Spot-check scope (")) {
+        inScope = true;
+      }
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const entry = line.slice(2).trim();
+      if (entry) scopes.push(entry);
+    } else {
+      break;
+    }
+  }
+  return scopes;
+}
+
+function collectPlanSquadScopeEntries(rawPlan, selectedSquadId) {
+  if (!Array.isArray(rawPlan?.workers)) {
+    throw new Error(`--from-scope requires plan.workers['${selectedSquadId}'] with scopeFiles.`);
+  }
+  const squadWorker = rawPlan.workers.find(w => w && typeof w === "object" && w.squadId === selectedSquadId);
+  if (!squadWorker) {
+    throw new Error(`--from-scope could not find squad '${selectedSquadId}' in plan.workers.`);
+  }
+  const collected = [];
+  const addWorkerScopes = (entry) => {
+    if (!entry || typeof entry !== "object") return;
+    if (Array.isArray(entry.scopeFiles)) {
+      for (const item of entry.scopeFiles) collected.push(item);
+      return;
+    }
+    const briefText = entry.swarmAdd?.brief ?? entry.Subagent?.Prompt;
+    for (const item of extractScopeLinesFromBrief(briefText)) {
+      collected.push(item);
+    }
+  };
+  for (const specialist of Array.isArray(squadWorker.specialists) ? squadWorker.specialists : []) {
+    addWorkerScopes(specialist);
+  }
+  if (squadWorker.lead) {
+    addWorkerScopes(squadWorker.lead);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const raw of collected) {
+    if (typeof raw !== "string") {
+      throw new Error(`--from-scope found invalid scopeFiles entry for squad '${selectedSquadId}'.`);
+    }
+    const trimmed = raw.trim();
+    if (
+      !trimmed ||
+      CONTROL_CHAR_SCOPE_RE.test(trimmed) ||
+      trimmed.startsWith("/") ||
+      trimmed.includes("\\") ||
+      /^[a-zA-Z]:/.test(trimmed)
+    ) {
+      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
+    }
+    if (trimmed !== "." && trimmed.split("/").some(part => !part || part === "." || part === "..")) {
+      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
+    }
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      deduped.push(trimmed);
+    }
+  }
+  if (deduped.length === 0) {
+    throw new Error(`--from-scope found no scopeFiles for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return deduped;
+}
+
+function expandScopeEntriesToFiles(canonicalRoot, entries, selectedSquadId, verifiedDirs, resolvedReportRoot) {
+  const expanded = new Set();
+  const reportRootPrefix = `${resolvedReportRoot}/`;
+  const walkDirectory = (dirAbs, dirRel, originEntry) => {
+    const dirents = fs.readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    );
+    for (const dirent of dirents) {
+      const childRel = `${dirRel}/${dirent.name}`;
+      if (dirent.isSymbolicLink()) {
+        throw new Error(`Refusing to follow symlink '${childRel}' while expanding --from-scope directory '${originEntry}'.`);
+      }
+      if (dirent.isDirectory()) {
+        if (
+          SKIPPED_SCOPE_WALK_DIRS.has(dirent.name) ||
+          childRel === resolvedReportRoot ||
+          childRel.startsWith(reportRootPrefix)
+        ) {
+          continue;
+        }
+        walkDirectory(path.join(dirAbs, dirent.name), childRel, originEntry);
+      } else if (dirent.isFile()) {
+        expanded.add(childRel);
+        if (expanded.size > MAX_FROM_SCOPE_FILES) {
+          throw new Error(
+            `--from-scope exceeded the ${MAX_FROM_SCOPE_FILES}-file safety cap while expanding '${originEntry}'; pass explicit --file <path> arguments instead.`
+          );
+        }
+      } else {
+        throw new Error(`Unsupported non-regular file '${childRel}' encountered while expanding --from-scope directory '${originEntry}'.`);
+      }
+    }
+  };
+
+  for (const entry of entries) {
+    if (entry === ".") {
+      throw new Error(
+        "--from-scope cannot expand repo-wide wildcard '.'; narrow scopeFiles in the plan or pass explicit --file <path> arguments."
+      );
+    }
+    const targetAbs = workspacePath(canonicalRoot, entry, verifiedDirs);
+    let stat;
+    try {
+      stat = fs.lstatSync(targetAbs);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        throw new Error(`--from-scope path '${entry}' does not exist in workspace.`);
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      const symErr = new Error(`Refusing to follow symlink '${entry}' in --from-scope.`);
+      symErr.code = "ELOOP";
+      throw symErr;
+    }
+    if (stat.isFile()) {
+      expanded.add(entry);
+      if (expanded.size > MAX_FROM_SCOPE_FILES) {
+        throw new Error(
+          `--from-scope exceeded the ${MAX_FROM_SCOPE_FILES}-file safety cap; pass explicit --file <path> arguments instead.`
+        );
+      }
+    } else if (stat.isDirectory()) {
+      if (entry === resolvedReportRoot || entry.startsWith(reportRootPrefix)) {
+        continue;
+      }
+      walkDirectory(targetAbs, entry, entry);
+    } else {
+      throw new Error(`Unsupported non-regular file '${entry}' in --from-scope.`);
+    }
+  }
+  if (expanded.size === 0) {
+    throw new Error(`--from-scope resolved 0 regular files for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function buildBundleRecordInit(root, options = {}) {
   if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
@@ -1827,6 +1986,7 @@ function buildBundleRecordInit(root, options = {}) {
     provenance,
     squadId,
     files = [],
+    fromScope = false,
     reportRoot,
     verdict,
     idMap = {},
@@ -1837,6 +1997,9 @@ function buildBundleRecordInit(root, options = {}) {
     onLeadRead
   } = options;
 
+  if (typeof fromScope !== "boolean") {
+    throw new Error("fromScope must be a boolean.");
+  }
   if (typeof allowUnaudited !== "boolean") {
     throw new Error("allowUnaudited must be a boolean.");
   }
@@ -1948,7 +2111,12 @@ function buildBundleRecordInit(root, options = {}) {
     throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
   }
   let verifiedFiles = {};
-  if (files.length > 0) {
+  if (fromScope) {
+    const scopeEntries = collectPlanSquadScopeEntries(rawPlan, selectedSquadId);
+    const expandedFiles = expandScopeEntriesToFiles(root, scopeEntries, selectedSquadId, verifiedDirs, resolvedReportRoot);
+    const combinedFiles = [...new Set([...expandedFiles, ...files])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    verifiedFiles = fingerprint(root, combinedFiles, verifiedDirs);
+  } else if (files.length > 0) {
     verifiedFiles = fingerprint(root, files, verifiedDirs);
   } else if (
     template.verifiedFiles &&
