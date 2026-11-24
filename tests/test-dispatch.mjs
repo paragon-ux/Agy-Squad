@@ -567,6 +567,7 @@ try {
   fs.writeFileSync(path.join(nestedManifestDir, "m.json"), JSON.stringify(manifest));
   const nestedLoaded = readManifest(workspace, path.join("nested", "m.json"));
   assert.equal(nestedLoaded.selectedManifest, "nested/m.json", "RUN-007: selectedManifest must use POSIX / separators");
+  rejects({ squadId: "all_l1", manifestPath: "C:swarm-manifest.json" }, /drive-relative/);
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {

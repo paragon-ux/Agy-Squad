@@ -25,6 +25,9 @@ function assertWithinWorkspace(root, file) {
 }
 
 function readManifest(root, filename, logicalRoot = root) {
+  if (/^[A-Za-z]:(?![\\/])/.test(filename)) {
+    throw new Error("Manifest path must not be a Windows drive-relative path.");
+  }
   const candidate = path.resolve(root, filename);
   if (path.isAbsolute(filename)) {
     if (!isWithinWorkspace(root, candidate) && !isWithinWorkspace(logicalRoot, candidate)) {
