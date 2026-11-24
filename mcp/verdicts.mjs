@@ -36,6 +36,9 @@ const VERDICT_NEGATION_RE =
   /\b(not|no|never|isn't|wasn't|aren't|weren't|didn't|doesn't|don't|won't|cannot|can't|did\s+not|does\s+not|do\s+not|will\s+not)\s+(pass)\b/gi;
 const VERDICT_SUBJECT_NOUN_RE =
   /\b(?:verdict|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
+const VERDICT_LABEL_SUBJECT_RE =
+  /\b(?:verdict|result|outcome|status|disposition|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
+const BARE_POST_COLON_RE = /^\s*[*_]{0,3}(?:(?:it|they|this|that|still|also|really)\s+){0,2}[*_]{0,3}$/i;
 const NEGATIVE_EXPECTATION_RE =
   /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
 const CLAUSE_BREAK_RE =
@@ -50,6 +53,7 @@ function createClauseTracker(line) {
   let hasHistorical = false;
   let hasCurrent = false;
   let hasSubject = false;
+  let hasColonSubjectLabel = false;
   let hasNegExpectation = false;
   let hasPriorNegation = false;
   let hasPriorClauseBreak = false;
@@ -74,6 +78,7 @@ function createClauseTracker(line) {
       updateFlags(chunk);
       hasPriorClauseBreak = true;
       if (m.groups?.colon) {
+        const labelHasSubject = VERDICT_LABEL_SUBJECT_RE.test(chunk);
         // Preserve historical/negative-expectation qualifiers across introducer colons when no current context appeared.
         if (hasCurrent) {
           hasHistorical = false;
@@ -82,23 +87,27 @@ function createClauseTracker(line) {
           }
           hasCurrent = false;
         }
+        hasSubject = false;
+        hasColonSubjectLabel = labelHasSubject;
       } else {
         hasHistorical = false;
         hasCurrent = false;
         hasSubject = false;
+        hasColonSubjectLabel = false;
         hasNegExpectation = false;
       }
       pos = m.index + m[0].length;
     }
     const delta = seg.slice(pos);
     updateFlags(delta);
+    const effectiveSubject = hasSubject || (hasColonSubjectLabel && BARE_POST_COLON_RE.test(delta));
     const isLineInitial =
       !hasPriorNegation &&
       !hasPriorClauseBreak &&
       /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
     return {
       isHistorical: hasHistorical && !hasCurrent,
-      hasVerdictSubject: hasSubject && !hasNegExpectation,
+      hasVerdictSubject: effectiveSubject && !hasNegExpectation,
       isLineInitial
     };
   };
@@ -106,6 +115,7 @@ function createClauseTracker(line) {
   const markConsumed = matchEnd => {
     scanFrom = matchEnd;
     hasPriorNegation = true;
+    hasColonSubjectLabel = false;
   };
 
   return { advanceTo, markConsumed };

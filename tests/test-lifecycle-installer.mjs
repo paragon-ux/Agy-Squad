@@ -1536,6 +1536,93 @@ try {
         "PR15-DEP-001: publish job must compare SHA-256 of existing and newly built tarballs"
       );
 
+      // Devin PR #17 Flag #2: behavioral execution of the release-tag.yml GitHub Release retry script across all 4 branches (Linux / ubuntu-latest)
+      if (os.platform() === "linux" && spawnSync("sha256sum", ["--version"], { encoding: "utf8" }).status === 0) {
+        const releaseStepMatch = publishJobBlock.match(
+          /name:\s*Create or update GitHub Release and attach npm tarball[\s\S]*?\n\s+run:\s*\|\n([\s\S]*?)(?:\n\s+- name:|$)/
+        );
+        assert.ok(releaseStepMatch, "PR15-DEP-001: expected GitHub Release step run block");
+        const releaseScript = releaseStepMatch[1]
+          .split(/\r?\n/)
+          .map((line) => line.replace(/^ {10}/, ""))
+          .join("\n");
+        const relDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-release-retry-"));
+        try {
+          const fakeBin = path.join(relDir, "bin");
+          fs.mkdirSync(fakeBin, { recursive: true });
+          const tarballName = "agy-squad-0.2.1.tgz";
+          const builtTarball = path.join(relDir, tarballName);
+          const remoteMatch = path.join(relDir, "remote-match.tgz");
+          const remoteMismatch = path.join(relDir, "remote-mismatch.tgz");
+          const ghLog = path.join(relDir, "gh.log");
+          fs.writeFileSync(builtTarball, "deterministic-tarball-bytes-v0.2.1\n");
+          fs.writeFileSync(remoteMatch, "deterministic-tarball-bytes-v0.2.1\n");
+          fs.writeFileSync(remoteMismatch, "tampered-tarball-bytes\n");
+          const stubGh = path.join(fakeBin, "gh");
+          fs.writeFileSync(
+            stubGh,
+            [
+              "#!/usr/bin/env bash",
+              "set -euo pipefail",
+              'echo "$*" >> "$GH_LOG"',
+              'if [ "$1" = "release" ] && [ "$2" = "view" ]; then',
+              '  if [ "$GH_MODE" = "fresh" ]; then exit 1; fi',
+              '  if [ "${4:-}" = "--json" ]; then',
+              '    if [ "$GH_MODE" = "missing-asset" ]; then printf "other.txt\\n"; else printf "other.txt\\n%s\\n" "$TARBALL"; fi',
+              "  fi",
+              "  exit 0",
+              "fi",
+              'if [ "$1" = "release" ] && [ "$2" = "download" ]; then',
+              '  out=""',
+              '  while [ $# -gt 0 ]; do if [ "$1" = "--output" ]; then out="$2"; shift 2; else shift; fi; done',
+              '  cp "$GH_REMOTE_FILE" "$out"',
+              "  exit 0",
+              "fi",
+              'if [ "$1" = "release" ] && [ "$2" = "upload" ]; then exit 0; fi',
+              'if [ "$1" = "release" ] && [ "$2" = "create" ]; then exit 0; fi',
+              "exit 2"
+            ].join("\n") + "\n",
+            { mode: 0o755 }
+          );
+          const runReleaseBranch = (mode, remoteFile = remoteMatch) => {
+            fs.writeFileSync(ghLog, "");
+            return spawnSync("bash", ["-eo", "pipefail", "-c", releaseScript], {
+              cwd: relDir,
+              env: {
+                ...process.env,
+                PATH: `${fakeBin}:${process.env.PATH || ""}`,
+                RELEASE_TAG: "v0.2.1",
+                TARBALL: tarballName,
+                GH_MODE: mode,
+                GH_REMOTE_FILE: remoteFile,
+                GH_LOG: ghLog
+              },
+              encoding: "utf8"
+            });
+          };
+
+          const freshRes = runReleaseBranch("fresh");
+          assert.equal(freshRes.status, 0, freshRes.stderr || freshRes.stdout);
+          assert.match(fs.readFileSync(ghLog, "utf8"), /release create v0\.2\.1 agy-squad-0\.2\.1\.tgz --verify-tag --generate-notes/);
+
+          const uploadRes = runReleaseBranch("missing-asset");
+          assert.equal(uploadRes.status, 0, uploadRes.stderr || uploadRes.stdout);
+          assert.match(fs.readFileSync(ghLog, "utf8"), /release upload v0\.2\.1 agy-squad-0\.2\.1\.tgz/);
+
+          const matchRes = runReleaseBranch("retry-match", remoteMatch);
+          assert.equal(matchRes.status, 0, matchRes.stderr || matchRes.stdout);
+          assert.doesNotMatch(fs.readFileSync(ghLog, "utf8"), /release upload/, "matching retry must skip duplicate gh release upload");
+          assert.match(matchRes.stdout, /already matches built tarball/);
+
+          const mismatchRes = runReleaseBranch("retry-mismatch", remoteMismatch);
+          assert.notEqual(mismatchRes.status, 0, "mismatched existing tarball must fail closed");
+          assert.doesNotMatch(fs.readFileSync(ghLog, "utf8"), /release upload/, "mismatched retry must never overwrite");
+          assert.match(mismatchRes.stderr, /does not match newly built tarball/);
+        } finally {
+          fs.rmSync(relDir, { recursive: true, force: true });
+        }
+      }
+
       // Batch B SEC-009, SEC-010, TEST-004 & Day-1 R1-TEST-001: SHA-pinned workflow actions, exact npm pin, non-main cancel-in-progress, strict docs build
       const ciWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
       const docsWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "docs.yml"), "utf8");

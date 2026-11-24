@@ -24,14 +24,16 @@ function workspacesFromInitializeParams(params) {
     params.rootUri
   ];
   const resolved = [];
+  const seenCanonical = [];
   const addUnique = (localPath) => {
     const abs = path.resolve(localPath);
     let canonical = abs;
     try {
       canonical = fs.realpathSync.native(abs);
     } catch {}
-    if (!resolved.some((existing) => isExpectedRealPath(existing, canonical))) {
-      resolved.push(canonical);
+    if (!seenCanonical.some((existing) => isExpectedRealPath(existing, canonical))) {
+      seenCanonical.push(canonical);
+      resolved.push(abs);
     }
   };
   for (const candidate of candidates) {

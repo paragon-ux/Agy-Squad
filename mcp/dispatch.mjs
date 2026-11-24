@@ -51,7 +51,7 @@ function readManifest(root, filename, logicalRoot = root) {
   );
   let relManifest = path.relative(root, realFile);
   if (
-    (process.platform === "win32" || process.platform === "darwin") &&
+    process.platform === "win32" &&
     (relManifest === ".." || relManifest.startsWith(`..${path.sep}`))
   ) {
     relManifest = path.relative(fs.realpathSync.native(root), realFile);

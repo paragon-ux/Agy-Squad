@@ -1256,6 +1256,53 @@ console.log("Agy-Squad MCP server tests\n");
       assert.equal(Boolean(responses[3].result.isError), false, `PR15-MCP-001 default: ${responses[3].result.content[0].text}`);
       assert.equal(JSON.parse(responses[3].result.content[0].text).Subagents[0].Role, "Spec");
     }
+
+    // Devin PR #17 Flag #1: retargeting an opened workspace symlink mid-session follows the new target without reconnecting
+    const wsReal2 = path.join(aliasBase, "repo-real-2");
+    fs.mkdirSync(wsReal2, { recursive: true });
+    fs.writeFileSync(
+      path.join(wsReal2, "swarm-manifest.json"),
+      JSON.stringify({
+        squads: {
+          beta: {
+            lead: { role: "Lead2", objective: "Lead2", scopeFiles: ["."] },
+            specialists: [{ role: "Spec2", objective: "Audit2", scopeFiles: ["."] }]
+          }
+        }
+      })
+    );
+    try {
+      await handleRequest({
+        jsonrpc: "2.0",
+        id: 500,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          workspaceFolders: [{ uri: pathToFileURL(wsLink).href, name: "linked" }]
+        }
+      });
+      const beforeRetarget = await handleRequest({
+        jsonrpc: "2.0",
+        id: 501,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: "swarm-manifest.json" } }
+      });
+      assert.equal(Boolean(beforeRetarget.result.isError), false, beforeRetarget.result.content[0].text);
+      assert.equal(JSON.parse(beforeRetarget.result.content[0].text).workspace, wsReal);
+
+      fs.unlinkSync(wsLink);
+      fs.symlinkSync(wsReal2, wsLink, os.platform() === "win32" ? "junction" : "dir");
+      const afterRetarget = await handleRequest({
+        jsonrpc: "2.0",
+        id: 502,
+        method: "tools/call",
+        params: { name: "squad_planner", arguments: { manifestPath: "swarm-manifest.json" } }
+      });
+      assert.equal(Boolean(afterRetarget.result.isError), false, afterRetarget.result.content[0].text);
+      assert.equal(JSON.parse(afterRetarget.result.content[0].text).workspace, wsReal2);
+    } finally {
+      await handleRequest({ jsonrpc: "2.0", id: 503, method: "initialize", params: { protocolVersion: "2024-11-05" } });
+    }
   } finally {
     fs.rmSync(aliasBase, { recursive: true, force: true });
   }

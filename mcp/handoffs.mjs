@@ -214,16 +214,29 @@ function decodeUtf8(bytes, relative) {
   }
 }
 
+function isSameFsObject(a, b) {
+  try {
+    const stA = fs.statSync(a, { bigint: true });
+    const stB = fs.statSync(b, { bigint: true });
+    return stA.dev === stB.dev && stA.ino === stB.ino;
+  } catch {
+    return false;
+  }
+}
+
 function isExpectedRealPath(expected, actual) {
   if (actual === expected) return true;
-  if (process.platform === "win32" || process.platform === "darwin") {
+  if (process.platform === "win32") {
     return actual.toLowerCase() === expected.toLowerCase();
+  }
+  if (process.platform === "darwin" && actual.toLowerCase() === expected.toLowerCase()) {
+    return isSameFsObject(expected, actual);
   }
   return false;
 }
 
 function isContainedPath(root, target, allowEqual = false, platform = process.platform) {
-  const normalizeCase = platform === "win32" || platform === "darwin";
+  const normalizeCase = platform === "win32";
   const normRoot = normalizeCase ? root.toLowerCase() : root;
   const normTarget = normalizeCase ? target.toLowerCase() : target;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
@@ -1396,7 +1409,7 @@ function collectReportSlots(root, options = {}) {
     if (isExpectedRealPath(root, realSrc)) {
       throw new Error(`Worktree source '${src}' resolves to the coordinator workspace itself.`);
     }
-    const seenKey = process.platform === "win32" || process.platform === "darwin" ? realSrc.toLowerCase() : realSrc;
+    const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
       resolvedSources.push({ raw: src, real: realSrc });

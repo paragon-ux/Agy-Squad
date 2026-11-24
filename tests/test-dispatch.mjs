@@ -569,16 +569,42 @@ try {
   assert.equal(nestedLoaded.selectedManifest, "nested/m.json", "RUN-007: selectedManifest must use POSIX / separators");
   rejects({ squadId: "all_l1", manifestPath: "C:swarm-manifest.json" }, /drive-relative/);
 
-  // PR15-RUN-002: platform-aware case-insensitive containment on darwin/win32 and strict case sensitivity on linux
+  // PR15-RUN-002 / CWE-22: POSIX (linux and darwin) containment stays strictly case-sensitive on canonical paths; win32 normalizes case
   const { isContainedPath } = await import("../mcp/handoffs.mjs");
-  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo/swarm-manifest.json", true, "darwin"), true);
-  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo", true, "darwin"), true);
-  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo", false, "darwin"), false);
-  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/MyRepo2/swarm-manifest.json", true, "darwin"), false);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/myrepo/swarm-manifest.json", true, "darwin"), false);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/myrepo", true, "darwin"), false);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo/swarm-manifest.json", true, "darwin"), true);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo", true, "darwin"), true);
+  assert.equal(isContainedPath("/Volumes/Dev/MyRepo", "/Volumes/Dev/MyRepo", false, "darwin"), false);
   assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "c:\\users\\dev\\myrepo\\swarm-manifest.json", true, "win32"), true);
   assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "D:\\Users\\Dev\\MyRepo\\swarm-manifest.json", true, "win32"), false);
   assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo/swarm-manifest.json", true, "linux"), false);
   assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/MyRepo/swarm-manifest.json", true, "linux"), true);
+
+  // Case-sensitive volume check: symlink from MyRepo into sibling case-variant myrepo must be rejected
+  const caseBase = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-case-")));
+  try {
+    const upperDir = path.join(caseBase, "CaseRepo");
+    const lowerDir = path.join(caseBase, "caserepo");
+    fs.mkdirSync(upperDir, { recursive: true });
+    if (!fs.existsSync(lowerDir)) {
+      fs.mkdirSync(lowerDir, { recursive: true });
+      const siblingManifest = path.join(lowerDir, "swarm-manifest.json");
+      fs.writeFileSync(siblingManifest, JSON.stringify(manifest));
+      const escapeLink = path.join(upperDir, "escape-case.json");
+      fs.symlinkSync(siblingManifest, escapeLink, "file");
+      assert.throws(
+        () => readManifest(upperDir, "escape-case.json"),
+        /Manifest path must stay inside the workspace/,
+        "CWE-22: symlink to distinct case-variant sibling directory must be rejected"
+      );
+      const dispEsc = handleDispatchSquad({ squadId: "all_l1", manifestPath: "escape-case.json" }, upperDir);
+      assert.equal(dispEsc.isError, true);
+      assert.match(dispEsc.content[0].text, /Manifest path must stay inside the workspace/);
+    }
+  } finally {
+    fs.rmSync(caseBase, { recursive: true, force: true });
+  }
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
