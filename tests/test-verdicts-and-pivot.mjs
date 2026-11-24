@@ -1073,7 +1073,16 @@ try {
     "Content Verdict: PASS\nNegative test: tests did not pass: after the fix: build did not pass.\n",
     "Content Verdict: PASS\nAfter the fix: build did not PASS.\n",
     "Content Verdict: PASS\nExpected CI checks did not pass.\n",
-    "Content Verdict: PASS\nExpected result: did not pass; final result: did not pass.\n"
+    "Content Verdict: PASS\nTests for the expected behavior did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected behaviour did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected result did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected outcome did not pass.\n",
+    "Content Verdict: PASS\nTests for expected error handling did not pass.\n",
+    "Content Verdict: PASS\nTests for the expected behavior: did not pass.\n",
+    "Content Verdict: PASS\nExpected CI checks: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass; final result: did not pass.\n",
+    "Content Verdict: PASS\nExpected result: did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nExpected behavior: tests did not pass. Tests for the expected behavior did not pass.\n"
   ]) {
     assert.throws(
       () => parseContentVerdict(bypassReport),
@@ -1097,7 +1106,13 @@ try {
     "Content Verdict: PASS\nExpected result: did not pass.\n",
     "Content Verdict: PASS\nExpected outcome: tests did not pass.\n",
     "Content Verdict: PASS\nExpected failure: suite did not pass.\n",
+    "Content Verdict: PASS\nExpected behavior: tests did not pass.\n",
+    "Content Verdict: PASS\n**Expected behavior:** tests did not pass.\n",
+    "Content Verdict: PASS\n- Expected behavior: tests did not pass.\n",
+    "Content Verdict: PASS\n1. Expected result: did not pass.\n",
+    "Content Verdict: PASS\nPost-fix expected result: did not pass.\n",
     "Content Verdict: PASS\nExpected: tests did not pass.\n",
+    "Content Verdict: PASS\nThe check is expected to not pass.\n",
     "Content Verdict: PASS\nFinal negative test: suite did not pass.\n",
     "Content Verdict: PASS\nPost-fix negative test: suite did not pass.\n",
     "Content Verdict: PASS\nCurrent invalid-input check: did not pass.\n",

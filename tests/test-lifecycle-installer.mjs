@@ -1805,6 +1805,49 @@ try {
         assert.equal(fs.existsSync(mlMcpBak), false, "PR15-SCRIPT-001 control: owned-only backup must be unlinked after full scoped restore");
         assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001 control: empty backup must not create config.json");
         assert.equal(fs.existsSync(mlCfgBak), false, "PR15-SCRIPT-001 control: empty backup with zero foreign data must be cleared");
+
+        // Case C: !currentData + mixed read-only legacy mcp_config.json.bak (agy-squad + private-api) recreates ONLY agy-squad at mode 0600 without modifying legacy backup
+        fs.rmSync(mlMcpPath, { force: true });
+        const mlLegacyMcpBak = `${mlMcpPath}.bak`;
+        const legacyMixedBody = JSON.stringify(
+          {
+            globalOpt: 2,
+            mcpServers: {
+              "agy-squad": { command: "node", args: ["legacy-own.js"] },
+              "private-api": { command: "node", args: ["private.js"] }
+            }
+          },
+          null,
+          2
+        ) + "\n";
+        fs.writeFileSync(mlLegacyMcpBak, legacyMixedBody);
+        const mlLegacyRes = spawnSync(process.execPath, [cli, "restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlLegacyRes.status, 0, mlLegacyRes.stderr || mlLegacyRes.stdout);
+        assert.deepEqual(JSON.parse(fs.readFileSync(mlMcpPath, "utf8")), {
+          mcpServers: { "agy-squad": { command: "node", args: ["legacy-own.js"] } }
+        });
+        if (os.platform() !== "win32") {
+          assert.equal(
+            fs.statSync(mlMcpPath).mode & 0o777,
+            0o600,
+            "PR15-SCRIPT-001 legacy fallback: recreated missing live target must use mode 0600"
+          );
+        }
+        assert.equal(fs.existsSync(mlLegacyMcpBak), true, "PR15-SCRIPT-001 legacy fallback: legacy backup must stay intact");
+        assert.equal(fs.readFileSync(mlLegacyMcpBak, "utf8"), legacyMixedBody);
+        assert.match(mlLegacyRes.stdout, /Recreated mcp_config\.json with agy-squad entries from legacy backup/);
+        // Repeat restore-backups stays idempotent and keeps legacy backup untouched
+        const mlLegacyRepeatRes = spawnSync(process.execPath, [cli, "restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlLegacyRepeatRes.status, 0, mlLegacyRepeatRes.stderr || mlLegacyRepeatRes.stdout);
+        assert.equal(fs.readFileSync(mlLegacyMcpBak, "utf8"), legacyMixedBody);
       } finally {
         fs.rmSync(missingLiveProfile, { recursive: true, force: true });
       }

@@ -40,7 +40,9 @@ const VERDICT_LABEL_SUBJECT_RE =
   /\b(?:verdict|result|outcome|status|disposition|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
 const BARE_POST_COLON_RE = /^\s*[*_]{0,3}(?:(?:it|they|this|that|still|also|really)\s+){0,2}[*_]{0,3}$/i;
 const NEGATIVE_EXPECTATION_RE =
-  /\b(?:should|must|expected\s+(?:to|result|outcome|failure(?:s)?|behaviou?r|denial|rejection|error)|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b|^\s*[*_]{0,3}expected[*_]{0,3}\s*$/i;
+  /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
+const NEGATIVE_EXPECTATION_LABEL_RE =
+  /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]{0,3}(?:(?:post-fix|post|final|current|prior|previous|initial|baseline|negative|test|suite)\s+)?expected(?:\s+(?:results?|outcomes?|failures?|behaviou?rs?|denials?|rejections?|errors?))?[*_]{0,3}\s*$/i;
 const CLAUSE_BREAK_RE =
   /(?:[.;!?][*_]{0,3}(?=\s|$)|(?<colon>:)[*_]{0,3}(?=\s|$)|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
 const TAIL_ADJUNCT_WORD_RE =
@@ -79,10 +81,14 @@ function createClauseTracker(line) {
       hasPriorClauseBreak = true;
       if (m.groups?.colon) {
         const labelHasSubject = VERDICT_LABEL_SUBJECT_RE.test(chunk);
+        const labelHasNegExpectation = NEGATIVE_EXPECTATION_LABEL_RE.test(chunk);
+        if (labelHasNegExpectation) {
+          hasNegExpectation = true;
+        }
         // Preserve historical/negative-expectation qualifiers across introducer colons when no current context appeared.
         if (hasCurrent) {
           hasHistorical = false;
-          if (!NEGATIVE_EXPECTATION_RE.test(chunk)) {
+          if (!NEGATIVE_EXPECTATION_RE.test(chunk) && !labelHasNegExpectation) {
             hasNegExpectation = false;
           }
           hasCurrent = false;

@@ -1112,14 +1112,13 @@ function prepareRestoreJsonSection({
   const ownBackupKeys = Object.keys(backupSection).filter(keyFilter);
   const hasForeignBackup = hasForeignBackupData(backupData, sectionKey, keyFilter);
 
-  if (!currentData && hasForeignBackup) {
-    const sourceBackup = hasPrimary ? backupPath : legacyBackupPath;
+  if (!currentData && hasPrimary && hasForeignBackup) {
     return {
       targetPath,
       content: null,
       mode: undefined,
       unlinkBackupPath: null,
-      logMessage: `[WARN] Retained backup without recreating ${targetLabel} (live ${targetLabel} is missing and backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover; restore manually if needed): ${sourceBackup}`
+      logMessage: `[WARN] Retained backup without recreating ${targetLabel} (live ${targetLabel} is missing and backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover; restore manually if needed): ${backupPath}`
     };
   }
 
@@ -1155,7 +1154,9 @@ function prepareRestoreJsonSection({
     unlinkBackupPath: hasPrimary ? backupPath : null,
     logMessage: hasPrimary
       ? `[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`
-      : `[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`
+      : !currentData && hasForeignBackup
+        ? `[OK] Recreated ${targetLabel} with ${PLUGIN_KEY} entries from legacy backup (read-only fallback; non-${PLUGIN_KEY} settings remain untouched in backup): ${legacyBackupPath} -> ${targetPath}`
+        : `[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`
   };
 }
 
