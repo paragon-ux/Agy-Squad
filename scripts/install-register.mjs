@@ -23,9 +23,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 export const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.1";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.2";
   } catch {
-    return "0.2.1";
+    return "0.2.2";
   }
 })();
 

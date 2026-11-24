@@ -10,6 +10,7 @@ Reference for [`SKILL.md`](../SKILL.md).
    - `@<target> PARTIAL <slot> -- <note and blocker>`
    - `@<target> NO_REPORT - <reason>`
 3. **Verbatim & scoped:** Copy raw posts verbatim into `handoffs[].message` for `inspect` (verified post-hoc). Always scope `read_board{since|seqs}`.
+4. **Sources & citation carry-forward:** Any specialist or lead report citing external URLs or repository code should include a `## Sources` section with descriptive `[Title](url)` or `path:line` entries (never generic `reference 1` labels). Carry every cited source forward into synthesis (or drop prose claims that depended on omitted sources), synthesize **before** `finalize --prune` (or pass `--keep-reports`), and reconcile any `citations.uncarriedUrls` reported by `bundle-init --digest`, `digest`, `bundle`, or `finalize` (pass `--strict-citations` to fail closed before bundling/pruning when any specialist URL is missing from `lead/report.md`).
 
 ## Canonical Auditor Slots and Verdicts
 

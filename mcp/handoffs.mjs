@@ -617,7 +617,58 @@ function readSynthesis(root, report, verifiedDirs, { allowNonPassing = false, ca
   if (!allowNonPassing && verdict !== "PASS") {
     throw new Error("Synthesis report must record an unambiguous PASS verdict.");
   }
-  return { bytes, verdict };
+  return { bytes, markdown, verdict };
+}
+
+function extractCitationUrls(markdown) {
+  if (typeof markdown !== "string" || !markdown) return [];
+  const urls = new Set();
+  const re = /https?:\/\/[^\s<>"'`]+/gi;
+  for (let m; (m = re.exec(markdown)); ) {
+    let raw = m[0];
+    let parenDelta = 0;
+    let bracketDelta = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (ch === "(") parenDelta++;
+      else if (ch === ")") parenDelta--;
+      else if (ch === "[") bracketDelta++;
+      else if (ch === "]") bracketDelta--;
+    }
+    while (raw.length > 0) {
+      const last = raw[raw.length - 1];
+      if (".,;:!?".includes(last)) {
+        raw = raw.slice(0, -1);
+      } else if (last === ")" && parenDelta < 0) {
+        raw = raw.slice(0, -1);
+        parenDelta++;
+      } else if (last === "]" && bracketDelta < 0) {
+        raw = raw.slice(0, -1);
+        bracketDelta++;
+      } else {
+        break;
+      }
+    }
+    const minLen = raw.toLowerCase().startsWith("https://") ? 8 : 7;
+    if (raw.length > minLen) {
+      urls.add(raw);
+    }
+  }
+  return [...urls];
+}
+
+function summarizeCitations(reports, synthesisMarkdown) {
+  const specialistUrlSet = new Set();
+  for (const report of reports ?? []) {
+    for (const url of extractCitationUrls(report?.markdown ?? "")) {
+      specialistUrlSet.add(url);
+    }
+  }
+  const synthesisUrls = extractCitationUrls(synthesisMarkdown);
+  const synthesisUrlSet = new Set(synthesisUrls);
+  const specialistUrls = [...specialistUrlSet];
+  const uncarriedUrls = specialistUrls.filter(url => !synthesisUrlSet.has(url));
+  return { specialistUrls, synthesisUrls, uncarriedUrls };
 }
 
 function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expectedEvidenceDigest, cachedBytes) {
@@ -821,7 +872,8 @@ function prepareCohortSnapshot(
     };
   });
   const evidenceDigest = canonicalSnapshotDigest(squadId, synthesis, verifiedFiles, reports);
-  return { rootPrefix, relative, verifiedDirs, synthesisCheck, synthesis, reports, evidenceDigest };
+  const citations = summarizeCitations(reports, synthesisCheck.markdown);
+  return { rootPrefix, relative, synthesisSlot, verifiedDirs, synthesisCheck, synthesis, reports, evidenceDigest, citations };
 }
 
 function computeEvidenceDigest(root, record, options = {}) {
@@ -834,7 +886,7 @@ function computeEvidenceDigest(root, record, options = {}) {
   if (typeof allowPartial !== "boolean") throw new Error("allowPartial must be a boolean.");
   if (typeof allowNonPassing !== "boolean") throw new Error("allowNonPassing must be a boolean.");
   validateSquadId(squadId);
-  const { synthesis, reports, evidenceDigest } = prepareCohortSnapshot(canonicalRoot, record, {
+  const { synthesis, reports, evidenceDigest, citations } = prepareCohortSnapshot(canonicalRoot, record, {
     action: "Computing evidence digest",
     verifiedDirs,
     expectedVerdict: record.verdict,
@@ -846,7 +898,8 @@ function computeEvidenceDigest(root, record, options = {}) {
     evidenceDigest,
     synthesis,
     verifiedFiles,
-    reports: reports.map(({ markdown: _markdown, ...rest }) => rest)
+    reports: reports.map(({ markdown: _markdown, ...rest }) => rest),
+    citations
   };
 }
 
@@ -943,7 +996,8 @@ function bundleReports(root, record, options = {}) {
     replaceExisting = false,
     expectedPredecessorSha256,
     allowNonPassing = false,
-    allowPartial = false
+    allowPartial = false,
+    strictCitations = false
   } = record;
   validateSquadId(squadId);
   if (retainReports !== undefined && typeof retainReports !== "boolean") {
@@ -961,6 +1015,9 @@ function bundleReports(root, record, options = {}) {
   if (typeof allowPartial !== "boolean") {
     throw new Error("allowPartial must be a boolean.");
   }
+  if (typeof strictCitations !== "boolean") {
+    throw new Error("strictCitations must be a boolean.");
+  }
   if (expectedPredecessorSha256 !== undefined && !/^[0-9a-f]{64}$/.test(expectedPredecessorSha256)) {
     throw new Error("expectedPredecessorSha256 must be a 64-character lowercase hex SHA-256 digest.");
   }
@@ -977,15 +1034,22 @@ function bundleReports(root, record, options = {}) {
   const {
     rootPrefix,
     relative,
+    synthesisSlot,
     synthesisCheck,
     synthesis,
     reports,
-    evidenceDigest
+    evidenceDigest,
+    citations
   } = prepareCohortSnapshot(root, record, {
     action: "Bundling",
     verifiedDirs,
     expectedVerdict: verdict
   });
+  if (strictCitations && citations.uncarriedUrls.length > 0) {
+    throw new Error(
+      `Uncarried specialist citation URL(s) missing from ${synthesisSlot}: ${citations.uncarriedUrls.join(", ")}`
+    );
+  }
 
   let integrityAudits = [];
   const isAuditCohort =
@@ -1058,7 +1122,8 @@ function bundleReports(root, record, options = {}) {
     path: relative,
     sha256: sha256(bundlePayload),
     auditPolicy,
-    reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h }))
+    reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })),
+    citations
   };
 }
 
@@ -1222,11 +1287,13 @@ function verifyBundleInternal(root, relative, acceptedHash, verifiedDirs = new S
     }
   }
 
+  const citations = summarizeCitations(reports, synthesisCheck.markdown);
   return {
     path: relative,
     sha256: digest,
     auditPolicy: parsed.auditPolicy,
     reports: reports.map(({ path: p, sha256: h }) => ({ path: p, sha256: h })),
+    citations,
     loosePresent,
     looseSnapshots,
     retainReports: parsed.retainReports === true
@@ -1236,8 +1303,8 @@ function verifyBundleInternal(root, relative, acceptedHash, verifiedDirs = new S
 function verifyBundle(root, relative, expectedSha256, options = {}) {
   const verifiedDirs = options?.verifiedDirs ?? new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
-  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(canonicalRoot, relative, expectedSha256, verifiedDirs);
-  return { path: p, sha256: s, auditPolicy, reports };
+  const { path: p, sha256: s, auditPolicy, reports, citations } = verifyBundleInternal(canonicalRoot, relative, expectedSha256, verifiedDirs);
+  return { path: p, sha256: s, auditPolicy, reports, citations };
 }
 
 function removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots) {
@@ -1309,11 +1376,11 @@ function verifyAndPruneBundle(root, relative, options = {}) {
     throw new Error("Pruning requires a 64-character lowercase hex expectedSha256 bundle digest.");
   }
   const verified = verifyBundleInternal(canonicalRoot, relative, expectedSha256, verifiedDirs);
-  const { path: p, sha256: s, auditPolicy, reports, loosePresent, looseSnapshots, retainReports } = verified;
+  const { path: p, sha256: s, auditPolicy, reports, citations, loosePresent, looseSnapshots, retainReports } = verified;
   const pruned = opts.keepReports || retainReports
     ? { removed: [], retained: loosePresent }
     : removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots);
-  return { path: p, sha256: s, auditPolicy, reports, pruned };
+  return { path: p, sha256: s, auditPolicy, reports, citations, pruned };
 }
 
 function validateReportSlotPath(slotPath) {
@@ -1968,6 +2035,7 @@ export {
   computeEvidenceDigest,
   decodeUtf8,
   ensureDirectory,
+  extractCitationUrls,
   fingerprint,
   inspectHandoffs,
   isContainedPath,
@@ -1982,6 +2050,7 @@ export {
   reportPath,
   resolveCanonicalRoot,
   stripReceiptPrefix,
+  summarizeCitations,
   trimTrailingSlashes,
   verifyAndPruneBundle,
   verifyBundle

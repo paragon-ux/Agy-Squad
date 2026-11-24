@@ -22,10 +22,18 @@ function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NO
 
 function readPackageVersion() {
   try {
-    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.1";
+    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.2";
   } catch {
-    return "0.2.1";
+    return "0.2.2";
   }
+}
+
+function warnUncarriedCitations(citations, targetLabel) {
+  const uncarried = citations?.uncarriedUrls;
+  if (!Array.isArray(uncarried) || uncarried.length === 0) return;
+  console.error(
+    `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
+  );
 }
 
 function isDirectExecution(
@@ -280,6 +288,7 @@ const SUBCOMMAND_HELP = {
     "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
+    "  --strict-citations               Fail closed if any specialist URL is missing from lead/report.md",
     "  --replace                        Overwrite an existing differing report.sources.json",
     "  --predecessor <sha256>           Require existing bundle digest to match before overwrite",
     "",
@@ -310,6 +319,7 @@ const SUBCOMMAND_HELP = {
     "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
+    "  --strict-citations               Fail closed if any specialist URL is missing from lead/report.md",
     "  --replace                        Overwrite an existing differing report.sources.json",
     "  --predecessor <sha256>           Require existing bundle digest to match before overwrite",
     "  --prune                          Unlink verified loose specialist reports after verify",
@@ -952,6 +962,9 @@ async function main(args) {
           preReadSynthesis
         })
       : undefined;
+    if (digestResult) {
+      warnUncarriedCitations(digestResult.citations, "synthesis report");
+    }
     if (values.out !== undefined) {
       const outRel = normalizeBundleOutCliPath(values.out);
       const parentDir = path.posix.dirname(outRel);
@@ -964,11 +977,11 @@ async function main(args) {
         path: outRel,
         squadId: record.squadId,
         verifiedFilesCount: Object.keys(record.verifiedFiles).length,
-        ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest } : {}),
+        ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations } : {}),
         record
       }, null, 2));
     } else if (digestResult) {
-      console.log(JSON.stringify({ evidenceDigest: digestResult.evidenceDigest, record }, null, 2));
+      console.log(JSON.stringify({ evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations, record }, null, 2));
     } else {
       console.log(JSON.stringify(record, null, 2));
     }
@@ -1010,15 +1023,19 @@ async function main(args) {
       ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
       ...(values["allow-partial"] ? { allowPartial: true } : {})
     };
-    console.log(JSON.stringify(computeEvidenceDigest(root, digestInput), null, 2));
+    const digestOut = computeEvidenceDigest(root, digestInput);
+    warnUncarriedCitations(digestOut.citations, "synthesis report");
+    console.log(JSON.stringify(digestOut, null, 2));
     return 0;
   }
   if (command === "bundle") {
-    const usageLine = "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>]";
+    const usageLine =
+      "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       "allow-unaudited": { type: "boolean", default: false },
       "allow-non-passing": { type: "boolean", default: false },
       "allow-partial": { type: "boolean", default: false },
+      "strict-citations": { type: "boolean", default: false },
       replace: { type: "boolean", default: false },
       predecessor: { type: "string" }
     });
@@ -1036,10 +1053,13 @@ async function main(args) {
         : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
       ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
       ...(values["allow-partial"] ? { allowPartial: true } : {}),
+      ...(values["strict-citations"] ? { strictCitations: true } : {}),
       ...(values.replace ? { replaceExisting: true } : {}),
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
-    console.log(JSON.stringify(bundleReports(root, bundleInput), null, 2));
+    const bundled = bundleReports(root, bundleInput);
+    warnUncarriedCitations(bundled.citations, bundled.path);
+    console.log(JSON.stringify(bundled, null, 2));
     return 0;
   }
   if (command === "verify") {
@@ -1061,22 +1081,25 @@ async function main(args) {
     const expectedSha256 = values["expected-sha256"] ?? positionals[1];
     if (values.prune) {
       const { verifyAndPruneBundle } = await import("../mcp/handoffs.mjs");
-      console.log(
-        JSON.stringify(verifyAndPruneBundle(root, rel, { expectedSha256, keepReports: values["keep-reports"] }), null, 2)
-      );
+      const out = verifyAndPruneBundle(root, rel, { expectedSha256, keepReports: values["keep-reports"] });
+      warnUncarriedCitations(out.citations, out.path);
+      console.log(JSON.stringify(out, null, 2));
     } else {
       const { verifyBundle } = await import("../mcp/handoffs.mjs");
-      console.log(JSON.stringify(verifyBundle(root, rel, expectedSha256), null, 2));
+      const out = verifyBundle(root, rel, expectedSha256);
+      warnUncarriedCitations(out.citations, out.path);
+      console.log(JSON.stringify(out, null, 2));
     }
     return 0;
   }
   if (command === "finalize") {
     const usageLine =
-      "Usage: agy-squad finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]";
+      "Usage: agy-squad finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       "allow-unaudited": { type: "boolean", default: false },
       "allow-non-passing": { type: "boolean", default: false },
       "allow-partial": { type: "boolean", default: false },
+      "strict-citations": { type: "boolean", default: false },
       replace: { type: "boolean", default: false },
       predecessor: { type: "string" },
       prune: { type: "boolean", default: false },
@@ -1107,11 +1130,13 @@ async function main(args) {
         : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
       ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
       ...(values["allow-partial"] ? { allowPartial: true } : {}),
+      ...(values["strict-citations"] ? { strictCitations: true } : {}),
       ...(values.replace ? { replaceExisting: true } : {}),
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
     // bundleReports already reconciles handoffs and reads every report slot once; derive inspected summary from validated inputs without a duplicate disk pass.
     const bundled = bundleReports(root, bundleInput, { verifiedDirs });
+    warnUncarriedCitations(bundled.citations, bundled.path);
     const statusBySender = new Map();
     for (const h of record.handoffs ?? []) {
       const stripped = stripReceiptPrefix(h.message);
@@ -1134,7 +1159,7 @@ async function main(args) {
         verifiedDirs
       });
       pruned = vp.pruned;
-      verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports };
+      verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports, citations: vp.citations };
     } else {
       verified = verifyBundle(root, bundled.path, bundled.sha256, { verifiedDirs });
     }

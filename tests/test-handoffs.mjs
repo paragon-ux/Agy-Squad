@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -2631,6 +2631,101 @@ try {
     const overwritten = collectReportSlots(asqDir, { plan: corruptPlan, sources: [asqWt], overwrite: true });
     assert.equal(overwritten.collected.length, 1);
     assert.equal(fs.readFileSync(corruptDestPath, "utf8"), "# Clean Replacement\nVerified.\n");
+
+    // v0.2.2 citation tracking: extractCitationUrls, summarizeCitations, stderr warning before prune, and --strict-citations fail-closed gate
+    assert.deepEqual(
+      extractCitationUrls(
+        "See [Wiki](https://en.wikipedia.org/wiki/Foo_(bar)).\n" +
+        "Also [Proxy](https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ_abc-123==), and https://example.com/a?x=1&y=2!\n" +
+        "Duplicate: https://example.com/a?x=1&y=2\n"
+      ),
+      [
+        "https://en.wikipedia.org/wiki/Foo_(bar)",
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ_abc-123==",
+        "https://example.com/a?x=1&y=2"
+      ],
+      "v0.2.2: extractCitationUrls must trim unbalanced punctuation/parens while preserving balanced parens and base64url tokens"
+    );
+    const citeSummary = summarizeCitations(
+      [{ markdown: "Refs: [A](https://example.com/kept) and [B](https://example.com/dropped)." }],
+      "Synthesis: [A](https://example.com/kept)."
+    );
+    assert.deepEqual(citeSummary.uncarriedUrls, ["https://example.com/dropped"]);
+
+    const citeSquad = "cite_track";
+    const citeSpecSlot = reportPath(citeSquad, 1);
+    const citeLeadSlot = reportPath(citeSquad);
+    const citeTargetFile = "cite-target.txt";
+    writeAtAsq(asqDir, citeTargetFile, "citation check fixture\n");
+    writeAtAsq(
+      asqDir,
+      citeSpecSlot,
+      "# Specialist Report\n\n## Sources\n- [Kept](https://example.com/kept)\n- [Dropped](https://example.com/dropped)\n"
+    );
+    writeAtAsq(
+      asqDir,
+      citeLeadSlot,
+      "Content Verdict: PASS\n\n## Sources\n- [Kept](https://example.com/kept)\n"
+    );
+    const citeRecord = {
+      squadId: citeSquad,
+      workspace: asqDir,
+      verdict: "PASS",
+      requireIntegrityAudit: false,
+      verifiedFiles: fingerprint(asqDir, [citeTargetFile]),
+      assignments: [{ conversationId: "cite-worker-1", report: citeSpecSlot }],
+      handoffs: [{ sender: "cite-worker-1", message: `READY ${citeSpecSlot} - verified citations` }]
+    };
+    const citeRecPath = "scratch/cite-record.json";
+    writeAtAsq(asqDir, citeRecPath, JSON.stringify(citeRecord, null, 2) + "\n");
+
+    // computeEvidenceDigest and CLI digest report uncarriedUrls and emit stderr warning
+    const citeDig = computeEvidenceDigest(asqDir, citeRecord);
+    assert.deepEqual(citeDig.citations.uncarriedUrls, ["https://example.com/dropped"]);
+    const citeDigCli = spawnSync(process.execPath, [agySquadCli, "digest", citeRecPath], { cwd: asqDir, encoding: "utf8" });
+    assert.equal(citeDigCli.status, 0, citeDigCli.stderr);
+    assert.match(citeDigCli.stderr, /\[WARN\] 1 specialist citation URL\(s\) not carried/);
+    assert.deepEqual(JSON.parse(citeDigCli.stdout).citations.uncarriedUrls, ["https://example.com/dropped"]);
+
+    // bundleReports / finalize --strict-citations fails closed before bundling or pruning
+    assert.throws(
+      () => bundleReports(asqDir, { ...citeRecord, strictCitations: true }),
+      /Uncarried specialist citation URL\(s\).*https:\/\/example\.com\/dropped/
+    );
+    const strictFailCli = spawnSync(
+      process.execPath,
+      [agySquadCli, "finalize", citeRecPath, "--allow-unaudited", "--strict-citations", "--prune"],
+      { cwd: asqDir, encoding: "utf8" }
+    );
+    assert.notEqual(strictFailCli.status, 0, "v0.2.2: finalize --strict-citations must fail closed on uncarried URLs");
+    assert.match(strictFailCli.stderr, /Uncarried specialist citation URL\(s\)/);
+    assert.equal(fs.existsSync(path.join(asqDir, citeSpecSlot)), true, "v0.2.2: failed --strict-citations must not prune loose specialist report");
+
+    // Non-strict finalize warns on stderr before pruning and still surfaces citations.uncarriedUrls in JSON
+    const warnFinCli = spawnSync(
+      process.execPath,
+      [agySquadCli, "finalize", citeRecPath, "--allow-unaudited", "--replace", "--prune", "--keep-reports"],
+      { cwd: asqDir, encoding: "utf8" }
+    );
+    assert.equal(warnFinCli.status, 0, warnFinCli.stderr);
+    assert.match(warnFinCli.stderr, /\[WARN\] 1 specialist citation URL\(s\) not carried/);
+    assert.deepEqual(JSON.parse(warnFinCli.stdout).bundled.citations.uncarriedUrls, ["https://example.com/dropped"]);
+
+    // Carrying all specialist URLs into lead/report.md clears warning and passes --strict-citations --prune
+    writeAtAsq(
+      asqDir,
+      citeLeadSlot,
+      "Content Verdict: PASS\n\n## Sources\n- [Kept](https://example.com/kept)\n- [Dropped](https://example.com/dropped)\n"
+    );
+    const strictPassCli = spawnSync(
+      process.execPath,
+      [agySquadCli, "finalize", citeRecPath, "--allow-unaudited", "--strict-citations", "--replace", "--prune"],
+      { cwd: asqDir, encoding: "utf8" }
+    );
+    assert.equal(strictPassCli.status, 0, strictPassCli.stderr);
+    assert.doesNotMatch(strictPassCli.stderr, /\[WARN\]/);
+    assert.deepEqual(JSON.parse(strictPassCli.stdout).bundled.citations.uncarriedUrls, []);
+    assert.equal(fs.existsSync(path.join(asqDir, citeSpecSlot)), false, "v0.2.2: passing --strict-citations --prune must prune loose specialist report");
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

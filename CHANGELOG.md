@@ -5,6 +5,17 @@ All notable changes to `Agy-Squad` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-11-24
+
+### Added
+- `agy-squad bundle-init --digest`, `digest`, `bundle`, and `finalize` now report a deterministic `citations` summary (`specialistUrls`, `synthesisUrls`, `uncarriedUrls`) and print a warning on stderr before pruning when specialist URLs are missing from the synthesis report.
+- Added `--strict-citations` on `agy-squad bundle` and `agy-squad finalize` to fail closed before bundling or pruning if any specialist URL is not carried into the synthesis report.
+
+### Changed
+- Layered squad leads now focus strictly on content verification (specialist reports, cited files, and checks) without running duplicate transcript forensics before independent integrity auditors.
+- Integrity auditor briefs and the swarm governance wire guide now specify explicit `agy-context transcript` flags (`--id`, `--include-tools`, `--full`, `--out`) and read-only `|` pipe usage alongside the standalone native JSONL transcript path.
+- Swarm governance Stage 3 now directs coordinators to synthesize verified specialist and lead reports into the final deliverable before pruning loose reports (or to retain them with `--keep-reports`) and to carry forward `## Sources` citations.
+
 ## [0.2.1] - 2026-11-24
 
 ### Changed
