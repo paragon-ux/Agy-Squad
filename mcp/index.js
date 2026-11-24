@@ -9,7 +9,7 @@ import {
   isNodeVersionSupported
 } from "../scripts/install-register.mjs";
 import { defaultManifests, handleDispatchSquad } from "./dispatch.mjs";
-import { isExpectedRealPath } from "./handoffs.mjs";
+import { isContainedPath, isExpectedRealPath } from "./handoffs.mjs";
 import { handleSquadPlanner } from "./planner.mjs";
 
 const isEntryPoint = isDirectEntryPoint(process.argv[1], import.meta.url);
@@ -24,10 +24,16 @@ function workspacesFromInitializeParams(params) {
     params.rootUri
   ];
   const resolved = [];
+  const seenCanonical = [];
   const addUnique = (localPath) => {
-    const canonical = path.resolve(localPath);
-    if (!resolved.some((existing) => isExpectedRealPath(existing, canonical))) {
-      resolved.push(canonical);
+    const abs = path.resolve(localPath);
+    let canonical = abs;
+    try {
+      canonical = fs.realpathSync.native(abs);
+    } catch {}
+    if (!seenCanonical.some((existing) => isExpectedRealPath(existing, canonical))) {
+      seenCanonical.push(canonical);
+      resolved.push(abs);
     }
   };
   for (const candidate of candidates) {
@@ -68,7 +74,7 @@ function isInstalledPluginDir(dir) {
   const resolved = path.resolve(dir);
   const candidates = [resolved];
   try {
-    const real = fs.realpathSync(resolved);
+    const real = fs.realpathSync.native(resolved);
     if (!isExpectedRealPath(resolved, real)) candidates.push(real);
   } catch {}
   for (const candidate of candidates) {
@@ -95,15 +101,12 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
     return args.workspace.trim();
   }
   if (sessionWorkspaces.length > 1) {
-    const isContained = (dir, target, allowEqual = false) => {
-      const relCheck = path.relative(dir, target);
-      return (allowEqual || Boolean(relCheck)) && relCheck !== ".." && !relCheck.startsWith(`..${path.sep}`) && !path.isAbsolute(relCheck);
-    };
+    const isContained = (dir, target, allowEqual = false) => isContainedPath(dir, target, allowEqual);
     const isContainedRealFile = (root, candidate) => {
       try {
         if (!isContained(root, candidate)) return false;
-        const canonicalCandidate = fs.realpathSync(candidate);
-        const canonicalRoot = fs.realpathSync(root);
+        const canonicalCandidate = fs.realpathSync.native(candidate);
+        const canonicalRoot = fs.realpathSync.native(root);
         return isContained(canonicalRoot, canonicalCandidate) && fs.statSync(canonicalCandidate).isFile();
       } catch {
         return false;
@@ -117,16 +120,16 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
         let canonicalCandidate;
         let canonicalParent;
         try {
-          const resolvedCandidate = fs.realpathSync(candidate);
+          const resolvedCandidate = fs.realpathSync.native(candidate);
           if (fs.statSync(resolvedCandidate).isFile()) {
             canonicalCandidate = resolvedCandidate;
-            canonicalParent = fs.realpathSync(path.dirname(candidate));
+            canonicalParent = fs.realpathSync.native(path.dirname(candidate));
           }
         } catch {}
         if (canonicalCandidate && canonicalParent) {
           matching = sessionWorkspaces.filter((root) => {
             try {
-              const canonicalRoot = fs.realpathSync(root);
+              const canonicalRoot = fs.realpathSync.native(root);
               if (!isContained(canonicalRoot, canonicalCandidate)) return false;
               return (
                 isContained(root, candidate) ||

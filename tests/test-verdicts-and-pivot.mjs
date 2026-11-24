@@ -10,7 +10,7 @@ import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, report
 import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
 const outsideFile = path.join(os.tmpdir(), `agy-outside-${process.pid}.md`);
 fs.writeFileSync(outsideFile, "Content Verdict: PASS\n", "utf8");
 
@@ -1048,6 +1048,78 @@ try {
   }
   // Trailing ASCII space and tab still close CommonMark fences cleanly
   assert.equal(parseContentVerdict("```md\nContent Verdict: FAIL\n``` \t \nContent Verdict: PASS\n"), "PASS");
+
+  // PR15-SEC-002 / B-SEC-001: mid-token '.', ':', ';', '!', '?' (filenames, file:line, semver, URL query strings) must not bypass PASS contradiction detection
+  for (const bypassReport of [
+    "Content Verdict: PASS\nThe test suite for src/auth.js did not pass.\n",
+    "Content Verdict: PASS\nVerification of mcp/index.js:120 did not pass.\n",
+    "Content Verdict: PASS\nCheck of package.json did not pass.\n",
+    "Content Verdict: PASS\nCI gate for v0.2.1 did not pass.\n",
+    "Content Verdict: PASS\nThe test suite for https://example.com/run?id=1 did not pass.\n",
+    "Content Verdict: PASS\nVerification of [PR #15](https://github.com/org/repo/pull/15?w=1) did not pass.\n",
+    "Content Verdict: PASS\nThe check for sidecar://swarm/swarm_board/?auto_open=false did not pass.\n",
+    "Content Verdict: PASS\nTest suite: did not pass.\n",
+    "Content Verdict: PASS\nFinal result: did not pass.\n",
+    "Content Verdict: PASS\nFinal outcome: did not pass.\n",
+    "Content Verdict: PASS\nFinal status: did not pass.\n",
+    "Content Verdict: PASS\nFinal result: it did not pass.\n",
+    "Content Verdict: PASS\nTests: Unit tests did not pass.\n",
+    "Content Verdict: PASS\n1. did not pass.\n",
+    "Content Verdict: PASS\nCurrent check: did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not PASS; after the fix: build did not PASS.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not pass. Current tests did not pass.\n",
+    "Content Verdict: PASS\nPrior run: tests did not pass, but current tests did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix: tests did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nNegative test: tests did not pass: after the fix: build did not pass.\n",
+    "Content Verdict: PASS\nAfter the fix: build did not PASS.\n"
+  ]) {
+    assert.throws(
+      () => parseContentVerdict(bypassReport),
+      /conflicting content verdicts/,
+      `PR15-SEC-002 / PR15-RUN-001: expected contradiction throw for ${JSON.stringify(bypassReport)}`
+    );
+  }
+
+  // PR15-RUN-001 / B-RUN-002: introducer colons and mid-token punctuation preserve historical and negative-expectation context
+  for (const validPassReport of [
+    "Content Verdict: PASS\nBefore the fix: tests did not PASS.\n",
+    "Content Verdict: PASS\n**Before the fix:** tests did not PASS.\n",
+    "Content Verdict: PASS\nPrior run: tests did not PASS.\n",
+    "Content Verdict: PASS\nPrior run: did not pass.\n",
+    "Content Verdict: PASS\nPrior result: did not pass.\n",
+    "Content Verdict: PASS\nBefore the fix in src/auth.js, tests did not PASS.\n",
+    "Content Verdict: PASS\nBefore the fix: check on https://example.com/run?id=1 did not PASS.\n",
+    "Content Verdict: PASS\nNegative test: suite did not pass.\n",
+    "Content Verdict: PASS\nNegative test: did not pass.\n",
+    "Content Verdict: PASS\nNegative result: did not pass.\n",
+    "Content Verdict: PASS\nFinal negative test: suite did not pass.\n",
+    "Content Verdict: PASS\nPost-fix negative test: suite did not pass.\n",
+    "Content Verdict: PASS\nCurrent invalid-input check: did not pass.\n",
+    "Content Verdict: PASS\nTests: Requests without a token do not pass.\n",
+    "Content Verdict: PASS\nTests: Requests without a token do not pass, still do not pass.\n",
+    "Content Verdict: PASS\n1. Prior run: did not pass.\n"
+  ]) {
+    assert.equal(
+      parseContentVerdict(validPassReport),
+      "PASS",
+      `PR15-RUN-001: expected PASS for ${JSON.stringify(validPassReport)}`
+    );
+  }
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nBefore the fix: the run was not CLEAN.\n"),
+    "CLEAN",
+    "PR15-RUN-001: historical colon before not CLEAN must preserve CLEAN"
+  );
+  assert.equal(
+    parseIntegrityVerdict("Integrity Verdict: CLEAN\nPrior run in mcp/index.js:120 was not CLEAN.\n"),
+    "CLEAN",
+    "PR15-RUN-001: mid-token file:line in historical integrity note must preserve CLEAN"
+  );
+  assert.throws(
+    () => parseIntegrityVerdict("Integrity Verdict: CLEAN\nBefore the fix: run was not CLEAN; after the fix: run was not CLEAN.\n"),
+    /conflicting verdicts/,
+    "PR15-RUN-001: post-fix integrity contradiction after semicolon must throw"
+  );
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

@@ -43,7 +43,7 @@ function isDirectExecution(
     let resolved;
     if (platform === process.platform) {
       try {
-        resolved = fs.realpathSync(path.resolve(p));
+        resolved = fs.realpathSync.native(path.resolve(p));
       } catch {
         resolved = path.resolve(p);
       }
@@ -807,7 +807,7 @@ async function main(args) {
     return 0;
   }
 
-  const root = fs.realpathSync(process.cwd());
+  const root = fs.realpathSync.native(process.cwd());
 
   if (command === "plan") {
     console.log(JSON.stringify(await runPlanCommand(rest, root), null, 2));

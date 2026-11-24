@@ -36,9 +36,13 @@ const VERDICT_NEGATION_RE =
   /\b(not|no|never|isn't|wasn't|aren't|weren't|didn't|doesn't|don't|won't|cannot|can't|did\s+not|does\s+not|do\s+not|will\s+not)\s+(pass)\b/gi;
 const VERDICT_SUBJECT_NOUN_RE =
   /\b(?:verdict|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
+const VERDICT_LABEL_SUBJECT_RE =
+  /\b(?:verdict|result|outcome|status|disposition|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
+const BARE_POST_COLON_RE = /^\s*[*_]{0,3}(?:(?:it|they|this|that|still|also|really)\s+){0,2}[*_]{0,3}$/i;
 const NEGATIVE_EXPECTATION_RE =
   /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
-const CLAUSE_BREAK_RE = /(?:[.;:!?]|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
+const CLAUSE_BREAK_RE =
+  /(?:[.;!?][*_]{0,3}(?=\s|$)|(?<colon>:)[*_]{0,3}(?=\s|$)|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
 const TAIL_ADJUNCT_WORD_RE =
   /^(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
 const INTEGRITY_NEGATION_RE =
@@ -49,34 +53,61 @@ function createClauseTracker(line) {
   let hasHistorical = false;
   let hasCurrent = false;
   let hasSubject = false;
+  let hasColonSubjectLabel = false;
   let hasNegExpectation = false;
   let hasPriorNegation = false;
+  let hasPriorClauseBreak = false;
+
+  const updateFlags = text => {
+    if (!text) return;
+    if (HISTORICAL_CONTEXT_RE.test(text)) hasHistorical = true;
+    if (CURRENT_CONTEXT_RE.test(text)) hasCurrent = true;
+    if (VERDICT_SUBJECT_NOUN_RE.test(text)) hasSubject = true;
+    if (NEGATIVE_EXPECTATION_RE.test(text)) hasNegExpectation = true;
+  };
 
   const advanceTo = toIndex => {
     const seg = line.slice(scanFrom, toIndex);
-    let lastBreakEnd = -1;
+    let pos = 0;
     CLAUSE_BREAK_RE.lastIndex = 0;
     for (let m; (m = CLAUSE_BREAK_RE.exec(seg)); ) {
-      lastBreakEnd = m.index + m[0].length;
+      const chunk = seg.slice(pos, m.index);
+      if (scanFrom === 0 && pos === 0 && m[0].startsWith(".") && /^\s*\d+$/.test(chunk)) {
+        continue;
+      }
+      updateFlags(chunk);
+      hasPriorClauseBreak = true;
+      if (m.groups?.colon) {
+        const labelHasSubject = VERDICT_LABEL_SUBJECT_RE.test(chunk);
+        // Preserve historical/negative-expectation qualifiers across introducer colons when no current context appeared.
+        if (hasCurrent) {
+          hasHistorical = false;
+          if (!NEGATIVE_EXPECTATION_RE.test(chunk)) {
+            hasNegExpectation = false;
+          }
+          hasCurrent = false;
+        }
+        hasSubject = false;
+        hasColonSubjectLabel = labelHasSubject;
+      } else {
+        hasHistorical = false;
+        hasCurrent = false;
+        hasSubject = false;
+        hasColonSubjectLabel = false;
+        hasNegExpectation = false;
+      }
+      pos = m.index + m[0].length;
     }
-    let delta = seg;
-    if (lastBreakEnd !== -1) {
-      hasHistorical = false;
-      hasCurrent = false;
-      hasSubject = false;
-      hasNegExpectation = false;
-      hasPriorNegation = false;
-      delta = seg.slice(lastBreakEnd);
-    }
-    if (HISTORICAL_CONTEXT_RE.test(delta)) hasHistorical = true;
-    if (CURRENT_CONTEXT_RE.test(delta)) hasCurrent = true;
-    if (VERDICT_SUBJECT_NOUN_RE.test(delta)) hasSubject = true;
-    if (NEGATIVE_EXPECTATION_RE.test(delta)) hasNegExpectation = true;
+    const delta = seg.slice(pos);
+    updateFlags(delta);
+    const effectiveSubject = hasSubject || (hasColonSubjectLabel && BARE_POST_COLON_RE.test(delta));
     const isLineInitial =
-      !hasPriorNegation && /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
+      !hasPriorNegation &&
+      !hasPriorClauseBreak &&
+      /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
     return {
       isHistorical: hasHistorical && !hasCurrent,
-      hasVerdictSubject: hasSubject && !hasNegExpectation,
+      hasVerdictSubject: effectiveSubject && !hasNegExpectation,
       isLineInitial
     };
   };
@@ -84,6 +115,7 @@ function createClauseTracker(line) {
   const markConsumed = matchEnd => {
     scanFrom = matchEnd;
     hasPriorNegation = true;
+    hasColonSubjectLabel = false;
   };
 
   return { advanceTo, markConsumed };

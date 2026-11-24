@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AGENT_ALIAS_PAIRS, buildSubagentSpec } from "./briefs.mjs";
-import { readRegularFileSafe, resolveCanonicalRoot } from "./handoffs.mjs";
+import { isContainedPath, readRegularFileSafe, resolveCanonicalRoot } from "./handoffs.mjs";
 import { validateSquadId } from "./verdicts.mjs";
 
 const RETIRED_ADVERSARIAL_RE = /^adversarial_(?:review|l1|flat)$|^adversarial_/i;
@@ -13,9 +13,8 @@ const defaultManifests = [
   "suite-manifest.json"
 ];
 
-function isWithinWorkspace(root, file) {
-  const relative = path.relative(root, file);
-  return !(relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative));
+function isWithinWorkspace(root, file, platform = process.platform) {
+  return isContainedPath(root, file, true, platform);
 }
 
 function assertWithinWorkspace(root, file) {
@@ -33,7 +32,7 @@ function readManifest(root, filename, logicalRoot = root) {
     if (!isWithinWorkspace(root, candidate) && !isWithinWorkspace(logicalRoot, candidate)) {
       let realParent;
       try {
-        realParent = fs.realpathSync(path.dirname(candidate));
+        realParent = fs.realpathSync.native(path.dirname(candidate));
       } catch {
         throw new Error("Manifest path must stay inside the workspace.");
       }
@@ -42,7 +41,7 @@ function readManifest(root, filename, logicalRoot = root) {
   } else {
     assertWithinWorkspace(root, candidate);
   }
-  const realFile = fs.realpathSync(candidate);
+  const realFile = fs.realpathSync.native(candidate);
   assertWithinWorkspace(root, realFile);
   const manifest = JSON.parse(
     readRegularFileSafe(realFile, filename, {
@@ -50,7 +49,14 @@ function readManifest(root, filename, logicalRoot = root) {
       containmentError: "Manifest path must stay inside the workspace."
     }).toString("utf8")
   );
-  return { squads: manifestSquads(manifest), selectedManifest: path.relative(root, realFile).split(path.sep).join("/") };
+  let relManifest = path.relative(root, realFile);
+  if (
+    process.platform === "win32" &&
+    (relManifest === ".." || relManifest.startsWith(`..${path.sep}`))
+  ) {
+    relManifest = path.relative(fs.realpathSync.native(root), realFile);
+  }
+  return { squads: manifestSquads(manifest), selectedManifest: relManifest.split(path.sep).join("/") };
 }
 
 function manifestSquads(manifest) {

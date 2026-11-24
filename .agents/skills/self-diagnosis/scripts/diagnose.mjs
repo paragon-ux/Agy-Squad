@@ -52,7 +52,7 @@ function stripHtmlComments(text) {
 function assertAgySquadWorkspace() {
   const rawCwd = process.cwd();
   let cursor;
-  try { cursor = fs.realpathSync(rawCwd); } catch { cursor = path.resolve(rawCwd); }
+  try { cursor = fs.realpathSync.native(rawCwd); } catch { cursor = path.resolve(rawCwd); }
   let foundPkgName = null;
   while (true) {
     const pkgPath = path.join(cursor, "package.json");
@@ -113,7 +113,6 @@ function parseFrontmatter(markdown) {
   return { name, hasDescription: descBody.length > 0 };
 }
 
-const headingSlugCache = new Map();
 function readMarkdownCached(filePath, markdownTextCache) {
   if (markdownTextCache?.has(filePath)) return markdownTextCache.get(filePath);
   const text = fs.readFileSync(filePath, "utf8");
@@ -162,27 +161,26 @@ function stripMarkdownLinkSyntax(text) {
   return out;
 }
 
-function getHeadingSlugs(filePath, markdownTextCache) {
-  if (!headingSlugCache.has(filePath)) {
-    const slugs = new Set();
-    const counts = new Map();
-    for (const line of stripFencedCodeBlocks(readMarkdownCached(filePath, markdownTextCache)).split(/\r?\n/)) {
-      const match = /^#{1,6}\s+(.+)$/.exec(line);
-      if (!match) continue;
-      const base = stripMarkdownLinkSyntax(match[1])
-        .toLowerCase()
-        .replace(/`/g, "")
-        .replace(/[^\w\s-]/g, "")
-        .trim()
-        .replace(/\s/g, "-");
-      if (!base) continue;
-      const seen = counts.get(base) ?? 0;
-      counts.set(base, seen + 1);
-      slugs.add(seen === 0 ? base : `${base}-${seen}`);
-    }
-    headingSlugCache.set(filePath, slugs);
+function getHeadingSlugs(filePath, markdownTextCache, headingSlugCache = null) {
+  if (headingSlugCache?.has(filePath)) return headingSlugCache.get(filePath);
+  const slugs = new Set();
+  const counts = new Map();
+  for (const line of stripFencedCodeBlocks(readMarkdownCached(filePath, markdownTextCache)).split(/\r?\n/)) {
+    const match = /^#{1,6}\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const base = stripMarkdownLinkSyntax(match[1])
+      .toLowerCase()
+      .replace(/`/g, "")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s/g, "-");
+    if (!base) continue;
+    const seen = counts.get(base) ?? 0;
+    counts.set(base, seen + 1);
+    slugs.add(seen === 0 ? base : `${base}-${seen}`);
   }
-  return headingSlugCache.get(filePath);
+  headingSlugCache?.set(filePath, slugs);
+  return slugs;
 }
 
 function extractMarkdownLinks(text) {
@@ -249,7 +247,7 @@ function hasValidSvgEnvelope(svgRaw) {
   return false;
 }
 
-function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache) {
+function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache, headingSlugCache = new Map()) {
   const broken = [];
   const dir = path.dirname(skillFile);
   const skillsRootDir = path.join(repoRoot, ".agents", "skills");
@@ -284,7 +282,11 @@ function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache)
     }
     if (!existsCached(resolved, markdownTextCache, existsCache)) {
       broken.push(label);
-    } else if (fragment && resolved.endsWith(".md") && !getHeadingSlugs(resolved, markdownTextCache).has(fragment.toLowerCase())) {
+    } else if (
+      fragment &&
+      resolved.endsWith(".md") &&
+      !getHeadingSlugs(resolved, markdownTextCache, headingSlugCache).has(fragment.toLowerCase())
+    ) {
       broken.push(displayLink);
     }
   }
@@ -353,6 +355,7 @@ function runDiagnostics() {
   const skills = [];
   const markdownTextCache = new Map();
   const existsCache = new Map();
+  const headingSlugCache = new Map();
   const docsRoot = path.join(repoRoot, "docs");
   const excludedDocDirs = new Set([path.join(docsRoot, "reviews"), path.join(docsRoot, "plans")]);
   const activeDocs = fs.existsSync(docsRoot)
@@ -398,7 +401,7 @@ function runDiagnostics() {
       const relFile = path.relative(repoRoot, f).replace(/\\/g, "/");
       const relInSkill = path.relative(dir, f).replace(/\\/g, "/");
       const fileSlug = isSkillMd ? "" : toFindingSlug(relInSkill.replace(/^references\//, ""));
-      const broken = checkRelativeLinks(f, text, markdownTextCache, existsCache);
+      const broken = checkRelativeLinks(f, text, markdownTextCache, existsCache, headingSlugCache);
       if (broken.length) {
         brokenLinksCount += broken.length;
         findings.push({

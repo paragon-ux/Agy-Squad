@@ -85,7 +85,21 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" "${TARBALL}"
+            existing_assets="$(gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name')"
+            if printf '%s\n' "${existing_assets}" | grep -Fx -- "${TARBALL}" >/dev/null; then
+              tmp_dir="$(mktemp -d)"
+              trap 'rm -rf "${tmp_dir}"' EXIT
+              gh release download "${RELEASE_TAG}" --pattern "${TARBALL}" --output "${tmp_dir}/${TARBALL}"
+              expected_sha="$(sha256sum "${TARBALL}" | awk '{print $1}')"
+              actual_sha="$(sha256sum "${tmp_dir}/${TARBALL}" | awk '{print $1}')"
+              if [ "${expected_sha}" != "${actual_sha}" ]; then
+                echo "Error: existing release asset ${TARBALL} on ${RELEASE_TAG} does not match newly built tarball (${actual_sha} != ${expected_sha}); refusing to overwrite." >&2
+                exit 1
+              fi
+              echo "✓ Release asset ${TARBALL} on ${RELEASE_TAG} already matches built tarball (${expected_sha}); skipping duplicate upload."
+            else
+              gh release upload "${RELEASE_TAG}" "${TARBALL}"
+            fi
           else
             gh release create "${RELEASE_TAG}" "${TARBALL}" --verify-tag --generate-notes
           fi

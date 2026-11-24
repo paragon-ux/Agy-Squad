@@ -101,7 +101,7 @@ export function isDirectEntryPoint(
     let resolved;
     if (platform === process.platform) {
       try {
-        resolved = fs.realpathSync(path.resolve(p));
+        resolved = fs.realpathSync.native(path.resolve(p));
       } catch {
         resolved = path.resolve(p);
       }
@@ -165,7 +165,7 @@ function normalizePathEntry(entry, platform = os.platform(), homeDir = os.homedi
   let resolved = pathImpl.resolve(trimmed);
   if (platform === os.platform()) {
     try {
-      resolved = fs.realpathSync(resolved);
+      resolved = fs.realpathSync.native(resolved);
     } catch {}
   }
   resolved = stripTrailingSeparators(resolved);
@@ -202,8 +202,12 @@ export function formatPathGuidanceLines(antigravityBinDir, platform = os.platfor
 }
 
 async function safeWriteFileIfChanged(filePath, content, mode) {
+  let effectiveMode = mode;
   try {
     if (fs.existsSync(filePath)) {
+      if (effectiveMode === undefined && os.platform() !== "win32") {
+        effectiveMode = fs.statSync(filePath).mode & 0o777;
+      }
       const current = await fsPromises.readFile(filePath, "utf8");
       if (current === content) {
         if (mode !== undefined && os.platform() !== "win32") {
@@ -215,11 +219,13 @@ async function safeWriteFileIfChanged(filePath, content, mode) {
   } catch {}
   await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  const writeOpts = mode !== undefined ? { encoding: "utf8", flag: "wx", mode } : { encoding: "utf8", flag: "wx" };
+  const writeOpts = effectiveMode !== undefined
+    ? { encoding: "utf8", flag: "wx", mode: effectiveMode }
+    : { encoding: "utf8", flag: "wx" };
   try {
     await fsPromises.writeFile(tmpPath, content, writeOpts);
-    if (mode !== undefined && os.platform() !== "win32") {
-      await fsPromises.chmod(tmpPath, mode);
+    if (effectiveMode !== undefined && os.platform() !== "win32") {
+      await fsPromises.chmod(tmpPath, effectiveMode);
     }
     await fsPromises.rename(tmpPath, filePath);
   } catch (err) {
@@ -333,7 +339,7 @@ export function detectExistingInstallation(options = {}) {
         }
         if (isLocalCheckout) {
           try {
-            details.plugin.pointsElsewhere = !pathsEqual(fs.realpathSync(pluginDest), fs.realpathSync(repoRoot));
+            details.plugin.pointsElsewhere = !pathsEqual(fs.realpathSync.native(pluginDest), fs.realpathSync.native(repoRoot));
           } catch {
             details.plugin.pointsElsewhere = true;
           }
@@ -364,7 +370,7 @@ export function detectExistingInstallation(options = {}) {
                 const localAgentsSkills = path.join(pluginDest, ".agents", "skills");
                 if (
                   fs.existsSync(localAgentsSkills) &&
-                  pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(localAgentsSkills))
+                  pathsEqual(fs.realpathSync.native(linkPath), fs.realpathSync.native(localAgentsSkills))
                 ) {
                   continue;
                 }
@@ -374,7 +380,7 @@ export function detectExistingInstallation(options = {}) {
             let subdirRedirected = false;
             if (isLocalCheckout) {
               try {
-                if (!pathsEqual(fs.realpathSync(linkPath), fs.realpathSync(path.join(repoRoot, repoRel)))) {
+                if (!pathsEqual(fs.realpathSync.native(linkPath), fs.realpathSync.native(path.join(repoRoot, repoRel)))) {
                   details.plugin.pointsElsewhere = true;
                   subdirRedirected = true;
                 }
@@ -974,7 +980,7 @@ export async function runInstall(options = {}) {
       try {
         const currentRaw = fs.readFileSync(mcpJsonPath, "utf8");
         if (currentRaw !== nextMcpRaw) {
-          await safeWriteFileIfChanged(mcpBakPath, currentRaw);
+          await safeWriteFileIfChanged(mcpBakPath, currentRaw, 0o600);
           log(`[OK] Created configuration backup: ${mcpBakPath}`);
         }
       } catch (err) {
@@ -1014,7 +1020,7 @@ export async function runInstall(options = {}) {
     if (fs.existsSync(configJsonPath) && !fs.existsSync(configBakPath)) {
       try {
         const currentCfgRaw = fs.readFileSync(configJsonPath, "utf8");
-        await safeWriteFileIfChanged(configBakPath, currentCfgRaw);
+        await safeWriteFileIfChanged(configBakPath, currentCfgRaw, 0o600);
       } catch {}
     }
     nextConfig.plugins = {
@@ -1046,6 +1052,19 @@ export async function runInstall(options = {}) {
 
 function isOwnMcpServerKey(key) {
   return key === PLUGIN_KEY;
+}
+
+function hasForeignBackupData(backupData, sectionKey, keyFilter) {
+  if (!isPlainObject(backupData)) return false;
+  for (const topKey of Object.keys(backupData)) {
+    if (topKey !== sectionKey) return true;
+  }
+  if (isPlainObject(backupData[sectionKey])) {
+    for (const key of Object.keys(backupData[sectionKey])) {
+      if (!keyFilter(key)) return true;
+    }
+  }
+  return false;
 }
 
 function prepareRestoreJsonSection({
@@ -1091,11 +1110,24 @@ function prepareRestoreJsonSection({
 
   const backupSection = isPlainObject(backupData?.[sectionKey]) ? backupData[sectionKey] : {};
   const ownBackupKeys = Object.keys(backupSection).filter(keyFilter);
+  const hasForeignBackup = hasForeignBackupData(backupData, sectionKey, keyFilter);
+
+  if (!currentData && hasForeignBackup) {
+    const sourceBackup = hasPrimary ? backupPath : legacyBackupPath;
+    return {
+      targetPath,
+      content: null,
+      mode: undefined,
+      unlinkBackupPath: null,
+      logMessage: `[WARN] Retained backup without recreating ${targetLabel} (live ${targetLabel} is missing and backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover; restore manually if needed): ${sourceBackup}`
+    };
+  }
 
   if (!currentData && ownBackupKeys.length === 0) {
     return {
       targetPath,
       content: null,
+      mode: undefined,
       unlinkBackupPath: hasPrimary ? backupPath : null,
       logMessage: hasPrimary ? `[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}` : null
     };
@@ -1119,6 +1151,7 @@ function prepareRestoreJsonSection({
   return {
     targetPath,
     content: JSON.stringify(nextDoc, null, 2) + "\n",
+    mode: currentData ? undefined : 0o600,
     unlinkBackupPath: hasPrimary ? backupPath : null,
     logMessage: hasPrimary
       ? `[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`
@@ -1151,7 +1184,7 @@ async function commitRestorePlans(plans, log) {
   // Phase 2: commit target writes first, then unlink primary backups.
   for (const plan of plans) {
     if (plan.content !== null) {
-      await safeWriteFileIfChanged(plan.targetPath, plan.content);
+      await safeWriteFileIfChanged(plan.targetPath, plan.content, plan.mode);
     }
   }
   for (const plan of plans) {
