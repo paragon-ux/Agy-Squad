@@ -1111,19 +1111,25 @@ function prepareRestoreJsonSection({
   const backupSection = isPlainObject(backupData?.[sectionKey]) ? backupData[sectionKey] : {};
   const ownBackupKeys = Object.keys(backupSection).filter(keyFilter);
   const hasForeignBackup = hasForeignBackupData(backupData, sectionKey, keyFilter);
-  const retainPrimaryBackup = !currentData && hasForeignBackup;
+
+  if (!currentData && hasForeignBackup) {
+    const sourceBackup = hasPrimary ? backupPath : legacyBackupPath;
+    return {
+      targetPath,
+      content: null,
+      mode: undefined,
+      unlinkBackupPath: null,
+      logMessage: `[WARN] Retained backup without recreating ${targetLabel} (live ${targetLabel} is missing and backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover; restore manually if needed): ${sourceBackup}`
+    };
+  }
 
   if (!currentData && ownBackupKeys.length === 0) {
     return {
       targetPath,
       content: null,
       mode: undefined,
-      unlinkBackupPath: hasPrimary && !retainPrimaryBackup ? backupPath : null,
-      logMessage: !hasPrimary
-        ? null
-        : retainPrimaryBackup
-          ? `[WARN] Retained backup (live ${targetLabel} is missing and backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover): ${backupPath}`
-          : `[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}`
+      unlinkBackupPath: hasPrimary ? backupPath : null,
+      logMessage: hasPrimary ? `[OK] Cleared backup (no ${PLUGIN_KEY} entries to restore): ${backupPath}` : null
     };
   }
 
@@ -1146,14 +1152,10 @@ function prepareRestoreJsonSection({
     targetPath,
     content: JSON.stringify(nextDoc, null, 2) + "\n",
     mode: currentData ? undefined : 0o600,
-    unlinkBackupPath: hasPrimary && !retainPrimaryBackup ? backupPath : null,
+    unlinkBackupPath: hasPrimary ? backupPath : null,
     logMessage: hasPrimary
-      ? retainPrimaryBackup
-        ? `[WARN] Restored ${PLUGIN_KEY} entries to recreated ${targetPath}; retained backup ${backupPath} because live ${targetLabel} was missing and backup contains non-${PLUGIN_KEY} settings.`
-        : `[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`
-      : retainPrimaryBackup
-        ? `[WARN] Restored ${PLUGIN_KEY} entries from legacy backup ${legacyBackupPath} to recreated ${targetPath}; legacy backup contains non-${PLUGIN_KEY} settings that scoped restore does not recover.`
-        : `[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`
+      ? `[OK] Restored ${PLUGIN_KEY} entries from backup: ${backupPath} -> ${targetPath} (foreign entries preserved)`
+      : `[OK] Restored ${PLUGIN_KEY} entries from legacy backup (read-only fallback): ${legacyBackupPath} -> ${targetPath} (foreign entries preserved)`
   };
 }
 

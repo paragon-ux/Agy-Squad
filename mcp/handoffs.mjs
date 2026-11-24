@@ -226,7 +226,7 @@ function isContainedPath(root, target, allowEqual = false, platform = process.pl
   const normalizeCase = platform === "win32" || platform === "darwin";
   const normRoot = normalizeCase ? root.toLowerCase() : root;
   const normTarget = normalizeCase ? target.toLowerCase() : target;
-  const pathImpl = platform === "win32" ? path.win32 : path;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const rel = pathImpl.relative(normRoot, normTarget);
   return (
     (allowEqual || Boolean(rel)) &&

@@ -39,7 +39,7 @@ const VERDICT_SUBJECT_NOUN_RE =
 const NEGATIVE_EXPECTATION_RE =
   /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
 const CLAUSE_BREAK_RE =
-  /(?:[;!?]|\.[*_]{0,3}(?=\s|$)|(?<colon>:)[*_]{0,3}(?=\s|$)|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
+  /(?:[.;!?][*_]{0,3}(?=\s|$)|(?<colon>:)[*_]{0,3}(?=\s|$)|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
 const TAIL_ADJUNCT_WORD_RE =
   /^(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
 const INTEGRITY_NEGATION_RE =
@@ -77,7 +77,9 @@ function createClauseTracker(line) {
         // Preserve historical/negative-expectation qualifiers across introducer colons when no current context appeared.
         if (hasCurrent) {
           hasHistorical = false;
-          hasNegExpectation = false;
+          if (!NEGATIVE_EXPECTATION_RE.test(chunk)) {
+            hasNegExpectation = false;
+          }
           hasCurrent = false;
         }
       } else {

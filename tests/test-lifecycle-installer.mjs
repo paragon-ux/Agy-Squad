@@ -1668,23 +1668,39 @@ try {
           encoding: "utf8"
         });
         assert.equal(mlRes.status, 0, mlRes.stderr || mlRes.stdout);
-        assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001: must not create config.json when ownBackupKeys.length === 0");
+        assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001: must not create config.json when live target is missing and backup has foreign keys");
         assert.equal(fs.existsSync(mlCfgBak), true, "PR15-SCRIPT-001: must retain config.json.agy-squad.bak when live config is missing and backup has foreign keys");
         assert.equal(fs.readFileSync(mlCfgBak, "utf8"), cfgBakBody);
-        assert.match(mlRes.stdout, /\[WARN\] Retained backup .*config\.json\.agy-squad\.bak/);
+        assert.match(mlRes.stdout, /\[WARN\] Retained backup without recreating config\.json .*config\.json\.agy-squad\.bak/);
 
-        assert.equal(fs.existsSync(mlMcpPath), true, "PR15-SCRIPT-001: scoped restore recreates mcp_config.json for agy-squad entry");
-        const recreatedMcp = JSON.parse(fs.readFileSync(mlMcpPath, "utf8"));
-        assert.deepEqual(recreatedMcp, { mcpServers: { "agy-squad": { command: "node", args: ["old.js"] } } });
-        if (os.platform() !== "win32") {
-          assert.equal(fs.statSync(mlMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: recreated missing live target must use mode 0600");
-        }
+        assert.equal(fs.existsSync(mlMcpPath), false, "B-SCRIPT-001: must not recreate partial mcp_config.json when live target is missing and backup has foreign keys");
         assert.equal(fs.existsSync(mlMcpBak), true, "PR15-SCRIPT-001: must retain mcp_config.json.agy-squad.bak when live mcp_config.json is missing and backup has foreign keys");
         assert.equal(fs.readFileSync(mlMcpBak, "utf8"), mcpBakBody);
-        assert.match(mlRes.stdout, /\[WARN\] Restored agy-squad entries to recreated .*retained backup .*mcp_config\.json\.agy-squad\.bak/);
+        assert.match(mlRes.stdout, /\[WARN\] Retained backup without recreating mcp_config\.json .*mcp_config\.json\.agy-squad\.bak/);
 
-        // Case B: !currentData control where backups contain ONLY owned agy-squad data (and empty backup) -> restored and safely unlinked
-        fs.rmSync(mlMcpPath, { force: true });
+        // B-SCRIPT-001 idempotency: repeat restore-backups and uninstall --restore-backups must keep both foreign backups intact
+        const mlRepeatRes = spawnSync(process.execPath, [cli, "restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlRepeatRes.status, 0, mlRepeatRes.stderr || mlRepeatRes.stdout);
+        assert.equal(fs.existsSync(mlCfgBak), true, "B-SCRIPT-001: repeat restore-backups must still retain config.json.agy-squad.bak");
+        assert.equal(fs.existsSync(mlMcpBak), true, "B-SCRIPT-001: repeat restore-backups must still retain mcp_config.json.agy-squad.bak");
+
+        const mlUninstRes = spawnSync(process.execPath, [cli, "uninstall", "--restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlUninstRes.status, 0, mlUninstRes.stderr || mlUninstRes.stdout);
+        assert.equal(fs.existsSync(mlCfgPath), false, "B-SCRIPT-001: uninstall --restore-backups must not recreate partial config.json");
+        assert.equal(fs.existsSync(mlMcpPath), false, "B-SCRIPT-001: uninstall --restore-backups must not recreate partial mcp_config.json");
+        assert.equal(fs.existsSync(mlCfgBak), true, "B-SCRIPT-001: uninstall --restore-backups must retain config.json.agy-squad.bak");
+        assert.equal(fs.existsSync(mlMcpBak), true, "B-SCRIPT-001: uninstall --restore-backups must retain mcp_config.json.agy-squad.bak");
+        assert.equal(fs.readFileSync(mlMcpBak, "utf8"), mcpBakBody);
+
+        // Case B: !currentData control where backups contain ONLY owned agy-squad data (and empty backup) -> restored (mode 0600) and safely unlinked
         fs.writeFileSync(mlMcpBak, JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["only-own.js"] } } }, null, 2) + "\n");
         fs.writeFileSync(mlCfgBak, "{}\n");
         const mlOwnRes = spawnSync(process.execPath, [cli, "restore-backups"], {
@@ -1696,6 +1712,9 @@ try {
         assert.deepEqual(JSON.parse(fs.readFileSync(mlMcpPath, "utf8")), {
           mcpServers: { "agy-squad": { command: "node", args: ["only-own.js"] } }
         });
+        if (os.platform() !== "win32") {
+          assert.equal(fs.statSync(mlMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: recreated missing live target must use mode 0600");
+        }
         assert.equal(fs.existsSync(mlMcpBak), false, "PR15-SCRIPT-001 control: owned-only backup must be unlinked after full scoped restore");
         assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001 control: empty backup must not create config.json");
         assert.equal(fs.existsSync(mlCfgBak), false, "PR15-SCRIPT-001 control: empty backup with zero foreign data must be cleared");
