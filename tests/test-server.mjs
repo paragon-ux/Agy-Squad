@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -796,10 +797,39 @@ console.log("Agy-Squad MCP server tests\n");
       assert.equal(Boolean(symRootRes[2].result.isError), false, `TEST-NEW-001: symlinked root + canonical manifestPath must pass dispatch_squad: ${symRootRes[2].result.content[0].text}`);
       assert.equal(JSON.parse(symRootRes[2].result.content[0].text).Subagents[0].Role, "Beta");
 
+      const relSymRootRes = runTmpSession([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            workspaceFolders: [
+              { uri: pathToFileURL(dupSlashRoot).href, name: "r1" },
+              { uri: pathToFileURL(secondaryLink).href, name: "r2-link" }
+            ]
+          }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "squad_planner", arguments: { manifestPath: "target.json" } }
+        }
+      ]);
+      assert.equal(Boolean(relSymRootRes[1].result.isError), false, `relative manifestPath inside symlinked root must pass: ${relSymRootRes[1].result.content[0].text}`);
+      assert.equal(JSON.parse(relSymRootRes[1].result.content[0].text).workspace, secondaryWs);
+
       const crossRootEscape = path.join(dupSlashRoot, "escape-to-r2.json");
+      const relShadowEscape = path.join(dupSlashRoot, "target.json");
+      const inRootAlias = path.join(secondaryWs, "in-root-alias.json");
+      const danglingShadow = path.join(dupSlashRoot, "in-root-alias.json");
       let crossLinkCreated = false;
       try {
         fs.symlinkSync(absTargetManifest, crossRootEscape, "file");
+        fs.symlinkSync(absTargetManifest, relShadowEscape, "file");
+        fs.symlinkSync(absTargetManifest, inRootAlias, "file");
+        fs.symlinkSync(path.join(dupSlashRoot, "missing-target.json"), danglingShadow, "file");
         crossLinkCreated = true;
       } catch (err) {
         if (err?.code !== "EPERM") throw err;
@@ -824,12 +854,185 @@ console.log("Agy-Squad MCP server tests\n");
               id: 2,
               method: "tools/call",
               params: { name: "squad_planner", arguments: { manifestPath: crossRootEscape } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 3,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: "target.json" } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 4,
+              method: "tools/call",
+              params: { name: "dispatch_squad", arguments: { squadId: "beta", manifestPath: "target.json" } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 5,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: "escape-to-r2.json" } }
             }
           ]);
           assert.equal(escapeRes[1].result.isError, true, "MCP-004: outbound cross-root symlink must be rejected");
           assert.match(escapeRes[1].result.content[0].text, /inside the workspace/);
           assert.doesNotMatch(escapeRes[1].result.content[0].text, /Ambiguous multi-root workspace/);
+          assert.equal(Boolean(escapeRes[2].result.isError), false, `relative escaping symlink in sibling root must be skipped without ambiguity: ${escapeRes[2].result.content[0].text}`);
+          assert.equal(JSON.parse(escapeRes[2].result.content[0].text).workspace, secondaryWs);
+          assert.equal(Boolean(escapeRes[3].result.isError), false, `dispatch_squad relative escaping symlink in sibling root must be skipped: ${escapeRes[3].result.content[0].text}`);
+          assert.equal(JSON.parse(escapeRes[3].result.content[0].text).Subagents[0].Role, "Beta");
+          assert.equal(escapeRes[4].result.isError, true, "relative escaping symlink with no valid sibling root must fail closed");
+          assert.doesNotMatch(escapeRes[4].result.content[0].text, /Ambiguous multi-root workspace/);
         }
+        const inRootAliasRes = runTmpSession([
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2024-11-05",
+              workspaceFolders: [
+                { uri: pathToFileURL(dupSlashRoot).href, name: "r1" },
+                { uri: pathToFileURL(secondaryWs).href, name: "r2" }
+              ]
+            }
+          },
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "squad_planner", arguments: { manifestPath: "in-root-alias.json" } }
+          }
+        ]);
+        assert.equal(Boolean(inRootAliasRes[1].result.isError), false, `valid in-workspace relative symlink must resolve: ${inRootAliasRes[1].result.content[0].text}`);
+        assert.equal(JSON.parse(inRootAliasRes[1].result.content[0].text).workspace, secondaryWs);
+      }
+
+      // Cross-OS multi-root directory shadowing, escaping dir junction/symlink, drive-relative guard, and omitted-manifestPath defaultManifests containment
+      const shadowRootA = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-a-")));
+      const shadowRootB = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-shadow-b-")));
+      const dirLinkType = os.platform() === "win32" ? "junction" : "dir";
+      const escapeSubLink = path.join(shadowRootA, "sub-escape");
+      const escapeScratchLink = path.join(shadowRootA, ".scratch");
+      try {
+        const betaManifestBody = JSON.stringify({
+          squads: { beta: { specialists: [{ role: "Beta", objective: "Check", scopeFiles: ["."] }] } }
+        });
+        fs.mkdirSync(path.join(shadowRootA, "dir-shadow.json"), { recursive: true });
+        fs.mkdirSync(path.join(shadowRootA, "task-01-manifest.json"), { recursive: true });
+        fs.mkdirSync(path.join(shadowRootB, "sub-escape"), { recursive: true });
+        fs.writeFileSync(path.join(shadowRootB, "dir-shadow.json"), betaManifestBody);
+        fs.writeFileSync(path.join(shadowRootB, "swarm-manifest.json"), betaManifestBody);
+        fs.writeFileSync(path.join(shadowRootB, "sub-escape", "target.json"), betaManifestBody);
+        fs.symlinkSync(path.join(shadowRootB, "sub-escape"), escapeSubLink, dirLinkType);
+        fs.symlinkSync(shadowRootB, escapeScratchLink, dirLinkType);
+
+        for (const pair of [[shadowRootA, shadowRootB], [shadowRootB, shadowRootA]]) {
+          const shadowRes = runTmpSession([
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2024-11-05",
+                workspaceFolders: [
+                  { uri: pathToFileURL(pair[0]).href, name: "sa" },
+                  { uri: pathToFileURL(pair[1]).href, name: "sb" }
+                ]
+              }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: "dir-shadow.json" } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 3,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: "sub-escape/target.json" } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 4,
+              method: "tools/call",
+              params: { name: "dispatch_squad", arguments: { squadId: "beta" } }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 5,
+              method: "tools/call",
+              params: { name: "squad_planner", arguments: { manifestPath: "C:dir-shadow.json" } }
+            }
+          ]);
+          assert.equal(Boolean(shadowRes[1].result.isError), false, `directory shadowing relative manifestPath must be skipped: ${shadowRes[1].result.content[0].text}`);
+          assert.equal(JSON.parse(shadowRes[1].result.content[0].text).workspace, shadowRootB);
+          assert.equal(Boolean(shadowRes[2].result.isError), false, `escaping dir symlink/junction on relative manifestPath must be skipped: ${shadowRes[2].result.content[0].text}`);
+          assert.equal(JSON.parse(shadowRes[2].result.content[0].text).workspace, shadowRootB);
+          assert.equal(Boolean(shadowRes[3].result.isError), false, `omitted manifestPath must skip directory and escaping .scratch junction: ${shadowRes[3].result.content[0].text}`);
+          assert.equal(JSON.parse(shadowRes[3].result.content[0].text).Subagents[0].Role, "Beta");
+          assert.equal(shadowRes[4].result.isError, true, "Windows drive-relative manifestPath must fail closed");
+          assert.doesNotMatch(shadowRes[4].result.content[0].text, /Ambiguous multi-root workspace/);
+        }
+
+        if (crossLinkCreated) {
+          fs.symlinkSync(path.join(shadowRootB, "swarm-manifest.json"), path.join(shadowRootA, "swarm-manifest.json"), "file");
+          for (const pair of [[shadowRootA, shadowRootB], [shadowRootB, shadowRootA]]) {
+            const defaultSymRes = runTmpSession([
+              {
+                jsonrpc: "2.0",
+                id: 1,
+                method: "initialize",
+                params: {
+                  protocolVersion: "2024-11-05",
+                  workspaceFolders: [
+                    { uri: pathToFileURL(pair[0]).href, name: "sa" },
+                    { uri: pathToFileURL(pair[1]).href, name: "sb" }
+                  ]
+                }
+              },
+              {
+                jsonrpc: "2.0",
+                id: 2,
+                method: "tools/call",
+                params: { name: "dispatch_squad", arguments: { squadId: "beta" } }
+              }
+            ]);
+            assert.equal(Boolean(defaultSymRes[1].result.isError), false, `omitted manifestPath must skip escaping default-manifest file symlink: ${defaultSymRes[1].result.content[0].text}`);
+            assert.equal(JSON.parse(defaultSymRes[1].result.content[0].text).Subagents[0].Role, "Beta");
+          }
+          // Valid in-workspace default-manifest symlink in secondary root resolves cleanly
+          fs.rmSync(path.join(shadowRootB, "swarm-manifest.json"));
+          fs.symlinkSync(path.join(shadowRootB, "dir-shadow.json"), path.join(shadowRootB, "swarm-manifest.json"), "file");
+          const validDefaultSymRes = runTmpSession([
+            {
+              jsonrpc: "2.0",
+              id: 1,
+              method: "initialize",
+              params: {
+                protocolVersion: "2024-11-05",
+                workspaceFolders: [
+                  { uri: pathToFileURL(shadowRootA).href, name: "sa" },
+                  { uri: pathToFileURL(shadowRootB).href, name: "sb" }
+                ]
+              }
+            },
+            {
+              jsonrpc: "2.0",
+              id: 2,
+              method: "tools/call",
+              params: { name: "dispatch_squad", arguments: { squadId: "beta" } }
+            }
+          ]);
+          assert.equal(Boolean(validDefaultSymRes[1].result.isError), false, `valid in-workspace default-manifest symlink must resolve: ${validDefaultSymRes[1].result.content[0].text}`);
+          assert.equal(JSON.parse(validDefaultSymRes[1].result.content[0].text).Subagents[0].Role, "Beta");
+        }
+      } finally {
+        fs.rmSync(escapeSubLink, { recursive: true, force: true });
+        fs.rmSync(escapeScratchLink, { recursive: true, force: true });
+        fs.rmSync(shadowRootA, { recursive: true, force: true });
+        fs.rmSync(shadowRootB, { recursive: true, force: true });
       }
     } finally {
       fs.rmSync(secondaryLink, { recursive: true, force: true });
@@ -980,6 +1183,15 @@ console.log("Agy-Squad MCP server tests\n");
     fs.rmSync(simHome, { recursive: true, force: true });
   }
   console.log("✓ global plugin cwd guard, case-insensitive entry detection, and Node >= 22 version check");
+}
+{
+  const selfPkg = await import("agy-squad");
+  assert.equal(typeof selfPkg.handleRequest, "function");
+  assert.ok(Array.isArray(selfPkg.TOOLS) && selfPkg.TOOLS.length === 2);
+  const pkgMeta = createRequire(import.meta.url)("agy-squad/package.json");
+  assert.equal(pkgMeta.name, "agy-squad");
+  await assert.rejects(() => import("agy-squad/mcp/dispatch.mjs"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+  console.log("✓ package.json exports map exposes root/package.json and encapsulates internal subpaths");
 }
 {
   const exited = new Promise((resolve) => proc.on("exit", (code) => resolve(code)));
