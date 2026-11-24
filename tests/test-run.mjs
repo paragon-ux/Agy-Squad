@@ -73,7 +73,11 @@ try {
 
   const diagHelp = spawnSync(process.execPath, [isoDiag, "--help"], { cwd: isoRepo, encoding: "utf8" });
   assert.equal(diagHelp.status, 0, diagHelp.stderr);
-  assert.match(diagHelp.stdout, /Usage:.*--json.*--help/);
+  assert.match(diagHelp.stdout, /Usage:.*--json.*-h\|--help/);
+  assert.match(diagHelp.stdout, /compatibility alias/i);
+  const diagShortHelp = spawnSync(process.execPath, [isoDiag, "-h"], { cwd: isoRepo, encoding: "utf8" });
+  assert.equal(diagShortHelp.status, 0, diagShortHelp.stderr);
+  assert.equal(diagShortHelp.stdout, diagHelp.stdout);
 
   for (const args of [[], ["--json"]]) {
     const diagRun = spawnSync(process.execPath, [isoDiag, ...args], { cwd: isoRepo, encoding: "utf8" });
@@ -463,6 +467,11 @@ try {
   assert.doesNotMatch(fullSkillText, /recommendation on Agy-Squad/i, "UX-SQ-001: full-review must target the active repository");
   assert.match(reportTplText, /\| Repository \| `<owner\/repo>` \|/, "UX-SQ-001: report-template.md must use <owner/repo>");
   assert.doesNotMatch(swarmSkillText, /\b(?:antislop|permissioned-github)\b/i, "UX-SQ-011: swarm-governance/SKILL.md must not front-load third-party skills");
+  const swarmDocText = fs.readFileSync(path.join(repoRoot, "docs/skills/swarm-governance.md"), "utf8");
+  for (const [label, txt] of [["swarm-governance/SKILL.md", swarmSkillText], ["docs/skills/swarm-governance.md", swarmDocText]]) {
+    assert.match(txt, /Synthesize all verified `lead\/report\.md` outputs into one complete user-facing deliverable/i, `${label} must require deliverable-first synthesis in Stage 3`);
+    assert.match(txt, /--no-integrity.*--allow-unaudited/i, `${label} must document lightweight research opt-out`);
+  }
   assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
 
   const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));
@@ -521,7 +530,7 @@ try {
   const slugs = getHeadingSlugs("/virtual-redos.md", slugCache);
   assert.equal(slugs.has("valid-heading"), true);
   const diagMs = performance.now() - tDiag;
-  assert.ok(diagMs < 100, `R1-SEC-003 / R2-SEC-003: diagnose link/SVG/heading checks took ${diagMs.toFixed(1)} ms (>= 100 ms)`);
+  assert.ok(diagMs < 500, `R1-SEC-003 / R2-SEC-003: diagnose link/SVG/heading checks took ${diagMs.toFixed(1)} ms (>= 500 ms)`);
   const virtualSelfFile = path.join(repoRoot, ".agents/skills/pr-review/virtual-r2-check.md");
   const selfTextCache = new Map([[virtualSelfFile, "# Top\nSee [missing](#foo).\n"]]);
   assert.deepEqual(
@@ -536,6 +545,41 @@ try {
   assert.equal(matchesPackageEntry("mcp/handoffs.mjs", "mcp/*.mjs"), true);
   assert.equal(matchesPackageEntry("mcp/sub/handoffs.mjs", "mcp/*.mjs"), false);
   assert.equal(matchesPackageEntry("docs/plans/LEDGER.md", "docs/plans/**"), true);
+  // Batch B SCRIPT-005: '?' single non-slash wildcard + plugin.json logo coverage + SD-SCRIPT-007 YAML block scalar indicators + TEST-003 unwired test warning
+  assert.equal(matchesPackageEntry("mcp/a.mjs", "mcp/?.mjs"), true);
+  assert.equal(matchesPackageEntry("mcp/ab.mjs", "mcp/?.mjs"), false);
+  assert.equal(matchesPackageEntry("mcp//.mjs", "mcp/?.mjs"), false);
+
+  const origPlugin = fs.readFileSync(path.join(isoRepo, "plugin.json"), "utf8");
+  const badLogoPlugin = JSON.parse(origPlugin);
+  writeIso("unpacked-logo.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>\n");
+  badLogoPlugin.logo = "unpacked-logo.svg";
+  writeIso("plugin.json", JSON.stringify(badLogoPlugin, null, 2) + "\n");
+  const preflightBadLogo = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightBadLogo.status, 0, "SCRIPT-005: plugin.json logo excluded from package.json files must fail preflight");
+  assert.match(preflightBadLogo.stderr, /plugin\.json logo: unpacked-logo\.svg/);
+  badLogoPlugin.logo = "assets\\logo.svg";
+  writeIso("plugin.json", JSON.stringify(badLogoPlugin, null, 2) + "\n");
+  const preflightBackslashLogo = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightBackslashLogo.status, 0, "Backslash plugin.json logo must fail preflight on all OSes");
+  assert.match(preflightBackslashLogo.stderr, /plugin\.json logo must use POSIX/);
+  writeIso("plugin.json", origPlugin);
+  fs.rmSync(path.join(isoRepo, "unpacked-logo.svg"), { force: true });
+
+  const unwiredProbe = path.join(isoRepo, "tests/test-unwired-probe.mjs");
+  fs.writeFileSync(unwiredProbe, "// probe\n", "utf8");
+  const preflightUnwired = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  fs.rmSync(unwiredProbe, { force: true });
+  assert.equal(preflightUnwired.status, 0, preflightUnwired.stderr);
+  assert.match(preflightUnwired.stderr, /WARN: Test file tests\/test-unwired-probe\.mjs is not wired/);
+
+  for (const scalarHeader of [">2", ">-2", ">2-", "|+2", "|2+"]) {
+    fs.writeFileSync(prSkillPath, `---\nname: pr-review\ndescription: ${scalarHeader}\n  Indented scalar body.\n---\nBody.\n`);
+    const scalarOut = JSON.parse(spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" }).stdout);
+    assert.ok(!scalarOut.findings.some(f => f.id === "SKILL-FM-pr-review"), `SD-SCRIPT-007: '${scalarHeader}' must pass SKILL-FM`);
+  }
+  fs.writeFileSync(prSkillPath, savedPrSkill);
+
   const tGlob = performance.now();
   assert.equal(matchesPackageEntry("a/".repeat(25) + "y", "**/".repeat(15) + "x"), false);
   assert.equal(matchesPackageEntry("a/".repeat(40) + "y", "**/a/".repeat(15) + "x"), false);

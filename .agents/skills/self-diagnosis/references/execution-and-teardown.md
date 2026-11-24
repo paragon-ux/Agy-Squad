@@ -41,4 +41,4 @@ agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune -
 ```
 
 - Write temp `<plan.json>` and `bundle-record-<id>.json` outside `scratch/agy-squad/squad-<id>/` (e.g., `scratch/bundle-record-<id>.json`) and remove once done.
-- Transcribe every finding `1 ID = 1 Row` and each verified bundle SHA-256 into `docs/reviews/<slug>.md` (Standard `v1.5.0` Sections 1-9) before removing finished `scratch/agy-squad/` directories.
+- Transcribe every finding `1 ID = 1 Row` and each verified bundle SHA-256 into `docs/reviews/<slug>.md` (Standard v1.5.0 Sections 1-9) before removing finished `scratch/agy-squad/` directories.

@@ -30,6 +30,9 @@ function matchPackageGlob(value, pattern) {
     } else if (pattern[i] === "*") {
       if (tokens[tokens.length - 1] !== "*") tokens.push("*");
       i += 1;
+    } else if (pattern[i] === "?") {
+      tokens.push("?");
+      i += 1;
     } else {
       tokens.push(pattern[i]);
       i += 1;
@@ -64,6 +67,10 @@ function matchPackageGlob(value, pattern) {
         if (dp[j]) seen = true;
         if (seen) next[j] = 1;
       }
+    } else if (tok === "?") {
+      for (let j = 0; j < n; j++) {
+        if (dp[j] && value[j] !== "/") next[j + 1] = 1;
+      }
     } else {
       for (let j = 0; j < n; j++) {
         if (dp[j] && value[j] === tok) next[j + 1] = 1;
@@ -76,7 +83,7 @@ function matchPackageGlob(value, pattern) {
 
 function matchesPackageEntry(relativePath, normalized) {
   if (!normalized) return false;
-  if (normalized.includes("*")) {
+  if (normalized.includes("*") || normalized.includes("?")) {
     return matchPackageGlob(relativePath, normalized);
   }
   return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
@@ -121,6 +128,7 @@ if (pkg) {
     errors.push(`package.json version is not a valid semver release version: ${JSON.stringify(pkg.version)}.`);
   }
 
+  let pluginLogoPath = null;
   const pluginText = readText("plugin.json");
   if (pluginText) {
     try {
@@ -148,8 +156,15 @@ if (pkg) {
       }
       if (typeof pluginManifest.logo !== "string" || !pluginManifest.logo.trim()) {
         errors.push('plugin.json must define a non-empty "logo" path.');
-      } else if (!exists(pluginManifest.logo.trim())) {
-        errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
+      } else {
+        const rawLogo = pluginManifest.logo.trim();
+        if (rawLogo.includes("\\")) {
+          errors.push(`plugin.json logo must use POSIX '/' separators: ${pluginManifest.logo}`);
+        } else if (!exists(rawLogo)) {
+          errors.push(`plugin.json logo target does not exist: ${pluginManifest.logo}`);
+        } else {
+          pluginLogoPath = rawLogo.replace(/^\.\//, "");
+        }
       }
     } catch (error) {
       errors.push(`plugin.json is not valid JSON: ${error.message}`);
@@ -224,6 +239,9 @@ if (pkg) {
       errors.push(`package.json "files" does not clearly include ${relativePath}.`);
     }
   }
+  if (pluginLogoPath && !isCoveredByFiles(pluginLogoPath)) {
+    errors.push(`package.json "files" does not clearly include plugin.json logo: ${pluginLogoPath}.`);
+  }
 
   for (const excludedPath of [
     ".agents/skills/self-diagnosis",
@@ -278,6 +296,17 @@ if (pkg) {
     for (const suitePath of suitePaths) {
       if (!exists(suitePath)) {
         errors.push(`npm test references a missing test file: ${suitePath}`);
+      }
+    }
+    if (exists("tests")) {
+      const wiredSuites = new Set(suitePaths);
+      for (const entry of fs.readdirSync(path.join(root, "tests"), { withFileTypes: true })) {
+        if (entry.isFile() && /^test-.*\.mjs$/.test(entry.name)) {
+          const rel = `tests/${entry.name}`;
+          if (!wiredSuites.has(rel)) {
+            warnings.push(`Test file ${rel} is not wired into package.json scripts.test.`);
+          }
+        }
       }
     }
   }

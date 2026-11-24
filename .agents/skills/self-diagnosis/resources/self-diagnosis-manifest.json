@@ -13,7 +13,7 @@
           ".agents/skills/swarm-governance",
           "docs/tools.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad skill_and_pr_review_audit --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
+        "instructions": "Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
@@ -29,7 +29,7 @@
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
             ".agents/skills/self-diagnosis/references/execution-and-teardown.md"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files); run diagnose.mjs --json read-only as needed, and never prune or remove scratch/agy-squad/ mid-cohort.",
+          "instructions": "Run diagnose.mjs --json read-only as needed; never prune or remove scratch/agy-squad/ mid-cohort.",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -53,7 +53,6 @@
             "docs/plans/LEDGER.md",
             "docs/tools.md"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
           "expectedDeliverable": "Markdown evidence report with SKILL/ARCH/DOC P1/P2/P3 triage, contract provenance checks, and concrete optimization recommendations."
         }
       ]
@@ -72,7 +71,7 @@
           "bin/agy-squad.mjs",
           "scripts/install-register.mjs"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad runtime_and_contract_diagnosis --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
+        "instructions": "Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP/SEC findings."
       },
       "specialists": [
@@ -88,7 +87,6 @@
             "mcp/verdicts.mjs",
             "mcp/planner.mjs"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC/SEC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
@@ -109,7 +107,6 @@
             "tests/verify-package.mjs",
             ".github/workflows"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
           "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP/SEC P1/P2/P3 triage and verification gap analysis."
         }
       ]
@@ -129,7 +126,7 @@
           ".agents/skills/self-diagnosis/SKILL.md",
           ".agents/skills/pr-review/SKILL.md"
         ],
-        "instructions": "On /swarm, wait via swarm_wait for READY receipts, verify cited files via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files), write synthesis ('Content Verdict: PASS', FAIL, or BLOCKED) preserving 1-ID-per-finding granularity, and post <=500B READY. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md (subagent fallback: 'agy-squad dispatch --squad token_and_execution_optimization --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json').",
+        "instructions": "Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [
@@ -146,7 +143,6 @@
             ".agents/skills/day-one-review/SKILL.md",
             ".agents/skills/swarm-governance/SKILL.md"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
           "expectedDeliverable": "Markdown evidence report with exact byte/token measurements and concrete before/after optimization proposals."
         },
         {
@@ -159,7 +155,6 @@
             "mcp/handoffs.mjs",
             "bin/agy-squad.mjs"
           ],
-          "instructions": "Inspect your scopeFiles via native search/read tools (grep_search/find_by_name + bounded read_file slices on large files).",
           "expectedDeliverable": "Markdown evidence report with syscall/latency analysis and ranked runtime optimization proposals."
         }
       ]

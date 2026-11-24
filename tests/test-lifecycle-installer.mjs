@@ -380,7 +380,7 @@ try {
   const cmdShimText = formatWindowsCmdShim(pluginDir);
   assert.match(cmdShimText, /^@echo off\r\nchcp 65001 >nul\r\n/);
   assert.match(cmdShimText, /chcp 65001 >nul/);
-  assert.match(cmdShimText, /setlocal/);
+  assert.match(cmdShimText, /setlocal DisableDelayedExpansion/);
   assert.match(cmdShimText, /where node/);
   assert.match(cmdShimText, /if errorlevel 1 goto :fallback/);
   assert.match(cmdShimText, /Math\.min\(parseInt\(process\.versions\.node,10\),22\)===22/);
@@ -551,7 +551,7 @@ try {
   assert.match(partialStatus.stdout, /PARTIAL INSTALLATION/);
   fs.writeFileSync(shimFile, savedShim, os.platform() === "win32" ? undefined : { mode: 0o755 });
 
-  // L49 / v0.2.0: skillsReady must require all 5 skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
+  // L49 / v0.2.0: skillsReady must require all 4 shipped skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
   const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
   fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
   assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);
@@ -1026,7 +1026,7 @@ try {
         assert.equal(fs.existsSync(installed), false);
       }
     } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
+      fs.rmSync(testRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }
 
@@ -1496,6 +1496,20 @@ try {
         /\bgh release upload[^\n]*--clobber\b/,
         "SEC-008: gh release upload must not pass --clobber"
       );
+
+      // Batch B SEC-009, SEC-010, TEST-004 & Day-1 R1-TEST-001: SHA-pinned workflow actions, exact npm pin, non-main cancel-in-progress, strict docs build
+      const ciWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
+      const docsWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "docs.yml"), "utf8");
+      assert.match(ciWorkflow, /cancel-in-progress:\s*\$\{\{\s*github\.ref != 'refs\/heads\/main'\s*\}\}/, "TEST-004: ci.yml must skip cancel-in-progress on main");
+      assert.match(releaseWorkflow, /npm install --global 'npm@\d+\.\d+\.\d+'/, "SEC-009: release-tag.yml must pin an exact npm version");
+      assert.match(docsWorkflow, /^\s*run:\s*zensical build --clean --strict\s*$/m, "R1-TEST-001: docs.yml must run zensical build --clean --strict");
+      for (const [wfName, wfBody] of [["ci.yml", ciWorkflow], ["docs.yml", docsWorkflow], ["release-tag.yml", releaseWorkflow]]) {
+        const usesLines = [...wfBody.matchAll(/^\s*uses:\s*(\S+)/gm)].map((m) => m[1]);
+        assert.ok(usesLines.length > 0, `SEC-010: expected uses: refs in ${wfName}`);
+        for (const ref of usesLines) {
+          assert.match(ref, /@[0-9a-f]{40}$/, `SEC-010: workflow action '${ref}' in ${wfName} must be pinned to a 40-hex commit SHA`);
+        }
+      }
 
       // Day-1 raw-final RF-SCRIPT-001: stale global mcp_config.json-only profile reports PARTIAL INSTALLATION + Next step (not DISABLED)
       const rfProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-rf-status-"));

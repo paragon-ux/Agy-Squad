@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSubagentSpec, superviseSwarmLayeredLead } from "../mcp/briefs.mjs";
-import { handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
+import { findScopeOverlaps, handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap } from "../mcp/planner.mjs";
 
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -563,7 +563,7 @@ try {
     includeIntegrityAuditor: false
   }, root);
   assert.deepEqual(defaultScopePlan.topology.scopeOverlaps, []);
-  assert.ok(defaultScopePlan.workers[0].specialists[0].swarmAdd.brief.includes("Work within these files or directories:\n- ."));
+  assert.ok(defaultScopePlan.workers[0].specialists[0].swarmAdd.brief.includes("Scope:\n- ."));
   assert.throws(() => planSquadCohort({
     task: "Invalid empty scopeFiles",
     scopeFiles: [],
@@ -766,17 +766,22 @@ try {
     assert.equal(overridePlan.workers[0].squadId, "alpha");
     assert.match(
       inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief,
-      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
+      /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/
     );
     assert.doesNotMatch(inlineSwarmLeadPlan.workers[0].lead.swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
     assert.match(
       overridePlan.workers[0].specialists[0].swarmAdd.brief,
-      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
+      /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/
     );
     assert.doesNotMatch(overridePlan.workers[0].specialists[0].swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
-      /native search\/read tools \(grep_search\/find_by_name \+ bounded read_file slices on large files\)/
+      /native search\/read \(grep_search\/find_by_name \+ bounded read_file\)/
+    );
+    assert.doesNotMatch(
+      overridePlan.integrityAuditPlan[0].swarmAdd.brief,
+      /; emit 'Target Squad: <id>'/,
+      "OPT-BRIEF-02: default auditor brief must omit duplicate verdict emit clause already in Deliverable"
     );
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
@@ -1126,12 +1131,12 @@ try {
     );
     assert.deepEqual(compPlan.topology.scopeOverlaps, [], "SD2-SKILL-01: comparative-research-manifest specialists must be readOnly: true");
     const compLeadBrief = compPlan.workers[0].lead.swarmAdd.brief;
-    assert.match(compLeadBrief, /read_board\{since\|seqs\}/);
+    assert.match(compLeadBrief, /read_board\{since:/);
     assert.match(compLeadBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
     assert.match(compLeadBrief, /agy-context transcript/);
     assert.match(compLeadBrief, /Content Verdict/);
-    assert.match(compLeadBrief, /post <=500B READY/);
-    assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line/);
+    assert.match(compLeadBrief, /post_message <= 500 UTF-8 bytes.*READY/);
+    assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line|deterministic scratch teardown/);
 
     const selfDiagDecoupledPlan = planSquadCohort(
       { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" },
@@ -1281,7 +1286,11 @@ try {
     assert.doesNotMatch(layeredLeadBrief, /kill finished workers/);
     assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
     assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} initially, then since: <last_read_seq>\./);
-    assert.match(layeredLeadBrief, /follow Board scope above/);
+    assert.match(
+      layeredLeadBrief,
+      /Park via swarm_wait for receipts; follow Board scope above/,
+      "Layered swarm lead must retain pre-receipt swarm_wait distinct from post-handoff Then swarm_wait"
+    );
     assert.ok(
       Buffer.byteLength(superviseSwarmLayeredLead, "utf8") <= 600,
       `OPT-BRIEF-03: expected compact superviseSwarmLayeredLead <= 600 B, got ${Buffer.byteLength(superviseSwarmLayeredLead, "utf8")} B`
@@ -1580,6 +1589,35 @@ try {
       /^Top-level 'inherit' passed, but worker\/lead specs pin explicit models/,
       `SVC-002: expected explicit inherit caveat, got: ${inheritWithWorkerModel.modelProvenance.caveat}`
     );
+
+    // Batch B OPT-IO-08: sorted prefix sweep handles '-' (45) / '.' (46) < '/' (47) ordering and scales cleanly at W=32
+    const asciiTrapOverlaps = findScopeOverlaps([
+      { label: "w0", scopeFiles: ["src"], squadId: "s", roleType: "specialist" },
+      { label: "w1", scopeFiles: ["src-extra"], squadId: "s", roleType: "specialist" },
+      { label: "w2", scopeFiles: ["src.bak"], squadId: "s", roleType: "specialist" },
+      { label: "w3", scopeFiles: ["src/a.js"], squadId: "s", roleType: "specialist" },
+      { label: "w4", scopeFiles: ["src/a.js"], squadId: "s", roleType: "specialist" }
+    ]);
+    assert.deepEqual(
+      asciiTrapOverlaps.map(o => `${o.workerA}|${o.workerB}|${o.pairs.join(",")}`),
+      ["w0|w3|src <-> src/a.js", "w0|w4|src <-> src/a.js", "w3|w4|src/a.js <-> src/a.js"],
+      "OPT-IO-08: sorted prefix sweep must not lose src <-> src/a.js across src-extra/src.bak"
+    );
+    const wideEntries = Array.from({ length: 32 }, (_, i) => ({
+      label: `w-${i}`,
+      scopeFiles: [`pkg-${i}/a.js`, `pkg-${i}/b.js`, `pkg-${i}/sub/c.js`],
+      squadId: "wide",
+      roleType: "specialist"
+    }));
+    wideEntries[31].scopeFiles.push("pkg-0/sub");
+    const tSweep = performance.now();
+    const wideOverlaps = findScopeOverlaps(wideEntries);
+    const sweepMs = performance.now() - tSweep;
+    assert.equal(wideOverlaps.length, 1);
+    assert.equal(wideOverlaps[0].workerA, "w-0");
+    assert.equal(wideOverlaps[0].workerB, "w-31");
+    assert.deepEqual(wideOverlaps[0].pairs, ["pkg-0/sub/c.js <-> pkg-0/sub"]);
+    assert.ok(sweepMs < 200, `OPT-IO-08: 32-worker prefix sweep took ${sweepMs.toFixed(1)} ms (>= 200 ms)`);
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

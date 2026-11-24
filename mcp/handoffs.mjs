@@ -5,6 +5,7 @@ import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, par
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:/;
 const SWARM_MENTION_RESERVE_BYTES = 33; // "@<24-char-name> [done] " prefix headroom on /swarm
 const MIN_OBSERVATION_BYTES = 16; // minimum observation reserve alongside PARTIAL prefix + @24-char mention
 
@@ -13,6 +14,7 @@ function isValidRelativePrefix(prefix) {
     typeof prefix === "string" &&
     prefix.length > 0 &&
     !CONTROL_CHAR_RE.test(prefix) &&
+    !WINDOWS_DRIVE_RE.test(prefix) &&
     !prefix.includes("\\") &&
     !path.isAbsolute(prefix) &&
     !prefix.split("/").some(part => !part || part === "." || part === "..")
@@ -220,7 +222,8 @@ function isExpectedRealPath(expected, actual) {
   return false;
 }
 
-function resolveCanonicalRoot(root) {
+function resolveCanonicalRoot(root, verifiedDirs) {
+  if (verifiedDirs?.has(root)) return root;
   if (typeof root !== "string" || !root.trim()) {
     throw new Error("Expected a valid workspace directory path.");
   }
@@ -228,6 +231,7 @@ function resolveCanonicalRoot(root) {
   if (!fs.lstatSync(realRoot).isDirectory()) {
     throw new Error(`Expected workspace root to be a directory: ${root}`);
   }
+  verifiedDirs?.add(realRoot);
   return realRoot;
 }
 
@@ -268,6 +272,7 @@ function workspacePath(root, relative, verifiedDirs) {
     typeof relative !== "string" ||
     !relative ||
     CONTROL_CHAR_RE.test(relative) ||
+    WINDOWS_DRIVE_RE.test(relative) ||
     relative.includes("\\") ||
     path.isAbsolute(relative) ||
     relative.split("/").some(part => !part || part === "." || part === "..")
@@ -316,24 +321,64 @@ function readOpenedFileWithStat(file, relative = file) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
     }
-    const chunks = [];
-    const chunk = Buffer.allocUnsafe(65536);
-    while (true) {
-      const n = fs.readSync(fd, chunk, 0, chunk.length, null);
-      if (n <= 0) break;
-      chunks.push(Buffer.from(chunk.subarray(0, n)));
+    const expectedSize = stat.size;
+    let bytes;
+    if (expectedSize >= 0 && expectedSize <= 64 * 1024 * 1024) {
+      const buf = Buffer.allocUnsafe(expectedSize + 1);
+      let offset = 0;
+      while (offset < buf.length) {
+        const n = fs.readSync(fd, buf, offset, buf.length - offset, null);
+        if (n <= 0) break;
+        offset += n;
+      }
+      if (offset < buf.length) {
+        bytes = buf.subarray(0, offset);
+      } else {
+        const chunks = [buf];
+        const extra = Buffer.allocUnsafe(65536);
+        while (true) {
+          const n = fs.readSync(fd, extra, 0, extra.length, null);
+          if (n <= 0) break;
+          chunks.push(Buffer.from(extra.subarray(0, n)));
+        }
+        bytes = Buffer.concat(chunks);
+      }
+    } else {
+      const chunks = [];
+      const chunk = Buffer.allocUnsafe(65536);
+      while (true) {
+        const n = fs.readSync(fd, chunk, 0, chunk.length, null);
+        if (n <= 0) break;
+        chunks.push(Buffer.from(chunk.subarray(0, n)));
+      }
+      bytes = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
     }
-    const bytes = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
     return { bytes, stat, realPath };
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function readRegularFileSafe(filePath, displayPath = filePath) {
+function assertContainedPath(canonicalRoot, targetPath, errorMessage) {
+  const rel = path.relative(canonicalRoot, targetPath);
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error(errorMessage);
+  }
+}
+
+function readRegularFileSafe(filePath, displayPath = filePath, options = {}) {
   const resolved = path.resolve(filePath);
   const canonicalTarget = path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
-  return readOpenedFileWithStat(canonicalTarget, displayPath).bytes;
+  const allowedRoot = options?.allowedRoot !== undefined ? resolveCanonicalRoot(options.allowedRoot) : undefined;
+  const containmentMessage = options?.containmentError ?? `Path must stay inside the workspace: ${displayPath}`;
+  if (allowedRoot !== undefined) {
+    assertContainedPath(allowedRoot, canonicalTarget, containmentMessage);
+  }
+  const opened = readOpenedFileWithStat(canonicalTarget, displayPath);
+  if (allowedRoot !== undefined) {
+    assertContainedPath(allowedRoot, opened.realPath, containmentMessage);
+  }
+  return opened.bytes;
 }
 
 function readOpenedFile(file, relative) {
@@ -341,7 +386,7 @@ function readOpenedFile(file, relative) {
 }
 
 function readFile(root, relative, verifiedDirs) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
@@ -355,7 +400,7 @@ function readIfPresentWithStat(root, relative, verifiedDirs) {
 }
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   if (!Array.isArray(files) || !files.length) {
     throw new Error("Specify the final files used for independent verification.");
   }
@@ -441,35 +486,40 @@ function withPredecessorLock(destination, relative, fn) {
   }
 }
 
-function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256, { sync = true } = {}) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+function publish(root, relative, contents, replace = false, verifiedDirs, expectedPredecessorSha256, { sync = true, skipExistingCheck = false } = {}) {
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   const destination = workspacePath(canonicalRoot, relative, verifiedDirs);
   const runPublish = () => {
-    let existingBytes;
-    try {
-      existingBytes = readOpenedFile(destination, relative);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    if (existingBytes !== undefined) {
-      const existingHash = sha256(existingBytes);
-      if (expectedPredecessorSha256 !== undefined && existingHash !== expectedPredecessorSha256) {
+    const directOverwrite = Boolean(replace && expectedPredecessorSha256 === undefined && skipExistingCheck);
+    if (!directOverwrite) {
+      let existingBytes;
+      try {
+        existingBytes = readOpenedFile(destination, relative);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      if (existingBytes !== undefined) {
+        if (expectedPredecessorSha256 !== undefined) {
+          const existingHash = sha256(existingBytes);
+          if (existingHash !== expectedPredecessorSha256) {
+            throw new Error(
+              `Bundle predecessor digest mismatch at '${relative}': expected '${expectedPredecessorSha256}', found '${existingHash}'.`
+            );
+          }
+        }
+        if (existingBytes.equals(contents)) return;
+        if (!replace) {
+          const err = new Error(
+            `Existing file at '${relative}' differs (SHA-256 ${sha256(existingBytes)}); pass replaceExisting: true or matching expectedPredecessorSha256 to overwrite.`
+          );
+          err.code = "EEXIST";
+          throw err;
+        }
+      } else if (expectedPredecessorSha256 !== undefined) {
         throw new Error(
-          `Bundle predecessor digest mismatch at '${relative}': expected '${expectedPredecessorSha256}', found '${existingHash}'.`
+          `Bundle predecessor digest '${expectedPredecessorSha256}' provided, but '${relative}' does not exist.`
         );
       }
-      if (existingBytes.equals(contents)) return;
-      if (!replace) {
-        const err = new Error(
-          `Existing file at '${relative}' differs (SHA-256 ${existingHash}); pass replaceExisting: true or matching expectedPredecessorSha256 to overwrite.`
-        );
-        err.code = "EEXIST";
-        throw err;
-      }
-    } else if (expectedPredecessorSha256 !== undefined) {
-      throw new Error(
-        `Bundle predecessor digest '${expectedPredecessorSha256}' provided, but '${relative}' does not exist.`
-      );
     }
     const temporary = `${destination}.${randomUUID()}.tmp`;
     const fd = fs.openSync(temporary, "wx", 0o600);
@@ -479,6 +529,10 @@ function publish(root, relative, contents, replace = false, verifiedDirs, expect
         if (sync) fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
+      }
+      if (directOverwrite) {
+        fs.renameSync(temporary, destination);
+        return;
       }
       try {
         fs.linkSync(temporary, destination);
@@ -518,8 +572,11 @@ function readEvidence(root, report, verifiedDirs) {
   return bytes;
 }
 
-function readSynthesis(root, report, verifiedDirs, { allowNonPassing = false } = {}) {
-  const bytes = readEvidence(root, report, verifiedDirs);
+function readSynthesis(root, report, verifiedDirs, { allowNonPassing = false, cachedBytes } = {}) {
+  const bytes = cachedBytes ?? readEvidence(root, report, verifiedDirs);
+  if (cachedBytes !== undefined && !bytes.toString("utf8").trim()) {
+    throw new Error(`Empty evidence report: ${report}`);
+  }
   const markdown = decodeUtf8(bytes, report);
   let verdict;
   try {
@@ -537,8 +594,11 @@ function readSynthesis(root, report, verifiedDirs, { allowNonPassing = false } =
   return { bytes, verdict };
 }
 
-function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expectedEvidenceDigest) {
-  const bytes = readEvidence(root, report, verifiedDirs);
+function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expectedEvidenceDigest, cachedBytes) {
+  const bytes = cachedBytes ?? readEvidence(root, report, verifiedDirs);
+  if (cachedBytes !== undefined && !bytes.toString("utf8").trim()) {
+    throw new Error(`Empty evidence report: ${report}`);
+  }
   const markdown = decodeUtf8(bytes, report);
   let verdict;
   try {
@@ -548,9 +608,6 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expecte
   }
   if (verdict !== "CLEAN") {
     throw new Error(`Acceptance blocked: Integrity audit verdict is ${verdict}.`);
-  }
-  if (hasContentVerdictAttempt(markdown)) {
-    throw new Error("Acceptance blocked: Integrity audit verdict is not CLEAN. (Integrity audit report must not declare a content verdict.)");
   }
   const targetSquad = parseTargetSquad(markdown);
   if (expectedSquadId && (!targetSquad || targetSquad !== expectedSquadId)) {
@@ -643,7 +700,7 @@ function listCohortSlotsIfPresent(root, cohortRelDir) {
   return [...specialistEntries.map(s => s.rel), ...slots];
 }
 
-function matchesFlatAuditTarget(root, rel, squadId, verifiedDirs, { includeOnError = true } = {}) {
+function matchesFlatAuditTarget(root, rel, squadId, verifiedDirs, { includeOnError = true, readCache } = {}) {
   let opened;
   try {
     opened = readIfPresentWithStat(root, rel, verifiedDirs);
@@ -656,32 +713,36 @@ function matchesFlatAuditTarget(root, rel, squadId, verifiedDirs, { includeOnErr
     const text = decodeUtf8(opened.bytes, rel);
     if (!text.trim()) return includeOnError;
     const declaredTarget = parseTargetSquad(text);
-    return !declaredTarget || declaredTarget === squadId;
+    const matches = !declaredTarget || declaredTarget === squadId;
+    if (matches) readCache?.set(rel, opened.bytes);
+    return matches;
   } catch {
     return includeOnError;
   }
 }
 
-function discoverAuditSlots(root, squadId, rootPrefix) {
+function discoverAuditSlots(root, squadId, rootPrefix, verifiedDirs = new Set(), readCache) {
   const scopedDir = `${rootPrefix}/squad-${encodeURIComponent(`integrity_auditor-${squadId}`)}`;
   const scopedSlots = listCohortSlotsIfPresent(root, scopedDir);
   if (scopedSlots.length > 0) return scopedSlots;
   const flatDir = `${rootPrefix}/squad-integrity_auditor`;
   const flatSlots = listCohortSlotsIfPresent(root, flatDir);
-  const verifiedDirs = new Set();
-  return flatSlots.filter(rel => matchesFlatAuditTarget(root, rel, squadId, verifiedDirs, { includeOnError: true }));
+  return flatSlots.filter(rel =>
+    matchesFlatAuditTarget(root, rel, squadId, verifiedDirs, { includeOnError: true, readCache })
+  );
 }
 
-function prepareCohortSnapshot(canonicalRoot, record, { action = "Bundling", verifiedDirs = new Set(), expectedVerdict } = {}) {
+function prepareCohortSnapshot(
+  canonicalRoot,
+  record,
+  { action = "Bundling", verifiedDirs = new Set(), expectedVerdict, skipFileRehash = false, preReadSynthesis } = {}
+) {
+  verifiedDirs.add(canonicalRoot);
   const { squadId, verifiedFiles, allowPartial = false, allowNonPassing = false } = record;
   const rootPrefix = resolveReportRoot(record);
   const assignments = inspectReports(canonicalRoot, record, verifiedDirs, { rejectLooseOnNoReport: true });
   const allowedStatuses = allowPartial ? new Set(["READY", "PARTIAL", "NO_REPORT"]) : new Set(["READY"]);
-  if (
-    assignments.some(
-      ({ status, report }, index) => !allowedStatuses.has(status) || report !== reportPath(squadId, index + 1, rootPrefix)
-    )
-  ) {
+  if (assignments.some(({ status }) => !allowedStatuses.has(status))) {
     throw new Error(
       allowPartial
         ? `${action} requires a READY, PARTIAL, or NO_REPORT handoff from each recorded specialist in its compiled slot.`
@@ -706,8 +767,15 @@ function prepareCohortSnapshot(canonicalRoot, record, { action = "Bundling", ver
   ) {
     throw new Error("Record final work inputs in verifiedFiles. The bundle hashes the loose reports separately.");
   }
-  verifyFiles(canonicalRoot, verifiedFiles, verifiedDirs);
-  const synthesisCheck = readSynthesis(canonicalRoot, synthesisSlot, verifiedDirs, { allowNonPassing });
+  if (!skipFileRehash) {
+    verifyFiles(canonicalRoot, verifiedFiles, verifiedDirs);
+  } else if (!verifiedFiles || typeof verifiedFiles !== "object" || Array.isArray(verifiedFiles) || Object.keys(verifiedFiles).length === 0) {
+    throw new Error("Specify the final files used for independent verification.");
+  }
+  const synthesisCheck = readSynthesis(canonicalRoot, synthesisSlot, verifiedDirs, {
+    allowNonPassing,
+    cachedBytes: preReadSynthesis?.slot === synthesisSlot ? preReadSynthesis.bytes : undefined
+  });
   if (expectedVerdict !== undefined && synthesisCheck.verdict !== expectedVerdict) {
     throw new Error(
       allowNonPassing
@@ -730,8 +798,9 @@ function prepareCohortSnapshot(canonicalRoot, record, { action = "Bundling", ver
   return { rootPrefix, relative, verifiedDirs, synthesisCheck, synthesis, reports, evidenceDigest };
 }
 
-function computeEvidenceDigest(root, record) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+function computeEvidenceDigest(root, record, options = {}) {
+  const verifiedDirs = options?.verifiedDirs ?? new Set();
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle or handoff record.");
   }
@@ -741,7 +810,10 @@ function computeEvidenceDigest(root, record) {
   validateSquadId(squadId);
   const { synthesis, reports, evidenceDigest } = prepareCohortSnapshot(canonicalRoot, record, {
     action: "Computing evidence digest",
-    expectedVerdict: record.verdict
+    verifiedDirs,
+    expectedVerdict: record.verdict,
+    skipFileRehash: Boolean(options?.skipFileRehash),
+    preReadSynthesis: options?.preReadSynthesis
   });
   return {
     squadId,
@@ -753,8 +825,15 @@ function computeEvidenceDigest(root, record) {
 }
 
 function ensureDirectory(root, relative, created = [], verifiedDirs) {
-  const canonicalRoot = resolveCanonicalRoot(root);
-  if (typeof relative !== "string" || CONTROL_CHAR_RE.test(relative) || relative.includes("\\")) {
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
+  if (
+    typeof relative !== "string" ||
+    !relative ||
+    CONTROL_CHAR_RE.test(relative) ||
+    WINDOWS_DRIVE_RE.test(relative) ||
+    relative.includes("\\") ||
+    path.isAbsolute(relative)
+  ) {
     throw new Error(`Invalid workspace directory: ${relative}`);
   }
   let directory = canonicalRoot;
@@ -777,7 +856,7 @@ function ensureDirectory(root, relative, created = [], verifiedDirs) {
 }
 
 function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnNoReport = false } = {}) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid handoff inspection record.");
   }
@@ -811,17 +890,19 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
   });
 }
 
-function inspectHandoffs(root, record) {
-  const canonicalRoot = resolveCanonicalRoot(root);
-  return inspectReports(canonicalRoot, record).map(({ conversationId, report, status }) => ({
+function inspectHandoffs(root, record, options = {}) {
+  const verifiedDirs = options?.verifiedDirs ?? new Set();
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
+  return inspectReports(canonicalRoot, record, verifiedDirs).map(({ conversationId, report, status }) => ({
     conversationId,
     report,
     status
   }));
 }
 
-function bundleReports(root, record) {
-  root = resolveCanonicalRoot(root);
+function bundleReports(root, record, options = {}) {
+  const verifiedDirs = options?.verifiedDirs ?? new Set();
+  root = resolveCanonicalRoot(root, verifiedDirs);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("Provide a valid bundle record.");
   }
@@ -867,7 +948,6 @@ function bundleReports(root, record) {
   if (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS") {
     throw new Error("Only independently passing cohorts are eligible for bundling.");
   }
-  const verifiedDirs = new Set();
   const {
     rootPrefix,
     relative,
@@ -896,10 +976,11 @@ function bundleReports(root, record) {
     const hasExplicitAudit =
       integrityReport !== undefined ||
       (Array.isArray(integrityAuditSlots) && integrityAuditSlots.length > 0);
+    const auditReadCache = new Map();
     if (requireIntegrityAudit || hasExplicitAudit) {
       for (const slot of integrityAuditSlots ?? []) candidateSet.add(slot);
       if (!hasExplicitAudit) {
-        for (const slot of discoverAuditSlots(root, squadId, rootPrefix)) candidateSet.add(slot);
+        for (const slot of discoverAuditSlots(root, squadId, rootPrefix, verifiedDirs, auditReadCache)) candidateSet.add(slot);
       }
     }
     const candidates = [...candidateSet];
@@ -910,7 +991,7 @@ function bundleReports(root, record) {
       throw new Error("Acceptance blocked: Mandatory integrity audit report missing. Run integrity_auditor (or audit-<squad> in /swarm) before bundling.");
     }
     integrityAudits = candidates.map(slot => {
-      const audit = readIntegrityAudit(root, slot, squadId, verifiedDirs, evidenceDigest);
+      const audit = readIntegrityAudit(root, slot, squadId, verifiedDirs, evidenceDigest, auditReadCache.get(slot));
       return {
         path: slot,
         sha256: sha256(audit.bytes),
@@ -955,8 +1036,8 @@ function bundleReports(root, record) {
   };
 }
 
-function verifyBundleInternal(root, relative, acceptedHash) {
-  const verifiedDirs = new Set();
+function verifyBundleInternal(root, relative, acceptedHash, verifiedDirs = new Set()) {
+  verifiedDirs.add(root);
   const contents = readFile(root, relative, verifiedDirs);
   const digest = sha256(contents);
   if (acceptedHash !== undefined && digest !== acceptedHash) {
@@ -1126,14 +1207,15 @@ function verifyBundleInternal(root, relative, acceptedHash) {
   };
 }
 
-function verifyBundle(root, relative, expectedSha256) {
-  const canonicalRoot = resolveCanonicalRoot(root);
-  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(canonicalRoot, relative, expectedSha256);
+function verifyBundle(root, relative, expectedSha256, options = {}) {
+  const verifiedDirs = options?.verifiedDirs ?? new Set();
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
+  const { path: p, sha256: s, auditPolicy, reports } = verifyBundleInternal(canonicalRoot, relative, expectedSha256, verifiedDirs);
   return { path: p, sha256: s, auditPolicy, reports };
 }
 
 function removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots) {
-  const verifiedDirs = new Set();
+  const verifiedDirs = new Set([canonicalRoot]);
   const removed = [];
   for (let i = 0; i < looseSnapshots.length; i += 1) {
     const snap = looseSnapshots[i];
@@ -1175,9 +1257,10 @@ function removeVerifiedLooseSnapshots(canonicalRoot, looseSnapshots) {
 }
 
 function pruneReports(root, relative, acceptedHash, options = {}) {
-  const canonicalRoot = resolveCanonicalRoot(root);
+  const verifiedDirs = options?.verifiedDirs ?? new Set();
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   if (!/^[0-9a-f]{64}$/.test(acceptedHash ?? "")) throw new Error("Pruning requires the primary's accepted bundle digest.");
-  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash);
+  const { loosePresent, looseSnapshots, retainReports } = verifyBundleInternal(canonicalRoot, relative, acceptedHash, verifiedDirs);
   if (options.keepReports || retainReports) {
     return { removed: [], retained: loosePresent };
   }
@@ -1185,8 +1268,9 @@ function pruneReports(root, relative, acceptedHash, options = {}) {
 }
 
 function verifyAndPruneBundle(root, relative, options = {}) {
-  const canonicalRoot = resolveCanonicalRoot(root);
   const opts = options && typeof options === "object" ? options : {};
+  const verifiedDirs = opts.verifiedDirs ?? new Set();
+  const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   if (
     opts.expectedSha256 !== undefined &&
     opts.acceptedHash !== undefined &&
@@ -1198,7 +1282,7 @@ function verifyAndPruneBundle(root, relative, options = {}) {
   if (typeof expectedSha256 !== "string" || !/^[0-9a-f]{64}$/.test(expectedSha256)) {
     throw new Error("Pruning requires a 64-character lowercase hex expectedSha256 bundle digest.");
   }
-  const verified = verifyBundleInternal(canonicalRoot, relative, expectedSha256);
+  const verified = verifyBundleInternal(canonicalRoot, relative, expectedSha256, verifiedDirs);
   const { path: p, sha256: s, auditPolicy, reports, loosePresent, looseSnapshots, retainReports } = verified;
   const pruned = opts.keepReports || retainReports
     ? { removed: [], retained: loosePresent }
@@ -1424,10 +1508,39 @@ function collectReportSlots(root, options = {}) {
   }
 
   const targetSlots = [...targetSlotSet];
+  const foldSlotCase = process.platform === "win32" || process.platform === "darwin";
   const foundBySlot = new Map();
   for (const { raw, real } of resolvedSources) {
-    const verifiedSrcDirs = new Set();
+    const verifiedSrcDirs = new Set([real]);
+    const cohortEntriesCache = new Map();
+    const cohortHasSlotDir = (slotRel) => {
+      const slotDir = path.posix.dirname(slotRel);
+      const cohortDir = path.posix.dirname(slotDir);
+      const slotName = path.posix.basename(slotDir);
+      let entryNames = cohortEntriesCache.get(cohortDir);
+      if (entryNames === undefined) {
+        const fullCohortDir = path.join(real, cohortDir);
+        try {
+          const st = fs.lstatSync(fullCohortDir);
+          if (st.isSymbolicLink() || !st.isDirectory()) {
+            entryNames = "probe";
+          } else {
+            const names = fs.readdirSync(fullCohortDir);
+            entryNames = new Set(foldSlotCase ? names.map(name => name.toLowerCase()) : names);
+          }
+        } catch (error) {
+          if (error.code === "ENOENT" || error.code === "ENOTDIR") {
+            entryNames = null;
+          } else {
+            entryNames = "probe";
+          }
+        }
+        cohortEntriesCache.set(cohortDir, entryNames);
+      }
+      return entryNames === "probe" || (entryNames !== null && entryNames.has(foldSlotCase ? slotName.toLowerCase() : slotName));
+    };
     for (const slotRel of targetSlots) {
+      if (!cohortHasSlotDir(slotRel)) continue;
       const opened = readIfPresentWithStat(real, slotRel, verifiedSrcDirs);
       if (!opened) continue;
       const text = decodeUtf8(opened.bytes, slotRel);
@@ -1446,7 +1559,7 @@ function collectReportSlots(root, options = {}) {
     }
   }
 
-  const verifiedInheritDirs = new Set();
+  const verifiedInheritDirs = new Set([root]);
   const missing = targetSlots.filter(slotRel => {
     if (foundBySlot.has(slotRel)) return false;
     if (inheritSlotSet.has(slotRel)) {
@@ -1464,7 +1577,7 @@ function collectReportSlots(root, options = {}) {
     throw new Error(`Missing expected report slot(s) across worktrees: ${missing.join(", ")}`);
   }
 
-  const verifiedDestDirs = new Set();
+  const verifiedDestDirs = new Set([root]);
   const pendingActions = [];
   for (const [slotRel, entry] of foundBySlot.entries()) {
     assertNoSymlinkedAncestors(root, slotRel, verifiedDestDirs);
@@ -1500,7 +1613,7 @@ function collectReportSlots(root, options = {}) {
     }
     if (!dryRun) {
       ensureDirectory(root, path.posix.dirname(slotRel), [], verifiedDestDirs);
-      publish(root, slotRel, entry.bytes, true, verifiedDestDirs, undefined, { sync: false });
+      publish(root, slotRel, entry.bytes, true, verifiedDestDirs, undefined, { sync: false, skipExistingCheck: true });
     }
     collected.push({
       slot: slotRel,
@@ -1527,7 +1640,7 @@ function isPlainObject(value) {
   return proto === Object.prototype || proto === null;
 }
 
-function hydratePlanForBundleInit(plan, fallbackRoot) {
+function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
   if (
     isPlainObject(plan) &&
     plan.includeIntegrityAuditor !== undefined &&
@@ -1538,11 +1651,30 @@ function hydratePlanForBundleInit(plan, fallbackRoot) {
   if (!isPlainObject(plan) || plan.bundleRecordTemplates !== undefined || !Array.isArray(plan.workers)) {
     return plan;
   }
+  const workerList = plan.workers.filter(w => w && typeof w === "object" && typeof w.squadId === "string");
+  let targetWorkers = workerList;
+  if (selectedSquadId !== undefined) {
+    const matched = workerList.filter(w => w.squadId === selectedSquadId);
+    if (matched.length > 0) {
+      targetWorkers = matched;
+    } else {
+      return {
+        ...plan,
+        bundleRecordTemplates: Object.fromEntries(workerList.map(w => [w.squadId, null])),
+        ...(plan.provenanceScaffold === undefined ? { provenanceScaffold: { entries: [] } } : {})
+      };
+    }
+  } else if (workerList.length !== 1) {
+    return {
+      ...plan,
+      bundleRecordTemplates: Object.fromEntries(workerList.map(w => [w.squadId, null])),
+      ...(plan.provenanceScaffold === undefined ? { provenanceScaffold: { entries: [] } } : {})
+    };
+  }
   const templates = Object.create(null);
   const entries = [];
   const auditPlan = Array.isArray(plan.integrityAuditPlan) ? plan.integrityAuditPlan : [];
-  for (const w of plan.workers) {
-    if (!w || typeof w !== "object" || typeof w.squadId !== "string") continue;
+  for (const w of targetWorkers) {
     const id = w.squadId;
     const specialists = Array.isArray(w.specialists) ? w.specialists : [];
     const assignments = [];
@@ -1583,10 +1715,11 @@ function hydratePlanForBundleInit(plan, fallbackRoot) {
 }
 
 function buildBundleRecordInit(root, options = {}) {
-  root = resolveCanonicalRoot(root);
   if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
   }
+  const verifiedDirs = options.verifiedDirs ?? new Set();
+  root = resolveCanonicalRoot(root, verifiedDirs);
   const {
     plan: rawPlan,
     provenance,
@@ -1598,7 +1731,8 @@ function buildBundleRecordInit(root, options = {}) {
     handoffs,
     allowUnaudited = false,
     allowNonPassing = false,
-    allowPartial = false
+    allowPartial = false,
+    onLeadRead
   } = options;
 
   if (typeof allowUnaudited !== "boolean") {
@@ -1613,7 +1747,7 @@ function buildBundleRecordInit(root, options = {}) {
   if (!isPlainObject(rawPlan)) {
     throw new Error("Provide a valid squad_planner JSON object.");
   }
-  const plan = hydratePlanForBundleInit(rawPlan, root);
+  const plan = hydratePlanForBundleInit(rawPlan, root, squadId);
   if (!isPlainObject(idMap)) {
     throw new Error("idMap must be a plain object mapping worker names to IDs.");
   }
@@ -1703,14 +1837,14 @@ function buildBundleRecordInit(root, options = {}) {
   }
   let verifiedFiles = {};
   if (files.length > 0) {
-    verifiedFiles = fingerprint(root, files);
+    verifiedFiles = fingerprint(root, files, verifiedDirs);
   } else if (
     template.verifiedFiles &&
     typeof template.verifiedFiles === "object" &&
     !Array.isArray(template.verifiedFiles) &&
     Object.keys(template.verifiedFiles).length > 0
   ) {
-    verifiedFiles = fingerprint(root, Object.keys(template.verifiedFiles));
+    verifiedFiles = fingerprint(root, Object.keys(template.verifiedFiles), verifiedDirs);
   }
 
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
@@ -1719,8 +1853,9 @@ function buildBundleRecordInit(root, options = {}) {
     resolvedVerdict = verdict;
   } else {
     const leadSlot = reportPath(selectedSquadId, undefined, resolvedReportRoot);
-    const leadOpened = readIfPresentWithStat(root, leadSlot, new Set());
+    const leadOpened = readIfPresentWithStat(root, leadSlot, verifiedDirs);
     if (leadOpened) {
+      onLeadRead?.({ slot: leadSlot, bytes: leadOpened.bytes });
       const leadText = decodeUtf8(leadOpened.bytes, leadSlot);
       if (leadText.trim()) {
         try {
