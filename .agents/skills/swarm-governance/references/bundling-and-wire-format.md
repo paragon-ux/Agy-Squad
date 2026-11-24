@@ -24,8 +24,8 @@ Reference for [`SKILL.md`](../SKILL.md).
 ## Dual-Path Trace Inspection
 
 - **Standalone native (`agy-context` absent):** Single-pass batch read of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` (+ `transcript_full.jsonl` if `truncated_fields` set), matching child `conversationId`s (`subagent`) or Step 0/1 `sender=<coordId>` + `@<workerName>` (`/swarm`). Never copy raw JSONL into `scratch/` or poll step-by-step.
-- **Optional `Agy-Context-Saver` installed:** Single-pass `agy-context transcript list --parent <id> --lineage`, `query --id <id> --summary`, or `read --id <id> --last-turns 10`. If restricted, extract a sanitized index before waking `audit-<id>`:
-  - `agy-context transcript export --parent <coord-uuid> --sanitized --out scratch/agy-squad/transcript-index-<id>.md` (or `query --id <uuid> --roles assistant --include-tools --limit 50` + `step` on `ERROR`; never rely only on `--roles error`).
+- **Optional `Agy-Context-Saver` installed:** Single unchained `agy-context transcript` commands (read-only `|` stdin pipes such as `rg`/`grep`/`head`/`tail`/`jq` allowed; no `&&` or `;`): discover via `list --parent <id> --json` or `health --id u1,u2 --json`, then audit tool traces in parallel via `query --id <uuid> --summary --include-tools --full` (or `--field tool_calls|tool_args`), `read --id <uuid> --full`, and `step <N|N-M> --id <uuid> --full` (use `--out <path>` if raw output exceeds `9 KB`). If restricted, extract a sanitized index before waking `audit-<id>`:
+  - `agy-context transcript export --parent <coord-uuid> --sanitized --out scratch/agy-squad/transcript-index-<id>.md` (or `query --id <uuid> --roles assistant --include-tools --full --limit 50` + `step --id <uuid> --full` on `ERROR`; never rely only on `--roles error`).
 - **Fail closed:** Workspace re-runs alone never justify `CLEAN`. Emit `INTEGRITY VIOLATION` if traces cannot be verified via the active environment's path or tampering/fabrication is found.
 
 ## Bundle Record Schema and CLI

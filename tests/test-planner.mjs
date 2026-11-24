@@ -1123,6 +1123,9 @@ try {
     assert.match(swarmAuditLeadSpec.Prompt, /Target Squad: <id>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
+    assert.match(swarmAuditLeadSpec.Prompt, /read-only '\|' pipes/);
+    assert.match(swarmAuditLeadSpec.Prompt, /query --id <uuid> --summary --include-tools --full/);
+    assert.match(swarmAuditLeadSpec.Prompt, /read\|step --id <uuid> --full/);
 
     // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and /swarm lead wording
     const compPlan = planSquadCohort(
@@ -1132,11 +1135,16 @@ try {
     assert.deepEqual(compPlan.topology.scopeOverlaps, [], "SD2-SKILL-01: comparative-research-manifest specialists must be readOnly: true");
     const compLeadBrief = compPlan.workers[0].lead.swarmAdd.brief;
     assert.match(compLeadBrief, /read_board\{since:/);
-    assert.match(compLeadBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
-    assert.match(compLeadBrief, /agy-context transcript/);
+    assert.doesNotMatch(compLeadBrief, /batch-read traces|agy-context transcript|transcript\.jsonl/);
+    assert.match(compLeadBrief, /content only; no trace forensics/);
     assert.match(compLeadBrief, /Content Verdict/);
     assert.match(compLeadBrief, /post_message <= 500 UTF-8 bytes.*READY/);
     assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line|deterministic scratch teardown/);
+    const compAuditBrief = compPlan.integrityAuditPlan[0].swarmAdd.brief;
+    assert.match(compAuditBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
+    assert.match(compAuditBrief, /agy-context transcript/);
+    assert.match(compAuditBrief, /query --id <uuid> --summary --include-tools --full/);
+    assert.match(compAuditBrief, /read-only '\|' pipes/);
 
     const selfDiagDecoupledPlan = planSquadCohort(
       { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" },

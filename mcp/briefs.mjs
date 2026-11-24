@@ -17,17 +17,17 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 
 const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file)";
 const TRANSCRIPT_FORENSICS_BASE =
-  "single unchained 'agy-context transcript' if installed, else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl";
+  "if agy-context is installed: single unchained 'agy-context transcript' (read-only '|' pipes ok; no &&/;): 'list --parent <coordId> --json' or 'health --id u1,u2 --json' -> parallel 'query --id <uuid> --summary --include-tools --full' / 'read|step --id <uuid> --full' (--out <path> if >9 KB); else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (+ transcript_full.jsonl)";
 const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [
   "Map conversationId->slot in shared workspace; yield via Reactive Wakeup, reconcile 1 receipt/slot; at 10m checkpoint operator checks /agents (stop own children only).",
-  `Squad Lead Patrol & Alignment Gate: reject ungrounded claims; batch-read traces (${TRANSCRIPT_FORENSICS_BASE}) and verify via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
+  `Squad Lead Patrol & Alignment Gate: reject ungrounded claims; verify specialist reports and cited files/checks via ${NATIVE_READ_TOOLS} (content only; no trace forensics); recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
   "Park via swarm_wait for receipts; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50); reconcile 1 receipt/slot; on resume, relay plain resume to specialists.",
-  `Squad Lead Patrol & Alignment Gate: verify swarm status, batch-read traces (${TRANSCRIPT_FORENSICS_SWARM}), and artifacts via ${NATIVE_READ_TOOLS}; recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
+  `Squad Lead Patrol & Alignment Gate: verify swarm status, specialist reports, and cited files/checks via ${NATIVE_READ_TOOLS} (content only; no trace forensics); recheck changed inputs, PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
