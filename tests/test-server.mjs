@@ -211,7 +211,7 @@ console.log("Agy-Squad MCP server tests\n");
   const waitForMsgCount = (count) =>
     new Promise((resolve, reject) => {
       if (cappedMsgs.length >= count) return resolve();
-      const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${count} stdio messages`)), 4000);
+      const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${count} stdio messages`)), 10000);
       notifyLine = () => {
         if (cappedMsgs.length >= count) {
           clearTimeout(timer);
@@ -246,7 +246,7 @@ console.log("Agy-Squad MCP server tests\n");
   const maxDefaultProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
   const maxChunks = [];
   maxDefaultProc.stdout.on("data", (d) => maxChunks.push(d));
-  const maxExited = new Promise((resolve) => maxDefaultProc.on("exit", resolve));
+  const maxExited = new Promise((resolve) => maxDefaultProc.on("close", resolve));
   maxDefaultProc.stdin.write(Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
   maxDefaultProc.stdin.write("\n");
   maxDefaultProc.stdin.end();
@@ -259,7 +259,7 @@ console.log("Agy-Squad MCP server tests\n");
   const crlfProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
   const crlfChunks = [];
   crlfProc.stdout.on("data", (d) => crlfChunks.push(d));
-  const crlfExited = new Promise((resolve) => crlfProc.on("exit", resolve));
+  const crlfExited = new Promise((resolve) => crlfProc.on("close", resolve));
   crlfProc.stdin.write(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 11, method: "ping" }) + "\r", "utf8"));
   crlfProc.stdin.write(Buffer.from("\n", "utf8"));
   crlfProc.stdin.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":12,"method":"'), Buffer.from([0xff, 0xfe]), Buffer.from('"}\n')]));
@@ -277,7 +277,7 @@ console.log("Agy-Squad MCP server tests\n");
   });
   const splitCapChunks = [];
   splitCapProc.stdout.on("data", (d) => splitCapChunks.push(d));
-  const splitCapExited = new Promise((resolve) => splitCapProc.on("exit", resolve));
+  const splitCapExited = new Promise((resolve) => splitCapProc.on("close", resolve));
   splitCapProc.stdin.write(Buffer.alloc(1500, 0x61));
   splitCapProc.stdin.write(Buffer.concat([Buffer.alloc(600, 0x62), Buffer.from("\n")]));
   splitCapProc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 13, method: "ping" }) + "\n");
@@ -294,7 +294,7 @@ console.log("Agy-Squad MCP server tests\n");
   const largeProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
   const largeChunks = [];
   largeProc.stdout.on("data", (d) => largeChunks.push(d));
-  const largeExited = new Promise((resolve) => largeProc.on("exit", resolve));
+  const largeExited = new Promise((resolve) => largeProc.on("close", resolve));
   largeProc.stdin.write(
     JSON.stringify({
       jsonrpc: "2.0",

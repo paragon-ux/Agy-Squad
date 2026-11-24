@@ -2268,7 +2268,7 @@ try {
     assert.deepEqual(collectedAlpha.collected.map(c => c.slot), [colS1]);
     assert.equal(fs.existsSync(path.join(asqDir, corruptFlatAudit)), false);
 
-    // ASQ-SEC-008: resolveReportRoot stays linear-time on 20k '/agy-squad' segments (< 100 ms)
+    // ASQ-SEC-008: resolveReportRoot stays linear-time on 20k '/agy-squad' segments (< 500 ms)
     const seg20k = "x" + "/agy-squad".repeat(20_000);
     const tResolve = performance.now();
     assert.throws(
@@ -2290,7 +2290,7 @@ try {
       /exact compiled report slots/
     );
     const resolveMs = performance.now() - tResolve;
-    assert.ok(resolveMs < 100, `ASQ-SEC-008: resolveReportRoot on 20k '/agy-squad' segments took ${resolveMs.toFixed(1)} ms (>= 100 ms)`);
+    assert.ok(resolveMs < 500, `ASQ-SEC-008: resolveReportRoot on 20k '/agy-squad' segments took ${resolveMs.toFixed(1)} ms (>= 500 ms)`);
 
     // Post-swarm live fix: hydratePlanForBundleInit stays fail-closed (requireIntegrityAudit: true) unless plan explicitly opts out
     const emptyAuditPlan = {

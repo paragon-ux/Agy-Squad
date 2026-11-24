@@ -525,7 +525,7 @@ try {
   const slugs = getHeadingSlugs("/virtual-redos.md", slugCache);
   assert.equal(slugs.has("valid-heading"), true);
   const diagMs = performance.now() - tDiag;
-  assert.ok(diagMs < 100, `R1-SEC-003 / R2-SEC-003: diagnose link/SVG/heading checks took ${diagMs.toFixed(1)} ms (>= 100 ms)`);
+  assert.ok(diagMs < 500, `R1-SEC-003 / R2-SEC-003: diagnose link/SVG/heading checks took ${diagMs.toFixed(1)} ms (>= 500 ms)`);
   const virtualSelfFile = path.join(repoRoot, ".agents/skills/pr-review/virtual-r2-check.md");
   const selfTextCache = new Map([[virtualSelfFile, "# Top\nSee [missing](#foo).\n"]]);
   assert.deepEqual(

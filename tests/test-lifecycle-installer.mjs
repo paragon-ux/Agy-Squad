@@ -1026,7 +1026,7 @@ try {
         assert.equal(fs.existsSync(installed), false);
       }
     } finally {
-      fs.rmSync(testRoot, { recursive: true, force: true });
+      fs.rmSync(testRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }
 
