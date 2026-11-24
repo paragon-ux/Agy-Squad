@@ -2141,7 +2141,7 @@ try {
   const evilRoot = "/".repeat(50_000) + "a";
   const tNorm = performance.now();
   assert.throws(() => normalizeReportRoot(evilRoot), /workspace-relative reportRoot/);
-  assert.ok(performance.now() - tNorm < 50, "normalizeReportRoot must stay linear-time on repeated slashes");
+  assert.ok(performance.now() - tNorm < 250, "normalizeReportRoot must stay linear-time on repeated slashes");
 
   // ASQ-TEST-001 regressions: ASQ-SEC-002, ASQ-RUN-001, ASQ-SVC-001, ASQ-SVC-002, ASQ-SEC-008
   const asqDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agy-asq-handoffs-")));

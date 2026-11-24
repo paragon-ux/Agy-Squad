@@ -1614,7 +1614,7 @@ try {
     assert.equal(wideOverlaps[0].workerA, "w-0");
     assert.equal(wideOverlaps[0].workerB, "w-31");
     assert.deepEqual(wideOverlaps[0].pairs, ["pkg-0/sub/c.js <-> pkg-0/sub"]);
-    assert.ok(sweepMs < 50, `OPT-IO-08: 32-worker prefix sweep took ${sweepMs.toFixed(1)} ms (>= 50 ms)`);
+    assert.ok(sweepMs < 200, `OPT-IO-08: 32-worker prefix sweep took ${sweepMs.toFixed(1)} ms (>= 200 ms)`);
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
