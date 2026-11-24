@@ -13,6 +13,8 @@ Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/sw
 | **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
 | **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
 
+- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, pass `--no-integrity` (`includeIntegrityAuditor: false`) and `--allow-unaudited` to skip Stage 2 `audit-*` trace ceremony while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
+
 ## Planner and Dispatch Commands
 
 Run via MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI:
@@ -46,3 +48,9 @@ agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
 3. Post single-line `[done] <summary>` (no `@`) before pausing `waiting` workers so `monitor` cron stops.
 4. **Top-down resume:** Resume paused swarms strictly top-down (**coordinator -> leads -> workers** layered; **coordinator -> workers** flat) via `post_message` with a plain prompt (`resume your assigned work from where you left off`; never tell unfinished workers to jump straight to posting reports), and re-emit verbatim `open_board` on its own line (`occupiedWorkerNames` if adding workers; fresh chat between major waves).
 5. On close: collect worktrees + verify bundles, post `[done]`, `swarm{action: "kill"}` workers + `monitor`, pass [Section 5](../SKILL.md#5-runtime-closure-checklist-pre-handoff-gate).
+
+## Deliverable-First Closing
+
+- Governance (`verdict`, `bundle`, `audit-*`, `finalize`, Section 5 closure) verifies the work; it is never a substitute for the user's deliverable.
+- For research, analysis, review, or architecture swarms (especially multi-squad cohorts whose `lead/report.md` files sit in separate `scratch/` folders), synthesize all verified squad reports into one complete user-facing deliverable (an Antigravity artifact for substantial reports, or directly in chat for short tasks) integrating reconciled findings, citations/URLs, cross-squad trade-offs, and prioritized recommendations.
+- Lead the final reply with the deliverable (or direct link to the synthesized artifact) and collapse verdicts, bundle SHA-256 digests, pruned counts, and Section 5 closure into a compact verification footer. Never reply with governance telemetry alone.

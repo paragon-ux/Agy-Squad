@@ -150,7 +150,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     deliverable.includes("Integrity Verdict:");
   const auditEmitClause = deliverableHasAuditFields
     ? ""
-    : "; emit 'Target Squad: <id>', 'Evidence Digest: <sha256>', 'Integrity Verdict: CLEAN | INTEGRITY VIOLATION'";
+    : "; emit 'Target Squad: <id>', 'Evidence Digest: <sha256>', 'Integrity Verdict: CLEAN | INTEGRITY VIOLATION' (plain text, no backticks)";
   const alignmentLine = isIntegrityAuditor
     ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Batch-check traces (${traceForensics}${isSwarm ? "; read_board/status verify handoffs/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered${auditEmitClause}.`
     : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed checks or file:line; use ${NATIVE_READ_TOOLS}. Retry when inputs change/transient; else partial+blocker.`;

@@ -467,6 +467,11 @@ try {
   assert.doesNotMatch(fullSkillText, /recommendation on Agy-Squad/i, "UX-SQ-001: full-review must target the active repository");
   assert.match(reportTplText, /\| Repository \| `<owner\/repo>` \|/, "UX-SQ-001: report-template.md must use <owner/repo>");
   assert.doesNotMatch(swarmSkillText, /\b(?:antislop|permissioned-github)\b/i, "UX-SQ-011: swarm-governance/SKILL.md must not front-load third-party skills");
+  const swarmDocText = fs.readFileSync(path.join(repoRoot, "docs/skills/swarm-governance.md"), "utf8");
+  for (const [label, txt] of [["swarm-governance/SKILL.md", swarmSkillText], ["docs/skills/swarm-governance.md", swarmDocText]]) {
+    assert.match(txt, /Synthesize all verified `lead\/report\.md` outputs into one complete user-facing deliverable/i, `${label} must require deliverable-first synthesis in Stage 3`);
+    assert.match(txt, /--no-integrity.*--allow-unaudited/i, `${label} must document lightweight research opt-out`);
+  }
   assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
 
   const pluginMeta = JSON.parse(fs.readFileSync(path.join(repoRoot, "plugin.json"), "utf8"));

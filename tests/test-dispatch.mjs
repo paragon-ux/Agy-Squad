@@ -487,6 +487,16 @@ try {
     /sender=<coordId> \+ @<workerName>/,
     "swarm Integrity Auditor brief must explain standalone Step 0/1 worker trace matching"
   );
+  assert.match(
+    uxAuditBrief,
+    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION' \(plain text, no backticks\)/,
+    "Integrity Auditor brief must explicitly disallow backticks on verdict lines"
+  );
+  assert.match(
+    scopedAuditor[0].Prompt,
+    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION \(plain text, no backticks\)\./,
+    "Default integrity_auditor deliverable must explicitly disallow backticks on verdict lines"
+  );
   const standaloneDispatch = handleDispatchSquad(
     { squadId: "alpha", manifestPath: "swarm-manifest.json" },
     workspace
