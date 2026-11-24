@@ -1,6 +1,6 @@
 # Platform-Fit Scorecard Template (`20-platform-fit-scorecard.md`)
 
-Coordinator synthesis template for `scratch/platform-fit/<YYYY-MM-DD>-<short-sha>/20-platform-fit-scorecard.md`. Reconcile all 3 specialist reports (`10-*`, `11-*`, `12-*`), deduplicate overlapping surfaces without merging distinct atomic IDs, and enforce Gate 1 (Empirical Leverage) and Gate 2 (Invariant Parity) fail-closed before publishing.
+Coordinator synthesis template for `scratch/platform-fit/<YYYY-MM-DD>-<short-sha>/20-platform-fit-scorecard.md`. Reconcile all 3 specialist reports (`10-*`, `11-*`, `12-*`), run one `agy-context transcript health --id <s1,s2,s3> --json` call (when `agy-context` is installed) to populate `Meta-Audit Footprint` accurately, deduplicate overlapping surfaces without merging distinct atomic IDs, and enforce Gate 1 (Empirical Leverage) and Gate 2 (Invariant Parity) fail-closed before publishing.
 
 ```markdown
 # Agy-Squad Platform-Fit & Native-Differentiation Scorecard
@@ -12,9 +12,9 @@ Coordinator synthesis template for `scratch/platform-fit/<YYYY-MM-DD>-<short-sha
 | Repository / Branch / Commit | `Agy-Squad` / `<branch>` / `<sha>` (Dirty: `<yes|no>`) |
 | Run Date (UTC) | `<ISO-8601>` |
 | Platform Baseline | `00-platform-baseline.md` (`LIVE` \| `PARTIAL` \| `DEGRADED (offline)`) |
-| Telemetry Extract | `01-telemetry-extract.md` (`MEASURED: <runId>` \| `LOCAL_PROBES_ONLY`) |
-| Specialists Executed | 3 flat `invoke_subagent` (`TypeName: "self"`, `[agy-transcript-access: self-only]`, no `/swarm`) |
-| Meta-Audit Footprint | Coordinator `<turns>` turns; Specialists `<total-turns>` turns / `<KB>` KB (self-cost check) |
+| Telemetry Extract | `01-telemetry-extract.md` (`MEASURED (health + outline)` \| `MEASURED (health-only)` \| `LOCAL_PROBES_ONLY`) |
+| Specialists Executed | 3 flat `invoke_subagent` (`TypeName: "self"`, `Model: "inherit"`, `Workspace: "inherit"`, `[agy-transcript-access: self-only]`, no `/swarm`) |
+| Meta-Audit Footprint | Coordinator `<turns>` turns; Specialists `<total-turns>` turns / `<tool-calls>` tool calls / `<KB>` KB via `agy-context transcript health --id <s1,s2,s3> --json` (or `n/a (agy-context absent)`) |
 
 ## 2. Executive Strategic Verdict & 5-Axis Scorecard
 

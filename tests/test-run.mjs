@@ -486,16 +486,24 @@ try {
   const platformFitRubric = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/specialist-rubric.md"), "utf8");
   const platformFitScorecard = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/scorecard-template.md"), "utf8");
   assert.match(platformFitSkill, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i);
-  assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self"/s);
+  assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self".*Model:\s*"inherit".*Workspace:\s*"inherit"/s);
   assert.match(platformFitSkill, /no \/swarm/i);
   assert.match(platformFitSkill, /\[agy-transcript-access: self-only\]/);
   assert.match(platformFitSkill, /scratch\/platform-fit\//);
   assert.match(platformFitSkill, /Empirical Leverage Gate/);
   assert.match(platformFitSkill, /Invariant Parity Gate/);
+  assert.match(platformFitSkill, /agy-context transcript health --id <s1,s2,s3> --json/);
   assert.match(platformFitPreflight, /https:\/\/antigravity\.google\/llms\.txt/);
+  assert.match(platformFitPreflight, /curl -fsSL --max-time 10/);
+  assert.match(platformFitPreflight, /agy-customizations.*run-workflow.*swarm_pane.*plugin.*mcp-app-development/);
+  assert.match(platformFitPreflight, /Same-day baseline reuse/i);
+  assert.match(platformFitPreflight, /n\/a \(health-only\)/);
   assert.match(platformFitPreflight, /00-platform-baseline\.md/);
   assert.match(platformFitPreflight, /01-telemetry-extract\.md/);
   assert.match(platformFitPreflight, /agy-context transcript health/);
+  assert.match(platformFitRubric, /Model:\s*"inherit"/);
+  assert.match(platformFitRubric, /do NOT full-read `mcp\/\*\.mjs`/);
+  assert.match(platformFitScorecard, /agy-context transcript health --id <s1,s2,s3> --json/);
   for (const verdict of [
     "Differentiated (Retain)",
     "Align to Native Primitive",
