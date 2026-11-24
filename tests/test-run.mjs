@@ -538,6 +538,15 @@ try {
     ["#foo"],
     "R2-SCRIPT-001: broken same-file fragment link must report '#foo' without duplicating '#foo#foo'"
   );
+  // PR15-SCRIPT-002: heading slugs are scoped per call so updated virtual markdown is never shadowed by a stale global cache
+  const updatedSelfCache = new Map([[virtualSelfFile, "# Top\n## Foo\nSee [ok](#foo).\n"]]);
+  assert.deepEqual(
+    checkRelativeLinks(virtualSelfFile, updatedSelfCache.get(virtualSelfFile), updatedSelfCache, new Map()),
+    [],
+    "PR15-SCRIPT-002: updated markdown for same file path must reflect newly added #foo heading"
+  );
+  assert.equal(getHeadingSlugs(virtualSelfFile, updatedSelfCache).has("foo"), true);
+  assert.equal(getHeadingSlugs(virtualSelfFile, selfTextCache).has("foo"), false);
 
   const { matchesPackageEntry } = await import("../scripts/release-preflight.mjs");
   assert.equal(matchesPackageEntry("docs/skills/pr-review.md", "docs/**/*.md"), true);

@@ -38,7 +38,8 @@ const VERDICT_SUBJECT_NOUN_RE =
   /\b(?:verdict|check|checks|test|tests|suite|suites|gate|gates|build|lint|audit|verification|smoke|ci|run|pipeline|preflight)\b/i;
 const NEGATIVE_EXPECTATION_RE =
   /\b(?:should|must|expected\s+to|verified\s+that|ensure|confirm|assert|negative|invalid|malformed|bad|corrupt|untrusted|unauthorized|rejected)\b/i;
-const CLAUSE_BREAK_RE = /(?:[.;:!?]|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
+const CLAUSE_BREAK_RE =
+  /(?:[;!?]|\.[*_]{0,3}(?=\s|$)|(?<colon>:)[*_]{0,3}(?=\s|$)|,\s*(?:and|but|however|yet|while)\b)\s*/gi;
 const TAIL_ADJUNCT_WORD_RE =
   /^(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
 const INTEGRITY_NEGATION_RE =
@@ -51,29 +52,48 @@ function createClauseTracker(line) {
   let hasSubject = false;
   let hasNegExpectation = false;
   let hasPriorNegation = false;
+  let hasPriorClauseBreak = false;
+
+  const updateFlags = text => {
+    if (!text) return;
+    if (HISTORICAL_CONTEXT_RE.test(text)) hasHistorical = true;
+    if (CURRENT_CONTEXT_RE.test(text)) hasCurrent = true;
+    if (VERDICT_SUBJECT_NOUN_RE.test(text)) hasSubject = true;
+    if (NEGATIVE_EXPECTATION_RE.test(text)) hasNegExpectation = true;
+  };
 
   const advanceTo = toIndex => {
     const seg = line.slice(scanFrom, toIndex);
-    let lastBreakEnd = -1;
+    let pos = 0;
     CLAUSE_BREAK_RE.lastIndex = 0;
     for (let m; (m = CLAUSE_BREAK_RE.exec(seg)); ) {
-      lastBreakEnd = m.index + m[0].length;
+      const chunk = seg.slice(pos, m.index);
+      if (scanFrom === 0 && pos === 0 && m[0].startsWith(".") && /^\s*\d+$/.test(chunk)) {
+        continue;
+      }
+      updateFlags(chunk);
+      hasPriorClauseBreak = true;
+      if (m.groups?.colon) {
+        // Preserve historical/negative-expectation qualifiers across introducer colons when no current context appeared.
+        if (hasCurrent) {
+          hasHistorical = false;
+          hasNegExpectation = false;
+          hasCurrent = false;
+        }
+      } else {
+        hasHistorical = false;
+        hasCurrent = false;
+        hasSubject = false;
+        hasNegExpectation = false;
+      }
+      pos = m.index + m[0].length;
     }
-    let delta = seg;
-    if (lastBreakEnd !== -1) {
-      hasHistorical = false;
-      hasCurrent = false;
-      hasSubject = false;
-      hasNegExpectation = false;
-      hasPriorNegation = false;
-      delta = seg.slice(lastBreakEnd);
-    }
-    if (HISTORICAL_CONTEXT_RE.test(delta)) hasHistorical = true;
-    if (CURRENT_CONTEXT_RE.test(delta)) hasCurrent = true;
-    if (VERDICT_SUBJECT_NOUN_RE.test(delta)) hasSubject = true;
-    if (NEGATIVE_EXPECTATION_RE.test(delta)) hasNegExpectation = true;
+    const delta = seg.slice(pos);
+    updateFlags(delta);
     const isLineInitial =
-      !hasPriorNegation && /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
+      !hasPriorNegation &&
+      !hasPriorClauseBreak &&
+      /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?[*_]*$/.test(delta);
     return {
       isHistorical: hasHistorical && !hasCurrent,
       hasVerdictSubject: hasSubject && !hasNegExpectation,

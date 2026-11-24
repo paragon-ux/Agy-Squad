@@ -569,6 +569,17 @@ try {
   assert.equal(nestedLoaded.selectedManifest, "nested/m.json", "RUN-007: selectedManifest must use POSIX / separators");
   rejects({ squadId: "all_l1", manifestPath: "C:swarm-manifest.json" }, /drive-relative/);
 
+  // PR15-RUN-002: platform-aware case-insensitive containment on darwin/win32 and strict case sensitivity on linux
+  const { isContainedPath } = await import("../mcp/handoffs.mjs");
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo/swarm-manifest.json", true, "darwin"), true);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo", true, "darwin"), true);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo", false, "darwin"), false);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/MyRepo2/swarm-manifest.json", true, "darwin"), false);
+  assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "c:\\users\\dev\\myrepo\\swarm-manifest.json", true, "win32"), true);
+  assert.equal(isContainedPath("C:\\Users\\Dev\\MyRepo", "D:\\Users\\Dev\\MyRepo\\swarm-manifest.json", true, "win32"), false);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/myrepo/swarm-manifest.json", true, "linux"), false);
+  assert.equal(isContainedPath("/Users/dev/MyRepo", "/Users/dev/MyRepo/swarm-manifest.json", true, "linux"), true);
+
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
   fs.rmSync(testDir, { recursive: true, force: true });

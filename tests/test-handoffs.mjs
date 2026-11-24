@@ -2584,6 +2584,53 @@ try {
       /Record final work inputs in verifiedFiles/,
       "SVC-006: computeEvidenceDigest must reject integrityReport in verifiedFiles"
     );
+
+    // PR15-SVC-001: slimmed v2.0.0 subagent plan resolves workerName-only --provenance entries without repeating reportSlot
+    const slimSubagentSlot = reportPath("slim_sub", 1);
+    const slimSubagentPlan = {
+      schemaVersion: "2.0.0",
+      executionMode: "subagent",
+      workspace: asqDir,
+      includeIntegrityAuditor: false,
+      workers: [
+        {
+          squadId: "slim_sub",
+          specialists: [{ workerName: "slim-sub-spec-1", reportSlot: slimSubagentSlot }]
+        }
+      ]
+    };
+    const slimInit = buildBundleRecordInit(asqDir, {
+      plan: slimSubagentPlan,
+      provenance: {
+        entries: [{ squadId: "slim_sub", workerName: "slim-sub-spec-1", conversationId: "conv-uuid-slim-1" }]
+      },
+      squadId: "slim_sub",
+      allowUnaudited: true
+    });
+    assert.deepEqual(
+      slimInit.assignments,
+      [{ conversationId: "conv-uuid-slim-1", report: slimSubagentSlot }],
+      "PR15-SVC-001: workerName-only provenance override must populate subagent conversationId"
+    );
+
+    // PR15-RUN-003: collectReportSlots with corrupt non-UTF-8 destination conflicts without --overwrite and replaces cleanly with --overwrite
+    const corruptSlot = reportPath("corrupt_dest", 1);
+    const corruptDestPath = path.join(asqDir, corruptSlot);
+    fs.mkdirSync(path.dirname(corruptDestPath), { recursive: true });
+    fs.writeFileSync(corruptDestPath, Buffer.from([0xff, 0xfe, 0x00, 0x80]));
+    writeAtAsq(asqWt, corruptSlot, "# Clean Replacement\nVerified.\n");
+    const corruptPlan = {
+      executionMode: "swarm",
+      workers: [{ squadId: "corrupt_dest", specialists: [{ workerName: "cd-1", reportSlot: corruptSlot }] }]
+    };
+    assert.throws(
+      () => collectReportSlots(asqDir, { plan: corruptPlan, sources: [asqWt], overwrite: false }),
+      /Conflict at destination/,
+      "PR15-RUN-003: non-UTF-8 destination must surface destination conflict when overwrite=false"
+    );
+    const overwritten = collectReportSlots(asqDir, { plan: corruptPlan, sources: [asqWt], overwrite: true });
+    assert.equal(overwritten.collected.length, 1);
+    assert.equal(fs.readFileSync(corruptDestPath, "utf8"), "# Clean Replacement\nVerified.\n");
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });

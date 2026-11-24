@@ -198,7 +198,9 @@ function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
         continue;
       }
       const resolved = path.posix.normalize(path.posix.join(baseDir, cleanTarget));
-      if (resolved === ".." || resolved.startsWith("../") || !present.has(resolved)) {
+      if (resolved === ".." || resolved.startsWith("../") || !resolved.startsWith(".agents/skills/")) {
+        brokenSkillLinks.push(`${name} -> ${rawTarget} (escapes .agents/skills/: ${resolved})`);
+      } else if (!present.has(resolved)) {
         brokenSkillLinks.push(`${name} -> ${rawTarget} (absent from package: ${resolved})`);
       }
     }
@@ -272,6 +274,15 @@ function selfTest() {
     /Broken or unpackaged relative skill links:.*does-not-exist\.md/,
     "SKILL-002: broken relative link in packaged skill file must be rejected"
   );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/pr-review/SKILL.md": "See [tools](../../../docs/tools.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*escapes \.agents\/skills\//,
+    "PR15-TEST-002: relative link escaping .agents/skills/ into packed docs/ must be rejected"
+  );
   assert.equal(
     validate(fixture([]), {
       fileContents: {
@@ -297,7 +308,7 @@ function selfTest() {
   const linksMs = performance.now() - tLinks;
   assert.ok(linksMs < 500, `R1-SEC-004: verify-package link scanner took ${linksMs.toFixed(1)} ms (>= 500 ms)`);
 
-  console.log(`Package verifier self-test passed (positive + ${badCases.length + 3} negatives)`);
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 4} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

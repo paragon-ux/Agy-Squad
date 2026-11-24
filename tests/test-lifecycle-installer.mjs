@@ -551,18 +551,42 @@ try {
   assert.match(partialStatus.stdout, /PARTIAL INSTALLATION/);
   fs.writeFileSync(shimFile, savedShim, os.platform() === "win32" ? undefined : { mode: 0o755 });
 
-  // L49 / v0.2.0: skillsReady must require all 4 shipped skills (including swarm-governance & day-one-review) and lifecycle subcommands enforce strict args
-  const savedSwarmSkill = fs.readFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), "utf8");
-  fs.rmSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"));
-  assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);
-  fs.writeFileSync(path.join(pluginDir, "skills", "swarm-governance", "SKILL.md"), savedSwarmSkill);
-  assert.equal(detectExistingInstallation().details.plugin.skillsReady, true);
+  // L49 / v0.2.0 / PR15-TEST-001: skillsReady must require all 4 shipped skills using an isolated forceCopyFallback install (never mutating symlinked repo SKILL.md files)
+  const isolatedSkillsProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-skills-copy-"));
+  const savedProfileForSkills = process.env.AGY_TEST_PROFILE_DIR;
+  try {
+    process.env.AGY_TEST_PROFILE_DIR = isolatedSkillsProfile;
+    await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+    const copyPluginDir = path.join(isolatedSkillsProfile, ".gemini", "config", "plugins", "agy-squad");
+    const resolvedCopySkillsDir = fs.realpathSync(path.join(copyPluginDir, "skills"));
+    assert.ok(
+      resolvedCopySkillsDir.startsWith(fs.realpathSync(copyPluginDir) + path.sep),
+      `PR15-TEST-001: copy-mode skills dir must stay inside isolated pluginDir, got ${resolvedCopySkillsDir}`
+    );
 
-  const savedDayOneSkill = fs.readFileSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"), "utf8");
-  fs.rmSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"));
-  assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);
-  fs.writeFileSync(path.join(pluginDir, "skills", "day-one-review", "SKILL.md"), savedDayOneSkill);
-  assert.equal(detectExistingInstallation().details.plugin.skillsReady, true);
+    const swarmSkillCopy = path.join(copyPluginDir, "skills", "swarm-governance", "SKILL.md");
+    const savedSwarmSkill = fs.readFileSync(swarmSkillCopy, "utf8");
+    try {
+      fs.rmSync(swarmSkillCopy);
+      assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);
+    } finally {
+      fs.writeFileSync(swarmSkillCopy, savedSwarmSkill);
+    }
+    assert.equal(detectExistingInstallation().details.plugin.skillsReady, true);
+
+    const dayOneSkillCopy = path.join(copyPluginDir, "skills", "day-one-review", "SKILL.md");
+    const savedDayOneSkill = fs.readFileSync(dayOneSkillCopy, "utf8");
+    try {
+      fs.rmSync(dayOneSkillCopy);
+      assert.equal(detectExistingInstallation().details.plugin.skillsReady, false);
+    } finally {
+      fs.writeFileSync(dayOneSkillCopy, savedDayOneSkill);
+    }
+    assert.equal(detectExistingInstallation().details.plugin.skillsReady, true);
+  } finally {
+    process.env.AGY_TEST_PROFILE_DIR = savedProfileForSkills;
+    fs.rmSync(isolatedSkillsProfile, { recursive: true, force: true });
+  }
 
   if (os.platform() !== "win32") {
     const installedPosixShim = path.join(tmpProfile, ".gemini", "antigravity", "bin", "agy-squad");
@@ -1496,6 +1520,21 @@ try {
         /\bgh release upload[^\n]*--clobber\b/,
         "SEC-008: gh release upload must not pass --clobber"
       );
+      assert.match(
+        publishJobBlock,
+        /gh release view "\$\{RELEASE_TAG\}" --json assets --jq '\.assets\[\]\.name'/,
+        "PR15-DEP-001: publish job must inspect existing release assets before uploading"
+      );
+      assert.match(
+        publishJobBlock,
+        /gh release download "\$\{RELEASE_TAG\}" --pattern "\$\{TARBALL\}"/,
+        "PR15-DEP-001: publish job must download existing tarball asset to verify digest on retry"
+      );
+      assert.match(
+        publishJobBlock,
+        /\bsha256sum\b[\s\S]*\bsha256sum\b/,
+        "PR15-DEP-001: publish job must compare SHA-256 of existing and newly built tarballs"
+      );
 
       // Batch B SEC-009, SEC-010, TEST-004 & Day-1 R1-TEST-001: SHA-pinned workflow actions, exact npm pin, non-main cancel-in-progress, strict docs build
       const ciWorkflow = fs.readFileSync(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
@@ -1531,6 +1570,137 @@ try {
         assert.match(rfStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/, "RF-SCRIPT-001: Next step setup hint must print");
       } finally {
         fs.rmSync(rfProfile, { recursive: true, force: true });
+      }
+
+      // PR15-SEC-001: POSIX 0600 preservation across setup, restore-backups, and uninstall (plus 0600 on backups and recreated targets)
+      if (os.platform() !== "win32") {
+        const secProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-sec001-"));
+        const prevUmask = process.umask(0o022);
+        const prevSecProfile = process.env.AGY_TEST_PROFILE_DIR;
+        try {
+          process.env.AGY_TEST_PROFILE_DIR = secProfile;
+          const secCfgDir = path.join(secProfile, ".gemini", "config");
+          fs.mkdirSync(secCfgDir, { recursive: true });
+          const secMcpPath = path.join(secCfgDir, "mcp_config.json");
+          const secMcpBak = `${secMcpPath}.agy-squad.bak`;
+          const secCfgPath = path.join(secCfgDir, "config.json");
+          const secCfgBak = `${secCfgPath}.agy-squad.bak`;
+          fs.writeFileSync(
+            secMcpPath,
+            JSON.stringify(
+              {
+                mcpServers: {
+                  "agy-squad": { command: "node", args: ["old/mcp/index.js"] },
+                  "private-api": { command: "node", args: ["secret.js"], env: { API_KEY: "top-secret" } }
+                }
+              },
+              null,
+              2
+            ) + "\n",
+            { mode: 0o600 }
+          );
+          fs.writeFileSync(
+            secCfgPath,
+            JSON.stringify({ theme: "dark", plugins: { "other-plugin": { enabled: true } } }, null, 2) + "\n",
+            { mode: 0o600 }
+          );
+          fs.chmodSync(secMcpPath, 0o600);
+          fs.chmodSync(secCfgPath, 0o600);
+
+          await runAgySquadInstall({ silent: true, forceCopyFallback: true });
+          assert.equal(fs.statSync(secMcpBak).mode & 0o777, 0o600, "PR15-SEC-001: mcp_config.json.agy-squad.bak must be mode 0600");
+          assert.equal(fs.statSync(secMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: setup must preserve 0600 on live mcp_config.json");
+          assert.equal(fs.statSync(secCfgBak).mode & 0o777, 0o600, "PR15-SEC-001: config.json.agy-squad.bak must be mode 0600");
+          assert.equal(fs.statSync(secCfgPath).mode & 0o777, 0o600, "PR15-SEC-001: setup must preserve 0600 on live config.json");
+
+          // restore-backups onto existing 0600 targets must preserve 0600
+          await installerMod.runRestoreBackups({ silent: true });
+          assert.equal(fs.statSync(secMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: restore-backups must preserve 0600 on live mcp_config.json");
+          assert.equal(fs.statSync(secCfgPath).mode & 0o777, 0o600, "PR15-SEC-001: restore-backups must preserve 0600 on live config.json");
+
+          // uninstall removing agy-squad entries from 0600 files must preserve 0600
+          fs.writeFileSync(
+            secCfgPath,
+            JSON.stringify({ theme: "dark", plugins: { "agy-squad": { enabled: true }, "other-plugin": { enabled: true } } }, null, 2) + "\n",
+            { mode: 0o600 }
+          );
+          fs.chmodSync(secCfgPath, 0o600);
+          await installerMod.runUninstall({ silent: true });
+          assert.equal(fs.statSync(secMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: uninstall must preserve 0600 on live mcp_config.json");
+          assert.equal(fs.statSync(secCfgPath).mode & 0o777, 0o600, "PR15-SEC-001: uninstall must preserve 0600 on live config.json");
+        } finally {
+          process.umask(prevUmask);
+          process.env.AGY_TEST_PROFILE_DIR = prevSecProfile;
+          fs.rmSync(secProfile, { recursive: true, force: true });
+        }
+      }
+
+      // PR15-SCRIPT-001: missing live config during restore-backups retains *.agy-squad.bak whenever backup holds foreign data
+      const missingLiveProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-script001-"));
+      try {
+        const mlCfgDir = path.join(missingLiveProfile, ".gemini", "config");
+        fs.mkdirSync(mlCfgDir, { recursive: true });
+        const mlMcpPath = path.join(mlCfgDir, "mcp_config.json");
+        const mlMcpBak = `${mlMcpPath}.agy-squad.bak`;
+        const mlCfgPath = path.join(mlCfgDir, "config.json");
+        const mlCfgBak = `${mlCfgPath}.agy-squad.bak`;
+        const mlEnv = { ...process.env, AGY_TEST_PROFILE_DIR: missingLiveProfile };
+
+        // Case A: !currentData, ownBackupKeys.length === 0 + foreign data (config.json) AND ownBackupKeys.length > 0 + foreign data (mcp_config.json)
+        const cfgBakBody = JSON.stringify({ theme: "dark", plugins: { "foreign-plugin": { enabled: true } } }, null, 2) + "\n";
+        const mcpBakBody = JSON.stringify(
+          {
+            globalOpt: 1,
+            mcpServers: {
+              "agy-squad": { command: "node", args: ["old.js"] },
+              "foreign-server": { command: "node", args: ["foreign.js"] }
+            }
+          },
+          null,
+          2
+        ) + "\n";
+        fs.writeFileSync(mlCfgBak, cfgBakBody);
+        fs.writeFileSync(mlMcpBak, mcpBakBody);
+
+        const mlRes = spawnSync(process.execPath, [cli, "restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlRes.status, 0, mlRes.stderr || mlRes.stdout);
+        assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001: must not create config.json when ownBackupKeys.length === 0");
+        assert.equal(fs.existsSync(mlCfgBak), true, "PR15-SCRIPT-001: must retain config.json.agy-squad.bak when live config is missing and backup has foreign keys");
+        assert.equal(fs.readFileSync(mlCfgBak, "utf8"), cfgBakBody);
+        assert.match(mlRes.stdout, /\[WARN\] Retained backup .*config\.json\.agy-squad\.bak/);
+
+        assert.equal(fs.existsSync(mlMcpPath), true, "PR15-SCRIPT-001: scoped restore recreates mcp_config.json for agy-squad entry");
+        const recreatedMcp = JSON.parse(fs.readFileSync(mlMcpPath, "utf8"));
+        assert.deepEqual(recreatedMcp, { mcpServers: { "agy-squad": { command: "node", args: ["old.js"] } } });
+        if (os.platform() !== "win32") {
+          assert.equal(fs.statSync(mlMcpPath).mode & 0o777, 0o600, "PR15-SEC-001: recreated missing live target must use mode 0600");
+        }
+        assert.equal(fs.existsSync(mlMcpBak), true, "PR15-SCRIPT-001: must retain mcp_config.json.agy-squad.bak when live mcp_config.json is missing and backup has foreign keys");
+        assert.equal(fs.readFileSync(mlMcpBak, "utf8"), mcpBakBody);
+        assert.match(mlRes.stdout, /\[WARN\] Restored agy-squad entries to recreated .*retained backup .*mcp_config\.json\.agy-squad\.bak/);
+
+        // Case B: !currentData control where backups contain ONLY owned agy-squad data (and empty backup) -> restored and safely unlinked
+        fs.rmSync(mlMcpPath, { force: true });
+        fs.writeFileSync(mlMcpBak, JSON.stringify({ mcpServers: { "agy-squad": { command: "node", args: ["only-own.js"] } } }, null, 2) + "\n");
+        fs.writeFileSync(mlCfgBak, "{}\n");
+        const mlOwnRes = spawnSync(process.execPath, [cli, "restore-backups"], {
+          cwd: repoRoot,
+          env: mlEnv,
+          encoding: "utf8"
+        });
+        assert.equal(mlOwnRes.status, 0, mlOwnRes.stderr || mlOwnRes.stdout);
+        assert.deepEqual(JSON.parse(fs.readFileSync(mlMcpPath, "utf8")), {
+          mcpServers: { "agy-squad": { command: "node", args: ["only-own.js"] } }
+        });
+        assert.equal(fs.existsSync(mlMcpBak), false, "PR15-SCRIPT-001 control: owned-only backup must be unlinked after full scoped restore");
+        assert.equal(fs.existsSync(mlCfgPath), false, "PR15-SCRIPT-001 control: empty backup must not create config.json");
+        assert.equal(fs.existsSync(mlCfgBak), false, "PR15-SCRIPT-001 control: empty backup with zero foreign data must be cleared");
+      } finally {
+        fs.rmSync(missingLiveProfile, { recursive: true, force: true });
       }
     } finally {
       process.env.AGY_TEST_PROFILE_DIR = tmpProfile;

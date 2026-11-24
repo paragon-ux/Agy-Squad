@@ -1185,6 +1185,83 @@ console.log("Agy-Squad MCP server tests\n");
   console.log("✓ global plugin cwd guard, case-insensitive entry detection, and Node >= 22 version check");
 }
 {
+  // PR15-MCP-001: workspaceFolders advertising canonical + symlink aliases of the same repo collapse without false multi-root ambiguity
+  const aliasBase = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-alias-root-")));
+  const wsReal = path.join(aliasBase, "repo-real");
+  const wsLink = path.join(aliasBase, "repo-link");
+  fs.mkdirSync(wsReal, { recursive: true });
+  const aliasManifestPath = path.join(wsReal, "swarm-manifest.json");
+  fs.writeFileSync(
+    aliasManifestPath,
+    JSON.stringify({
+      squads: {
+        alpha: {
+          lead: { role: "Lead", objective: "Lead", scopeFiles: ["."] },
+          specialists: [{ role: "Spec", objective: "Audit", scopeFiles: ["."] }]
+        }
+      }
+    })
+  );
+  fs.symlinkSync(wsReal, wsLink, os.platform() === "win32" ? "junction" : "dir");
+  try {
+    const runAliasSession = (requests) => {
+      const res = spawnSync(process.execPath, [server], {
+        cwd: aliasBase,
+        env: { ...process.env, AGY_SQUAD_WORKSPACE: "" },
+        input: requests.map((r) => JSON.stringify(r)).join("\n") + "\n",
+        encoding: "utf8",
+        timeout: 15000
+      });
+      assert.equal(res.status, 0, res.stderr);
+      return res.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    };
+    for (const pair of [[wsReal, wsLink], [wsLink, wsReal]]) {
+      const responses = runAliasSession([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            workspaceFolders: [
+              { uri: pathToFileURL(pair[0]).href, name: "first" },
+              { uri: pathToFileURL(pair[1]).href, name: "second" }
+            ],
+            rootUri: pathToFileURL(wsLink).href
+          }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "squad_planner", arguments: { manifestPath: path.join(wsLink, "swarm-manifest.json") } }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: { name: "squad_planner", arguments: { manifestPath: "swarm-manifest.json" } }
+        },
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "dispatch_squad", arguments: { squadId: "alpha" } }
+        }
+      ]);
+      assert.equal(Boolean(responses[1].result.isError), false, `PR15-MCP-001 abs: ${responses[1].result.content[0].text}`);
+      assert.equal(JSON.parse(responses[1].result.content[0].text).workspace, wsReal);
+      assert.equal(Boolean(responses[2].result.isError), false, `PR15-MCP-001 rel: ${responses[2].result.content[0].text}`);
+      assert.equal(JSON.parse(responses[2].result.content[0].text).workspace, wsReal);
+      assert.equal(Boolean(responses[3].result.isError), false, `PR15-MCP-001 default: ${responses[3].result.content[0].text}`);
+      assert.equal(JSON.parse(responses[3].result.content[0].text).Subagents[0].Role, "Spec");
+    }
+  } finally {
+    fs.rmSync(aliasBase, { recursive: true, force: true });
+  }
+  console.log("✓ symlink-aliased workspace roots collapse without multi-root ambiguity");
+}
+{
   const selfPkg = await import("agy-squad");
   assert.equal(typeof selfPkg.handleRequest, "function");
   assert.ok(Array.isArray(selfPkg.TOOLS) && selfPkg.TOOLS.length === 2);

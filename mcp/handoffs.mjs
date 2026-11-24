@@ -222,12 +222,26 @@ function isExpectedRealPath(expected, actual) {
   return false;
 }
 
+function isContainedPath(root, target, allowEqual = false, platform = process.platform) {
+  const normalizeCase = platform === "win32" || platform === "darwin";
+  const normRoot = normalizeCase ? root.toLowerCase() : root;
+  const normTarget = normalizeCase ? target.toLowerCase() : target;
+  const pathImpl = platform === "win32" ? path.win32 : path;
+  const rel = pathImpl.relative(normRoot, normTarget);
+  return (
+    (allowEqual || Boolean(rel)) &&
+    rel !== ".." &&
+    !rel.startsWith(`..${pathImpl.sep}`) &&
+    !pathImpl.isAbsolute(rel)
+  );
+}
+
 function resolveCanonicalRoot(root, verifiedDirs) {
   if (verifiedDirs?.has(root)) return root;
   if (typeof root !== "string" || !root.trim()) {
     throw new Error("Expected a valid workspace directory path.");
   }
-  const realRoot = fs.realpathSync(root);
+  const realRoot = fs.realpathSync.native(root);
   if (!fs.lstatSync(realRoot).isDirectory()) {
     throw new Error(`Expected workspace root to be a directory: ${root}`);
   }
@@ -260,7 +274,7 @@ function assertNoSymlinkedAncestors(root, relative, verifiedDirs) {
     if (!stat.isDirectory()) {
       throw new Error(`Expected a workspace directory for '${relative}' at '${part}'.`);
     }
-    if (!isExpectedRealPath(current, fs.realpathSync(current))) {
+    if (!isExpectedRealPath(current, fs.realpathSync.native(current))) {
       throw new Error(`Symlinked directories are unsupported: ${relative}`);
     }
     verifiedDirs?.add(current);
@@ -282,7 +296,7 @@ function workspacePath(root, relative, verifiedDirs) {
   const file = path.join(root, relative);
   const dir = path.dirname(file);
   if (!verifiedDirs?.has(dir)) {
-    if (!isExpectedRealPath(dir, fs.realpathSync(dir))) {
+    if (!isExpectedRealPath(dir, fs.realpathSync.native(dir))) {
       throw new Error(`Symlinked directories are unsupported: ${relative}`);
     }
     verifiedDirs?.add(dir);
@@ -312,11 +326,11 @@ function readOpenedFileWithStat(file, relative = file) {
       if (realPath !== file) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
-      if (!hasONofollow && !isExpectedRealPath(file, fs.realpathSync(file))) {
+      if (!hasONofollow && !isExpectedRealPath(file, fs.realpathSync.native(file))) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
     } else {
-      realPath = fs.realpathSync(file);
+      realPath = fs.realpathSync.native(file);
       if (!isExpectedRealPath(file, realPath)) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
@@ -360,15 +374,14 @@ function readOpenedFileWithStat(file, relative = file) {
 }
 
 function assertContainedPath(canonicalRoot, targetPath, errorMessage) {
-  const rel = path.relative(canonicalRoot, targetPath);
-  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+  if (!isContainedPath(canonicalRoot, targetPath, true)) {
     throw new Error(errorMessage);
   }
 }
 
 function readRegularFileSafe(filePath, displayPath = filePath, options = {}) {
   const resolved = path.resolve(filePath);
-  const canonicalTarget = path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  const canonicalTarget = path.join(fs.realpathSync.native(path.dirname(resolved)), path.basename(resolved));
   const allowedRoot = options?.allowedRoot !== undefined ? resolveCanonicalRoot(options.allowedRoot) : undefined;
   const containmentMessage = options?.containmentError ?? `Path must stay inside the workspace: ${displayPath}`;
   if (allowedRoot !== undefined) {
@@ -661,7 +674,7 @@ function listCohortSlotsIfPresent(root, cohortRelDir) {
     err.code = "ELOOP";
     throw err;
   }
-  const realDir = fs.realpathSync(fullDir);
+  const realDir = fs.realpathSync.native(fullDir);
   if (!isExpectedRealPath(fullDir, realDir)) {
     throw new Error(`Symlinked audit directory is unsupported: ${cohortRelDir}`);
   }
@@ -863,7 +876,7 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
   const { workspace, assignments, handoffs } = record;
   let canonicalWorkspace;
   try {
-    canonicalWorkspace = typeof workspace === "string" && workspace.trim() ? fs.realpathSync(workspace) : undefined;
+    canonicalWorkspace = typeof workspace === "string" && workspace.trim() ? fs.realpathSync.native(workspace) : undefined;
   } catch {
     canonicalWorkspace = undefined;
   }
@@ -1373,7 +1386,7 @@ function collectReportSlots(root, options = {}) {
     }
     let realSrc;
     try {
-      realSrc = fs.realpathSync(src);
+      realSrc = fs.realpathSync.native(src);
     } catch (error) {
       throw new Error(`Worktree directory does not exist (${src}): ${error.message}`);
     }
@@ -1587,11 +1600,20 @@ function collectReportSlots(root, options = {}) {
         pendingActions.push({ kind: "unchanged", slotRel, entry });
         continue;
       }
-      const existingNonEmpty = decodeUtf8(existing.bytes, slotRel).trim().length > 0;
-      if (existingNonEmpty && !overwrite) {
-        throw new Error(
-          `Conflict at destination '${slotRel}': coordinator workspace already has differing content (SHA-256 ${sha256(existing.bytes).slice(0, 12)}); pass --overwrite to replace.`
-        );
+      if (!overwrite) {
+        let existingNonEmpty = existing.bytes.length > 0;
+        if (existingNonEmpty) {
+          try {
+            existingNonEmpty = decodeUtf8(existing.bytes, slotRel).trim().length > 0;
+          } catch {
+            existingNonEmpty = true;
+          }
+        }
+        if (existingNonEmpty) {
+          throw new Error(
+            `Conflict at destination '${slotRel}': coordinator workspace already has differing content (SHA-256 ${sha256(existing.bytes).slice(0, 12)}); pass --overwrite to replace.`
+          );
+        }
       }
     }
     pendingActions.push({ kind: "copy", slotRel, entry });
@@ -1794,6 +1816,10 @@ function buildBundleRecordInit(root, options = {}) {
     if (typeof entry.workerName === "string") byWorker.set(entry.workerName, entry);
   }
 
+  const hasRealConversationId = candidate =>
+    typeof candidate?.conversationId === "string" &&
+    candidate.conversationId.trim().length > 0 &&
+    !/^<.*>$/.test(candidate.conversationId.trim());
   const matchedIdMapKeys = new Set();
   const assignments = (Array.isArray(template.assignments) ? template.assignments : []).map((item, idx) => {
     if (!isPlainObject(item)) {
@@ -1801,11 +1827,22 @@ function buildBundleRecordInit(root, options = {}) {
     }
     const slotPath =
       reportRoot !== undefined ? reportPath(selectedSquadId, idx + 1, resolvedReportRoot) : item.report;
-    const entry = bySlot.get(slotPath) || bySlot.get(item.report) || byWorker.get(item.conversationId);
+    const slotEntry = bySlot.get(slotPath) || bySlot.get(item.report);
+    const workerEntry =
+      (typeof slotEntry?.workerName === "string" ? byWorker.get(slotEntry.workerName) : undefined) ||
+      byWorker.get(item.conversationId);
+    const entry = hasRealConversationId(slotEntry)
+      ? slotEntry
+      : hasRealConversationId(workerEntry)
+        ? workerEntry
+        : (slotEntry || workerEntry);
     let mappedId;
     if (entry && Object.hasOwn(idMap, entry.workerName)) {
       mappedId = idMap[entry.workerName];
       matchedIdMapKeys.add(entry.workerName);
+    } else if (slotEntry && Object.hasOwn(idMap, slotEntry.workerName)) {
+      mappedId = idMap[slotEntry.workerName];
+      matchedIdMapKeys.add(slotEntry.workerName);
     } else if (Object.hasOwn(idMap, item.conversationId)) {
       mappedId = idMap[item.conversationId];
       matchedIdMapKeys.add(item.conversationId);
@@ -1813,12 +1850,7 @@ function buildBundleRecordInit(root, options = {}) {
     let nextId = item.conversationId;
     if (typeof mappedId === "string" && mappedId.trim()) {
       nextId = mappedId.trim();
-    } else if (
-      plan.executionMode !== "swarm" &&
-      typeof entry?.conversationId === "string" &&
-      entry.conversationId.trim() &&
-      !/^<.*>$/.test(entry.conversationId.trim())
-    ) {
+    } else if (plan.executionMode !== "swarm" && hasRealConversationId(entry)) {
       nextId = entry.conversationId.trim();
     }
     return {
@@ -1925,6 +1957,7 @@ export {
   ensureDirectory,
   fingerprint,
   inspectHandoffs,
+  isContainedPath,
   isExpectedRealPath,
   messageLimit,
   normalizeReportRoot,
