@@ -8,7 +8,7 @@ Agy-Squad exposes two MCP tools (`dispatch_squad` in `mcp/dispatch.mjs` and `squ
 
 | Argument | Purpose |
 | --- | --- |
-| `squadId` | Required. Use `all_l1` for working leads, `integrity_auditor` (or `integrity_auditor:<targetSquad>`) for the canonical flat independent integrity auditor, or a squad ID for that squad's specialists. Legacy `adversarial_l1` / `adversarial_flat` / `adversarial_review` stages were removed in PR #5. |
+| `squadId` | Required. Use `all_l1` for working leads, `integrity_auditor` (or `integrity_auditor:<targetSquad>`) for the canonical flat independent integrity auditor, or a squad ID for that squad's specialists. Legacy `adversarial_l1`, `adversarial_flat`, and `adversarial_review` stages have been removed. |
 | `manifestPath` | Optional. A relative or absolute path inside the configured workspace. Symlinks must also resolve inside the workspace. |
 | `workspace` | Optional. Active repository directory path; overrides MCP initialize roots, `AGY_SQUAD_WORKSPACE`, and server `cwd` when running from a global plugin install. |
 
@@ -85,7 +85,7 @@ File scope in a brief describes the worker's assigned target paths; host-level w
 
 ## Governance CLI & report cleanup (`agy-squad`, `mcp/handoffs.mjs`, `mcp/verdicts.mjs`)
 
-Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Squad` source checkout, you may also run `node bin/agy-squad.mjs <command>`; run `agy-squad help [<command>]` or `agy-squad <command> --help` for focused flags and examples; `mcp/handoffs.mjs` is the underlying JS library module whose standalone CLI entrypoint was removed in PR #5). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) and Windows `\` relative paths on `win32` (for example, `.\scratch\record.json`) are normalized uniformly at the CLI boundary across downstream verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`, and `collect`), while internal JSON/API contracts keep canonical POSIX `/` paths. Flat and `task` plans also emit `workers[i].synthesisSlot` pointing to the coordinator-authored `lead/report.md` path. Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
+Run `agy-squad <command>` from the shared workspace root (inside a local `Agy-Squad` source checkout, you may also run `node bin/agy-squad.mjs <command>`; run `agy-squad help [<command>]` or `agy-squad <command> --help` for focused flags and examples; `mcp/handoffs.mjs` is the underlying JS library module whose standalone CLI entrypoint has been retired). Leading `./` workspace-relative paths (for example, `./docs/tools.md`) and Windows `\` relative paths on `win32` (for example, `.\scratch\record.json`) are normalized uniformly at the CLI boundary across downstream verbs (`plan`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`, and `collect`), while internal JSON/API contracts keep canonical POSIX `/` paths. Flat and `task` plans also emit `workers[i].synthesisSlot` pointing to the coordinator-authored `lead/report.md` path. Bundling and pruning support both default (`scratch/agy-squad/squad-<id>/`) and custom `reportRoot` layouts.
 
 ### CLI subcommands
 

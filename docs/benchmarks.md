@@ -38,7 +38,7 @@ Both arms caught all six planted defect categories (`6 / 6`). Counting **all ses
 | `audit-ab-audit` (Integrity Auditor) | `15f815c6-7dec-480c-b7e8-3f6a71256f9c` | `46` | `7` | `37` | `4` | `103.8 KB` (`103,770 B`) |
 
 > [!NOTE]
-> **Friction investigated and fixed in `v0.1.1`:** During Arm 1 above, Parent Step 7 hit `1` `ENOENT` error when `mcp_agy-squad_squad_planner` ran with MCP server `cwd` outside the repository root (resolved via optional `workspace` parameter, `initialize` `rootUri` fallback, and actionable `ENOENT` diagnostics), and `audit-ab-audit` hit `4` pre-tool hook denials on unbounded `read_file` in Steps 5–8 before falling back to `rtk read` (resolved by adding bounded `<=150`-line / `rtk read` guidance in `mcp/briefs.mjs`).
+> **Friction investigated and fixed in `v0.1.1`:** During Arm 1 above, Parent Step 7 hit `1` `ENOENT` error when `mcp_agy-squad_squad_planner` ran with MCP server `cwd` outside the repository root (resolved via optional `workspace` parameter, `initialize` `rootUri` fallback, and actionable `ENOENT` diagnostics), and `audit-ab-audit` hit `4` pre-tool hook denials on unbounded `read_file` in Steps 5-8 before falling back to `rtk read` (resolved by adding bounded `<=150`-line / `rtk read` guidance in `mcp/briefs.mjs`).
 
 #### Arm 2: Antigravity `/teamwork` control (`9` sessions total, `801,839 B` / `801.8 KB`)
 
