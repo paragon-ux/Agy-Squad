@@ -13,7 +13,7 @@ Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/sw
 | **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
 | **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
 
-- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, pass `--no-integrity` (`includeIntegrityAuditor: false`) and `--allow-unaudited` to skip Stage 2 `audit-*` trace ceremony while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
+- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (skipping Stage 2 auditor wakeup and Stage 3 `verdict --integrity`) and close with `finalize --allow-unaudited [--prune]`, while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
 
 ## Planner and Dispatch Commands
 
