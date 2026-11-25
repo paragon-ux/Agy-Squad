@@ -1933,6 +1933,55 @@ try {
     assert.equal(cliEmitW2Obj.swarmAdd.length, 1);
     assert.equal(handleSquadPlanner({ task: "Bad pane escape", swarmPaneOutPath: "/tmp/outside-pane.json" }, root).isError, true);
 
+    // RUN-02: swarmPaneOutPath supports symlinked ~/.gemini root (via both logical and canonical paths) while rejecting symlinks beneath ~/.gemini
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-home-"));
+    const realDotfilesGemini = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-dotfiles-"));
+    const prevTestHome = process.env.AGY_TEST_HOME_DIR;
+    try {
+      fs.symlinkSync(realDotfilesGemini, path.join(fakeHome, ".gemini"));
+      process.env.AGY_TEST_HOME_DIR = fakeHome;
+      const logicalBrainPane = path.join(
+        fakeHome,
+        ".gemini/antigravity/brain/11111111-2222-3333-4444-555555555555/.system_generated/swarm/plan.json"
+      );
+      const realBrainPane = path.join(
+        realDotfilesGemini,
+        "antigravity/brain/22222222-3333-4444-5555-666666666666/.system_generated/swarm/plan.json"
+      );
+      const paneViaLogical = planSquadCohort(
+        { task: "Symlinked gemini logical", readOnly: true, swarmPaneOutPath: logicalBrainPane },
+        root
+      );
+      assert.ok(fs.existsSync(logicalBrainPane), "RUN-02: logical ~/.gemini symlink path must write swarmPane");
+      assert.deepEqual(JSON.parse(fs.readFileSync(logicalBrainPane, "utf8")).goal, paneViaLogical.swarmPane.goal);
+
+      planSquadCohort(
+        { task: "Symlinked gemini canonical", readOnly: true, swarmPaneOutPath: realBrainPane },
+        root
+      );
+      assert.ok(fs.existsSync(realBrainPane), "RUN-02: canonical ~/.gemini realpath must write swarmPane");
+
+      // Symlinked directory BENEATH ~/.gemini must still be rejected
+      const evilTarget = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-evil-"));
+      try {
+        const subBrainParent = path.join(realDotfilesGemini, "antigravity/brain");
+        fs.symlinkSync(evilTarget, path.join(subBrainParent, "evil-session"));
+        const evilPanePath = path.join(fakeHome, ".gemini/antigravity/brain/evil-session/.system_generated/swarm/plan.json");
+        assert.equal(
+          handleSquadPlanner({ task: "Nested symlink escape", readOnly: true, swarmPaneOutPath: evilPanePath }, root).isError,
+          true,
+          "RUN-02: symlinked directory beneath ~/.gemini must fail closed"
+        );
+      } finally {
+        fs.rmSync(evilTarget, { recursive: true, force: true });
+      }
+    } finally {
+      if (prevTestHome === undefined) delete process.env.AGY_TEST_HOME_DIR;
+      else process.env.AGY_TEST_HOME_DIR = prevTestHome;
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      fs.rmSync(realDotfilesGemini, { recursive: true, force: true });
+    }
+
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

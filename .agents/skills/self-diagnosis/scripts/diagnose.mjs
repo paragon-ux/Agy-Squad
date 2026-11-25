@@ -582,4 +582,4 @@ if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
   runCli();
 }
 
-export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripMarkdownLinkSyntax };
+export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripHtmlComments, stripMarkdownLinkSyntax };

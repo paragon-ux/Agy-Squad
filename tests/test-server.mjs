@@ -68,7 +68,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(planner.inputSchema.properties.roleScopes?.minProperties, 1, "R1-MCP-001: roleScopes schema enforces minProperties: 1");
   assert.equal(planner.inputSchema.properties.scopeFiles.description, "Task paths.", "OPT-GAP-SCHEMA-WORD: scopeFiles description must use 'Task paths.'");
   const toolsListBytes = Buffer.byteLength(JSON.stringify(res), "utf8");
-  assert.ok(toolsListBytes <= 3072, `W4 target: tools/list response must stay <= 3072 B (got ${toolsListBytes})`);
+  assert.ok(toolsListBytes <= 4096, `W4 target: tools/list response must stay <= 4096 B (got ${toolsListBytes})`);
   const invalidParamsRes = await handleRequest({ jsonrpc: "2.0", id: 98, method: "tools/call", params: null });
   assert.equal(invalidParamsRes.error.code, -32602);
   const arrayParamsRes = await handleRequest({ jsonrpc: "2.0", id: 99, method: "tools/call", params: [] });

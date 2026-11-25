@@ -23,6 +23,14 @@ function isValidRelativePrefix(prefix) {
   );
 }
 
+function isValidScopeEntry(file) {
+  if (typeof file !== "string") return false;
+  const trimmed = file.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) return false;
+  if (trimmed.startsWith("/") || trimmed.includes("\\") || WINDOWS_DRIVE_RE.test(trimmed)) return false;
+  return trimmed === "." || !trimmed.split("/").some(part => !part || part === "." || part === "..");
+}
+
 function trimTrailingSlashes(value) {
   const s = value.trim();
   let end = s.length;
@@ -1889,8 +1897,9 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
 
 const MAX_FROM_SCOPE_FILES = 256;
 const MAX_READONLY_BASELINE_FILES = 512;
+const MAX_DIRTY_BASELINE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_TRACE_JSONL_BYTES = 64 * 1024 * 1024;
 const SKIPPED_SCOPE_WALK_DIRS = new Set([".git", "node_modules"]);
-const CONTROL_CHAR_SCOPE_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 
 function isScratchOrReportRelPath(relPosix, resolvedReportRoot = defaultReportRoot()) {
   if (!relPosix) return false;
@@ -2016,6 +2025,7 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
   );
   const missingScopeEntries = [];
   const scopedDirs = [];
+  const recordedSymlinks = Object.create(null);
   let expandedFiles = [];
   let filesCapped = false;
   if (nonWildcardEntries.length > 0) {
@@ -2034,7 +2044,10 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
         }
         continue;
       }
-      if (st.isSymbolicLink()) continue;
+      if (st.isSymbolicLink()) {
+        recordedSymlinks[trimmed] = fs.readlinkSync(abs);
+        continue;
+      }
       if (st.isDirectory()) scopedDirs.push(trimmed);
       existingEntries.push(trimmed);
     }
@@ -2046,44 +2059,87 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
           "readonly_baseline",
           verifiedDirs,
           resolvedReportRoot,
-          { maxFiles: MAX_READONLY_BASELINE_FILES, allowEmptyResult: true }
+          { maxFiles: MAX_READONLY_BASELINE_FILES, allowEmptyResult: true, symlinkPolicy: "record", recordedSymlinks }
         );
       } catch (err) {
         if (err?.code === "EMAXFILES") {
           filesCapped = true;
           expandedFiles = Array.isArray(err.partialFiles) ? err.partialFiles : [];
+        } else {
+          throw err;
         }
       }
     }
   }
   const filteredExpanded = ignoreSet ? expandedFiles.filter(rel => !ignoreSet.has(rel)) : expandedFiles;
   const files = Object.fromEntries(filteredExpanded.map(rel => [rel, hashCached(rel)]));
+  const symlinks = Object.fromEntries(
+    Object.entries(recordedSymlinks)
+      .filter(([rel]) => !isScratchOrReportRelPath(rel, resolvedReportRoot) && !ignoreSet?.has(rel))
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  );
   let gitSnapshot = cache?.gitSnapshot;
   if (gitSnapshot === undefined) {
     gitSnapshot = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot, ignoreSet) ?? null;
     if (cache && typeof cache === "object") cache.gitSnapshot = gitSnapshot;
   }
   let dirtyFiles;
+  let unhashedDirtyMeta;
   if (gitSnapshot && gitSnapshot.dirtyPaths.length > 0) {
     const dirtyMap = {};
-    for (const rel of gitSnapshot.dirtyPaths.slice(0, 64)) {
-      if (Object.hasOwn(files, rel) || ignoreSet?.has(rel)) continue;
+    const metaMap = {};
+    let hashedDirtyCount = 0;
+    for (const rel of gitSnapshot.dirtyPaths) {
+      if (Object.hasOwn(files, rel) || Object.hasOwn(symlinks, rel) || ignoreSet?.has(rel)) continue;
+      const absDirty = path.join(canonicalRoot, rel);
+      let st;
       try {
-        const opened = readIfPresentWithStat(canonicalRoot, rel, verifiedDirs);
-        if (opened) dirtyMap[rel] = sha256(opened.bytes).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
-      } catch {}
+        st = fs.lstatSync(absDirty);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        try {
+          dirtyMap[rel] = `symlink:${sha256(Buffer.from(fs.readlinkSync(absDirty), "utf8")).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN)}`;
+        } catch {}
+        continue;
+      }
+      if (!st.isFile()) continue;
+      if (hashedDirtyCount < MAX_READONLY_BASELINE_FILES && st.size <= MAX_DIRTY_BASELINE_FILE_BYTES) {
+        try {
+          if (shaCache.has(rel)) {
+            dirtyMap[rel] = shaCache.get(rel);
+            hashedDirtyCount += 1;
+          } else {
+            const opened = readIfPresentWithStat(canonicalRoot, rel, verifiedDirs);
+            if (opened) {
+              const digest = sha256(opened.bytes).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
+              shaCache.set(rel, digest);
+              dirtyMap[rel] = digest;
+              hashedDirtyCount += 1;
+            }
+          }
+        } catch {
+          metaMap[rel] = `${st.size}:${Math.trunc(st.mtimeMs)}`;
+        }
+      } else {
+        metaMap[rel] = `${st.size}:${Math.trunc(st.mtimeMs)}`;
+      }
     }
     if (Object.keys(dirtyMap).length > 0) dirtyFiles = dirtyMap;
+    if (Object.keys(metaMap).length > 0) unhashedDirtyMeta = metaMap;
   }
   const nonScratchIgnore = ignoreList.filter(p => !isScratchOrReportRelPath(p, resolvedReportRoot));
   return {
     files,
+    ...(Object.keys(symlinks).length > 0 ? { symlinks } : {}),
     ...(filesCapped ? { filesCapped: true } : {}),
     ...(!filesCapped && scopedDirs.length > 0 ? { scopedDirs } : {}),
     ...(!filesCapped && missingScopeEntries.length > 0 ? { missingScopeEntries } : {}),
     ...(nonScratchIgnore.length > 0 ? { baselineIgnorePaths: nonScratchIgnore } : {}),
     ...(gitSnapshot ? { gitStatusPorcelain: gitSnapshot.lines } : {}),
-    ...(dirtyFiles ? { dirtyFiles } : {})
+    ...(dirtyFiles ? { dirtyFiles } : {}),
+    ...(unhashedDirtyMeta ? { unhashedDirtyMeta } : {})
   };
 }
 
@@ -2100,6 +2156,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
     ...(Array.isArray(baseline.baselineIgnorePaths) ? baseline.baselineIgnorePaths : [])
   ]);
   const baselineFiles = isPlainObject(baseline.files) ? baseline.files : {};
+  const baselineSymlinks = isPlainObject(baseline.symlinks) ? baseline.symlinks : {};
   for (const [relPath, expectedHash] of Object.entries(baselineFiles)) {
     let opened;
     try {
@@ -2115,8 +2172,36 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       throw new Error(`Read-only containment violation: baseline file '${relPath}' was modified during execution.`);
     }
   }
+  for (const [relPath, expectedTarget] of Object.entries(baselineSymlinks)) {
+    if (ignoreRelPaths.has(relPath)) continue;
+    const absSym = path.join(canonicalRoot, relPath);
+    let st;
+    try {
+      st = fs.lstatSync(absSym);
+    } catch {
+      throw new Error(`Read-only containment violation: baseline symlink '${relPath}' was deleted during execution.`);
+    }
+    if (!st.isSymbolicLink() || fs.readlinkSync(absSym) !== expectedTarget) {
+      throw new Error(`Read-only containment violation: baseline symlink '${relPath}' was modified during execution.`);
+    }
+  }
   if (isPlainObject(baseline.dirtyFiles)) {
     for (const [relPath, expectedHash] of Object.entries(baseline.dirtyFiles)) {
+      if (ignoreRelPaths.has(relPath)) continue;
+      if (typeof expectedHash === "string" && expectedHash.startsWith("symlink:")) {
+        const absSym = path.join(canonicalRoot, relPath);
+        let st;
+        try {
+          st = fs.lstatSync(absSym);
+        } catch {
+          throw new Error(`Read-only containment violation: pre-existing dirty symlink '${relPath}' was deleted during execution.`);
+        }
+        const actualLinkHash = st.isSymbolicLink() ? sha256(Buffer.from(fs.readlinkSync(absSym), "utf8")) : "";
+        if (!actualLinkHash || !matchesBaselineDigest(actualLinkHash, expectedHash.slice("symlink:".length))) {
+          throw new Error(`Read-only containment violation: pre-existing dirty symlink '${relPath}' was modified during execution.`);
+        }
+        continue;
+      }
       let opened;
       try {
         opened = readIfPresentWithStat(canonicalRoot, relPath, verifiedDirs);
@@ -2128,16 +2213,36 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       }
     }
   }
+  if (isPlainObject(baseline.unhashedDirtyMeta)) {
+    for (const [relPath, expectedMeta] of Object.entries(baseline.unhashedDirtyMeta)) {
+      if (ignoreRelPaths.has(relPath)) continue;
+      let st;
+      try {
+        st = fs.lstatSync(path.join(canonicalRoot, relPath));
+      } catch {
+        throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was deleted during execution.`);
+      }
+      if (!st.isFile() || `${st.size}:${Math.trunc(st.mtimeMs)}` !== expectedMeta) {
+        throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was modified during execution.`);
+      }
+    }
+  }
   if (Array.isArray(baseline.missingScopeEntries)) {
     for (const relPath of baseline.missingScopeEntries) {
       if (typeof relPath !== "string" || isScratchOrReportRelPath(relPath, resolvedReportRoot) || ignoreRelPaths.has(relPath)) continue;
-      if (fs.existsSync(path.join(canonicalRoot, relPath))) {
+      let exists = false;
+      try {
+        fs.lstatSync(path.join(canonicalRoot, relPath));
+        exists = true;
+      } catch {}
+      if (exists) {
         throw new Error(`Read-only containment violation: unexpected new path '${relPath}' created in read-only scope.`);
       }
     }
   }
   if (!baseline.filesCapped && Array.isArray(baseline.scopedDirs) && baseline.scopedDirs.length > 0) {
     let currentScopedFiles = [];
+    const currentSymlinks = Object.create(null);
     try {
       const existingScopedDirs = baseline.scopedDirs.filter(d => typeof d === "string" && fs.existsSync(path.join(canonicalRoot, d)));
       if (existingScopedDirs.length > 0) {
@@ -2147,7 +2252,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
           "readonly_verify",
           verifiedDirs,
           resolvedReportRoot,
-          { maxFiles: MAX_READONLY_BASELINE_FILES, allowEmptyResult: true }
+          { maxFiles: MAX_READONLY_BASELINE_FILES, allowEmptyResult: true, symlinkPolicy: "record", recordedSymlinks: currentSymlinks }
         );
       }
     } catch (err) {
@@ -2157,6 +2262,12 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       if (isScratchOrReportRelPath(relPath, resolvedReportRoot) || ignoreRelPaths.has(relPath)) continue;
       if (!Object.hasOwn(baselineFiles, relPath)) {
         throw new Error(`Read-only containment violation: new file '${relPath}' was created inside read-only scope.`);
+      }
+    }
+    for (const relPath of Object.keys(currentSymlinks)) {
+      if (isScratchOrReportRelPath(relPath, resolvedReportRoot) || ignoreRelPaths.has(relPath)) continue;
+      if (!Object.hasOwn(baselineSymlinks, relPath)) {
+        throw new Error(`Read-only containment violation: new symlink '${relPath}' was created inside read-only scope.`);
       }
     }
   }
@@ -2235,6 +2346,36 @@ function relativizeContainedCliPath(inputPath, targetRoot, { platform = process.
   }
 }
 
+function normalizeContainedJsonOutPath(rawPath, targetRoot, label = "outPath", platform = process.platform) {
+  let candidate = typeof rawPath === "string" ? rawPath.trim() : "";
+  if (candidate && targetRoot && path.isAbsolute(candidate)) {
+    const relativized = relativizeContainedCliPath(candidate, targetRoot, { platform, allowEqual: false });
+    if (relativized !== null) candidate = relativized;
+  }
+  const errSuffix = label === "outPath" ? " inside workspace" : "";
+  if (
+    !candidate ||
+    CONTROL_CHAR_RE.test(candidate) ||
+    candidate.startsWith("/") ||
+    candidate.startsWith("\\") ||
+    path.isAbsolute(candidate) ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    (platform !== "win32" && candidate.includes("\\"))
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  const posixOut = (platform === "win32" ? candidate.replace(/\\/g, "/") : candidate).replace(/^(?:\.\/)+/, "");
+  if (
+    !posixOut ||
+    posixOut.split("/").some(p => !p || p === "." || p === "..") ||
+    !posixOut.toLowerCase().endsWith(".json") ||
+    path.posix.basename(posixOut).toLowerCase() === ".json"
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  return posixOut;
+}
+
 function extractScopeLinesFromBrief(text) {
   if (typeof text !== "string" || !text) return [];
   const lines = text.split(/\r?\n/);
@@ -2289,19 +2430,10 @@ function collectPlanSquadScopeEntries(rawPlan, selectedSquadId) {
     if (typeof raw !== "string") {
       throw new Error(`--from-scope found invalid scopeFiles entry for squad '${selectedSquadId}'.`);
     }
+    if (!isValidScopeEntry(raw)) {
+      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
+    }
     const trimmed = raw.trim();
-    if (
-      !trimmed ||
-      CONTROL_CHAR_SCOPE_RE.test(trimmed) ||
-      trimmed.startsWith("/") ||
-      trimmed.includes("\\") ||
-      /^[a-zA-Z]:/.test(trimmed)
-    ) {
-      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
-    }
-    if (trimmed !== "." && trimmed.split("/").some(part => !part || part === "." || part === "..")) {
-      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
-    }
     if (!seen.has(trimmed)) {
       seen.add(trimmed);
       deduped.push(trimmed);
@@ -2323,6 +2455,8 @@ function expandScopeEntriesToFiles(
 ) {
   const maxFiles = Number.isInteger(options?.maxFiles) && options.maxFiles > 0 ? options.maxFiles : MAX_FROM_SCOPE_FILES;
   const allowEmptyResult = Boolean(options?.allowEmptyResult);
+  const symlinkPolicy = options?.symlinkPolicy === "record" ? "record" : "throw";
+  const recordedSymlinks = options?.recordedSymlinks && typeof options.recordedSymlinks === "object" ? options.recordedSymlinks : null;
   const expanded = new Set();
   const reportRootPrefix = `${resolvedReportRoot}/`;
   const throwCapExceeded = (originEntry) => {
@@ -2341,6 +2475,12 @@ function expandScopeEntriesToFiles(
     for (const dirent of dirents) {
       const childRel = `${dirRel}/${dirent.name}`;
       if (dirent.isSymbolicLink()) {
+        if (symlinkPolicy === "record") {
+          if (recordedSymlinks && childRel !== resolvedReportRoot && !childRel.startsWith(reportRootPrefix)) {
+            recordedSymlinks[childRel] = fs.readlinkSync(path.join(dirAbs, dirent.name));
+          }
+          continue;
+        }
         throw new Error(`Refusing to follow symlink '${childRel}' while expanding --from-scope directory '${originEntry}'.`);
       }
       if (dirent.isDirectory()) {
@@ -2357,7 +2497,7 @@ function expandScopeEntriesToFiles(
         if (expanded.size > maxFiles) {
           throwCapExceeded(originEntry);
         }
-      } else {
+      } else if (symlinkPolicy !== "record") {
         throw new Error(`Unsupported non-regular file '${childRel}' encountered while expanding --from-scope directory '${originEntry}'.`);
       }
     }
@@ -2380,6 +2520,10 @@ function expandScopeEntriesToFiles(
       throw error;
     }
     if (stat.isSymbolicLink()) {
+      if (symlinkPolicy === "record") {
+        if (recordedSymlinks) recordedSymlinks[entry] = fs.readlinkSync(targetAbs);
+        continue;
+      }
       const symErr = new Error(`Refusing to follow symlink '${entry}' in --from-scope.`);
       symErr.code = "ELOOP";
       throw symErr;
@@ -2404,12 +2548,12 @@ function expandScopeEntriesToFiles(
   return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult, options = {}) {
+function buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult, options = {}) {
   if (!isPlainObject(plan) || !Array.isArray(plan.integrityAuditPlan) || record?.requireIntegrityAudit === false) {
-    return undefined;
+    return [];
   }
   const matching = plan.integrityAuditPlan.filter(a => a && a.targetSquad === record.squadId && isPlainObject(a.swarmAdd));
-  if (matching.length === 0) return undefined;
+  if (matching.length === 0) return [];
   const { coordId, handoffSeqs, idMap } = options;
   const effectiveRecordPath = outRel ?? record.recordPath ?? recordSlotPath(record.squadId, record.reportRoot);
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2431,9 +2575,9 @@ function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult,
       }
     }
   }
-  const bindOne = (auditEntry) => {
-    const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[0]
-      ? record.integrityAuditSlots[0]
+  const bindOne = (auditEntry, idx) => {
+    const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[idx]
+      ? record.integrityAuditSlots[idx]
       : auditEntry.reportSlot;
     let brief = String(auditEntry.swarmAdd.brief ?? "");
     const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
@@ -2471,8 +2615,11 @@ function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult,
       brief
     };
   };
-  const bound = matching.map(bindOne);
-  return bound[0];
+  return matching.map(bindOne);
+}
+
+function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult, options = {}) {
+  return buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult, options)[0];
 }
 
 function buildBundleRecordInit(root, options = {}) {
@@ -2857,23 +3004,144 @@ function buildBundleRecordsForAllSquads(root, options = {}) {
   });
 }
 
-function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath, brainRootOverride, fallbackWorkerName) {
+function assertNoSymlinkSegmentsBetween(baseDir, targetAbs) {
+  if (!baseDir || !isContainedPath(baseDir, targetAbs, false)) return;
+  const relParts = path.relative(baseDir, path.dirname(targetAbs)).split(path.sep).filter(Boolean);
+  let cur = baseDir;
+  for (const part of relParts) {
+    if (part === "." || part === "..") {
+      const err = new Error(`Unsafe trace path segment: ${targetAbs}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+    cur = path.join(cur, part);
+    const st = fs.lstatSync(cur);
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      const err = new Error(`ELOOP: symlinked directory along trace path: ${cur}`);
+      err.code = "ELOOP";
+      throw err;
+    }
+  }
+}
+
+function openSafeTraceFd(filePath, canonicalWorkspaceRoot = null, allowedBaseDir = null) {
+  const resolved = path.resolve(filePath);
+  if (canonicalWorkspaceRoot) assertNoSymlinkSegmentsBetween(canonicalWorkspaceRoot, resolved);
+  if (allowedBaseDir) assertNoSymlinkSegmentsBetween(allowedBaseDir, resolved);
+  const parentDir = path.dirname(resolved);
+  const parentStat = fs.lstatSync(parentDir);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    const err = new Error(`ELOOP: trace parent is not a regular directory: ${parentDir}`);
+    err.code = "ELOOP";
+    throw err;
+  }
+  const leafStat = fs.lstatSync(resolved);
+  if (leafStat.isSymbolicLink()) {
+    const err = new Error(`ELOOP: symlinked trace file is unsupported: ${resolved}`);
+    err.code = "ELOOP";
+    throw err;
+  }
+  if (!leafStat.isFile()) {
+    const err = new Error(`Expected regular file for trace: ${resolved}`);
+    err.code = "ENOTREG";
+    throw err;
+  }
+  const fd = fs.openSync(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      const err = new Error(`Expected regular file for trace: ${resolved}`);
+      err.code = "ENOTREG";
+      throw err;
+    }
+    if (process.platform === "linux") {
+      const fdTarget = fs.readlinkSync(`/proc/self/fd/${fd}`);
+      if (
+        path.basename(fdTarget) !== path.basename(resolved) ||
+        !isExpectedRealPath(fs.realpathSync.native(parentDir), path.dirname(fdTarget))
+      ) {
+        const err = new Error(`ELOOP: trace descriptor did not match path: ${resolved}`);
+        err.code = "ELOOP";
+        throw err;
+      }
+    }
+    if (stat.size > MAX_TRACE_JSONL_BYTES) {
+      const err = new Error(`Trace file exceeds 64 MiB cap: ${resolved}`);
+      err.code = "EFBIG";
+      throw err;
+    }
+    return { fd, stat };
+  } catch (err) {
+    try { fs.closeSync(fd); } catch {}
+    throw err;
+  }
+}
+
+function readSafeJsonlFile(filePath, canonicalWorkspaceRoot = null, allowedBaseDir = null) {
+  const { fd } = openSafeTraceFd(filePath, canonicalWorkspaceRoot, allowedBaseDir);
+  try {
+    const chunks = [];
+    const buf = Buffer.allocUnsafe(65536);
+    let total = 0;
+    while (true) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n <= 0) break;
+      total += n;
+      if (total > MAX_TRACE_JSONL_BYTES) {
+        const err = new Error(`Trace file exceeds 64 MiB cap: ${filePath}`);
+        err.code = "EFBIG";
+        throw err;
+      }
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
+}
+
+function discoverBrainTranscriptForWorker(
+  workerKey,
+  coordId,
+  explicitTracePath,
+  brainRootOverride,
+  fallbackWorkerName,
+  canonicalWorkspaceRoot = null
+) {
   if (typeof explicitTracePath === "string" && explicitTracePath.trim()) {
-    const resolved = path.resolve(explicitTracePath.trim());
-    return fs.existsSync(resolved) ? resolved : null;
+    const rawTrimmed = explicitTracePath.trim();
+    const resolved = path.isAbsolute(rawTrimmed)
+      ? path.resolve(rawTrimmed)
+      : path.resolve(canonicalWorkspaceRoot || process.cwd(), rawTrimmed);
+    try {
+      fs.lstatSync(resolved);
+      return { tracePath: resolved, brainBaseDir: null };
+    } catch (err) {
+      if (err?.code === "ENOENT" || err?.code === "ENOTDIR") return null;
+      return { tracePath: resolved, brainBaseDir: null };
+    }
   }
   const candidateBrainRoots = [];
   if (typeof brainRootOverride === "string" && brainRootOverride.trim()) {
-    candidateBrainRoots.push(path.resolve(brainRootOverride.trim()));
+    const overrideResolved = path.resolve(brainRootOverride.trim());
+    try {
+      if (fs.existsSync(overrideResolved)) {
+        const realBr = fs.realpathSync.native(overrideResolved);
+        if (fs.lstatSync(realBr).isDirectory()) candidateBrainRoots.push(realBr);
+      }
+    } catch {}
   } else {
     const home = os.homedir();
     const geminiDir = path.join(home, ".gemini");
     if (fs.existsSync(geminiDir)) {
       try {
-        for (const entry of fs.readdirSync(geminiDir, { withFileTypes: true })) {
-          if (entry.isDirectory() && entry.name.startsWith("antigravity")) {
-            const br = path.join(geminiDir, entry.name, "brain");
-            if (fs.existsSync(br)) candidateBrainRoots.push(br);
+        const realGemini = fs.realpathSync.native(geminiDir);
+        for (const entry of fs.readdirSync(realGemini, { withFileTypes: true })) {
+          if (!entry.isSymbolicLink() && entry.isDirectory() && entry.name.startsWith("antigravity")) {
+            const br = path.join(realGemini, entry.name, "brain");
+            if (fs.existsSync(br) && !fs.lstatSync(br).isSymbolicLink() && fs.lstatSync(br).isDirectory()) {
+              candidateBrainRoots.push(br);
+            }
           }
         }
       } catch {}
@@ -2885,10 +3153,32 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
     : typeof fallbackWorkerName === "string" && fallbackWorkerName.trim()
       ? fallbackWorkerName.trim()
       : null;
+  const readHeadLines = (filePath, brainBaseDir) => {
+    let opened;
+    try {
+      opened = openSafeTraceFd(filePath, canonicalWorkspaceRoot, brainBaseDir);
+      const headBuf = Buffer.allocUnsafe(16384);
+      const bytesRead = fs.readSync(opened.fd, headBuf, 0, headBuf.length, 0);
+      const headText = headBuf.subarray(0, bytesRead).toString("utf8");
+      return { firstLines: headText.split(/\r?\n/).slice(0, 4).join("\n"), mtimeMs: opened.stat.mtimeMs };
+    } catch {
+      return null;
+    } finally {
+      if (opened?.fd !== undefined) {
+        try { fs.closeSync(opened.fd); } catch {}
+      }
+    }
+  };
   for (const br of candidateBrainRoots) {
     if (isUuidLike) {
-      const direct = path.join(br, workerKey, ".system_generated", "logs", "transcript.jsonl");
-      if (fs.existsSync(direct)) return direct;
+      const directSessionDir = path.join(br, workerKey);
+      try {
+        const stDir = fs.lstatSync(directSessionDir);
+        if (!stDir.isSymbolicLink() && stDir.isDirectory()) {
+          const direct = path.join(directSessionDir, ".system_generated", "logs", "transcript.jsonl");
+          if (fs.existsSync(direct)) return { tracePath: direct, brainBaseDir: br };
+        }
+      } catch {}
       if (!mentionTarget) continue;
     }
     let sessionDirs;
@@ -2899,32 +3189,15 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
     }
     const mentionRe = new RegExp(`@${mentionTarget.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_-])`, "i");
     const matches = [];
-    const readHeadLines = (filePath) => {
-      let fd;
-      try {
-        fd = fs.openSync(filePath, fs.constants.O_RDONLY);
-        const headBuf = Buffer.allocUnsafe(16384);
-        const bytesRead = fs.readSync(fd, headBuf, 0, headBuf.length, 0);
-        const st = fs.fstatSync(fd);
-        const headText = headBuf.subarray(0, bytesRead).toString("utf8");
-        return { firstLines: headText.split(/\r?\n/).slice(0, 4).join("\n"), mtimeMs: st.mtimeMs };
-      } catch {
-        return null;
-      } finally {
-        if (fd !== undefined) {
-          try { fs.closeSync(fd); } catch {}
-        }
-      }
-    };
     for (const dirent of sessionDirs) {
-      if (!dirent.isDirectory()) continue;
+      if (dirent.isSymbolicLink() || !dirent.isDirectory()) continue;
       if (coordId && dirent.name === coordId) continue;
       const traceFile = path.join(br, dirent.name, ".system_generated", "logs", "transcript.jsonl");
-      const headInfo = readHeadLines(traceFile);
+      const headInfo = readHeadLines(traceFile, br);
       if (!headInfo) continue;
       let checkLines = headInfo.firstLines;
       if ((!mentionRe.test(checkLines) || (coordId && !checkLines.includes(`sender=${coordId}`))) && checkLines.includes("truncated_fields")) {
-        const fullHead = readHeadLines(path.join(path.dirname(traceFile), "transcript_full.jsonl"));
+        const fullHead = readHeadLines(path.join(path.dirname(traceFile), "transcript_full.jsonl"), br);
         if (fullHead) checkLines = `${checkLines}\n${fullHead.firstLines}`;
       }
       if (!mentionRe.test(checkLines)) continue;
@@ -2933,7 +3206,7 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
     }
     if (matches.length > 0) {
       matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
-      return matches[0].traceFile;
+      return { tracePath: matches[0].traceFile, brainBaseDir: br };
     }
   }
   return null;
@@ -3037,14 +3310,15 @@ function verifyWorkerTraces(root, record, options = {}) {
         : undefined;
     const reportSlot = String(assignment?.report ?? "").trim();
     const explicitTrace = traceMap[workerKey] ?? (explicitWorkerName ? traceMap[explicitWorkerName] : undefined);
-    const tracePath = discoverBrainTranscriptForWorker(
+    const discovered = discoverBrainTranscriptForWorker(
       workerKey,
       coordId,
       explicitTrace,
       options.brainRoot,
-      explicitWorkerName
+      explicitWorkerName,
+      canonicalRoot
     );
-    if (!tracePath) {
+    if (!discovered) {
       anomalies.push(`${workerKey}: MISSING_TRACE`);
       workerResults.push({
         worker: workerKey,
@@ -3056,11 +3330,14 @@ function verifyWorkerTraces(root, record, options = {}) {
       });
       continue;
     }
+    const { tracePath, brainBaseDir } = discovered;
     let rawJsonl;
     try {
-      rawJsonl = fs.readFileSync(tracePath, "utf8");
+      rawJsonl = readSafeJsonlFile(tracePath, canonicalRoot, brainBaseDir);
     } catch (err) {
-      anomalies.push(`${workerKey}: UNREADABLE_TRACE (${err.code || "ERR"})`);
+      const errCode = err?.code || "ERR";
+      const tag = errCode === "EFBIG" ? "OVERSIZED_TRACE" : errCode === "ELOOP" || errCode === "ENOTREG" ? `UNSAFE_TRACE (${errCode})` : `UNREADABLE_TRACE (${errCode})`;
+      anomalies.push(`${workerKey}: ${tag}`);
       workerResults.push({
         worker: workerKey,
         ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
@@ -3098,9 +3375,14 @@ function verifyWorkerTraces(root, record, options = {}) {
       if (!fullTraceLoaded) {
         fullTraceLoaded = true;
         const fullPath = path.join(path.dirname(tracePath), "transcript_full.jsonl");
+        let fullStatExists = false;
         try {
-          if (fs.existsSync(fullPath)) {
-            const fullLines = fs.readFileSync(fullPath, "utf8").split(/\r?\n/).filter(Boolean);
+          fs.lstatSync(fullPath);
+          fullStatExists = true;
+        } catch {}
+        if (fullStatExists) {
+          try {
+            const fullLines = readSafeJsonlFile(fullPath, canonicalRoot, brainBaseDir).split(/\r?\n/).filter(Boolean);
             fullByStepIndex = new Map();
             fullByLineIndex = new Map();
             for (let fIdx = 0; fIdx < fullLines.length; fIdx++) {
@@ -3112,8 +3394,11 @@ function verifyWorkerTraces(root, record, options = {}) {
                 }
               } catch {}
             }
+          } catch (err) {
+            const errCode = err?.code || "ERR";
+            anomalies.push(`${workerKey}: UNSAFE_FULL_TRACE (${errCode})`);
           }
-        } catch {}
+        }
       }
       if (fullByStepIndex && typeof compactStep.step_index === "number" && fullByStepIndex.has(compactStep.step_index)) {
         return fullByStepIndex.get(compactStep.step_index);
@@ -3163,8 +3448,9 @@ function verifyWorkerTraces(root, record, options = {}) {
         } else if (COMMAND_TOOL_NAMES.has(rawName)) {
           const cmd = args.CommandLine ?? args.command;
           if (typeof cmd === "string" && cmd.trim()) {
-            commandLines.push(cmd);
-            for (const tok of cmd.split(/[\s"'`();|&<>]+/)) {
+            const cmdForReads = cmd.replace(/(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?:&\d+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g, " ");
+            commandLines.push(cmdForReads);
+            for (const tok of cmdForReads.split(/[\s"'`();|&<>]+/)) {
               if (!tok || tok.startsWith("-")) continue;
               const cleanedTok = tok.replace(/:[1-9]\d*$/, "").replace(/\/+$/, "");
               if (cleanedTok === ".") {
@@ -3173,8 +3459,8 @@ function verifyWorkerTraces(root, record, options = {}) {
                 recordInspectedPath(cleanedTok, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
               }
             }
-            if (/\bgit\b[^\n;|&]*\bgrep\b/.test(cmd)) {
-              const afterGrep = cmd.slice(cmd.indexOf("grep") + 4);
+            if (/\bgit\b[^\n;|&]*\bgrep\b/.test(cmdForReads)) {
+              const afterGrep = cmdForReads.slice(cmdForReads.indexOf("grep") + 4);
               const nonFlagArgs = afterGrep
                 .replace(/(?:"[^"]*"|'[^']*')/g, " pat ")
                 .trim()
@@ -3184,7 +3470,17 @@ function verifyWorkerTraces(root, record, options = {}) {
             }
             if (isReadOnly) {
               const unquoted = cmd.replace(/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "''");
-              if (/\b(?:rm|mv|truncate)\s+|(?:\bsed|\bperl)\s+-i\b|\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+)/.test(unquoted)) {
+              const hasOutputRedir = /(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?!&\d|\/dev\/null(?:\s|$|[;|&)]))\S+/.test(unquoted);
+              const hasMutatingCmd =
+                /\b(?:rm|mv|cp|dd|tee|touch|truncate|mkdir|rmdir|unlink|chmod|chown|patch)\b|(?:\bsed|\bperl)\s+-i\b|\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+|apply|am|cherry-pick|merge|rebase|restore|stash|commit)\b/.test(
+                  unquoted
+                );
+              const hasInlineScriptWrite =
+                /\b(?:node|python3?|ruby|perl)\b/.test(unquoted) &&
+                /(?:\bfs\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|open\s*\([^)]*,\s*['"][wa+]|Path\([^)]*\)\.write_)/.test(
+                  cmd
+                );
+              if (hasOutputRedir || hasMutatingCmd || hasInlineScriptWrite) {
                 unauthorizedWrites.add("run_command");
               }
             }
@@ -3267,7 +3563,9 @@ function verifyWorkerTraces(root, record, options = {}) {
 }
 
 export {
+  CONTROL_CHAR_RE,
   buildBoundAuditSwarmAdd,
+  buildBoundAuditSwarmAdds,
   buildBundleRecordInit,
   buildBundleRecordsForAllSquads,
   bundlePath,
@@ -3285,13 +3583,16 @@ export {
   inspectHandoffs,
   isContainedPath,
   isExpectedRealPath,
+  isValidScopeEntry,
   messageLimit,
+  normalizeContainedJsonOutPath,
   normalizeReportRoot,
   pruneReports,
   publish,
   readFile,
   readOpenedFileWithStat,
   readRegularFileSafe,
+  readSafeJsonlFile,
   recordSlotPath,
   relativizeContainedCliPath,
   reportPath,

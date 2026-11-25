@@ -2895,6 +2895,13 @@ try {
       if (createdScopeSym) {
         assert.throws(
           () => buildBundleRecordInit(scopeDir, { plan: scopePlanObj, squadId: "scoped", fromScope: true }),
+          /Read-only containment violation: new symlink 'src\/leak-link\.txt'/
+        );
+        const writableSymPlan = structuredClone(scopePlanObj);
+        delete writableSymPlan.readOnlyBaseline;
+        delete writableSymPlan.workers[0].readOnlyBaseline;
+        assert.throws(
+          () => buildBundleRecordInit(scopeDir, { plan: writableSymPlan, squadId: "scoped", fromScope: true }),
           /Refusing to follow symlink/
         );
       }
@@ -3463,6 +3470,248 @@ try {
         { cwd: s3Parent, encoding: "utf8" }
       );
       assert.equal(mBatchFin.status, 0, `FIT-012/FLOW-013: multi-squad non-scratch finalize failed: ${mBatchFin.stderr}`);
+      const mBatchFinJson = JSON.parse(mBatchFin.stdout);
+
+      // SCRIPT-02: verify and positional prune infer child workspace root when invoked from s3Parent without --workspace
+      const childVerifyNoWs = spawnSync(
+        process.execPath,
+        [agySquadCli, "verify", `ChildRepo/${mBatchFinJson.results[0].bundlePath}`, mBatchFinJson.results[0].sha256],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(childVerifyNoWs.status, 0, `SCRIPT-02: parent-CWD verify without --workspace failed: ${childVerifyNoWs.stderr}`);
+      const childPruneNoWs = spawnSync(
+        process.execPath,
+        [agySquadCli, "prune", `ChildRepo/${mBatchFinJson.results[0].bundlePath}`, mBatchFinJson.results[0].sha256],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(childPruneNoWs.status, 0, `SCRIPT-02: parent-CWD positional prune without --workspace failed: ${childPruneNoWs.stderr}`);
+
+      // SEC-01 & SEC-02: symlinked --trace / symlinked transcript_full.jsonl rejected with O_NOFOLLOW; shell redirection (> file) flagged on readOnly and not credited as read
+      const outsideSecretJsonl = path.join(s3Parent, "outside-secret.jsonl");
+      fs.writeFileSync(
+        outsideSecretJsonl,
+        JSON.stringify({ step_index: 1, content: `[Message] sender=${coordUuid} @custommetasec` }) + "\n",
+        "utf8"
+      );
+      const traceLinkPath = path.join(s3Repo, "scratch/trace-link.jsonl");
+      fs.symlinkSync(outsideSecretJsonl, traceLinkPath);
+      const sec01LinkRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "meta/record.json", "--coord-id", coordUuid, "--trace", `${cmMappedUuid}=${traceLinkPath}`],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(sec01LinkRes.status, 1, "SEC-01: symlinked --trace file must fail closed");
+      assert.match(sec01LinkRes.stdout, /UNSAFE_TRACE \(ELOOP\)/);
+      fs.unlinkSync(traceLinkPath);
+
+      // Symlinked transcript_full.jsonl companion must also fail closed
+      const fullTracePath = path.join(cmLogDir, "transcript_full.jsonl");
+      fs.unlinkSync(fullTracePath);
+      fs.symlinkSync(outsideSecretJsonl, fullTracePath);
+      const sec01FullLinkRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(sec01FullLinkRes.status, 1, "SEC-01: symlinked transcript_full.jsonl must fail closed");
+      assert.match(sec01FullLinkRes.stdout, /UNSAFE_FULL_TRACE \(ELOOP\)/);
+      fs.unlinkSync(fullTracePath);
+
+      // SEC-02: shell output redirection (> src/app.js) in readOnly trace triggers UNAUTHORIZED_WRITE and does not credit src/app.js as read (while 2>/dev/null and 2>&1 stay allowed)
+      fs.writeFileSync(
+        path.join(cmLogDir, "transcript.jsonl"),
+        [
+          JSON.stringify({ step_index: 1, content: `[Message] sender=${coordUuid} @custommetasec` }),
+          JSON.stringify({
+            step_index: 2,
+            tool_calls: [
+              { name: "run_command", arguments: { CommandLine: "echo hacked > src/app.js" } },
+              { name: "write_file", arguments: { Path: path.join(s3Repo, cmSpecSlot) } }
+            ]
+          })
+        ].join("\n") + "\n",
+        "utf8"
+      );
+      const sec02RedirRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(sec02RedirRes.status, 1, "SEC-02: shell > redirection on readOnly cohort must fail closed");
+      const sec02Json = JSON.parse(sec02RedirRes.stdout);
+      assert.ok(sec02Json.workers[0].unauthorizedWrites.includes("run_command"));
+      assert.deepEqual(sec02Json.workers[0].unverifiedCitations, ["src/app.js"], "SEC-02: redirected output target must not be credited as grounded read");
+
+      fs.writeFileSync(
+        path.join(cmLogDir, "transcript.jsonl"),
+        [
+          JSON.stringify({ step_index: 1, content: `[Message] sender=${coordUuid} @custommetasec` }),
+          JSON.stringify({
+            step_index: 2,
+            tool_calls: [
+              { name: "run_command", arguments: { CommandLine: "git grep -n export src/app.js 2>/dev/null 2>&1" } },
+              { name: "write_file", arguments: { Path: path.join(s3Repo, cmSpecSlot) } }
+            ]
+          })
+        ].join("\n") + "\n",
+        "utf8"
+      );
+      const sec02SafeFdRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(sec02SafeFdRes.status, 0, `SEC-02: safe 2>/dev/null and 2>&1 must pass: ${sec02SafeFdRes.stdout}`);
+
+      // SVC-01: 2-specialist integrity_auditor squad binds distinct integrityAuditSlots[idx] and emits auditSwarmAdds
+      const dualAuditManifest = path.join(s3Repo, "meta/dual-audit-manifest.json");
+      fs.writeFileSync(
+        dualAuditManifest,
+        JSON.stringify({
+          squads: {
+            sqmain: {
+              specialists: [{ role: "MainSpec", objective: "Audit app", scopeFiles: ["src/app.js"], readOnly: true }]
+            },
+            integrity_auditor: {
+              specialists: [
+                { role: "AuditorOne", objective: "Audit trace 1", scopeFiles: ["src/app.js"], readOnly: true },
+                { role: "AuditorTwo", objective: "Audit trace 2", scopeFiles: ["src/app.js"], readOnly: true }
+              ]
+            }
+          }
+        }) + "\n",
+        "utf8"
+      );
+      const dualPlanRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--workspace", s3Repo, "--manifest", "meta/dual-audit-manifest.json", "--topology", "flat", "--out", "meta/dual-plan.json", "--replace"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(dualPlanRes.status, 0, dualPlanRes.stderr);
+      const dualPlanObj = JSON.parse(fs.readFileSync(path.join(s3Repo, "meta/dual-plan.json"), "utf8"));
+      assert.equal(dualPlanObj.integrityAuditPlan.length, 2);
+      const dualSpec = dualPlanObj.workers[0].specialists[0];
+      const dualLeadSlot = dualPlanObj.workers[0].synthesisSlot;
+      fs.mkdirSync(path.dirname(path.join(s3Repo, dualSpec.reportSlot)), { recursive: true });
+      fs.writeFileSync(path.join(s3Repo, dualSpec.reportSlot), "# Dual\nChecked src/app.js:1.\n", "utf8");
+      fs.mkdirSync(path.dirname(path.join(s3Repo, dualLeadSlot)), { recursive: true });
+      fs.writeFileSync(path.join(s3Repo, dualLeadSlot), "# Dual Lead\nContent Verdict: PASS\n", "utf8");
+      const dualInitRes = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--workspace", s3Repo,
+          "--plan", "meta/dual-plan.json",
+          "--squad", "sqmain",
+          "--from-scope",
+          "--handoff", `${dualSpec.workerName}=READY ${dualSpec.reportSlot} - ok`,
+          "--digest",
+          "--out", "meta/dual-record.json",
+          "--replace"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(dualInitRes.status, 0, `SVC-01: dual-auditor bundle-init failed: ${dualInitRes.stderr}`);
+      const dualInitOut = JSON.parse(dualInitRes.stdout);
+      assert.equal(Array.isArray(dualInitOut.auditSwarmAdds), true, "SVC-01: 2-auditor squad must emit auditSwarmAdds array");
+      assert.equal(dualInitOut.auditSwarmAdds.length, 2);
+      assert.match(dualInitOut.auditSwarmAdds[0].brief, /specialist-1\/report\.md/);
+      assert.match(dualInitOut.auditSwarmAdds[1].brief, /specialist-2\/report\.md/);
+
+      // RUN-01 & RUN-03: readOnlyBaseline handles scoped directories containing symlinks AND detects mutations to dirty git files beyond index 64
+      const roGitRepo = fs.mkdtempSync(path.join(os.tmpdir(), "agy-ro-git-"));
+      try {
+        spawnSync("git", ["init", "-q"], { cwd: roGitRepo });
+        spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: roGitRepo });
+        spawnSync("git", ["config", "user.name", "Test"], { cwd: roGitRepo });
+        fs.mkdirSync(path.join(roGitRepo, "src"), { recursive: true });
+        fs.mkdirSync(path.join(roGitRepo, "other"), { recursive: true });
+        fs.writeFileSync(path.join(roGitRepo, "src/real.js"), "export const real = 1;\n", "utf8");
+        fs.symlinkSync("real.js", path.join(roGitRepo, "src/alias.js"));
+        for (let i = 1; i <= 75; i++) {
+          const pad = String(i).padStart(3, "0");
+          fs.writeFileSync(path.join(roGitRepo, `other/f${pad}.js`), `export const v = ${i};\n`, "utf8");
+        }
+        spawnSync("git", ["add", "."], { cwd: roGitRepo });
+        spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: roGitRepo });
+        // Dirty all 75 files in other/ before planning
+        for (let i = 1; i <= 75; i++) {
+          const pad = String(i).padStart(3, "0");
+          fs.writeFileSync(path.join(roGitRepo, `other/f${pad}.js`), `export const v = ${i * 10};\n`, "utf8");
+        }
+        const roSymPlanRes = spawnSync(
+          process.execPath,
+          [
+            agySquadCli, "plan",
+            "--workspace", roGitRepo,
+            "--mode", "swarm",
+            "--read-only",
+            "--no-integrity",
+            "--scope", "src",
+            "--role", "RoSym",
+            "--out", "scratch/ro-sym-plan.json",
+            "Read-only symlink and dirty baseline check"
+          ],
+          { cwd: roGitRepo, encoding: "utf8" }
+        );
+        assert.equal(roSymPlanRes.status, 0, roSymPlanRes.stderr);
+        const roSymPlan = JSON.parse(fs.readFileSync(path.join(roGitRepo, "scratch/ro-sym-plan.json"), "utf8"));
+        assert.ok(roSymPlan.readOnlyBaseline.files["src/real.js"], "RUN-01: sibling regular file inside scoped dir with symlink must be hashed");
+        assert.equal(roSymPlan.readOnlyBaseline.symlinks["src/alias.js"], "real.js", "RUN-01: nested symlink inside scoped dir must be recorded");
+        assert.ok(roSymPlan.readOnlyBaseline.dirtyFiles["other/f070.js"], "RUN-03: dirty file #70 must be hashed in dirtyFiles");
+
+        const roSpecSlot = roSymPlan.workers[0].specialists[0].reportSlot;
+        const roLeadSlot = roSymPlan.workers[0].synthesisSlot;
+        fs.mkdirSync(path.dirname(path.join(roGitRepo, roSpecSlot)), { recursive: true });
+        fs.writeFileSync(path.join(roGitRepo, roSpecSlot), "# RO\nChecked src/real.js:1.\n", "utf8");
+        fs.mkdirSync(path.dirname(path.join(roGitRepo, roLeadSlot)), { recursive: true });
+        fs.writeFileSync(path.join(roGitRepo, roLeadSlot), "# RO Lead\nContent Verdict: PASS\n", "utf8");
+
+        const roInitClean = spawnSync(
+          process.execPath,
+          [
+            agySquadCli, "bundle-init",
+            "--workspace", roGitRepo,
+            "--plan", "scratch/ro-sym-plan.json",
+            "--file", "src/real.js",
+            "--handoff", `rosym=READY ${roSpecSlot} - ok`,
+            "--allow-unaudited",
+            "--out", "scratch/ro-sym-record.json"
+          ],
+          { cwd: roGitRepo, encoding: "utf8" }
+        );
+        assert.equal(roInitClean.status, 0, `RUN-01: untouched scoped dir with symlink must pass bundle-init: ${roInitClean.stderr}`);
+        const roFinClean = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "--workspace", roGitRepo, "scratch/ro-sym-record.json", "--allow-unaudited", "--replace"],
+          { cwd: roGitRepo, encoding: "utf8" }
+        );
+        assert.equal(roFinClean.status, 0, `RUN-01: untouched scoped dir with symlink must pass finalize: ${roFinClean.stderr}`);
+
+        // Mutating dirty file #70 must fail closed with Read-only containment violation
+        fs.writeFileSync(path.join(roGitRepo, "other/f070.js"), "export const v = 999999;\n", "utf8");
+        const roDirty70Fail = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "--workspace", roGitRepo, "scratch/ro-sym-record.json", "--allow-unaudited", "--replace"],
+          { cwd: roGitRepo, encoding: "utf8" }
+        );
+        assert.notEqual(roDirty70Fail.status, 0, "RUN-03: mutating dirty file #70 must fail closed");
+        assert.match(roDirty70Fail.stderr, /Read-only containment violation: pre-existing dirty file 'other\/f070\.js'/);
+
+        // Restore f070.js, then retarget symlink src/alias.js -> must also fail closed
+        fs.writeFileSync(path.join(roGitRepo, "other/f070.js"), "export const v = 700;\n", "utf8");
+        fs.unlinkSync(path.join(roGitRepo, "src/alias.js"));
+        fs.symlinkSync("../other/f001.js", path.join(roGitRepo, "src/alias.js"));
+        const roSymMutateFail = spawnSync(
+          process.execPath,
+          [agySquadCli, "finalize", "--workspace", roGitRepo, "scratch/ro-sym-record.json", "--allow-unaudited", "--replace"],
+          { cwd: roGitRepo, encoding: "utf8" }
+        );
+        assert.notEqual(roSymMutateFail.status, 0, "RUN-01: mutating symlink target inside read-only scope must fail closed");
+        assert.match(roSymMutateFail.stderr, /Read-only containment violation: baseline symlink 'src\/alias\.js'/);
+      } finally {
+        fs.rmSync(roGitRepo, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(s3Parent, { recursive: true, force: true });
       fs.rmSync(s3Wt, { recursive: true, force: true });

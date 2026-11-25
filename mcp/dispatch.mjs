@@ -278,14 +278,6 @@ function resolveWorkspaceRoots(argsWorkspace, fallbackWorkspace) {
   return { root: resolveCanonicalRoot(candidate), logicalRoot: path.resolve(candidate) };
 }
 
-function logicalWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
-  return path.resolve(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
-}
-
-function resolveWorkspaceRoot(argsWorkspace, fallbackWorkspace) {
-  return resolveCanonicalRoot(resolveCandidateWorkspace(argsWorkspace, fallbackWorkspace));
-}
-
 function formatNotFoundError(args, fallbackWorkspace) {
   const fallback = typeof fallbackWorkspace === "string" && fallbackWorkspace.trim()
     ? fallbackWorkspace.trim()
@@ -401,12 +393,10 @@ export {
   formatNotFoundError,
   handleDispatchSquad,
   loadSquads,
-  logicalWorkspaceRoot,
   manifestSquads,
   readManifest,
   resolveIntegrityAuditor,
   resolveSquadLead,
-  resolveWorkspaceRoot,
   resolveWorkspaceRoots,
   specialistAssignments
 };

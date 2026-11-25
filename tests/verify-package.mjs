@@ -6,6 +6,7 @@ import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { stripCode } from "../mcp/verdicts.mjs";
 import { MAINTAINER_SKILLS } from "../scripts/install-register.mjs";
+import { extractMarkdownLinks, stripHtmlComments } from "../.agents/skills/self-diagnosis/scripts/diagnose.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -65,65 +66,6 @@ const RETIRED_DENYLIST = [
   "mcp/run-state.mjs",
   "mcp/subagent-brief.mjs"
 ];
-
-function stripHtmlComments(markdown) {
-  let out = "";
-  for (let pos = 0; pos < markdown.length; ) {
-    const start = markdown.indexOf("<!--", pos);
-    if (start === -1) return out + markdown.slice(pos);
-    out += markdown.slice(pos, start);
-    const end = markdown.indexOf("-->", start + 4);
-    if (end === -1) return out;
-    pos = end + 3;
-  }
-  return out;
-}
-
-function extractMarkdownLinks(text) {
-  const links = [];
-  let pos = 0;
-  while (pos < text.length) {
-    const openBracket = text.indexOf("[", pos);
-    if (openBracket === -1) break;
-    const closeBracket = text.indexOf("]", openBracket + 1);
-    if (closeBracket === -1) break;
-    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
-      pos = closeBracket + 1;
-      continue;
-    }
-    let i = closeBracket + 2;
-    const destStart = i;
-    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
-      i++;
-    }
-    const rawDest = text.slice(destStart, i);
-    if (i < text.length && text[i] === ")") {
-      pos = i + 1;
-    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
-      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
-      const quote = text[i];
-      if (quote !== '"' && quote !== "'") {
-        pos = i;
-        continue;
-      }
-      const closeQuote = text.indexOf(quote, i + 1);
-      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
-        pos = i + 1;
-        continue;
-      }
-      pos = closeQuote + 2;
-    } else {
-      pos = i;
-      continue;
-    }
-    if (!rawDest) continue;
-    const hashIdx = rawDest.indexOf("#");
-    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
-    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
-    links.push({ target, fragment });
-  }
-  return links;
-}
 
 function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
   assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",

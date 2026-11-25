@@ -84,7 +84,7 @@ agy-squad dispatch \
 
 Every diagnostic pass follows one fixed sequence:
 
-`run zero-subagent check -> launch cohort -> reconcile & bundle reports -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> prune verified reports via agy-squad finalize --prune -> remediate -> re-verify with the same specialists -> terminate subagents`
+`run zero-subagent check -> launch cohort -> reconcile & bundle reports via agy-squad finalize -> transcribe 1-ID-per-row into docs/reviews/<slug>.md -> prune verified reports via agy-squad prune --records ... --clean-records -> remediate -> re-verify with the same specialists -> terminate subagents`
 
 ## 3. Review pull requests to the v1.5.0 standard
 
@@ -112,12 +112,14 @@ Agy-Squad separates native worker cleanup from report bundling and scratch delet
 | --- | --- | --- | --- |
 | **1. Native `/swarm` planning and workspace** | `agy-squad plan` (`squad_planner`) + Antigravity `/swarm` | Native `/swarm` owns worker lifecycles and `kill` cleanup (`workspace: "share"` / `"branch"` worktrees); `agy-squad` creates no temporary `.agents/plugins/`, `.agents/agents/`, or `run-<uuid>/` directories (the legacy `agy-squad run` PTY launcher is retired) | Preserves workspace-relative specialist/lead reports under `scratch/agy-squad/squad-<id>/` (or custom `reportRoot`) |
 | **2. Handoff and integrity bundle** | `agy-squad` (`finalize`, `bundle`, `verify`, `prune`) | `prune` (or `finalize --prune` / `verify --prune --expected-sha256 <sha256>`) deletes loose `specialist-<N>/report.md` files only after `bundle` and `verify` succeed (unless `--keep-reports` or `retainReports: true` is set) | Preserves `lead/report.md` (`Content Verdict: PASS`), `lead/report.sources.json` (SHA-256 digests of all inputs and specialist reports), and verified `integrityAudit` evidence (`Integrity Verdict: CLEAN`) |
-| **3. Self-diagnosis wave** | `agy-squad finalize --prune` + scratch cleanup | Removes verified loose specialist reports via `finalize --prune`, and clears finished `scratch/agy-squad/` directories once findings are archived | Retain verified `lead/report.sources.json` bundles until findings and bundle SHA-256 digests are recorded in `docs/reviews/<slug>.md` |
+| **3. Self-diagnosis wave** | `agy-squad finalize` + `agy-squad prune --records` + scratch cleanup | Finalizes bundles via `finalize`, and removes verified loose specialist reports and temporary record files via `prune --records ... --clean-records` (or `finalize --prune` when no review ledger is written), then clears finished `scratch/agy-squad/` directories once findings are archived | Retain verified `lead/report.sources.json` bundles until findings and bundle SHA-256 digests are recorded in `docs/reviews/<slug>.md` |
 
-To prune verified specialist reports and optionally clear completed self-diagnosis scratch directories after archiving findings into `docs/reviews/<target-review-slug>.md`:
+To prune verified specialist reports and temporary record files after archiving findings into `docs/reviews/<target-review-slug>.md` (and optionally clear completed self-diagnosis scratch directories):
 
 ```bash
-agy-squad finalize scratch/record.json --prune
+agy-squad finalize scratch/agy-squad/squad-*/record.json
+# After transcribing findings and bundle SHA-256 digests into docs/reviews/<slug>.md:
+agy-squad prune --records scratch/agy-squad/squad-*/record.json --clean-records
 # Optional: remove finished scratch bundles once findings are archived in docs/reviews/
 rm -rf scratch/agy-squad
 ```

@@ -1,32 +1,22 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import {
+  CONTROL_CHAR_RE,
+  normalizeContainedJsonOutPath,
+  relativizeContainedCliPath
+} from "../mcp/handoffs.mjs";
+import {
+  PACKAGE_VERSION,
+  assertNodeVersion,
+  isDirectEntryPoint,
+  isNodeVersionSupported
+} from "../scripts/install-register.mjs";
 
-const MIN_NODE_MAJOR = 22;
-
-function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  if (typeof versionStr !== "string") return false;
-  const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
-  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
-}
-
-function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  if (!isNodeVersionSupported(versionStr, minMajor)) {
-    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
-    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
-    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
-  }
-}
-
-function readPackageVersion() {
-  try {
-    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.2";
-  } catch {
-    return "0.2.2";
-  }
-}
+const readPackageVersion = () => PACKAGE_VERSION;
+const isDirectExecution = (argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) =>
+  isDirectEntryPoint(argv1, selfUrl, platform);
 
 function warnUncarriedCitations(citations, targetLabel) {
   const uncarried = citations?.uncarriedUrls;
@@ -34,35 +24,6 @@ function warnUncarriedCitations(citations, targetLabel) {
   console.error(
     `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations on bundle/finalize to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
   );
-}
-
-function isDirectExecution(
-  argv1 = process.argv[1],
-  selfUrl = import.meta.url,
-  platform = process.platform
-) {
-  if (!argv1 || !selfUrl) return false;
-  const selfPath =
-    selfUrl instanceof URL || (typeof selfUrl === "string" && selfUrl.startsWith("file:"))
-      ? fileURLToPath(selfUrl)
-      : selfUrl;
-  const pathImpl = platform === "win32" ? path.win32 : path.posix;
-  const normalize = (p) => {
-    let resolved;
-    if (platform === process.platform) {
-      try {
-        resolved = fs.realpathSync.native(path.resolve(p));
-      } catch {
-        resolved = path.resolve(p);
-      }
-    } else {
-      resolved = pathImpl.resolve(p);
-    }
-    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
-    if (platform === "darwin") return resolved.toLowerCase();
-    return resolved;
-  };
-  return normalize(argv1) === normalize(selfPath);
 }
 
 const usage = [
@@ -93,7 +54,7 @@ const usage = [
   "  fingerprint <file...>           Compute SHA-256 digests for verifiedFiles",
   "  inspect <record.json>           Reconcile Pointer-Over-Wire handoff receipts",
   "  digest <record.json> [options]  Compute canonical Evidence Digest (+ --verify-traces)",
-  "  audit-check --record <record.json> [options]",
+  "  audit-check (--record <rec.json> | <rec.json>) [options]",
   "                                  Verify worker Step-1 attribution, writes, and citations",
   "  bundle <record.json> [options]  Create a SHA-256 verified proof bundle (.sources.json)",
   "  verify <report.sources.json> [sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
@@ -285,7 +246,7 @@ const SUBCOMMAND_HELP = {
     "  agy-squad inspect scratch/bundle-record.json"
   ].join("\n"),
   digest: [
-    "Usage: agy-squad digest <record.json> [--workspace <dir>] [--verify-traces] [--coord-id <uuid>] [--trace <worker=jsonl>...] [--allow-non-passing] [--allow-partial]",
+    "Usage: agy-squad digest <record.json> [--workspace <dir>] [--verify-traces] [--coord-id <uuid>] [--trace <worker=jsonl>...] [--brain-dir <dir>] [--allow-non-passing] [--allow-partial]",
     "",
     "Compute the deterministic 64-hex Evidence Digest for integrity auditor binding.",
     "",
@@ -294,6 +255,7 @@ const SUBCOMMAND_HELP = {
     "  --verify-traces                  Run deterministic <50ms JSONL trace verification",
     "  --coord-id <uuid>                Coordinator conversationId for Step-1 sender check",
     "  --trace <worker=jsonl>           Explicit worker transcript JSONL path override",
+    "  --brain-dir <dir>                Override Antigravity brain root directory for trace discovery",
     "  --allow-non-passing              Allow FAIL or BLOCKED lead verdicts",
     "  --allow-partial                  Allow PARTIAL or NO_REPORT specialist handoffs",
     "",
@@ -302,18 +264,20 @@ const SUBCOMMAND_HELP = {
     "  agy-squad digest scratch/bundle-record.json --verify-traces --coord-id <uuid>"
   ].join("\n"),
   "audit-check": [
-    "Usage: agy-squad audit-check --record <record.json> [--workspace <dir>] [--coord-id <uuid>] [--trace <worker=jsonl>...]",
+    "Usage: agy-squad audit-check (--record <record.json> | <record.json>) [--workspace <dir>] [--coord-id <uuid>] [--trace <worker=jsonl>...] [--brain-dir <dir>]",
     "",
     "Run deterministic <50ms JSONL trace checks (Step-1 attribution, read-only writes, citation grounding).",
     "",
     "Options:",
-    "  --record <record.json>           Bundle record JSON defining cohort assignments",
+    "  --record <record.json>           Bundle record JSON defining cohort assignments (or pass positional <record.json>)",
     "  --workspace <dir>                Coordinator workspace root",
     "  --coord-id <uuid>                Coordinator conversationId for Step-1 sender=<coordId> check",
     "  --trace <worker=jsonl>           Repeatable or comma-separated worker=transcript.jsonl override",
+    "  --brain-dir <dir>                Override Antigravity brain root directory for trace discovery",
     "",
     "Examples:",
-    "  agy-squad audit-check --record scratch/agy-squad/squad-auth/record.json --coord-id <uuid>"
+    "  agy-squad audit-check --record scratch/agy-squad/squad-auth/record.json --coord-id <uuid>",
+    "  agy-squad audit-check scratch/agy-squad/squad-auth/record.json --coord-id <uuid>"
   ].join("\n"),
   bundle: [
     "Usage: agy-squad bundle <record.json> [--workspace <dir>] [options]",
@@ -627,6 +591,32 @@ function readRecordWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawPat
   return { record, effectiveRoot, recRel };
 }
 
+function resolveBundleWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawBundleArg, handoffsMod) {
+  const initialRel = normalizeWorkspaceCliPath(rawBundleArg, process.platform, baseRoot);
+  if (!explicitWorkspaceSet && typeof initialRel === "string" && initialRel && !path.isAbsolute(initialRel)) {
+    try {
+      const parsed = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(baseRoot, initialRel), initialRel));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.squadId === "string") {
+        const rootPrefix = handoffsMod.resolveReportRoot(parsed.reports?.[0]?.path ?? initialRel, true);
+        const expectedBundleRel = handoffsMod.bundlePath(parsed.squadId, rootPrefix);
+        if (initialRel !== expectedBundleRel && initialRel.endsWith(`/${expectedBundleRel}`)) {
+          const childPrefix = initialRel.slice(0, initialRel.length - expectedBundleRel.length - 1);
+          const effectiveRoot = inferChildWorkspaceIfContained(
+            baseRoot,
+            false,
+            path.join(baseRoot, childPrefix),
+            handoffsMod
+          );
+          if (effectiveRoot !== baseRoot) {
+            return { effectiveRoot, bundleRel: expectedBundleRel };
+          }
+        }
+      }
+    } catch {}
+  }
+  return { effectiveRoot: baseRoot, bundleRel: initialRel };
+}
+
 async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpectedRealPath, readFile, readRegularFileSafe }) {
   if (typeof pathOrDash !== "string" || !pathOrDash.trim()) {
     throw new Error(`${label} path must be nonempty.`);
@@ -678,67 +668,10 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpe
   }
 }
 
-function relativizeAbsoluteWithinRootSync(trimmedPath, targetRoot, platform = process.platform, allowEqual = false) {
-  if (!targetRoot || typeof targetRoot !== "string" || platform !== process.platform || !path.isAbsolute(trimmedPath)) {
-    return null;
-  }
-  let canonicalRoot;
-  try {
-    canonicalRoot = fs.realpathSync.native(targetRoot);
-  } catch {
-    return null;
-  }
-  const isContained = (rootP, targetP, eq = false) => {
-    const nRoot = platform === "win32" ? rootP.toLowerCase() : rootP;
-    const nTarget = platform === "win32" ? targetP.toLowerCase() : targetP;
-    const rel = path.relative(nRoot, nTarget);
-    return (eq || Boolean(rel)) && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
-  };
-  const resolved = path.resolve(trimmedPath);
-  let cur = resolved;
-  const tail = [];
-  while (true) {
-    try {
-      const st = fs.lstatSync(cur);
-      if (st.isSymbolicLink() && tail.length === 0) {
-        const realLexParent = fs.realpathSync.native(path.dirname(cur));
-        if (!isContained(canonicalRoot, realLexParent, true)) return null;
-        const candidateInside = path.join(realLexParent, path.basename(cur));
-        if (!isContained(canonicalRoot, candidateInside, allowEqual)) return null;
-        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
-        return rel || (allowEqual ? "." : null);
-      }
-      if (st.isSymbolicLink() && tail.length > 0) {
-        const realSym = fs.realpathSync.native(cur);
-        const sameRoot = platform === "win32"
-          ? realSym.toLowerCase() === canonicalRoot.toLowerCase()
-          : realSym === canonicalRoot;
-        if (!sameRoot) return null;
-        const candidateInside = path.join(realSym, ...tail);
-        if (!isContained(canonicalRoot, candidateInside, allowEqual)) return null;
-        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
-        return rel || (allowEqual ? "." : null);
-      }
-      const realExisting = fs.realpathSync.native(cur);
-      if (!isContained(canonicalRoot, realExisting, true)) return null;
-      const candidateTarget = tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
-      if (!isContained(canonicalRoot, candidateTarget, allowEqual)) return null;
-      const rel = path.relative(canonicalRoot, candidateTarget).split(path.sep).join("/");
-      return rel || (allowEqual ? "." : null);
-    } catch (err) {
-      if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") return null;
-    }
-    const parent = path.dirname(cur);
-    if (parent === cur) return null;
-    tail.unshift(path.basename(cur));
-    cur = parent;
-  }
-}
-
 function normalizeWorkspaceCliPath(inputPath, platform = process.platform, targetRoot = undefined, allowEqual = false) {
   if (typeof inputPath !== "string") return inputPath;
   const trimmed = inputPath.trim();
-  if (!trimmed || /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed)) {
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) {
     return trimmed;
   }
   if (
@@ -747,7 +680,9 @@ function normalizeWorkspaceCliPath(inputPath, platform = process.platform, targe
     /^[a-zA-Z]:/.test(trimmed) ||
     path.isAbsolute(trimmed)
   ) {
-    const relativized = relativizeAbsoluteWithinRootSync(trimmed, targetRoot, platform, allowEqual);
+    const relativized = targetRoot
+      ? relativizeContainedCliPath(trimmed, targetRoot, { platform, allowEqual })
+      : null;
     return relativized !== null ? relativized : trimmed;
   }
   if (platform !== "win32" && trimmed.includes("\\")) {
@@ -776,35 +711,7 @@ function normalizeScopeCliPath(inputPath, platform = process.platform, targetRoo
 }
 
 function normalizeBundleOutCliPath(inputOut, platform = process.platform, targetRoot = undefined) {
-  let trimmedOut = typeof inputOut === "string" ? inputOut.trim() : "";
-  if (trimmedOut && targetRoot && path.isAbsolute(trimmedOut)) {
-    const relativized = relativizeAbsoluteWithinRootSync(trimmedOut, targetRoot, platform, false);
-    if (relativized !== null) trimmedOut = relativized;
-  }
-  if (
-    !trimmedOut ||
-    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmedOut) ||
-    trimmedOut.startsWith("/") ||
-    trimmedOut.startsWith("\\") ||
-    path.isAbsolute(trimmedOut) ||
-    /^[a-zA-Z]:/.test(trimmedOut)
-  ) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  if (platform !== "win32" && trimmedOut.includes("\\")) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  const normalizedOut = platform === "win32" ? trimmedOut.replace(/\\/g, "/") : trimmedOut;
-  const outRel = normalizedOut.replace(/^(?:\.\/)+/, "");
-  if (
-    !outRel ||
-    outRel.split("/").some(p => !p || p === "." || p === "..") ||
-    !outRel.toLowerCase().endsWith(".json") ||
-    path.posix.basename(outRel).toLowerCase() === ".json"
-  ) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  return outRel;
+  return normalizeContainedJsonOutPath(inputOut, targetRoot, "--out", platform);
 }
 
 function parseKeyValuePairs(items, flagName) {
@@ -1290,14 +1197,14 @@ async function main(args) {
         if (digestResult) {
           warnUncarriedCitations(digestResult.citations, `${item.squadId} synthesis report`);
         }
-        const outRel = normalizeBundleOutCliPath(item.outRel ?? item.outPath, process.platform, targetRoot);
+        const outRel = normalizeBundleOutCliPath(item.outRel, process.platform, targetRoot);
         const parentDir = path.posix.dirname(outRel);
         if (parentDir && parentDir !== ".") {
           handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
         }
         const outBytes = Buffer.from(JSON.stringify(rec, null, 2) + "\n", "utf8");
         handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
-        const auditSwarmAdd = handoffsMod.buildBoundAuditSwarmAdd(targetRoot, plan, rec, outRel, digestResult, {
+        const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, rec, outRel, digestResult, {
           coordId: values["coord-id"],
           handoffSeqs,
           idMap
@@ -1307,7 +1214,8 @@ async function main(args) {
           squadId: rec.squadId,
           verifiedFilesCount: Object.keys(rec.verifiedFiles).length,
           ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations } : {}),
-          ...(auditSwarmAdd ? { auditSwarmAdd } : {}),
+          ...(auditSwarmAdds.length > 0 ? { auditSwarmAdd: auditSwarmAdds[0] } : {}),
+          ...(auditSwarmAdds.length > 1 ? { auditSwarmAdds } : {}),
           ...(values.verbose ? { record: rec } : {})
         });
       }
@@ -1360,7 +1268,7 @@ async function main(args) {
       }
       const outBytes = Buffer.from(JSON.stringify(record, null, 2) + "\n", "utf8");
       handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
-      const auditSwarmAdd = handoffsMod.buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult, {
+      const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult, {
         coordId: values["coord-id"],
         handoffSeqs,
         idMap
@@ -1371,7 +1279,8 @@ async function main(args) {
         squadId: record.squadId,
         verifiedFilesCount: Object.keys(record.verifiedFiles).length,
         ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations } : {}),
-        ...(auditSwarmAdd ? { auditSwarmAdd } : {}),
+        ...(auditSwarmAdds.length > 0 ? { auditSwarmAdd: auditSwarmAdds[0] } : {}),
+        ...(auditSwarmAdds.length > 1 ? { auditSwarmAdds } : {}),
         ...(values.verbose ? { record } : {})
       }, null, 2));
     } else if (digestResult) {
@@ -1412,7 +1321,7 @@ async function main(args) {
     return 0;
   }
   if (command === "digest") {
-    const usageLine = "Usage: agy-squad digest [--workspace <dir>] <record.json> [--allow-non-passing] [--allow-partial] [--verify-traces [--coord-id <uuid>] [--trace <worker=jsonlPath>...]]";
+    const usageLine = "Usage: agy-squad digest [--workspace <dir>] <record.json> [--allow-non-passing] [--allow-partial] [--verify-traces [--coord-id <uuid>] [--trace <worker=jsonlPath>...] [--brain-dir <dir>]]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       workspace: { type: "string" },
       "allow-non-passing": { type: "boolean", default: false },
@@ -1453,7 +1362,7 @@ async function main(args) {
     return 0;
   }
   if (command === "audit-check") {
-    const usageLine = "Usage: agy-squad audit-check [--workspace <dir>] (--record <record.json> | <record.json>) [--coord-id <uuid>] [--trace <worker=jsonlPath>...]";
+    const usageLine = "Usage: agy-squad audit-check [--workspace <dir>] (--record <record.json> | <record.json>) [--coord-id <uuid>] [--trace <worker=jsonlPath>...] [--brain-dir <dir>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       record: { type: "string" },
       workspace: { type: "string" },
@@ -1533,8 +1442,13 @@ async function main(args) {
       throw new Error(`Flag '--keep-reports' requires '--prune' on 'agy-squad verify'.\n${usageLine}`);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
-    const { targetRoot } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
-    const rel = normalizeWorkspaceCliPath(positionals[0], process.platform, targetRoot);
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { effectiveRoot: targetRoot, bundleRel: rel } = resolveBundleWithWorkspaceInference(
+      baseRoot,
+      explicit,
+      positionals[0],
+      handoffsMod
+    );
     const expectedSha256 = values["expected-sha256"] ?? positionals[1];
     if (values.prune) {
       const out = handoffsMod.verifyAndPruneBundle(targetRoot, rel, { expectedSha256, keepReports: values["keep-reports"] });
@@ -1734,8 +1648,8 @@ async function main(args) {
         if (!rawBundle || !sha) {
           throw new Error(`Invalid bundle=sha256 pair '${pair}'.\n${usageLine}`);
         }
-        const bundleRel = normalizeWorkspaceCliPath(rawBundle, process.platform, baseRoot);
-        const pruned = handoffsMod.pruneReports(baseRoot, bundleRel, sha, { keepReports: values["keep-reports"] });
+        const { effectiveRoot, bundleRel } = resolveBundleWithWorkspaceInference(baseRoot, explicit, rawBundle, handoffsMod);
+        const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, sha, { keepReports: values["keep-reports"] });
         removed.push(...(pruned.removed ?? []));
         results.push({
           bundlePath: bundleRel,
@@ -1750,9 +1664,10 @@ async function main(args) {
     if (positionals.length !== 2) {
       throw new Error(usageLine);
     }
+    const { effectiveRoot, bundleRel } = resolveBundleWithWorkspaceInference(baseRoot, explicit, positionals[0], handoffsMod);
     console.log(
       JSON.stringify(
-        handoffsMod.pruneReports(baseRoot, normalizeWorkspaceCliPath(positionals[0], process.platform, baseRoot), positionals[1], {
+        handoffsMod.pruneReports(effectiveRoot, bundleRel, positionals[1], {
           keepReports: values["keep-reports"]
         }),
         null,

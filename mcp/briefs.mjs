@@ -1,11 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
-import { isContainedPath, messageLimit, reportPath, resolveCanonicalRoot } from "./handoffs.mjs";
+import { CONTROL_CHAR_RE, isContainedPath, isValidScopeEntry, messageLimit, reportPath, resolveCanonicalRoot } from "./handoffs.mjs";
 
 const DISALLOWED_BUILTINS = new Set(["research", "browser", "image-generator"]);
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 const DELIVERABLE_CONTROL_CHAR_RE = /[\x00-\x09\x0b-\x1f\x7f\u2028\u2029]/;
 const LARGE_FILE_LINE_THRESHOLD = 750;
 const LARGE_FILE_BYTE_THRESHOLD = 43_008; // 42 KiB
@@ -172,17 +171,7 @@ function normalizeModeObjective(rawObjective, executionMode, isLead, isIntegrity
 
 /** Validate that every scopeFiles entry is a clean workspace-relative path (or "."). */
 function validateScopeFiles(scope, agentLabel) {
-  if (
-    !Array.isArray(scope) ||
-    !scope.length ||
-    scope.some(file => {
-      if (typeof file !== "string") return true;
-      const trimmed = file.trim();
-      if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) return true;
-      if (trimmed.startsWith("/") || trimmed.includes("\\") || /^[a-zA-Z]:/.test(trimmed)) return true;
-      return trimmed !== "." && trimmed.split("/").some(part => !part || part === "." || part === "..");
-    })
-  ) {
+  if (!Array.isArray(scope) || !scope.length || scope.some(file => !isValidScopeEntry(file))) {
     throw new Error(`Agent '${agentLabel || "unnamed"}' requires valid workspace-relative scopeFiles.`);
   }
   return scope.map(file => file.trim());
@@ -367,7 +356,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const handoffInstructionLine = isSwarm
     ? isIsolatedSwarm
       ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - wt=<abs-worktree-root> <obs> | PARTIAL <Report slot> - wt=<abs-worktree-root> <obs> | NO_REPORT - wt=<abs-worktree-root> <reason>. Then swarm_wait.`
-      : `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <obs>. Then swarm_wait.`.replace("NO_REPORT - <obs>", "NO_REPORT - <reason>")
+      : `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>. Then swarm_wait.`
     : `1 send_message <= ${messageLimit} UTF-8 bytes: READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>.`;
 
   const scopeHeader =

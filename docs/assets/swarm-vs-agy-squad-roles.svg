@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 704" width="920" height="704" style="max-width:100%;height:auto" role="img" aria-labelledby="cmp-title cmp-desc">
   <title id="cmp-title">Native Antigravity /swarm vs. Agy-Squad Roles and Configuration Additions</title>
-  <desc id="cmp-desc">Side-by-side comparison of native Antigravity /swarm roles and Agy-Squad governed roles, highlighting non-overlapping scopes, model pinning, workspace isolation, report slots with one-line receipts, dual-gate integrity auditing, and per-worker transcript access directives.</desc>
+  <desc id="cmp-desc">Side-by-side comparison of native Antigravity /swarm roles and Agy-Squad governed roles, highlighting non-overlapping scopes, model pinning, workspace isolation, report slots with one-line receipts, dual-gate integrity auditing, and optional opt-in transcript access directives.</desc>
   <style>
     :root {
       --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;

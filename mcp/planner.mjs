@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import util from "node:util";
-import { AGENT_ALIAS_PAIRS, CONTROL_CHAR_RE, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
   loadSquads,
@@ -13,10 +14,12 @@ import {
   specialistAssignments
 } from "./dispatch.mjs";
 import {
+  CONTROL_CHAR_RE,
   bundlePath,
   captureReadOnlyBaseline,
   ensureDirectory,
   expandScopeEntriesToFiles,
+  normalizeContainedJsonOutPath,
   normalizeReportRoot,
   publish,
   recordSlotPath,
@@ -1571,21 +1574,24 @@ function planSquadCohort(
       }
       publish(root, swarmPaneTarget.relPath, paneBytes, Boolean(replace), verifiedOutDirs, undefined, { sync: false });
     } else {
-      writeBrainSwarmPaneFile(swarmPaneTarget.absPath, paneBytes, Boolean(replace));
+      writeBrainSwarmPaneFile(swarmPaneTarget.baseDir, swarmPaneTarget.absPath, paneBytes, Boolean(replace));
     }
   }
 
   return plan;
 }
 
-function serializePlanJson(plan) {
-  const entries = Object.entries(plan);
+const PLAN_EXPANDED_ARRAY_KEYS = new Set(["workers", "integrityAuditPlan", "verificationPipeline"]);
+const WAVE_SLICE_EXPANDED_ARRAY_KEYS = new Set(["swarmAdd"]);
+
+function serializeCompactJsonWithExpandedArrays(obj, expandedKeys) {
+  const entries = Object.entries(obj);
   const lines = ["{"];
   for (let i = 0; i < entries.length; i++) {
     const [key, val] = entries[i];
     const comma = i < entries.length - 1 ? "," : "";
     const kJson = JSON.stringify(key);
-    if ((key === "workers" || key === "integrityAuditPlan" || key === "verificationPipeline") && Array.isArray(val)) {
+    if (expandedKeys.has(key) && Array.isArray(val)) {
       if (val.length === 0) {
         lines.push(`  ${kJson}: []${comma}`);
       } else {
@@ -1604,31 +1610,8 @@ function serializePlanJson(plan) {
   return lines.join("\n");
 }
 
-function serializeWaveSliceJson(slice) {
-  const entries = Object.entries(slice);
-  const lines = ["{"];
-  for (let i = 0; i < entries.length; i++) {
-    const [key, val] = entries[i];
-    const comma = i < entries.length - 1 ? "," : "";
-    const kJson = JSON.stringify(key);
-    if (key === "swarmAdd" && Array.isArray(val)) {
-      if (val.length === 0) {
-        lines.push(`  ${kJson}: []${comma}`);
-      } else {
-        lines.push(`  ${kJson}: [`);
-        for (let j = 0; j < val.length; j++) {
-          const itemComma = j < val.length - 1 ? "," : "";
-          lines.push(`    ${JSON.stringify(val[j])}${itemComma}`);
-        }
-        lines.push(`  ]${comma}`);
-      }
-    } else {
-      lines.push(`  ${kJson}: ${JSON.stringify(val)}${comma}`);
-    }
-  }
-  lines.push("}\n");
-  return lines.join("\n");
-}
+const serializePlanJson = (plan) => serializeCompactJsonWithExpandedArrays(plan, PLAN_EXPANDED_ARRAY_KEYS);
+const serializeWaveSliceJson = (slice) => serializeCompactJsonWithExpandedArrays(slice, WAVE_SLICE_EXPANDED_ARRAY_KEYS);
 
 function resolveSwarmPaneOutTarget(rawPath, canonicalRoot, platform = process.platform) {
   const trimmed = typeof rawPath === "string" ? rawPath.trim() : "";
@@ -1638,18 +1621,26 @@ function resolveSwarmPaneOutTarget(rawPath, canonicalRoot, platform = process.pl
       return { kind: "workspace", relPath: normalizePlanOutPath(relativized, canonicalRoot, platform) };
     }
     const resolvedAbs = path.resolve(trimmed);
-    const home = os.homedir();
-    const geminiBase = path.join(home, ".gemini");
+    const home = process.env.AGY_TEST_HOME_DIR || os.homedir();
+    const geminiBase = path.resolve(path.join(home, ".gemini"));
     let canonicalGemini = geminiBase;
-    try {
-      if (fs.existsSync(geminiBase)) canonicalGemini = fs.realpathSync.native(geminiBase);
-    } catch {}
-    const checkAgainstBase = (baseDir) => {
-      const rel = path.relative(baseDir, resolvedAbs).split(path.sep).join("/");
-      return /^antigravity[^/]*\/brain\/[A-Za-z0-9_-]+\/\.system_generated\/swarm\/plan\.json$/.test(rel);
-    };
-    if (checkAgainstBase(geminiBase) || checkAgainstBase(canonicalGemini)) {
-      return { kind: "brain", absPath: resolvedAbs };
+    if (fs.existsSync(geminiBase)) {
+      const geminiStat = fs.lstatSync(geminiBase);
+      if (geminiStat.isSymbolicLink() || geminiStat.isDirectory()) {
+        canonicalGemini = fs.realpathSync.native(geminiBase);
+      } else {
+        throw new Error(`Invalid ~/.gemini directory along swarmPaneOutPath: ${geminiBase}`);
+      }
+    }
+    const brainPattern = /^antigravity[^/]*\/brain\/[A-Za-z0-9_-]+\/\.system_generated\/swarm\/plan\.json$/;
+    for (const candidateBase of [geminiBase, canonicalGemini]) {
+      const rel = path.relative(candidateBase, resolvedAbs).split(path.sep).join("/");
+      if (brainPattern.test(rel)) {
+        const relParts = rel.split("/");
+        if (relParts.every(p => p && p !== "." && p !== "..")) {
+          return { kind: "brain", baseDir: canonicalGemini, absPath: path.join(canonicalGemini, ...relParts) };
+        }
+      }
     }
     throw new Error(
       `swarmPaneOutPath must be a workspace-relative .json path inside workspace or ~/.gemini/antigravity*/brain/<id>/.system_generated/swarm/plan.json: ${rawPath}`
@@ -1658,14 +1649,20 @@ function resolveSwarmPaneOutTarget(rawPath, canonicalRoot, platform = process.pl
   return { kind: "workspace", relPath: normalizePlanOutPath(trimmed, canonicalRoot, platform) };
 }
 
-function writeBrainSwarmPaneFile(absPath, bytes, allowReplace) {
-  const home = os.homedir();
-  const geminiBase = path.resolve(path.join(home, ".gemini"));
-  const relParts = path.relative(geminiBase, absPath).split(path.sep).filter(Boolean);
-  let cur = geminiBase;
-  if (fs.existsSync(cur) && fs.lstatSync(cur).isSymbolicLink()) {
-    throw new Error(`Refusing symlinked directory along swarmPaneOutPath: ${cur}`);
+function writeBrainSwarmPaneFile(baseDir, absPath, bytes, allowReplace) {
+  if (fs.existsSync(baseDir)) {
+    const baseStat = fs.lstatSync(baseDir);
+    if (baseStat.isSymbolicLink() || !baseStat.isDirectory()) {
+      throw new Error(`Invalid or symlinked base directory along swarmPaneOutPath: ${baseDir}`);
+    }
+  } else {
+    fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
   }
+  const relParts = path.relative(baseDir, absPath).split(path.sep);
+  if (relParts.length === 0 || relParts.some(p => !p || p === "." || p === "..")) {
+    throw new Error(`Invalid swarmPaneOutPath outside canonical ~/.gemini root: ${absPath}`);
+  }
+  let cur = baseDir;
   for (let i = 0; i < relParts.length - 1; i++) {
     cur = path.join(cur, relParts[i]);
     if (fs.existsSync(cur)) {
@@ -1686,9 +1683,14 @@ function writeBrainSwarmPaneFile(absPath, bytes, allowReplace) {
       throw new Error(`Target already exists: ${absPath} (pass --replace / replace: true to overwrite).`);
     }
   }
-  const tmpPath = `${absPath}.tmp-${process.pid}-${Date.now()}`;
+  const tmpPath = `${absPath}.tmp-${process.pid}-${randomUUID()}`;
   fs.writeFileSync(tmpPath, bytes, { mode: 0o600, flag: "wx" });
-  fs.renameSync(tmpPath, absPath);
+  try {
+    fs.renameSync(tmpPath, absPath);
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
 }
 
 function buildWaveSlice(plan, waveNumber) {
@@ -1734,32 +1736,7 @@ function buildWaveSlice(plan, waveNumber) {
 }
 
 function normalizePlanOutPath(rawOutPath, canonicalRoot, platform = process.platform) {
-  let candidate = typeof rawOutPath === "string" ? rawOutPath.trim() : "";
-  if (candidate && path.isAbsolute(candidate)) {
-    const relativized = relativizeContainedCliPath(candidate, canonicalRoot, { platform, allowEqual: false });
-    if (relativized) candidate = relativized;
-  }
-  if (
-    !candidate ||
-    CONTROL_CHAR_RE.test(candidate) ||
-    candidate.startsWith("/") ||
-    candidate.startsWith("\\") ||
-    path.isAbsolute(candidate) ||
-    /^[a-zA-Z]:/.test(candidate) ||
-    (platform !== "win32" && candidate.includes("\\"))
-  ) {
-    throw new Error(`outPath must be a workspace-relative .json path inside workspace: ${rawOutPath}`);
-  }
-  const posixOut = (platform === "win32" ? candidate.replace(/\\/g, "/") : candidate).replace(/^(?:\.\/)+/, "");
-  if (
-    !posixOut ||
-    posixOut.split("/").some(p => !p || p === "." || p === "..") ||
-    !posixOut.toLowerCase().endsWith(".json") ||
-    path.posix.basename(posixOut).toLowerCase() === ".json"
-  ) {
-    throw new Error(`outPath must be a workspace-relative .json path inside workspace: ${rawOutPath}`);
-  }
-  return posixOut;
+  return normalizeContainedJsonOutPath(rawOutPath, canonicalRoot, "outPath", platform);
 }
 
 function buildCompactPlanSummary(plan, explicitPath) {

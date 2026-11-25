@@ -421,7 +421,7 @@ try {
   for (const sub of [
     "setup", "install", "status", "uninstall", "restore-backups",
     "plan", "dispatch", "collect", "bundle-init", "fingerprint",
-    "inspect", "digest", "bundle", "verify", "finalize", "prune", "verdict"
+    "inspect", "digest", "audit-check", "bundle", "verify", "finalize", "prune", "verdict"
   ]) {
     const subHelp = spawnSync(process.execPath, [cli, sub, "--help"], { cwd: repoRoot, encoding: "utf8" });
     assert.equal(subHelp.status, 0, `UX-SQ-013: '${sub} --help' failed: ${subHelp.stderr}`);
