@@ -2826,17 +2826,26 @@ function buildBundleRecordsForAllSquads(root, options = {}) {
     }
   }
 
-  return workerSquads.map(w => {
+  const resolvedOutRels = workerSquads.map(w =>
+    typeof options.resolveOutPath === "function" ? options.resolveOutPath(w.squadId) : undefined
+  );
+  const sharedBatchIgnorePaths = [
+    ...(Array.isArray(options.ignoreRelPaths) ? options.ignoreRelPaths : []),
+    ...resolvedOutRels.filter(Boolean)
+  ];
+
+  return workerSquads.map((w, idx) => {
     const sqId = w.squadId;
     const idKeys = squadIdMapKeys.get(sqId);
     const scopedIdMap = Object.create(null);
     for (const [k, v] of Object.entries(fullIdMap)) {
       if (idKeys.has(k)) scopedIdMap[k] = v;
     }
-    const outRel = typeof options.resolveOutPath === "function" ? options.resolveOutPath(sqId) : undefined;
+    const outRel = resolvedOutRels[idx];
     let preReadSynthesis;
     const record = buildBundleRecordInit(root, {
       ...options,
+      ignoreRelPaths: sharedBatchIgnorePaths,
       squadId: sqId,
       idMap: scopedIdMap,
       handoffs: allHandoffs !== undefined ? handoffsBySquad.get(sqId) : undefined,

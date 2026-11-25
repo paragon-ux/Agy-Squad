@@ -3421,6 +3421,48 @@ try {
       const cmFinJson = JSON.parse(cmFinCompact.stdout);
       assert.equal(cmFinJson.results[0].uncarriedCitationsCount, 1, "FLOW-010: compact/multi-record finalize must report uncarriedCitationsCount");
       assert.deepEqual(cmFinJson.results[0].uncarriedUrls, ["https://example.com/uncarried-spec-doc"]);
+
+      // FIT-012 / FLOW-013: multi-squad bundle-init --all-squads --out-dir <non-scratch-dir> --digest -> finalize ignores sibling record paths
+      const multiManifestPath = path.join(s3Repo, "meta/multi-manifest.json");
+      fs.writeFileSync(
+        multiManifestPath,
+        JSON.stringify({
+          squads: {
+            sq1: { specialists: [{ role: "S1", objective: "Check app", scopeFiles: ["src/app.js"], readOnly: true }] },
+            sq2: { specialists: [{ role: "S2", objective: "Check app", scopeFiles: ["src/app.js"], readOnly: true }] }
+          }
+        }) + "\n",
+        "utf8"
+      );
+      const mPlanRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--workspace", s3Repo, "--manifest", "meta/multi-manifest.json", "--topology", "flat", "--no-integrity", "--out", "meta/multi-plan.json", "--replace"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(mPlanRes.status, 0, mPlanRes.stderr);
+      const mPlan = JSON.parse(fs.readFileSync(path.join(s3Repo, "meta/multi-plan.json"), "utf8"));
+      const mHandoffs = [];
+      for (const w of mPlan.workers) {
+        const sp = w.specialists[0];
+        fs.mkdirSync(path.dirname(path.join(s3Repo, sp.reportSlot)), { recursive: true });
+        fs.writeFileSync(path.join(s3Repo, sp.reportSlot), `# ${w.squadId}\nVerified src/app.js:1.\n`, "utf8");
+        fs.mkdirSync(path.dirname(path.join(s3Repo, w.synthesisSlot)), { recursive: true });
+        fs.writeFileSync(path.join(s3Repo, w.synthesisSlot), `# Lead ${w.squadId}\nContent Verdict: PASS\n`, "utf8");
+        mHandoffs.push({ sender: sp.workerName, message: `@coordinator READY ${sp.reportSlot} - ok` });
+      }
+      fs.writeFileSync(path.join(s3Repo, "meta/multi-handoffs.json"), JSON.stringify(mHandoffs) + "\n", "utf8");
+      const mBatchInit = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--workspace", s3Repo, "--plan", "meta/multi-plan.json", "--all-squads", "--handoffs", "meta/multi-handoffs.json", "--from-scope", "--digest", "--out-dir", "meta/records", "--replace"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(mBatchInit.status, 0, `FIT-012/FLOW-013: multi-squad non-scratch --out-dir --digest failed: ${mBatchInit.stderr}`);
+      const mBatchFin = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "--workspace", s3Repo, "meta/records/sq1.record.json", "meta/records/sq2.record.json", "--allow-unaudited", "--replace"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(mBatchFin.status, 0, `FIT-012/FLOW-013: multi-squad non-scratch finalize failed: ${mBatchFin.stderr}`);
     } finally {
       fs.rmSync(s3Parent, { recursive: true, force: true });
       fs.rmSync(s3Wt, { recursive: true, force: true });

@@ -1571,13 +1571,22 @@ async function main(args) {
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const loadedPositionals = positionals.map(rawRecPos =>
+      readRecordWithWorkspaceInference(baseRoot, explicit, rawRecPos, handoffsMod)
+    );
+    const allPositionalRecRels = loadedPositionals
+      .map(item => item.recRel)
+      .filter(rel => typeof rel === "string" && rel && !path.isAbsolute(rel));
     const finalizedResults = [];
-    for (const rawRecPos of positionals) {
-      const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecPos, handoffsMod);
+    for (const { record, effectiveRoot, recRel } of loadedPositionals) {
       const verifiedDirs = new Set([effectiveRoot]);
+      const mergedIgnorePaths = Array.from(
+        new Set([...(Array.isArray(record.baselineIgnorePaths) ? record.baselineIgnorePaths : []), ...allPositionalRecRels])
+      );
       const bundleInput = {
         ...record,
         ...(!path.isAbsolute(recRel) && !record.recordPath ? { recordPath: recRel } : {}),
+        ...(mergedIgnorePaths.length > 0 ? { baselineIgnorePaths: mergedIgnorePaths } : {}),
         ...(values["allow-unaudited"]
           ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
           : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
