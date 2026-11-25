@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle, verifyWorkerTraces } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -3716,6 +3716,43 @@ try {
       fs.rmSync(s3Parent, { recursive: true, force: true });
       fs.rmSync(s3Wt, { recursive: true, force: true });
       fs.rmSync(s3Brain, { recursive: true, force: true });
+    }
+  }
+
+  // SCRIPT-001/002, SEC-001, SVC-001, RUN-001: trace-check regressions
+  {
+    const tw = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-trace-")));
+    try {
+      const rec = { squadId: "s", readOnly: true, assignments: [{ conversationId: "w1", report: "scratch/r.md" }] };
+      const trace = (step, name) => {
+        const tp = path.join(tw, `${name}.jsonl`);
+        fs.writeFileSync(tp, JSON.stringify({ step_index: 0, content: "sender=C @w1", ...step }) + "\n");
+        return verifyWorkerTraces(tw, rec, { coordId: "C", traces: { w1: tp } });
+      };
+      const cmd = (CommandLine, n) => trace({ tool_calls: [{ name: "run_command", arguments: { CommandLine } }] }, n);
+      assert.equal(cmd("git grep -n patch -- mcp", "a").ok, true);
+      assert.equal(cmd("ls | grep rm", "b").ok, true);
+      assert.equal(cmd("rm file", "c").ok, false);
+      assert.equal(cmd("ls mcp > scratch/ls.txt", "d").ok, true);
+      assert.equal(cmd("ls mcp > src/x", "e").ok, false);
+      assert.equal(cmd("node -e 'require(\"fs\").writeFileSync(\"x\",\"y\")'", "f").ok, false);
+      assert.equal(cmd("git checkout .", "g").ok, false);
+      const meta = { Summary: "a", UserFacing: false, RequestFeedback: false };
+      assert.equal(trace({ tool_calls: [{ name: "write_file", arguments: { Path: path.join(tw, "src/brain/x.js"), Content: "x", ArtifactMetadata: meta } }] }, "h").ok, false);
+      const trunc = trace({ truncated_fields: ["tool_calls"], tool_calls: [{ name: "run_command", arguments: { CommandLine: "ls" } }] }, "i");
+      assert.ok(trunc.anomalies.some(a => a.includes("TRUNCATED_STEP_UNRESOLVED")));
+      const brain = path.join(tw, "brain");
+      for (const id of ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]) {
+        const d = path.join(brain, id, ".system_generated", "logs");
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, "transcript.jsonl"), JSON.stringify({ step_index: 0, content: "sender=C @specialist-1" }) + "\n");
+      }
+      const srec = { squadId: "s", readOnly: true, assignments: [{ conversationId: "specialist-1", report: "scratch/r.md" }] };
+      const noCoord = verifyWorkerTraces(tw, srec, { brainRoot: brain });
+      assert.ok(noCoord.anomalies.some(a => a.includes("MISSING_TRACE")));
+      assert.ok(!verifyWorkerTraces(tw, srec, { brainRoot: brain, coordId: "C" }).anomalies.some(a => a.includes("MISSING_TRACE")));
+    } finally {
+      fs.rmSync(tw, { recursive: true, force: true });
     }
   }
 

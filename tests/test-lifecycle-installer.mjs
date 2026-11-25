@@ -39,7 +39,7 @@ try {
   try {
     fs.cpSync(repoRoot, negRoot, {
       recursive: true,
-      filter: (src) => !src.includes(`${path.sep}scratch`) && !src.includes(`${path.sep}.git`)
+      filter: (src) => src !== path.join(repoRoot, "scratch") && !src.startsWith(path.join(repoRoot, "scratch") + path.sep) && !src.includes(`${path.sep}.git`)
     });
     const negPkgPath = path.join(negRoot, "package.json");
     const negPkg = JSON.parse(fs.readFileSync(negPkgPath, "utf8"));

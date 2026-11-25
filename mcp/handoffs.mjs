@@ -2271,8 +2271,10 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       }
     }
   }
+  let gitCheck = "not-recorded";
   if (Array.isArray(baseline.gitStatusPorcelain)) {
     const currentGit = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot, ignoreRelPaths);
+    gitCheck = currentGit ? "ok" : "skipped";
     if (currentGit) {
       const baselineSet = new Set(baseline.gitStatusPorcelain);
       const currentSet = new Set(currentGit.lines);
@@ -2284,6 +2286,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       }
     }
   }
+  return { gitCheck };
 }
 
 function relativizeContainedCliPath(inputPath, targetRoot, { platform = process.platform, allowEqual = false } = {}) {
@@ -3106,7 +3109,8 @@ function discoverBrainTranscriptForWorker(
   explicitTracePath,
   brainRootOverride,
   fallbackWorkerName,
-  canonicalWorkspaceRoot = null
+  canonicalWorkspaceRoot = null,
+  headCache = new Map()
 ) {
   if (typeof explicitTracePath === "string" && explicitTracePath.trim()) {
     const rawTrimmed = explicitTracePath.trim();
@@ -3154,6 +3158,12 @@ function discoverBrainTranscriptForWorker(
       ? fallbackWorkerName.trim()
       : null;
   const readHeadLines = (filePath, brainBaseDir) => {
+    if (headCache.has(filePath)) return headCache.get(filePath);
+    const result = readHeadLinesUncached(filePath, brainBaseDir);
+    headCache.set(filePath, result);
+    return result;
+  };
+  const readHeadLinesUncached = (filePath, brainBaseDir) => {
     let opened;
     try {
       opened = openSafeTraceFd(filePath, canonicalWorkspaceRoot, brainBaseDir);
@@ -3181,6 +3191,7 @@ function discoverBrainTranscriptForWorker(
       } catch {}
       if (!mentionTarget) continue;
     }
+    if (!coordId) continue;
     let sessionDirs;
     try {
       sessionDirs = fs.readdirSync(br, { withFileTypes: true });
@@ -3301,6 +3312,48 @@ function verifyWorkerTraces(root, record, options = {}) {
   const anomalies = [];
   const warnings = [];
   const workerResults = [];
+  const headCache = new Map();
+  const brainDirs = [];
+  {
+    const addBrain = (p) => { try { brainDirs.push(fs.realpathSync.native(p)); } catch {} };
+    if (typeof options.brainRoot === "string" && options.brainRoot.trim()) addBrain(options.brainRoot.trim());
+    else {
+      try {
+        const g = path.join(os.homedir(), ".gemini");
+        for (const e of fs.readdirSync(g, { withFileTypes: true })) {
+          if (e.isDirectory() && e.name.startsWith("antigravity")) addBrain(path.join(g, e.name, "brain"));
+        }
+      } catch {}
+    }
+  }
+  const isInBrainDir = (rawTarget) => {
+    let p = path.resolve(rawTarget.replace(/^file:\/\//i, ""));
+    try { p = path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p)); } catch {}
+    return brainDirs.some(b => p.startsWith(b + path.sep));
+  };
+  const hasWritingCommand = (cmd) => {
+    const unquoted = cmd.replace(/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "''");
+    const redirRe = /(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?!&\d)(\S+)/g;
+    for (let m; (m = redirRe.exec(unquoted)); ) {
+      const target = m[1];
+      if (target === "/dev/null") continue;
+      const rel = normalizeToolTargetToRel(target, canonicalRoot);
+      if (rel && !rel.startsWith("external:") && (isScratchOrReportRelPath(rel) || rel === reportSlotForCmd.value)) continue;
+      return true;
+    }
+    for (const seg of unquoted.split(/&&|\|\||\$\(|[;&|\n(]/)) {
+      const words = seg.trim().split(/\s+/).filter(Boolean);
+      while (words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || words[0] === "sudo")) words.shift();
+      const head = words[0];
+      if (!head) continue;
+      if (/^(?:rm|mv|cp|dd|tee|touch|truncate|mkdir|rmdir|unlink|chmod|chown|patch)$/.test(head)) return true;
+      if (/^(?:sed|perl)$/.test(head) && words.some(w => /^-[a-z]*i/.test(w))) return true;
+      if (head === "git" && /^git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+(?:--(?:\s|$)|\.(?:\s|$))|apply|am|cherry-pick|merge|rebase|restore|stash|commit)(?![\w-])/.test(words.join(" "))) return true;
+    }
+    return /\b(?:node|python3?|ruby|perl)\b/.test(unquoted) &&
+      /(?:\bfs\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|require\s*\([^)]*\)\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|open\s*\([^)]*,\s*['"][wa+]|Path\([^)]*\)\.write_)/.test(cmd);
+  };
+  const reportSlotForCmd = { value: "" };
 
   for (const assignment of record.assignments) {
     const workerKey = String(assignment?.conversationId ?? "").trim();
@@ -3309,6 +3362,7 @@ function verifyWorkerTraces(root, record, options = {}) {
         ? assignment.workerName.trim()
         : undefined;
     const reportSlot = String(assignment?.report ?? "").trim();
+    reportSlotForCmd.value = reportSlot;
     const explicitTrace = traceMap[workerKey] ?? (explicitWorkerName ? traceMap[explicitWorkerName] : undefined);
     const discovered = discoverBrainTranscriptForWorker(
       workerKey,
@@ -3316,7 +3370,8 @@ function verifyWorkerTraces(root, record, options = {}) {
       explicitTrace,
       options.brainRoot,
       explicitWorkerName,
-      canonicalRoot
+      canonicalRoot,
+      headCache
     );
     if (!discovered) {
       anomalies.push(`${workerKey}: MISSING_TRACE`);
@@ -3366,6 +3421,7 @@ function verifyWorkerTraces(root, record, options = {}) {
     let corruptLineSeen = false;
 
     let fullTraceLoaded = false;
+    let truncatedUnresolved = false;
     let fullByStepIndex = null;
     let fullByLineIndex = null;
     const hydrateTruncatedStep = (compactStep, lineIdx) => {
@@ -3405,6 +3461,10 @@ function verifyWorkerTraces(root, record, options = {}) {
       }
       if (fullByLineIndex && fullByLineIndex.has(lineIdx)) {
         return fullByLineIndex.get(lineIdx);
+      }
+      if (Array.isArray(compactStep.tool_calls) && compactStep.tool_calls.length > 0 && !truncatedUnresolved) {
+        truncatedUnresolved = true;
+        anomalies.push(`${workerKey}: TRUNCATED_STEP_UNRESOLVED`);
       }
       return compactStep;
     };
@@ -3469,24 +3529,11 @@ function verifyWorkerTraces(root, record, options = {}) {
               if (nonFlagArgs.length <= 1) inspectState.inspectedRoot = true;
             }
             if (isReadOnly) {
-              const unquoted = cmd.replace(/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "''");
-              const hasOutputRedir = /(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?!&\d|\/dev\/null(?:\s|$|[;|&)]))\S+/.test(unquoted);
-              const hasMutatingCmd =
-                /\b(?:rm|mv|cp|dd|tee|touch|truncate|mkdir|rmdir|unlink|chmod|chown|patch)\b|(?:\bsed|\bperl)\s+-i\b|\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+|apply|am|cherry-pick|merge|rebase|restore|stash|commit)\b/.test(
-                  unquoted
-                );
-              const hasInlineScriptWrite =
-                /\b(?:node|python3?|ruby|perl)\b/.test(unquoted) &&
-                /(?:\bfs\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|open\s*\([^)]*,\s*['"][wa+]|Path\([^)]*\)\.write_)/.test(
-                  cmd
-                );
-              if (hasOutputRedir || hasMutatingCmd || hasInlineScriptWrite) {
-                unauthorizedWrites.add("run_command");
-              }
+              if (hasWritingCommand(cmd)) unauthorizedWrites.add("run_command");
             }
           }
         } else if (WRITE_TOOL_NAMES.has(rawName)) {
-          if (args.ArtifactMetadata && typeof targetRaw === "string" && targetRaw.includes("/brain/")) {
+          if (args.ArtifactMetadata && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
             continue;
           }
           const rel = normalizeToolTargetToRel(targetRaw, canonicalRoot);

@@ -1686,11 +1686,13 @@ function writeBrainSwarmPaneFile(baseDir, absPath, bytes, allowReplace) {
   const tmpPath = `${absPath}.tmp-${process.pid}-${randomUUID()}`;
   fs.writeFileSync(tmpPath, bytes, { mode: 0o600, flag: "wx" });
   try {
-    fs.renameSync(tmpPath, absPath);
+    if (allowReplace) fs.renameSync(tmpPath, absPath);
+    else fs.linkSync(tmpPath, absPath); // exclusive create: fails with EEXIST if a file appeared since the check
   } catch (err) {
     try { fs.unlinkSync(tmpPath); } catch {}
     throw err;
   }
+  if (!allowReplace) fs.unlinkSync(tmpPath);
 }
 
 function buildWaveSlice(plan, waveNumber) {

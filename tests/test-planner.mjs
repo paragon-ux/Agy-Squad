@@ -195,7 +195,9 @@ try {
     },
     executionMode: "swarm"
   }, root);
-  const threeSquadBytes = Buffer.byteLength(JSON.stringify(compactThreeSquad), "utf8");
+  // Size budget excludes the workspace path (it appears many times and varies by OS temp dir).
+  const threeSquadJson = JSON.stringify(compactThreeSquad);
+  const threeSquadBytes = Buffer.byteLength(threeSquadJson.split(JSON.stringify(root).slice(1, -1)).join(""), "utf8");
   assert.ok(
     threeSquadBytes < 16384,
     `Expected compact 3-squad swarm plan < 16 KB, got ${threeSquadBytes} B`
