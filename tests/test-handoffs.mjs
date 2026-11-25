@@ -773,15 +773,22 @@ try {
     assert.equal(dryJson.collected.length, 3);
     assert.equal(fs.existsSync(path.join(svcCoord, s1Slot)), false);
 
-    // --strict fails when integrityAudit slot is missing from worktrees
+    // --strict fails when a Wave-1 worktree specialist slot (s2Slot) is missing, and succeeds post-Wave-1 when Wave-1 slots exist even before Wave-2/3 inherit slots run (FLOW-009)
     const strictMissing = spawnSync(
       process.execPath,
-      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2, "--strict"],
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--strict"],
       { cwd: svcCoord, encoding: "utf8" }
     );
     assert.notEqual(strictMissing.status, 0);
     assert.match(strictMissing.stderr, /Missing expected report slot/);
     assert.equal(fs.existsSync(path.join(svcCoord, s1Slot)), false, "--strict failure must be atomic with zero partial writes");
+
+    const strictPostWave1 = spawnSync(
+      process.execPath,
+      [agySquadCli, "collect", "--plan", "scratch/plan.json", "--from", svcWt1, "--from", svcWt2, "--strict", "--dry-run"],
+      { cwd: svcCoord, encoding: "utf8" }
+    );
+    assert.equal(strictPostWave1.status, 0, `FLOW-009: collect --plan --strict must succeed after Wave 1 before Wave-3 inherit audit runs: ${strictPostWave1.stderr}`);
 
     // Real collect copies slots atomically and is idempotent on repeat
     const realCollect = spawnSync(
@@ -3278,6 +3285,142 @@ try {
       );
       assert.notEqual(dotEmptyDigest.status, 0);
       assert.doesNotMatch(dotEmptyDigest.stderr, /Pass --from-scope/, "FIT-002: wildcard '.' empty-files error must not suggest --from-scope");
+
+      // 4. Stage 3b Regressions: FIT-010 (.scratch/ + non-scratch baselineIgnorePaths), FLOW-009 (post-Wave-1 collect --strict), FLOW-010 (batch finalize uncarriedUrls), ROI-009/FLOW-011 (transcript_full.jsonl hydration, grep_search/code-fence grounding, --id-map @workerName enforcement, bound UUIDs & audit-check)
+      const dotScratchPlanCli = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "plan",
+          "--workspace", s3Repo,
+          "--mode", "swarm",
+          "--read-only",
+          "--scope", "src/app.js",
+          "--role", "DotScratchSec",
+          "--out", ".scratch/ro-dotscratch-plan.json",
+          "FIT-010 .scratch and custom ignore check"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(dotScratchPlanCli.status, 0, dotScratchPlanCli.stderr);
+      const customMetaPlanCli = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "plan",
+          "--workspace", s3Repo,
+          "--mode", "swarm",
+          "--read-only",
+          "--scope", "src/app.js",
+          "--role", "CustomMetaSec",
+          "--out", "meta/plan.json",
+          "FIT-010 non-scratch outPath check"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(customMetaPlanCli.status, 0, customMetaPlanCli.stderr);
+      const cmSpecSlot = "scratch/cm-run/squad-task_squad/specialist-1/report.md";
+      const cmLeadSlot = "scratch/cm-run/squad-task_squad/lead/report.md";
+      fs.mkdirSync(path.join(s3Repo, path.dirname(cmSpecSlot)), { recursive: true });
+      fs.mkdirSync(path.join(s3Repo, path.dirname(cmLeadSlot)), { recursive: true });
+      fs.writeFileSync(
+        path.join(s3Repo, cmSpecSlot),
+        "# Spec\nChecked `src/app.js:1` via grep_search and see https://example.com/uncarried-spec-doc.\n```js\n// fake/not-a-real-cite.js:99 and src/util.js:1 inside fenced block must be ignored\n```\n",
+        "utf8"
+      );
+      fs.writeFileSync(path.join(s3Repo, cmLeadSlot), "# Synthesis\nContent Verdict: PASS\n", "utf8");
+      fs.writeFileSync(
+        path.join(s3Repo, "meta/handoffs.json"),
+        JSON.stringify([{ sender: "99999999-1111-2222-3333-444444444444", message: `READY ${cmSpecSlot} - ok` }]) + "\n",
+        "utf8"
+      );
+      const cmMappedUuid = "99999999-1111-2222-3333-444444444444";
+      const cmInit = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--workspace", s3Repo,
+          "--plan", "meta/plan.json",
+          "--report-root", "scratch/cm-run",
+          "--from-scope",
+          "--id-map", `custommetasec=${cmMappedUuid}`,
+          "--handoffs", "meta/handoffs.json",
+          "--coord-id", coordUuid,
+          "--digest",
+          "--out", "meta/record.json"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(cmInit.status, 0, `FIT-010: non-scratch plan/handoffs/record must pass readOnlyBaseline: ${cmInit.stderr}`);
+      const cmInitOut = JSON.parse(cmInit.stdout);
+      assert.match(cmInitOut.auditSwarmAdd.brief, /agy-squad audit-check --workspace .* --record meta\/record\.json --coord-id 11111111-2222-3333-4444-555555555555/, "ROI-009: bound auditSwarmAdd must include audit-check with bound record & coordId");
+      assert.match(cmInitOut.auditSwarmAdd.brief, new RegExp(`health --id ${cmMappedUuid} --json`), "ROI-009: bound auditSwarmAdd must interpolate mapped worker UUIDs in place of u1,u2");
+      const cmSavedRec = JSON.parse(fs.readFileSync(path.join(s3Repo, "meta/record.json"), "utf8"));
+      assert.equal(cmSavedRec.assignments[0].workerName, "custommetasec", "FLOW-011: workerName must persist alongside mapped UUID");
+      assert.ok(Array.isArray(cmSavedRec.baselineIgnorePaths) && cmSavedRec.baselineIgnorePaths.includes("meta/handoffs.json"));
+
+      // FLOW-011: wrong @workerName under --id-map UUID MUST fail audit-check, and truncated transcript.jsonl hydrated from transcript_full.jsonl + grep_search SearchPath MUST pass
+      const cmLogDir = path.join(s3Brain, cmMappedUuid, ".system_generated", "logs");
+      fs.mkdirSync(cmLogDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cmLogDir, "transcript.jsonl"),
+        JSON.stringify({ step_index: 1, content: `[Message] sender=${coordUuid} @wrong-worker-name` }) + "\n",
+        "utf8"
+      );
+      const wrongMentionRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "--record", "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(wrongMentionRes.status, 1, "FLOW-011: --id-map UUID must still enforce @<workerName> in Step 1");
+      assert.match(wrongMentionRes.stdout, /MISSING_MENTION \(@custommetasec\)/);
+
+      // Now test truncated_fields in transcript.jsonl hydrated from transcript_full.jsonl + grep_search SearchPath + fenced code citation ignored
+      fs.writeFileSync(
+        path.join(cmLogDir, "transcript.jsonl"),
+        [
+          JSON.stringify({ step_index: 1, content: "[Message] ...", truncated_fields: ["content"] }),
+          JSON.stringify({ step_index: 2, tool_calls: [{ name: "grep_search", arguments: "{trunc" }], truncated_fields: ["tool_calls"] })
+        ].join("\n") + "\n",
+        "utf8"
+      );
+      fs.writeFileSync(
+        path.join(cmLogDir, "transcript_full.jsonl"),
+        [
+          JSON.stringify({ step_index: 1, content: `[Message] sender=${coordUuid} @custommetasec Report slot: ${cmSpecSlot}` }),
+          JSON.stringify({
+            step_index: 2,
+            tool_calls: [
+              { name: "grep_search", arguments: { SearchPath: path.join(s3Repo, "src/app.js"), Query: "export" } },
+              { name: "write_file", arguments: { Path: path.join(s3Repo, cmSpecSlot) } }
+            ]
+          })
+        ].join("\n") + "\n",
+        "utf8"
+      );
+      const hydratedPass = spawnSync(
+        process.execPath,
+        [agySquadCli, "audit-check", "--workspace", s3Repo, "--record", "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(hydratedPass.status, 0, `FLOW-011: hydrated transcript_full.jsonl + grep_search citation failed: ${hydratedPass.stdout}`);
+      const hydratedJson = JSON.parse(hydratedPass.stdout);
+      assert.equal(hydratedJson.ok, true);
+      assert.deepEqual(hydratedJson.workers[0].unverifiedCitations, []);
+
+      // FIT-010 + FLOW-010: inspect, digest, and finalize --compact on meta/record.json pass readOnlyBaseline and report uncarriedCitationsCount + uncarriedUrls
+      assert.equal(
+        spawnSync(process.execPath, [agySquadCli, "inspect", "--workspace", s3Repo, "meta/record.json"], { cwd: s3Parent, encoding: "utf8" }).status,
+        0,
+        "FIT-010: inspect must honor persisted baselineIgnorePaths"
+      );
+      const cmFinCompact = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "--workspace", s3Repo, "meta/record.json", "--allow-unaudited", "--compact"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(cmFinCompact.status, 0, `FIT-010/FLOW-010: finalize --compact failed: ${cmFinCompact.stderr}`);
+      const cmFinJson = JSON.parse(cmFinCompact.stdout);
+      assert.equal(cmFinJson.results[0].uncarriedCitationsCount, 1, "FLOW-010: compact/multi-record finalize must report uncarriedCitationsCount");
+      assert.deepEqual(cmFinJson.results[0].uncarriedUrls, ["https://example.com/uncarried-spec-doc"]);
     } finally {
       fs.rmSync(s3Parent, { recursive: true, force: true });
       fs.rmSync(s3Wt, { recursive: true, force: true });

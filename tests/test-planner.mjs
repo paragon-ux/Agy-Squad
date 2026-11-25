@@ -1130,7 +1130,8 @@ try {
     assert.match(swarmAuditLeadSpec.Prompt, /list --parent <coordId> --lineage --json/);
     assert.match(swarmAuditLeadSpec.Prompt, /health --id u1,u2 --json/);
     assert.match(swarmAuditLeadSpec.Prompt, /step 1 --id <uuid> --field content/);
-    assert.match(swarmAuditLeadSpec.Prompt, /query --id <uuid> --tool write_file,edit_file --errors/);
+    assert.match(swarmAuditLeadSpec.Prompt, /query "write_file\|edit_file" --id <uuid> --summary --include-tools/);
+    assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--tool\b|--errors\b/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--out <scratch>|read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
 
     // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and Wave-2 /swarm lead wording
@@ -1710,8 +1711,9 @@ try {
         }
       }
       assert.equal(w.readOnly, true);
-      assert.ok(w.readOnlyBaseline && typeof w.readOnlyBaseline.files === "object");
+      assert.equal(w.readOnlyBaseline, undefined, "FIT-009: readOnlyBaseline is hoisted to plan.readOnlyBaseline");
     }
+    assert.ok(selfDiagDecoupledPlan.readOnlyBaseline && typeof selfDiagDecoupledPlan.readOnlyBaseline.files === "object");
     for (const a of selfDiagDecoupledPlan.integrityAuditPlan) {
       assert.equal(a.wave, 3);
       assert.ok(a.workerName.startsWith("audit-"), `FIT-004: expected audit- prefix on ${a.workerName}`);
@@ -1851,6 +1853,85 @@ try {
       /Large files \(slice <=600L, <45KiB\): roi002\/big\.js \(805L\//,
       "ROI-002: files >750L must emit compact slice hint"
     );
+
+    // Stage 3b Regressions: ROI-009, FIT-009/ROI-010, FLOW-012, ROI-011
+    for (const a of selfDiagDecoupledPlan.integrityAuditPlan) {
+      assert.match(a.swarmAdd.brief, /agy-squad audit-check --workspace .* --record .* \[--coord-id <coordId>\]/, "ROI-009: compiled auditor brief must wire audit-check");
+      assert.doesNotMatch(a.swarmAdd.brief, /--tool\b|--errors\b/, "ROI-009: auditor brief must not emit invalid --tool/--errors flags");
+    }
+    assert.equal(
+      selfDiagDecoupledPlan.verificationPipeline.some(step => /\bagy-squad verdict\b/.test(step)),
+      false,
+      "FLOW-012: verificationPipeline must omit redundant standalone verdict --integrity commands"
+    );
+    const s2SelfDiagBrief = selfDiagDecoupledPlan.workers[1].specialists[1].swarmAdd.brief;
+    assert.match(s2SelfDiagBrief, /scripts\/install-register\.mjs \(\d+L\/\d+KiB\)/, "ROI-011: MAX_LARGE_FILE_HINTS=10 must annotate all 8 oversized files without clipping install-register.mjs");
+    assert.doesNotMatch(s2SelfDiagBrief, /\+\d+ more/, "ROI-011: runtime-diag-governan-s2 must have 0 '+N more' hint truncation");
+
+    // FIT-009 / ROI-010: self-diag-plan.json < 40 KB (< 45 KiB), compact summary includes swarmPane + waveFiles, sidecars <= 13 KB, and --emit-wave / --swarm-pane-out work
+    const selfDiagOutRel = "scratch/s3b-self-diag.json";
+    const selfDiagPaneRel = "scratch/s3b-pane.json";
+    const selfDiagSaved = planSquadCohort(
+      {
+        manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+        reportRoot: "scratch/custom-root",
+        outPath: selfDiagOutRel,
+        swarmPaneOutPath: selfDiagPaneRel,
+        replace: true
+      },
+      repoRoot
+    );
+    try {
+      const savedPlanBytes = fs.statSync(path.join(repoRoot, selfDiagOutRel)).size;
+      const savedW1Bytes = fs.statSync(path.join(repoRoot, "scratch/s3b-self-diag.wave1.json")).size;
+      const savedW2Bytes = fs.statSync(path.join(repoRoot, "scratch/s3b-self-diag.wave2.json")).size;
+      const savedPaneObj = JSON.parse(fs.readFileSync(path.join(repoRoot, selfDiagPaneRel), "utf8"));
+      assert.ok(savedPlanBytes < 40_000, `FIT-009: self-diag-plan.json must stay < 40,000 B, got ${savedPlanBytes} B`);
+      assert.ok(savedW1Bytes < 13_000, `FIT-009: .wave1.json must stay < 13,000 B, got ${savedW1Bytes} B`);
+      assert.ok(savedW2Bytes < 13_000, `FIT-009: .wave2.json must stay < 13,000 B, got ${savedW2Bytes} B`);
+      assert.equal(savedPaneObj.threads.length, 3);
+      const compactSummary = JSON.parse(
+        handleSquadPlanner(
+          {
+            manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+            outPath: selfDiagOutRel,
+            replace: true
+          },
+          repoRoot
+        ).content[0].text
+      );
+      assert.ok(compactSummary.swarmPane && compactSummary.swarmPane.threads.length === 3, "FIT-009: buildCompactPlanSummary must include swarmPane");
+      assert.deepEqual(compactSummary.waveFiles, {
+        wave1: "scratch/s3b-self-diag.wave1.json",
+        wave2: "scratch/s3b-self-diag.wave2.json"
+      });
+      assert.ok(Buffer.byteLength(JSON.stringify(compactSummary, null, 2), "utf8") < 8000);
+      assert.equal(selfDiagSaved.swarmPanePath, selfDiagPaneRel);
+
+      const mcpWave1 = JSON.parse(
+        handleSquadPlanner(
+          {
+            manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+            emitWave: 1
+          },
+          repoRoot
+        ).content[0].text
+      );
+      assert.equal(mcpWave1.wave, 1);
+      assert.equal(mcpWave1.swarmAdd.length, 6);
+      assert.equal(mcpWave1.swarmAdd[0].action, "add");
+    } finally {
+      for (const rel of [selfDiagOutRel, "scratch/s3b-self-diag.wave1.json", "scratch/s3b-self-diag.wave2.json", selfDiagPaneRel]) {
+        fs.rmSync(path.join(repoRoot, rel), { force: true });
+      }
+    }
+    const cliEmitW2 = runCli(["plan", "--mode", "swarm", "--scope", "src", "--role", "A", "--emit-wave", "1", "Wave slice CLI test"]);
+    assert.equal(cliEmitW2.status, 0, cliEmitW2.stderr);
+    const cliEmitW2Obj = JSON.parse(cliEmitW2.stdout);
+    assert.equal(cliEmitW2.status, 0);
+    assert.equal(cliEmitW2Obj.wave, 1);
+    assert.equal(cliEmitW2Obj.swarmAdd.length, 1);
+    assert.equal(handleSquadPlanner({ task: "Bad pane escape", swarmPaneOutPath: "/tmp/outside-pane.json" }, root).isError, true);
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

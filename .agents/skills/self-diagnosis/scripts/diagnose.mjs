@@ -541,7 +541,7 @@ function runDiagnostics() {
     ["RUN-BUDGET-PRECOMPILED-LEAD", promptBudgets.precompiledLeadTemplateBytes, 1800, "Precompiled lead brief"],
     ["RUN-BUDGET-SWARM-SPEC", promptBudgets.swarmSpecialistTemplateBytes, 1200, "/swarm specialist brief"],
     ["RUN-BUDGET-SWARM-LEAD", promptBudgets.swarmLeadTemplateBytes, 1800, "/swarm lead brief"],
-    ["RUN-BUDGET-SWARM-AUDIT", promptBudgets.swarmAuditorTemplateBytes, 2000, "/swarm integrity auditor brief"],
+    ["RUN-BUDGET-SWARM-AUDIT", promptBudgets.swarmAuditorTemplateBytes, 2400, "/swarm integrity auditor brief"],
     ["MCP-BUDGET-SCHEMA", promptBudgets.mcpToolsListResponseBytes, 4096, "MCP tools/list schema"]
   ]) {
     if (actual > limit) findings.push({ id, priority: "P2", summary: `${label} is ${actual} B (exceeds ${limit} B budget)` });

@@ -182,7 +182,7 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
     {
       spec: {
         role: "Integrity Auditor",
-        objective: `Audit squad '${resolvedTarget}' alignment, traces, and evidence.`,
+        objective: `Audit '${resolvedTarget}' traces & evidence.`,
         scopeFiles: defaultAuditScopes,
         expectedDeliverable: [
           "Standalone lines (plain text, no backticks):",

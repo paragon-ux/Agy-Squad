@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -989,6 +989,11 @@ function inspectReports(root, record, verifiedDirs = new Set(), { rejectLooseOnN
 function inspectHandoffs(root, record, options = {}) {
   const verifiedDirs = options?.verifiedDirs ?? new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
+  if (record?.readOnlyBaseline !== undefined) {
+    verifyReadOnlyBaseline(canonicalRoot, record.readOnlyBaseline, resolveReportRoot(record), {
+      ignoreRelPaths: optionsRecordIgnorePaths(record)
+    });
+  }
   return inspectReports(canonicalRoot, record, verifiedDirs).map(({ conversationId, report, status }) => ({
     conversationId,
     report,
@@ -1540,12 +1545,16 @@ function collectReportSlots(root, options = {}) {
 
   const targetSlotSet = new Set();
   const inheritSlotSet = new Set();
-  const addSlot = (slot, isInherit = false) => {
+  const optionalPlanInheritSlots = new Set();
+  const addSlot = (slot, isInherit = false, optionalInPlan = false) => {
     validateReportSlotPath(slot);
     const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot;
     targetSlotSet.add(resolvedSlot);
     if (isInherit) {
       inheritSlotSet.add(resolvedSlot);
+    }
+    if (optionalInPlan) {
+      optionalPlanInheritSlots.add(resolvedSlot);
     }
   };
   let explicitExpectations = false;
@@ -1562,7 +1571,8 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (w?.lead?.reportSlot !== undefined) {
-        addSlot(w.lead.reportSlot, w.lead.swarmAdd?.workspace === "inherit");
+        const leadIsInherit = w.lead.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(w.lead.reportSlot, leadIsInherit, leadIsInherit);
       }
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
@@ -1574,16 +1584,15 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (entry?.reportSlot !== undefined) {
-        addSlot(
-          entry.reportSlot,
-          plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit")
-        );
+        const entryIsInherit = plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit");
+        addSlot(entry.reportSlot, entryIsInherit, entryIsInherit);
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
       if (audit?.reportSlot !== undefined) {
-        addSlot(audit.reportSlot, audit.swarmAdd?.workspace === "inherit");
+        const auditIsInherit = audit.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(audit.reportSlot, auditIsInherit, auditIsInherit);
       }
     }
     if (squadId !== undefined && !matchedPlanSquad) {
@@ -1710,6 +1719,7 @@ function collectReportSlots(root, options = {}) {
   const verifiedInheritDirs = new Set([root]);
   const missing = targetSlots.filter(slotRel => {
     if (foundBySlot.has(slotRel)) return false;
+    if (optionalPlanInheritSlots.has(slotRel)) return false;
     if (inheritSlotSet.has(slotRel)) {
       const rootExisting = readIfPresentWithStat(root, slotRel, verifiedInheritDirs);
       if (rootExisting && decodeUtf8(rootExisting.bytes, slotRel).trim().length > 0) {
@@ -1859,7 +1869,7 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
       ...(w.readOnly === true || plan.readOnly === true ? { readOnly: true } : {}),
       ...(isPlainObject(w.readOnlyBaseline)
         ? { readOnlyBaseline: w.readOnlyBaseline }
-        : isPlainObject(plan.readOnlyBaseline)
+        : (w.readOnly === true || plan.readOnly === true) && isPlainObject(plan.readOnlyBaseline)
           ? { readOnlyBaseline: plan.readOnlyBaseline }
           : {}),
       verdict: "PASS",
@@ -1888,6 +1898,8 @@ function isScratchOrReportRelPath(relPosix, resolvedReportRoot = defaultReportRo
   return (
     relPosix === "scratch" ||
     relPosix.startsWith("scratch/") ||
+    relPosix === ".scratch" ||
+    relPosix.startsWith(".scratch/") ||
     relPosix === scratchBase ||
     relPosix.startsWith(`${scratchBase}/`) ||
     relPosix === resolvedReportRoot ||
@@ -1956,19 +1968,46 @@ function optionsRecordIgnorePaths(record, extraPaths = []) {
   if (typeof record?.recordPath === "string" && record.recordPath.trim()) {
     out.add(record.recordPath.trim());
   }
+  if (Array.isArray(record?.baselineIgnorePaths)) {
+    for (const p of record.baselineIgnorePaths) {
+      if (typeof p === "string" && p.trim()) out.add(p.trim());
+    }
+  }
+  if (Array.isArray(record?.readOnlyBaseline?.baselineIgnorePaths)) {
+    for (const p of record.readOnlyBaseline.baselineIgnorePaths) {
+      if (typeof p === "string" && p.trim()) out.add(p.trim());
+    }
+  }
   for (const p of extraPaths) {
     if (typeof p === "string" && p.trim()) out.add(p.trim());
   }
   return out;
 }
 
-function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaultReportRoot(), cache = null) {
+const READONLY_BASELINE_DIGEST_HEX_LEN = 16;
+
+function matchesBaselineDigest(actualFullHex, expectedHex) {
+  return (
+    typeof expectedHex === "string" &&
+    /^[0-9a-f]{16,64}$/.test(expectedHex) &&
+    (expectedHex.length === 64 ? actualFullHex === expectedHex : actualFullHex.startsWith(expectedHex))
+  );
+}
+
+function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaultReportRoot(), cache = null, options = {}) {
   const verifiedDirs = new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
+  const rawIgnore = options?.ignoreRelPaths instanceof Set
+    ? [...options.ignoreRelPaths]
+    : Array.isArray(options?.ignoreRelPaths)
+      ? options.ignoreRelPaths
+      : [];
+  const ignoreList = [...new Set(rawIgnore.filter(p => typeof p === "string" && p.trim()).map(p => p.trim()))].sort();
+  const ignoreSet = ignoreList.length > 0 ? new Set(ignoreList) : null;
   const shaCache = cache?.shaCache instanceof Map ? cache.shaCache : new Map();
   const hashCached = (relPosix) => {
     if (shaCache.has(relPosix)) return shaCache.get(relPosix);
-    const digest = sha256(readFile(canonicalRoot, relPosix, verifiedDirs));
+    const digest = sha256(readFile(canonicalRoot, relPosix, verifiedDirs)).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
     shaCache.set(relPosix, digest);
     return digest;
   };
@@ -1983,7 +2022,7 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
     const existingEntries = [];
     for (const entry of nonWildcardEntries) {
       const trimmed = entry.trim();
-      if (isScratchOrReportRelPath(trimmed, resolvedReportRoot)) continue;
+      if (isScratchOrReportRelPath(trimmed, resolvedReportRoot) || ignoreSet?.has(trimmed)) continue;
       const abs = path.join(canonicalRoot, trimmed);
       let st;
       try {
@@ -2017,29 +2056,32 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
       }
     }
   }
-  const files = Object.fromEntries(expandedFiles.map(rel => [rel, hashCached(rel)]));
+  const filteredExpanded = ignoreSet ? expandedFiles.filter(rel => !ignoreSet.has(rel)) : expandedFiles;
+  const files = Object.fromEntries(filteredExpanded.map(rel => [rel, hashCached(rel)]));
   let gitSnapshot = cache?.gitSnapshot;
   if (gitSnapshot === undefined) {
-    gitSnapshot = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot) ?? null;
+    gitSnapshot = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot, ignoreSet) ?? null;
     if (cache && typeof cache === "object") cache.gitSnapshot = gitSnapshot;
   }
   let dirtyFiles;
   if (gitSnapshot && gitSnapshot.dirtyPaths.length > 0) {
     const dirtyMap = {};
     for (const rel of gitSnapshot.dirtyPaths.slice(0, 64)) {
-      if (Object.hasOwn(files, rel)) continue;
+      if (Object.hasOwn(files, rel) || ignoreSet?.has(rel)) continue;
       try {
         const opened = readIfPresentWithStat(canonicalRoot, rel, verifiedDirs);
-        if (opened) dirtyMap[rel] = sha256(opened.bytes);
+        if (opened) dirtyMap[rel] = sha256(opened.bytes).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
       } catch {}
     }
     if (Object.keys(dirtyMap).length > 0) dirtyFiles = dirtyMap;
   }
+  const nonScratchIgnore = ignoreList.filter(p => !isScratchOrReportRelPath(p, resolvedReportRoot));
   return {
     files,
     ...(filesCapped ? { filesCapped: true } : {}),
     ...(!filesCapped && scopedDirs.length > 0 ? { scopedDirs } : {}),
     ...(!filesCapped && missingScopeEntries.length > 0 ? { missingScopeEntries } : {}),
+    ...(nonScratchIgnore.length > 0 ? { baselineIgnorePaths: nonScratchIgnore } : {}),
     ...(gitSnapshot ? { gitStatusPorcelain: gitSnapshot.lines } : {}),
     ...(dirtyFiles ? { dirtyFiles } : {})
   };
@@ -2049,9 +2091,14 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
   if (!isPlainObject(baseline)) return;
   const verifiedDirs = new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
-  const ignoreRelPaths = options?.ignoreRelPaths instanceof Set
-    ? options.ignoreRelPaths
-    : new Set(Array.isArray(options?.ignoreRelPaths) ? options.ignoreRelPaths : []);
+  const ignoreRelPaths = new Set([
+    ...(options?.ignoreRelPaths instanceof Set
+      ? options.ignoreRelPaths
+      : Array.isArray(options?.ignoreRelPaths)
+        ? options.ignoreRelPaths
+        : []),
+    ...(Array.isArray(baseline.baselineIgnorePaths) ? baseline.baselineIgnorePaths : [])
+  ]);
   const baselineFiles = isPlainObject(baseline.files) ? baseline.files : {};
   for (const [relPath, expectedHash] of Object.entries(baselineFiles)) {
     let opened;
@@ -2064,7 +2111,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       throw new Error(`Read-only containment violation: baseline file '${relPath}' was deleted during execution.`);
     }
     const actualHash = sha256(opened.bytes);
-    if (actualHash !== expectedHash) {
+    if (!matchesBaselineDigest(actualHash, expectedHash)) {
       throw new Error(`Read-only containment violation: baseline file '${relPath}' was modified during execution.`);
     }
   }
@@ -2076,7 +2123,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       } catch (err) {
         throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' changed (${err.message}).`);
       }
-      if (!opened || sha256(opened.bytes) !== expectedHash) {
+      if (!opened || !matchesBaselineDigest(sha256(opened.bytes), expectedHash)) {
         throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was modified or deleted during execution.`);
       }
     }
@@ -2363,8 +2410,27 @@ function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult,
   }
   const matching = plan.integrityAuditPlan.filter(a => a && a.targetSquad === record.squadId && isPlainObject(a.swarmAdd));
   if (matching.length === 0) return undefined;
-  const { coordId, handoffSeqs } = options;
+  const { coordId, handoffSeqs, idMap } = options;
   const effectiveRecordPath = outRel ?? record.recordPath ?? recordSlotPath(record.squadId, record.reportRoot);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const mappedUuids = [];
+  const seenUuids = new Set();
+  for (const a of record.assignments ?? []) {
+    const cid = typeof a?.conversationId === "string" ? a.conversationId.trim() : "";
+    if (uuidRe.test(cid) && !seenUuids.has(cid)) {
+      seenUuids.add(cid);
+      mappedUuids.push(cid);
+    }
+  }
+  if (isPlainObject(idMap)) {
+    for (const val of Object.values(idMap)) {
+      const cid = typeof val === "string" ? val.trim() : "";
+      if (uuidRe.test(cid) && !seenUuids.has(cid)) {
+        seenUuids.add(cid);
+        mappedUuids.push(cid);
+      }
+    }
+  }
   const bindOne = (auditEntry) => {
     const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[0]
       ? record.integrityAuditSlots[0]
@@ -2387,7 +2453,12 @@ function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult,
       brief = brief.replace(/Evidence Digest:\s*<sha256>/g, `Evidence Digest: ${digestResult.evidenceDigest}`);
     }
     if (typeof coordId === "string" && coordId.trim()) {
-      brief = brief.replaceAll("<coordId>", coordId.trim());
+      const trimmedCoord = coordId.trim();
+      brief = brief.replaceAll("[--coord-id <coordId>]", `--coord-id ${trimmedCoord}`);
+      brief = brief.replaceAll("<coordId>", trimmedCoord);
+    }
+    if (mappedUuids.length > 0) {
+      brief = brief.replaceAll("u1,u2", mappedUuids.join(","));
     }
     if (Array.isArray(handoffSeqs) && handoffSeqs.length > 0) {
       brief = brief.replace(
@@ -2480,13 +2551,29 @@ function buildBundleRecordInit(root, options = {}) {
 
   const readOnlyBaseline = isPlainObject(template.readOnlyBaseline) ? template.readOnlyBaseline : undefined;
   const isReadOnlySquad = Boolean(template.readOnly === true || readOnlyBaseline);
+  const planWavePaths = isPlainObject(rawPlan.waveFiles) ? Object.values(rawPlan.waveFiles) : [];
+  const planPanePath =
+    typeof rawPlan.swarmPanePath === "string" && !path.isAbsolute(rawPlan.swarmPanePath)
+      ? rawPlan.swarmPanePath
+      : undefined;
+  const combinedIgnoreList = [
+    ...new Set(
+      [
+        ...(Array.isArray(readOnlyBaseline?.baselineIgnorePaths) ? readOnlyBaseline.baselineIgnorePaths : []),
+        ...(typeof rawPlan.path === "string" ? [rawPlan.path] : []),
+        ...planWavePaths,
+        planPanePath,
+        ...(Array.isArray(ignoreRelPaths) ? ignoreRelPaths : []),
+        explicitRecordPath
+      ]
+        .filter(p => typeof p === "string" && p.trim())
+        .map(p => p.trim())
+    )
+  ];
+  const persistedIgnorePaths = combinedIgnoreList.filter(p => !isScratchOrReportRelPath(p, resolvedReportRoot));
   if (readOnlyBaseline) {
     verifyReadOnlyBaseline(root, readOnlyBaseline, resolvedReportRoot, {
-      ignoreRelPaths: new Set(
-        [...(Array.isArray(ignoreRelPaths) ? ignoreRelPaths : []), explicitRecordPath].filter(
-          p => typeof p === "string" && p.trim()
-        )
-      )
+      ignoreRelPaths: new Set(combinedIgnoreList)
     });
   }
 
@@ -2539,8 +2626,22 @@ function buildBundleRecordInit(root, options = {}) {
     } else if (plan.executionMode !== "swarm" && hasRealConversationId(entry)) {
       nextId = entry.conversationId.trim();
     }
+    const explicitItemWorkerName =
+      typeof item.workerName === "string" && item.workerName.trim() ? item.workerName.trim() : undefined;
+    const swarmRosterName =
+      plan.executionMode === "swarm"
+        ? explicitItemWorkerName ??
+          (typeof (slotEntry?.workerName ?? workerEntry?.workerName) === "string"
+            ? (slotEntry?.workerName ?? workerEntry?.workerName).trim()
+            : typeof item.conversationId === "string" && !/^<.*>$/.test(item.conversationId.trim())
+              ? item.conversationId.trim()
+              : undefined)
+        : explicitItemWorkerName;
     return {
       conversationId: nextId,
+      ...(swarmRosterName && (explicitItemWorkerName || swarmRosterName !== nextId)
+        ? { workerName: swarmRosterName }
+        : {}),
       report: slotPath
     };
   });
@@ -2629,6 +2730,7 @@ function buildBundleRecordInit(root, options = {}) {
     workspace: root,
     reportRoot: resolvedReportRoot,
     ...(typeof explicitRecordPath === "string" && explicitRecordPath ? { recordPath: explicitRecordPath } : {}),
+    ...(persistedIgnorePaths.length > 0 ? { baselineIgnorePaths: persistedIgnorePaths } : {}),
     ...(isReadOnlySquad ? { readOnly: true } : {}),
     ...(readOnlyBaseline ? { readOnlyBaseline } : {}),
     verdict: resolvedVerdict,
@@ -2746,7 +2848,7 @@ function buildBundleRecordsForAllSquads(root, options = {}) {
   });
 }
 
-function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath, brainRootOverride) {
+function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath, brainRootOverride, fallbackWorkerName) {
   if (typeof explicitTracePath === "string" && explicitTracePath.trim()) {
     const resolved = path.resolve(explicitTracePath.trim());
     return fs.existsSync(resolved) ? resolved : null;
@@ -2769,10 +2871,16 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
     }
   }
   const isUuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workerKey);
+  const mentionTarget = !isUuidLike
+    ? workerKey
+    : typeof fallbackWorkerName === "string" && fallbackWorkerName.trim()
+      ? fallbackWorkerName.trim()
+      : null;
   for (const br of candidateBrainRoots) {
     if (isUuidLike) {
       const direct = path.join(br, workerKey, ".system_generated", "logs", "transcript.jsonl");
       if (fs.existsSync(direct)) return direct;
+      if (!mentionTarget) continue;
     }
     let sessionDirs;
     try {
@@ -2780,30 +2888,39 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
     } catch {
       continue;
     }
-    const mentionRe = new RegExp(`@${workerKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_-])`, "i");
+    const mentionRe = new RegExp(`@${mentionTarget.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_-])`, "i");
     const matches = [];
-    for (const dirent of sessionDirs) {
-      if (!dirent.isDirectory()) continue;
-      if (coordId && dirent.name === coordId) continue;
-      const traceFile = path.join(br, dirent.name, ".system_generated", "logs", "transcript.jsonl");
+    const readHeadLines = (filePath) => {
       let fd;
       try {
-        fd = fs.openSync(traceFile, fs.constants.O_RDONLY);
+        fd = fs.openSync(filePath, fs.constants.O_RDONLY);
         const headBuf = Buffer.allocUnsafe(16384);
         const bytesRead = fs.readSync(fd, headBuf, 0, headBuf.length, 0);
         const st = fs.fstatSync(fd);
         const headText = headBuf.subarray(0, bytesRead).toString("utf8");
-        const firstLines = headText.split(/\r?\n/).slice(0, 4).join("\n");
-        if (!mentionRe.test(firstLines)) continue;
-        if (coordId && !firstLines.includes(`sender=${coordId}`)) continue;
-        matches.push({ traceFile, mtimeMs: st.mtimeMs });
+        return { firstLines: headText.split(/\r?\n/).slice(0, 4).join("\n"), mtimeMs: st.mtimeMs };
       } catch {
-        continue;
+        return null;
       } finally {
         if (fd !== undefined) {
           try { fs.closeSync(fd); } catch {}
         }
       }
+    };
+    for (const dirent of sessionDirs) {
+      if (!dirent.isDirectory()) continue;
+      if (coordId && dirent.name === coordId) continue;
+      const traceFile = path.join(br, dirent.name, ".system_generated", "logs", "transcript.jsonl");
+      const headInfo = readHeadLines(traceFile);
+      if (!headInfo) continue;
+      let checkLines = headInfo.firstLines;
+      if ((!mentionRe.test(checkLines) || (coordId && !checkLines.includes(`sender=${coordId}`))) && checkLines.includes("truncated_fields")) {
+        const fullHead = readHeadLines(path.join(path.dirname(traceFile), "transcript_full.jsonl"));
+        if (fullHead) checkLines = `${checkLines}\n${fullHead.firstLines}`;
+      }
+      if (!mentionRe.test(checkLines)) continue;
+      if (coordId && !checkLines.includes(`sender=${coordId}`)) continue;
+      matches.push({ traceFile, mtimeMs: headInfo.mtimeMs });
     }
     if (matches.length > 0) {
       matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -2815,9 +2932,10 @@ function discoverBrainTranscriptForWorker(workerKey, coordId, explicitTracePath,
 
 function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
   if (typeof markdown !== "string" || !markdown) return [];
+  const cleanMarkdown = stripFencedCodeBlocks(markdown);
   const cited = new Set();
   const citeRe = /(?:^|[\s`(\["'])([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
-  for (let m; (m = citeRe.exec(markdown)); ) {
+  for (let m; (m = citeRe.exec(cleanMarkdown)); ) {
     const rawRel = m[1].replace(/^(?:\.\/)+/, "");
     if (!rawRel || rawRel === selfSlot || rawRel.startsWith("/") || rawRel.includes("..")) continue;
     const abs = path.join(canonicalRoot, rawRel);
@@ -2841,20 +2959,51 @@ const WRITE_TOOL_NAMES = new Set([
   "delete_file"
 ]);
 const READ_TOOL_NAMES = new Set(["read_file", "view_file", "view_file_outline", "view_code_item"]);
+const SEARCH_TOOL_NAMES = new Set(["grep_search", "find_by_name", "list_dir"]);
+const COMMAND_TOOL_NAMES = new Set(["run_command", "execute_command", "bash"]);
 
-function normalizeToolTargetToRel(rawTarget, canonicalRoot) {
+function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) {
   if (typeof rawTarget !== "string" || !rawTarget.trim()) return null;
   const trimmed = rawTarget.trim().replace(/^file:\/\//i, "");
   const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(canonicalRoot, trimmed);
   let normalizedResolved = resolved;
   try {
-    const parentReal = fs.realpathSync.native(path.dirname(resolved));
-    normalizedResolved = path.join(parentReal, path.basename(resolved));
-  } catch {}
-  if (!isContainedPath(canonicalRoot, normalizedResolved, false)) {
+    const st = fs.lstatSync(resolved);
+    if (!st.isSymbolicLink()) {
+      normalizedResolved = fs.realpathSync.native(resolved);
+    } else {
+      const parentReal = fs.realpathSync.native(path.dirname(resolved));
+      normalizedResolved = path.join(parentReal, path.basename(resolved));
+    }
+  } catch {
+    try {
+      const parentReal = fs.realpathSync.native(path.dirname(resolved));
+      normalizedResolved = path.join(parentReal, path.basename(resolved));
+    } catch {}
+  }
+  if (!isContainedPath(canonicalRoot, normalizedResolved, allowEqual)) {
     return `external:${trimmed}`;
   }
-  return path.relative(canonicalRoot, normalizedResolved).split(path.sep).join("/");
+  const rel = path.relative(canonicalRoot, normalizedResolved).split(path.sep).join("/");
+  return rel || (allowEqual ? "." : null);
+}
+
+function recordInspectedPath(rawTarget, canonicalRoot, inspectedFiles, inspectedDirs, state) {
+  const rel = normalizeToolTargetToRel(rawTarget, canonicalRoot, true);
+  if (!rel || rel.startsWith("external:")) return;
+  if (rel === ".") {
+    state.inspectedRoot = true;
+    return;
+  }
+  const abs = path.join(canonicalRoot, rel);
+  try {
+    const st = fs.lstatSync(abs);
+    if (st.isDirectory()) {
+      inspectedDirs.add(rel);
+      return;
+    }
+  } catch {}
+  inspectedFiles.add(rel);
 }
 
 function verifyWorkerTraces(root, record, options = {}) {
@@ -2868,21 +3017,33 @@ function verifyWorkerTraces(root, record, options = {}) {
   const traceMap = isPlainObject(options.traces) ? options.traces : {};
   const isReadOnly = Boolean(record.readOnly === true || isPlainObject(record.readOnlyBaseline) || options.readOnly === true);
   const anomalies = [];
+  const warnings = [];
   const workerResults = [];
 
   for (const assignment of record.assignments) {
     const workerKey = String(assignment?.conversationId ?? "").trim();
+    const explicitWorkerName =
+      typeof assignment?.workerName === "string" && assignment.workerName.trim()
+        ? assignment.workerName.trim()
+        : undefined;
     const reportSlot = String(assignment?.report ?? "").trim();
-    const explicitTrace = traceMap[workerKey];
-    const tracePath = discoverBrainTranscriptForWorker(workerKey, coordId, explicitTrace, options.brainRoot);
+    const explicitTrace = traceMap[workerKey] ?? (explicitWorkerName ? traceMap[explicitWorkerName] : undefined);
+    const tracePath = discoverBrainTranscriptForWorker(
+      workerKey,
+      coordId,
+      explicitTrace,
+      options.brainRoot,
+      explicitWorkerName
+    );
     if (!tracePath) {
       anomalies.push(`${workerKey}: MISSING_TRACE`);
       workerResults.push({
         worker: workerKey,
+        ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
         step1Ok: false,
         unauthorizedWrites: [],
         citedFilesCount: 0,
-        ungroundedCitations: []
+        unverifiedCitations: []
       });
       continue;
     }
@@ -2893,25 +3054,66 @@ function verifyWorkerTraces(root, record, options = {}) {
       anomalies.push(`${workerKey}: UNREADABLE_TRACE (${err.code || "ERR"})`);
       workerResults.push({
         worker: workerKey,
+        ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
         step1Ok: false,
         unauthorizedWrites: [],
         citedFilesCount: 0,
-        ungroundedCitations: []
+        unverifiedCitations: []
       });
       continue;
     }
 
     const lines = rawJsonl.split(/\r?\n/).filter(Boolean);
     const isUuidWorker = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workerKey);
-    const mentionRe = !isUuidWorker
-      ? new RegExp(`@${workerKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_-])`, "i")
+    const expectedMentionName = explicitWorkerName ?? (!isUuidWorker ? workerKey : undefined);
+    const mentionRe = expectedMentionName
+      ? new RegExp(`@${expectedMentionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z0-9_-])`, "i")
       : null;
     let sawEarlyContent = false;
-    let sawWorkerMention = isUuidWorker;
+    let sawWorkerMention = !mentionRe;
     let sawCoordSender = !coordId;
-    const readFiles = new Set();
+    const inspectedFiles = new Set();
+    const inspectedDirs = new Set();
+    const inspectState = { inspectedRoot: false };
+    const commandLines = [];
     const unauthorizedWrites = new Set();
     let corruptLineSeen = false;
+
+    let fullTraceLoaded = false;
+    let fullByStepIndex = null;
+    let fullByLineIndex = null;
+    const hydrateTruncatedStep = (compactStep, lineIdx) => {
+      if (!Array.isArray(compactStep?.truncated_fields) || compactStep.truncated_fields.length === 0) {
+        return compactStep;
+      }
+      if (!fullTraceLoaded) {
+        fullTraceLoaded = true;
+        const fullPath = path.join(path.dirname(tracePath), "transcript_full.jsonl");
+        try {
+          if (fs.existsSync(fullPath)) {
+            const fullLines = fs.readFileSync(fullPath, "utf8").split(/\r?\n/).filter(Boolean);
+            fullByStepIndex = new Map();
+            fullByLineIndex = new Map();
+            for (let fIdx = 0; fIdx < fullLines.length; fIdx++) {
+              try {
+                const parsedFull = JSON.parse(fullLines[fIdx]);
+                fullByLineIndex.set(fIdx, parsedFull);
+                if (typeof parsedFull?.step_index === "number") {
+                  fullByStepIndex.set(parsedFull.step_index, parsedFull);
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+      if (fullByStepIndex && typeof compactStep.step_index === "number" && fullByStepIndex.has(compactStep.step_index)) {
+        return fullByStepIndex.get(compactStep.step_index);
+      }
+      if (fullByLineIndex && fullByLineIndex.has(lineIdx)) {
+        return fullByLineIndex.get(lineIdx);
+      }
+      return compactStep;
+    };
 
     for (let idx = 0; idx < lines.length; idx++) {
       let step;
@@ -2924,6 +3126,7 @@ function verifyWorkerTraces(root, record, options = {}) {
         }
         continue;
       }
+      step = hydrateTruncatedStep(step, idx);
       const stepIdx = typeof step?.step_index === "number" ? step.step_index : idx;
       const content = typeof step?.content === "string" ? step.content : "";
       if (stepIdx <= 2 && content) {
@@ -2941,8 +3144,42 @@ function verifyWorkerTraces(root, record, options = {}) {
         if (!isPlainObject(args)) continue;
         const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
         if (READ_TOOL_NAMES.has(rawName)) {
-          const rel = normalizeToolTargetToRel(targetRaw, canonicalRoot);
-          if (rel && !rel.startsWith("external:")) readFiles.add(rel);
+          recordInspectedPath(targetRaw, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+        } else if (SEARCH_TOOL_NAMES.has(rawName)) {
+          for (const searchField of [args.SearchPath, args.SearchDirectory, args.DirectoryPath, targetRaw]) {
+            if (typeof searchField === "string" && searchField.trim()) {
+              recordInspectedPath(searchField, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+            }
+          }
+        } else if (COMMAND_TOOL_NAMES.has(rawName)) {
+          const cmd = args.CommandLine ?? args.command;
+          if (typeof cmd === "string" && cmd.trim()) {
+            commandLines.push(cmd);
+            for (const tok of cmd.split(/[\s"'`();|&<>]+/)) {
+              if (!tok || tok.startsWith("-")) continue;
+              const cleanedTok = tok.replace(/:[1-9]\d*$/, "").replace(/\/+$/, "");
+              if (cleanedTok === ".") {
+                inspectState.inspectedRoot = true;
+              } else if (cleanedTok.includes("/") || /\.[A-Za-z0-9]{1,8}$/.test(cleanedTok)) {
+                recordInspectedPath(cleanedTok, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+              }
+            }
+            if (/\bgit\b[^\n;|&]*\bgrep\b/.test(cmd)) {
+              const afterGrep = cmd.slice(cmd.indexOf("grep") + 4);
+              const nonFlagArgs = afterGrep
+                .replace(/(?:"[^"]*"|'[^']*')/g, " pat ")
+                .trim()
+                .split(/\s+/)
+                .filter(t => t && !t.startsWith("-"));
+              if (nonFlagArgs.length <= 1) inspectState.inspectedRoot = true;
+            }
+            if (isReadOnly) {
+              const unquoted = cmd.replace(/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "''");
+              if (/\b(?:rm|mv|truncate)\s+|(?:\bsed|\bperl)\s+-i\b|\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+)/.test(unquoted)) {
+                unauthorizedWrites.add("run_command");
+              }
+            }
+          }
         } else if (WRITE_TOOL_NAMES.has(rawName)) {
           if (args.ArtifactMetadata && typeof targetRaw === "string" && targetRaw.includes("/brain/")) {
             continue;
@@ -2960,7 +3197,7 @@ function verifyWorkerTraces(root, record, options = {}) {
     const step1Ok = sawEarlyContent && sawWorkerMention && sawCoordSender && !corruptLineSeen;
     if (!sawEarlyContent) anomalies.push(`${workerKey}: EMPTY_STEP1`);
     else {
-      if (!sawWorkerMention) anomalies.push(`${workerKey}: MISSING_MENTION (@${workerKey})`);
+      if (!sawWorkerMention) anomalies.push(`${workerKey}: MISSING_MENTION (@${expectedMentionName})`);
       if (!sawCoordSender) anomalies.push(`${workerKey}: COORD_SENDER_MISMATCH (expected ${coordId})`);
     }
     for (const wPath of unauthorizedWrites) {
@@ -2968,31 +3205,44 @@ function verifyWorkerTraces(root, record, options = {}) {
     }
 
     let citedFiles = [];
-    let ungroundedCitations = [];
+    let unverifiedCitations = [];
+    const isFileGrounded = (relFile) => {
+      if (inspectState.inspectedRoot || inspectedFiles.has(relFile)) return true;
+      for (const dirRel of inspectedDirs) {
+        if (relFile === dirRel || relFile.startsWith(`${dirRel}/`)) return true;
+      }
+      const parentDir = path.posix.dirname(relFile);
+      for (const cmd of commandLines) {
+        if (cmd.includes(relFile) || (parentDir !== "." && cmd.includes(parentDir))) return true;
+      }
+      return false;
+    };
     try {
       const opened = readIfPresentWithStat(canonicalRoot, reportSlot, verifiedDirs);
       if (opened) {
         const md = decodeUtf8(opened.bytes, reportSlot);
         citedFiles = extractCitedWorkspaceFiles(md, canonicalRoot, reportSlot);
-        ungroundedCitations = citedFiles.filter(f => !readFiles.has(f));
-        for (const uFile of ungroundedCitations) {
-          anomalies.push(`${workerKey}: UNGROUNDED_CITATION (${uFile})`);
+        unverifiedCitations = citedFiles.filter(f => !isFileGrounded(f));
+        for (const uFile of unverifiedCitations) {
+          warnings.push(`${workerKey}: UNVERIFIED_CITATION (${uFile})`);
         }
       }
     } catch {}
 
     workerResults.push({
       worker: workerKey,
+      ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
       step1Ok,
       unauthorizedWrites: [...unauthorizedWrites].slice(0, 5),
       citedFilesCount: citedFiles.length,
-      ungroundedCitations: ungroundedCitations.slice(0, 5)
+      unverifiedCitations: unverifiedCitations.slice(0, 5)
     });
   }
 
   const ok = anomalies.length === 0;
   const maxAnomalies = 8;
   const cappedAnomalies = anomalies.slice(0, maxAnomalies).map(a => (a.length > 110 ? `${a.slice(0, 107)}...` : a));
+  const cappedWarnings = warnings.slice(0, maxAnomalies).map(w => (w.length > 110 ? `${w.slice(0, 107)}...` : w));
   return {
     ok,
     recommendedVerdict: ok ? "CLEAN" : "INTEGRITY VIOLATION",
@@ -3000,6 +3250,7 @@ function verifyWorkerTraces(root, record, options = {}) {
     readOnly: isReadOnly,
     workersChecked: workerResults.length,
     anomaliesCount: anomalies.length,
+    ...(warnings.length > 0 ? { warningsCount: warnings.length, warnings: cappedWarnings } : {}),
     elapsedMs: Number((performance.now() - t0).toFixed(2)),
     workers: workerResults.slice(0, 12),
     anomalies: cappedAnomalies

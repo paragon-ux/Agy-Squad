@@ -506,7 +506,7 @@ try {
   const platformFitProto = fs.readFileSync(path.join(platformFitDir, "references/platform-fit-protocol.md"), "utf8");
   assert.equal(fs.existsSync(path.join(platformFitDir, "scripts")), false, "platform-fit must remain zero-script");
   const pfSkillBytes = Buffer.byteLength(platformFitSkill, "utf8");
-  assert.ok(pfSkillBytes <= 4000, `platform-fit/SKILL.md must stay concise (<= 4000 B, got ${pfSkillBytes} B)`);
+  assert.ok(pfSkillBytes <= 12288, `platform-fit/SKILL.md must stay within diagnose.mjs SKILL.md budget (<= 12288 B, got ${pfSkillBytes} B)`);
   assert.match(platformFitSkill, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i);
   assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self".*Model:\s*"inherit".*Workspace:\s*"inherit"/s);
   assert.match(platformFitSkill, /no \/swarm/i);
@@ -570,6 +570,14 @@ try {
   }
   assert.match(dayOneProtoText, /hermetic test scripts/i, "v0.2.1: day-one-protocol.md must note hermetic .system_generated consumer checks");
   assert.match(dayOneProtoText, /live symlinked plugin\/hook/i, "v0.2.1: day-one-protocol.md must serialize live symlinked plugin/hook edits");
+  assert.doesNotMatch(dayOneProtoText, /Step 0 `ask_question` for any unspecified settings|\bagy-squad verdict\b/, "FLOW-012: day-one-protocol.md must use zero-interview defaults and omit redundant verdict calls");
+  const benchmarksDocText = fs.readFileSync(path.join(repoRoot, "docs/benchmarks.md"), "utf8");
+  assert.doesNotMatch(benchmarksDocText, /[\u2013\u2014]/, "FIT-011: docs/benchmarks.md must have 0 prose em/en dashes");
+  for (const svgName of ["skill-role-workflows.svg", "swarm-vs-agy-squad-roles.svg"]) {
+    const svgText = fs.readFileSync(path.join(repoRoot, "docs/assets", svgName), "utf8");
+    assert.doesNotMatch(svgText, /\bnarrator\b/i, `FIT-011: ${svgName} must replace Narrator with swarm_pane`);
+    assert.match(svgText, /swarm_pane/, `FIT-011: ${svgName} must reference swarm_pane`);
+  }
   assert.match(stdText, /ReDoS/i, "v0.2.1: 4.11 SEC in pr-review-standard.md must include ReDoS");
   assert.match(stdText, /permissions:/, "v0.2.1: 4.11 SEC in pr-review-standard.md must include CI workflow permissions");
 

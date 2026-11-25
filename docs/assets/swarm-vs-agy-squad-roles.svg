@@ -103,7 +103,7 @@
     <text class="node-title" x="362" y="261">Worker 3</text>
     <text class="node-sub" x="362" y="280">Generic brief</text>
 
-    <!-- Optional Monitor and Narrator -->
+    <!-- Optional Monitor and swarm_pane -->
     <rect x="36" y="330" width="384" height="90" rx="6" fill="none" stroke="var(--card-border)" stroke-width="1" stroke-dasharray="4 3"/>
     <text class="board-sub" x="228" y="349">Optional native support helpers</text>
 
@@ -112,8 +112,8 @@
     <text class="node-sub" x="136" y="396">Stall alerts on board</text>
 
     <rect x="236" y="360" width="168" height="48" rx="5" fill="var(--card)" stroke="var(--card-border)" stroke-width="1"/>
-    <text class="node-title" x="320" y="380">Narrator</text>
-    <text class="node-sub" x="320" y="396">Swarm UI summary</text>
+    <text class="node-title" x="320" y="380">swarm_pane (plan.json)</text>
+    <text class="node-sub" x="320" y="396">Swarm UI Overview</text>
 
     <!-- Baseline note -->
     <text class="foot-note" x="228" y="446">All coordination flows through the shared board;</text>
@@ -186,10 +186,10 @@
     <line class="arrow-line" x1="692" y1="345" x2="702" y2="345" stroke-dasharray="3 2"/>
     <polygon class="arrow-head" points="708,345 701,341.5 701,348.5"/>
 
-    <!-- Native Monitor and Narrator (strictly observational) -->
+    <!-- Native Monitor and swarm_pane (strictly observational) -->
     <rect x="500" y="388" width="384" height="52" rx="6" fill="var(--card)" stroke="var(--card-border)" stroke-width="1" stroke-dasharray="4 3"/>
-    <text class="node-title" x="692" y="410">Native Monitor &amp; Narrator (Observational Only)</text>
-    <text class="node-sub" x="692" y="427">Stall alerts &amp; Swarm UI; never briefed, never edit or vote</text>
+    <text class="node-title" x="692" y="410">Native Monitor &amp; swarm_pane (plan.json)</text>
+    <text class="node-sub" x="692" y="427">Stall alerts &amp; zero-token Swarm UI Overview; never edit or vote</text>
 
     <!-- Summary line -->
     <text class="foot-note" x="692" y="461">Runs inside native /swarm; never replaces the host runtime</text>

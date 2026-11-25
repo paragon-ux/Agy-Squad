@@ -188,19 +188,19 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active repo root (pass from global installs)."
+  description: "Active repo root."
 };
 
 const MANIFEST_PATH_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Contained manifest path (rel/abs)."
+  description: "Manifest path."
 };
 
 const TOOLS = [
   {
     name: "dispatch_squad",
-    description: "Compile subagent leads (all_l1), integrity_auditor[:<id>], or squad specs.",
+    description: "Compile subagent leads (all_l1), auditor, or squad specs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -248,6 +248,8 @@ const TOOLS = [
         boardSince: { type: "integer", minimum: 0, description: "Board since." },
         boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." },
         outPath: { type: "string", minLength: 1, description: "Write plan JSON." },
+        swarmPaneOutPath: { type: "string", minLength: 1, description: "Write swarmPane JSON." },
+        emitWave: { type: "integer", enum: [1, 2, 3], description: "Emit wave 1|2|3 slice." },
         replace: { type: "boolean", description: "Overwrite outPath." },
         compact: { type: "boolean", description: "Compact receipt." }
       },

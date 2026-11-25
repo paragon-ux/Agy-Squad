@@ -23,7 +23,7 @@ Both arms caught all six planted defect categories (`6 / 6`). Counting **all ses
 | **Child-only raw transcript size** | **`183.6 KB`** (`3` workers) | **`773.7 KB`** (`8` subagents) | **`4.21x` smaller (`76.3%` byte reduction)** |
 | **Parent wakeups and injected bytes** | **`5` notices (`1,629 B`; `647 B` handoffs)** | **`4` wakeups (`18,322 B` incl. `15,839 B` Step 10 CLI output)** | **`11.2x` fewer parent bytes (`91.1%` reduction)** |
 | **Busy-polling violations** | **`0`** | **`0`** | Both compliant |
-| **Quality & integrity verification** | Bundle SHA-256 `4c28db49...`, Digest `ad876bd4...`, `audit-ab-audit` `CLEAN` | `Victory Auditor` approved Sentinel-fabricated snippets/symbols; caught by parent (`Steps 11–17`) | Cryptographic proof + trace audit vs. missed fabrication |
+| **Quality & integrity verification** | Bundle SHA-256 `4c28db49...`, Digest `ad876bd4...`, `audit-ab-audit` `CLEAN` | `Victory Auditor` approved Sentinel-fabricated snippets/symbols; caught by parent (`Steps 11-17`) | Cryptographic proof + trace audit vs. missed fabrication |
 | **Scratch artifacts retained** | **`4` files (`72,320 B`, specialists pruned, gitignored)** | **`33` files (`183,670 B` in `.agents/teamwork/`)** | **`29` fewer files (`60.6%` fewer bytes)** |
 
 ### Matched-`High` per-agent telemetry (November 15, 2026)

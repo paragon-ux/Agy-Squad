@@ -9,7 +9,7 @@ const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
 const DELIVERABLE_CONTROL_CHAR_RE = /[\x00-\x09\x0b-\x1f\x7f\u2028\u2029]/;
 const LARGE_FILE_LINE_THRESHOLD = 750;
 const LARGE_FILE_BYTE_THRESHOLD = 43_008; // 42 KiB
-const MAX_LARGE_FILE_HINTS = 4;
+const MAX_LARGE_FILE_HINTS = 10;
 const MAX_HINT_WALK_FILES = 128;
 const SKIPPED_HINT_DIRS = new Set([".git", "node_modules", "scratch", "site"]);
 const AGENT_ALIAS_PAIRS = Object.freeze([
@@ -25,7 +25,7 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 
 const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file) or git grep -n";
 const TRANSCRIPT_FORENSICS_BASE =
-  "if agy-context installed: unchained 'agy-context transcript' (read-only '|' pipes ok; no &&/;): 1) parallel 'list --parent <coordId> --lineage --json' + 'health --id u1,u2 --json'; 2) inline 'step 1 --id <uuid> --field content' + 'query --id <uuid> --tool write_file,edit_file --errors' (no --out dumps); else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (+ transcript_full.jsonl)";
+  "agy-context: unchained 'agy-context transcript' (read-only '|' pipes; no &&/;/--out): 'list --parent <coordId> --lineage --json', 'health --id u1,u2 --json', 'step 1 --id <uuid> --field content', 'query \"write_file|edit_file\" --id <uuid> --summary --include-tools'; else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl";
 const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [
@@ -34,8 +34,8 @@ const superviseCohort = [
 ].join("\n");
 
 const superviseSwarmLayeredLead = [
-  "Wave-2 Squad Lead (spawned after specialist reports exist on disk): do NOT park upfront on swarm_wait; follow Board scope above (never unfiltered read_board(), since: 0, or limit: 50).",
-  `Squad Lead Patrol & Alignment Gate: read specialist report slots directly, spot-check ONLY cited file:line/checks via ${NATIVE_READ_TOOLS} (no bulk repo re-reads; content only; no trace forensics), write Report slot, post <= ${messageLimit} B receipt to @coordinator, then swarm_wait; PASS on proof, else FAIL/BLOCKED.`
+  "Wave-2 Squad Lead (spawned after specialist reports exist on disk): do NOT park upfront on swarm_wait (never unfiltered read_board(), since: 0, or limit: 50).",
+  `Squad Lead Patrol: read specialist slots first, spot-check ONLY cited file:line/checks via ${NATIVE_READ_TOOLS} (no bulk repo re-reads; content only; no trace forensics); PASS on proof, else FAIL/BLOCKED.`
 ].join("\n");
 
 function countBufferLines(buf) {
@@ -304,7 +304,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
     ? ""
     : "\nEmit standalone lines (plain text, no backticks, never ';'-joined):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN | INTEGRITY VIOLATION";
   const alignmentLine = isIntegrityAuditor
-    ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Batch-check traces (${traceForensics}${isSwarm ? "; read_board/status verify handoffs/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered.${auditEmitClause}`
+    ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Traces (${traceForensics}${isSwarm ? "; board/status: receipts/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered.${auditEmitClause}`
     : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed checks or file:line; use ${NATIVE_READ_TOOLS}. Retry when inputs change/transient; else partial+blocker.`;
 
   const hasManifestFile =

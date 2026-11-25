@@ -169,7 +169,7 @@ const SUBCOMMAND_HELP = {
     "Options:",
     "  --manifest <path>                Load squads from a workspace manifest JSON file",
     "  --squad <id>                     Compile one squad (omit to compile all manifest squads)",
-    "  --topology flat|layered          Override topology (flat for inline task, manifest-defined otherwise; Step 0 asks if unspecified)",
+    "  --topology flat|layered          Override topology (flat for inline task, wave-gated layered for manifests; asks only on writable inherit overlaps)",
     "  --mode swarm|subagent            Target native /swarm (default) or invoke_subagent",
     "  --model <id>                     Pin an explicit model ID (verified via --known-model)",
     "  --known-model <id>               Repeatable allowed model ID from swarm{action:\"models\"}",
@@ -185,9 +185,11 @@ const SUBCOMMAND_HELP = {
     "  --board-since <seq>              Scope read_board{since: <seq>} for working members",
     "  --board-seq <seq>                Repeatable board seq for read_board{seqs: [...]}",
     "  --workspace <dir>                Target repository root (or set AGY_SQUAD_WORKSPACE)",
-    "  --out <plan.json>                Write full plan JSON atomically and print a <2 KB summary",
-    "  --replace                        Overwrite an existing --out file",
-    "  --compact                        Print compact <2 KB summary without full worker briefs",
+    "  --out <plan.json>                Write plan JSON (+ .wave1.json / .wave2.json) and print summary with swarmPane",
+    "  --swarm-pane-out <path>          Write swarmPane JSON directly (workspace .json or .system_generated/swarm/plan.json)",
+    "  --emit-wave <1|2|3>              Print compact swarmAdd slice for Wave 1, 2, or 3",
+    "  --replace                        Overwrite existing --out / --swarm-pane-out file(s)",
+    "  --compact                        Print compact summary with swarmPane without full worker briefs",
     "",
     "Examples:",
     "  agy-squad plan --mode swarm --scope src --role \"Implementer\" --role \"Reviewer\" \"Audit auth\"",
@@ -399,7 +401,7 @@ const SUBCOMMAND_HELP = {
 
 async function runPlanCommand(rest, fallbackRoot) {
   const usageLine =
-    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--workspace <dir>] [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...] [--out <plan.json>] [--replace] [--compact]";
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--workspace <dir>] [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...] [--out <plan.json>] [--swarm-pane-out <path>] [--emit-wave <1|2|3>] [--replace] [--compact]";
   if (!rest.length) {
     throw new Error(usageLine);
   }
@@ -432,11 +434,24 @@ async function runPlanCommand(rest, fallbackRoot) {
     "board-since": { type: "string" },
     "board-seq": { type: "string", multiple: true },
     out: { type: "string" },
+    "swarm-pane-out": { type: "string" },
+    "emit-wave": { type: "string" },
     replace: { type: "boolean", default: false },
     compact: { type: "boolean", default: false }
   });
-  if (values.replace && values.out === undefined) {
-    throw new Error(`Flag '--replace' requires '--out <plan.json>' on 'agy-squad plan'.\n${usageLine}`);
+  if (values.replace && values.out === undefined && values["swarm-pane-out"] === undefined) {
+    throw new Error(`Flag '--replace' requires '--out <plan.json>' or '--swarm-pane-out <path>' on 'agy-squad plan'.\n${usageLine}`);
+  }
+  let parsedEmitWave;
+  if (values["emit-wave"] !== undefined) {
+    const rawWave = String(values["emit-wave"]).trim();
+    if (rawWave !== "1" && rawWave !== "2" && rawWave !== "3") {
+      throw new Error(`--emit-wave must be 1, 2, or 3 (got '${values["emit-wave"]}').`);
+    }
+    if (values.compact) {
+      throw new Error("Conflicting flags: --emit-wave cannot be combined with --compact.");
+    }
+    parsedEmitWave = Number(rawWave);
   }
   const { resolveCanonicalRoot } = await import("../mcp/handoffs.mjs");
   const { targetRoot } = resolveCommandWorkspace(values.workspace, fallbackRoot, resolveCanonicalRoot);
@@ -462,7 +477,7 @@ async function runPlanCommand(rest, fallbackRoot) {
       roleScopes[roleKey].push(normalizeScopeCliPath(rawPath, process.platform, targetRoot));
     }
   }
-  const { buildCompactPlanSummary, planSquadCohort } = await import("../mcp/planner.mjs");
+  const { buildCompactPlanSummary, buildWaveSlice, planSquadCohort } = await import("../mcp/planner.mjs");
   const task = positionals.join(" ").trim();
   const normalizedOut = values.out !== undefined ? normalizeBundleOutCliPath(values.out, process.platform, targetRoot) : undefined;
   const planArgs = {
@@ -483,9 +498,15 @@ async function runPlanCommand(rest, fallbackRoot) {
     ...(values["occupied-worker"] !== undefined ? { occupiedWorkerNames: values["occupied-worker"] } : {}),
     ...(values["board-since"] !== undefined ? { boardSince: parseSeqArg(values["board-since"], "--board-since") } : {}),
     ...(values["board-seq"] !== undefined ? { boardSeqs: values["board-seq"].map(v => parseSeqArg(v, "--board-seq")) } : {}),
-    ...(normalizedOut !== undefined ? { outPath: normalizedOut, replace: values.replace } : {})
+    ...(normalizedOut !== undefined ? { outPath: normalizedOut } : {}),
+    ...(values["swarm-pane-out"] !== undefined ? { swarmPaneOutPath: values["swarm-pane-out"] } : {}),
+    ...(parsedEmitWave !== undefined ? { emitWave: parsedEmitWave } : {}),
+    ...(values.replace ? { replace: true } : {})
   };
   const plan = planSquadCohort(planArgs, targetRoot);
+  if (parsedEmitWave !== undefined) {
+    return buildWaveSlice(plan, parsedEmitWave);
+  }
   if (normalizedOut !== undefined || values.compact) {
     return buildCompactPlanSummary(plan, normalizedOut);
   }
@@ -873,7 +894,7 @@ function parseHandoffSeqOptions(singleItems, csvItems) {
 }
 
 const STRING_OPTIONS_BY_COMMAND = {
-  plan: ["manifest", "workspace", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq", "out"],
+  plan: ["manifest", "workspace", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq", "out", "swarm-pane-out", "emit-wave"],
   dispatch: ["squad", "manifest", "workspace"],
   collect: ["plan", "record", "squad", "from", "handoffs", "handoff", "workspace", "report-root"],
   "bundle-init": ["plan", "provenance", "squad", "out-dir", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "coord-id", "handoff-seq", "handoff-seqs", "out"],
@@ -1278,7 +1299,8 @@ async function main(args) {
         handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
         const auditSwarmAdd = handoffsMod.buildBoundAuditSwarmAdd(targetRoot, plan, rec, outRel, digestResult, {
           coordId: values["coord-id"],
-          handoffSeqs
+          handoffSeqs,
+          idMap
         });
         recordsOut.push({
           path: outRel,
@@ -1340,7 +1362,8 @@ async function main(args) {
       handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
       const auditSwarmAdd = handoffsMod.buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult, {
         coordId: values["coord-id"],
-        handoffSeqs
+        handoffSeqs,
+        idMap
       });
       console.log(JSON.stringify({
         ok: true,
@@ -1377,14 +1400,15 @@ async function main(args) {
     if (positionals.length !== 1) throw new Error(usageLine);
     const handoffsMod = await import("../mcp/handoffs.mjs");
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
-    const { record, effectiveRoot } = readRecordWithWorkspaceInference(
+    const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(
       baseRoot,
       explicit,
       positionals[0],
       handoffsMod,
       "Provide a valid bundle or handoff record."
     );
-    console.log(JSON.stringify(handoffsMod.inspectHandoffs(effectiveRoot, record), null, 2));
+    const inspectInput = !path.isAbsolute(recRel) && !record.recordPath ? { ...record, recordPath: recRel } : record;
+    console.log(JSON.stringify(handoffsMod.inspectHandoffs(effectiveRoot, inspectInput), null, 2));
     return 0;
   }
   if (command === "digest") {
@@ -1604,16 +1628,22 @@ async function main(args) {
         {
           ok: true,
           count: finalizedResults.length,
-          results: finalizedResults.map(item => ({
-            squadId: item.record.squadId,
-            recordPath: item.recRel,
-            bundlePath: item.bundled.path,
-            sha256: item.bundled.sha256,
-            auditPolicy: item.verified.auditPolicy,
-            uncarriedCitationsCount: Array.isArray(item.bundled.citations?.uncarried) ? item.bundled.citations.uncarried.length : 0,
-            prunedCount: Array.isArray(item.pruned?.removed) ? item.pruned.removed.length : 0,
-            ...(item.pruned ? { pruned: item.pruned } : {})
-          }))
+          results: finalizedResults.map(item => {
+            const uncarriedUrls = Array.isArray(item.bundled.citations?.uncarriedUrls)
+              ? item.bundled.citations.uncarriedUrls
+              : [];
+            return {
+              squadId: item.record.squadId,
+              recordPath: item.recRel,
+              bundlePath: item.bundled.path,
+              sha256: item.bundled.sha256,
+              auditPolicy: item.verified.auditPolicy,
+              uncarriedCitationsCount: uncarriedUrls.length,
+              ...(uncarriedUrls.length > 0 ? { uncarriedUrls } : {}),
+              prunedCount: Array.isArray(item.pruned?.removed) ? item.pruned.removed.length : 0,
+              ...(item.pruned ? { pruned: item.pruned } : {})
+            };
+          })
         },
         null,
         2

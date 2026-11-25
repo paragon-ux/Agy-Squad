@@ -93,7 +93,7 @@ In Desktop IDE and CLI sessions, `agy-squad setup` registers `squad_planner` and
 
 ![Six-step swarm lifecycle and dual-verdict gate](assets/swarm-lifecycle.svg)
 
-For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `agy-squad` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) subcommands (run `agy-squad <command> --help` for full options and examples). Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in favor of native `/swarm` planning and the unified `agy-squad` governance CLI.
+For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verification, `agy-squad` provides lifecycle (`setup`, `status`, `uninstall`, `restore-backups`) and cohort verification (`plan`, `dispatch`, `collect`, `bundle-init`, `audit-check`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`, `verdict`) subcommands (run `agy-squad <command> --help` for full options and examples). Legacy `agy-squad run` (`bin/terminal.py`) and the standalone `node mcp/handoffs.mjs` CLI were retired in favor of native `/swarm` planning and the unified `agy-squad` governance CLI.
 
 ### Generate a `/swarm` plan, audit, and proof bundle
 
@@ -116,7 +116,7 @@ agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json 
 agy-squad finalize scratch/record.json --replace --prune
 ```
 
-`scratch/handoffs.json` is a JSON array pairing each compiled `workerName` from `scratch/plan.json` with its exact single-line `<= 500` byte receipt (accepting spaced ASCII ` - ` or ` -- ` alongside ` — ` (`U+2014`) as the delimiter; you can also pass repeatable `--handoff "<workerName>=READY ..."` flags inline instead of a file):
+`scratch/handoffs.json` is a JSON array pairing each compiled `workerName` from `scratch/plan.json` with its exact single-line `<= 500` byte receipt (accepting spaced ASCII ` - ` or ` -- ` alongside Unicode `U+2014` as the delimiter; you can also pass repeatable `--handoff "<workerName>=READY ..."` flags inline instead of a file):
 
 ```json
 [
@@ -146,7 +146,7 @@ agy-squad plan \
 
 1. In Desktop IDE or CLI planning, `squad_planner` (or `dispatch_squad`) generates worker specs, report slots under `scratch/agy-squad/...`, model provenance metadata, and `verificationPipeline` commands.
    - **External repositories (`scratch/`):** Add `scratch/` to your repo's `.gitignore` (or `.git/info/exclude`) before running a cohort so `scratch/agy-squad/` artifacts stay untracked, or pass `--report-root <ignored-dir>`.
-2. Each worker writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and posts a single-line `<= 500` byte receipt (spaced ASCII ` - ` or ` -- `, or ` — `):
+2. Each worker writes its evidence report to its assigned slot (`scratch/agy-squad/.../specialist-<N>/report.md`) and posts a single-line `<= 500` byte receipt (spaced ASCII ` - ` or ` -- `, or Unicode `U+2014`):
    ```text
    READY scratch/agy-squad/squad-1/specialist-1/report.md -- gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
