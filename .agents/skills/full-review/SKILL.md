@@ -22,7 +22,7 @@ Review a repository target, subsystem, or evidence bundle and answer the user's 
 
 ## Workflow
 
-1. **Frame & Intake:** State the question in 1 sentence, name target type, and pin minimum evidence ([evidence intake](./references/evidence-intake.md)). On `/swarm`, run [`swarm-governance`](../swarm-governance/SKILL.md#workflow) Step 0 for missing settings.
+1. **Frame & Intake:** State the question in 1 sentence, name target type, and pin minimum evidence ([evidence intake](./references/evidence-intake.md)). On `/swarm`, apply [`swarm-governance`](../swarm-governance/SKILL.md#workflow) risk-gated defaults.
 2. **Ingest & Triage:** Fill [report-template.md](./references/report-template.md) Sections 1-3, batch-index large transcripts/logs ([transcript protocol](./references/evidence-intake.md#3-transcript-protocol-batch-never-poll)), triage all 11 categories, and route residuals/deferrals strictly to Section 8.
 3. **Direction Decision (if asked):** Fill Section 7.2 (Question, Constraints, Options incl. status quo & minimal, Recommendation, Falsifiers, Next actions, What not to do). Never recommend merge with unreviewed material categories or open P1/P2 blockers.
 4. **Deliver & Recheck:** Save `docs/reviews/<slug>.md` when adopted/requested; else deliver in chat or an Antigravity artifact. Recheck fixes at the fixed revision and pass [quality gates](./references/report-template.md#quality-gates).

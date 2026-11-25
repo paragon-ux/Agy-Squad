@@ -130,8 +130,8 @@ To run a fresh live comparison on an authenticated WSL2 / Linux host with `Agy-C
 
    ```bash
    node bin/agy-squad.mjs plan --manifest benchmarks/teamwork-vs-squad/manifest.json \
-     --squad ab_audit --topology flat --mode swarm --model <model-id>
+     --squad ab_audit --topology flat --mode swarm --model <model-id> --out scratch/ab-plan.json --replace
    ```
-   Execute the emitted `swarm add` calls (or `invoke_subagent` under `--mode subagent`), wait via `swarm_wait`, verify `audit-ab-audit` (`Integrity Verdict: CLEAN`), compute `digest`, `bundle`, and `verify` (`node bin/agy-squad.mjs verify scratch/agy-squad/squad-ab_audit/lead/report.sources.json`), and collect per-agent metrics via `agy-context transcript health --json`.
-3. **Arm 2 (Antigravity `/teamwork` control):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above, record completion time, and collect per-agent metrics via `agy-context transcript health --json` (or native JSONL transcript inspection).
+   Execute the emitted `swarm add` calls (or `invoke_subagent` under `--mode subagent`), wait via `swarm_wait`, initialize and compute the digest via `node bin/agy-squad.mjs bundle-init --plan scratch/ab-plan.json --handoffs scratch/handoffs.json --from-scope --digest --out scratch/ab-record.json --replace`, run `audit-ab-audit` (`node bin/agy-squad.mjs audit-check --record scratch/ab-record.json`, emitting `Integrity Verdict: CLEAN`), run `node bin/agy-squad.mjs finalize scratch/ab-record.json --replace --prune`, and collect per-agent metrics via `agy-context transcript health --id <parent,child1,...> --json`.
+3. **Arm 2 (Antigravity `/teamwork` control) and optional fast native controls (`/boost`, plain `/swarm`):** In a fresh Antigravity session on an identical clean checkout, invoke `/teamwork` (`[skip-interview]`) with the task prompt above (and optionally run separate control arms on `/boost` and plain unmanaged `/swarm` with `Agy-Context-Saver` held constant), record completion time, and collect per-agent metrics via `agy-context transcript health --id <parent,child1,...> --json` (or native JSONL transcript inspection).
 4. Grade both arms' findings against the six-defect rubric (`N1` through `N6`) in `results/telemetry.json`.

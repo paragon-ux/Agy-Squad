@@ -87,7 +87,7 @@ If you prefer not to use `agy-squad setup`, you can register `agy-squad` manuall
 }
 ```
 
-In Desktop IDE sessions, pair `squad_planner` with Antigravity native `/swarm` and the `swarm-governance` skill (calling Step 0 `ask_question` for any missing setting among `topology`, `model`, `workspaceIsolation`, and report retention; inline tasks default to `flat`, while manifests with `lead` blocks compile `layered` unless `--topology flat` is passed), or call `dispatch_squad` / `agy-squad dispatch` when targeting `invoke_subagent`. Enforce strict single-line verdicts and SHA-256 bundles with `agy-squad` (`plan`, `dispatch`, `collect`, `bundle-init`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
+In Desktop IDE and CLI sessions, `agy-squad setup` registers `squad_planner` and `dispatch_squad` as lazy MCP tools so idle chats and spawned workers pay `0 B` of `tools/list` schema overhead (run `agy-squad plan --out scratch/plan.json` directly or set `"eager": true` in a workspace `.agents/mcp_config.json` if you want the schema loaded upfront). Pair `squad_planner` with Antigravity native `/swarm` and `swarm-governance`: read-only and overlap-free runs start immediately with defaults (`flat` for inline tasks, staged `layered` waves for manifests with `lead` blocks unless `--topology flat` is passed), and the coordinator calls `ask_question` only when concurrent writers share files on `inherit` or run settings are ambiguous. Use `dispatch_squad` / `agy-squad dispatch` when targeting `invoke_subagent`. Check verdicts and seal SHA-256 bundles with `agy-squad` (`plan`, `dispatch`, `collect`, `bundle-init`, `audit-check`, `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `finalize`, `prune`), and stop completed `invoke_subagent` children with `manage_subagents(Action='kill', ConversationIds=[...])`.
 
 ## 3. CLI Planner and Governance (`agy-squad`)
 
@@ -100,22 +100,19 @@ For native `/swarm` planning, `invoke_subagent` stage compilation, and CI verifi
 Plan a self-contained read-only `/swarm` cohort in any repository, write the coordinator synthesis report (`synthesisSlot` in `scratch/plan.json`, required for flat `task` cohorts that have no separate lead worker), record the worker receipts in `scratch/handoffs.json`, and seal the SHA-256 bundle in one step:
 
 ```bash
-# 1. Plan a read-only /swarm cohort in any repository and save the plan JSON
-mkdir -p scratch && agy-squad plan --mode swarm --read-only --scope src \
+# 1. Plan a read-only /swarm cohort in any repository and save the plan JSON atomically
+agy-squad plan --mode swarm --read-only --scope src \
   --role "Security" --role "Test Audit" \
-  "Audit authentication flow" > scratch/plan.json
+  --out scratch/plan.json --replace "Audit authentication flow"
 
 # 2. After specialists finish, author the flat-mode synthesis report at
 #    workers[0].synthesisSlot (scratch/agy-squad/squad-task_squad/lead/report.md)
 #    containing a strict single line: "Content Verdict: PASS" (or FAIL / BLOCKED),
-#    then verify it and initialize the bundle record + Evidence Digest:
-agy-squad verdict scratch/agy-squad/squad-task_squad/lead/report.md
+#    then initialize the bundle record + Evidence Digest (checks Content Verdict + readOnlyBaseline):
 agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json \
-  --digest --out scratch/record.json src/auth.js
+  --digest --out scratch/record.json --replace src/auth.js
 
-# 3. Verify the integrity auditor verdict (single-squad slot; multi-squad uses squad-integrity_auditor-<id>)
-#    and finalize (inspect -> bundle -> verify + prune) in one step
-agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md
+# 3. After audit-task_squad writes its CLEAN report, finalize (inspect -> bundle -> verify + prune) in one step:
 agy-squad finalize scratch/record.json --replace --prune
 ```
 
@@ -160,9 +157,11 @@ agy-squad plan \
 
 | Approach | Primary strength | Use Agy-Squad when... | Prefer comparator when... |
 | --- | --- | --- | --- |
-| **Antigravity native `/swarm`** | Native shared board, worktrees (`share`/`branch`), live model switching, and `swarm_monitor` | You want Agy-Squad (`swarm-governance` + `agy-squad` CLI) on top of `/swarm` for role separation, `Pointer-Over-Wire` disk pointers, and SHA-256 CI proof bundles | You only need ephemeral board coordination without deterministic bundles or strict verdict gates |
+| **Antigravity native `/swarm`** | Native shared board, worktrees (`share`/`branch`), `swarm_pane` Overview, live model switching, and `swarm_monitor` | You want `swarm-governance` and `agy-squad` on top of `/swarm` to stage waves, verify read-only files stayed untouched, copy reports out of worktrees before `kill`, keep board posts under `500 B`, and seal SHA-256 bundles | You want informal collaboration on the shared board without report files, verdict checks, or proof bundles |
+| **Antigravity `/boost`** | Starts immediately across App, CLI, IDE, and extensions with `DeepCoder` or `DeepInvestigator` challenge and verification rounds | You are splitting a review or change across separate parts of a codebase and want structured `v1.5.0` review tables and SHA-256 proof archives | You are fixing a bug, tracing a root cause, or building a feature in one area (`<= 6-8` files) |
+| **Antigravity `run_workflow`** (`/run-workflow`) | Python script running `parallel()` and `pipeline()` agents with schema-checked `finish` results and no shared board | You want completed workers' reports kept if one sibling errors out, need child `transcript.jsonl` tool calls audited (`trajectory()` reads pre-workflow parent steps only), or need mid-run `ask_question` prompts | You are fanning out a scripted batch job (`10-50+` files or items) that returns JSON and can cancel the batch if one worker fails |
 | **Antigravity `/teamwork`** (or `/teamwork-preview`) | Autonomous multi-milestone campaigns with built-in wrapper, explorer, and semantic reviewer agents | You want proportional 2-to-3 agent cohorts in Desktop IDE or CLI, `<= 500` B receipts, SHA-256 evidence bundles, governed teardown, and integrated `v1.5.0` reviews (`pr-review`, `full-review`, `day-one-review`) (see [Benchmarks](benchmarks.md)) | You want a long autonomous campaign with built-in LLM reviewer/auditor agents |
-| **Antigravity native subagents** (`invoke_subagent`) | Zero setup for ad hoc parallel tasks | You want a repeatable manifest, report-slot paths, receipt length enforcement, and bundle verification | You only need one quick ad hoc delegation |
+| **Antigravity native subagents** (`invoke_subagent`) | Zero setup for ad hoc parallel tasks (including sandboxed read-only `research` subagents) | You want a repeatable manifest, report-slot paths, receipt length enforcement, and bundle verification | You only need 1-to-3 quick read-only lookups or helper delegations |
 | **Claude Code / Codex subagents** | Native role files and parallel delegation inside those tools | Your workflow runs in Antigravity Desktop or CLI on Linux, macOS, or Windows | Your team works inside Claude Code or OpenAI Codex |
 | **CrewAI / LangGraph / Microsoft Agent Framework** | General Python/TypeScript SDKs for building standalone multi-agent applications | You want a lightweight workspace harness without building an external orchestration service | You are building a standalone application, stateful graph, or multi-cloud agent service |
 

@@ -246,7 +246,10 @@ const TOOLS = [
         knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Valid models." },
         occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Used names." },
         boardSince: { type: "integer", minimum: 0, description: "Board since." },
-        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." }
+        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." },
+        outPath: { type: "string", minLength: 1, description: "Write plan JSON." },
+        replace: { type: "boolean", description: "Overwrite outPath." },
+        compact: { type: "boolean", description: "Compact receipt." }
       },
       oneOf: [
         { required: ["manifestPath"] },

@@ -85,7 +85,7 @@ try {
   assert.equal(overlapTask.topology.compiledPattern, "flat");
   assert.equal(
     overlapTask.topology.defaultBias,
-    "flat for inline task; manifest-defined otherwise (Step 0 asks for any unspecified swarm setting)"
+    "flat for inline task; wave-gated otherwise (zero-interview defaults; ask_question only on writable inherit siblingOverlaps or explicit ambiguity)"
   );
   assert.equal(overlapTask.topology.scopeOverlaps.length, 1);
   assert.match(overlapTask.warnings[0], /scopeFiles overlap/);
@@ -363,7 +363,9 @@ try {
     }
   }, root);
   assert.equal(readOnlyPlan.topology.scopeOverlaps.length, 0);
-  assert.equal(readOnlyPlan.warnings.length, 0);
+  assert.equal(readOnlyPlan.topology.readerSiblingOverlaps.length, 1);
+  assert.equal(readOnlyPlan.warnings.length, 1);
+  assert.match(readOnlyPlan.warnings[0], /read-only sibling reader overlap/i);
 
   const multiSquadPlan = planSquadCohort({
     manifest: {
@@ -726,11 +728,11 @@ try {
         }
       }
     },
-    occupiedWorkerNames: ["Task-Squad-Lead", "task-squad-worker-review"],
+    occupiedWorkerNames: ["Task-Squad-Lead", "task-squad-worker-rev-s1"],
     includeIntegrityAuditor: false
   }, root);
   assert.equal(deduplicatedPlan.workers[0].lead.workerName, "task-squad-lead-2");
-  assert.equal(deduplicatedPlan.workers[0].specialists[0].workerName, "task-squad-worker-revi-2");
+  assert.equal(deduplicatedPlan.workers[0].specialists[0].workerName, "task-squad-worker-r-s1-2");
   assert.equal(deduplicatedPlan.workers[0].specialists[0].workerName.length <= 24, true);
 
   const exact18Squad = "s".repeat(18);
@@ -940,10 +942,11 @@ try {
     }, root);
     const s1Brief = scopedDefaultPlan.workers[0].specialists[0].swarmAdd.brief;
     const leadWorker = scopedDefaultPlan.workers[0].lead.workerName;
-    assert.ok(s1Brief.includes(`@${leadWorker}`), `SKILL-SG-01: expected exact @${leadWorker} in specialist brief, got:\n${s1Brief}`);
-    assert.ok(!s1Brief.includes("@skill_and_pr_review_audit-lead") && !s1Brief.includes("@<lead>"), "SKILL-SG-01: must never emit literal @<squad>-lead or @<lead>");
-    assert.match(s1Brief, /read_board\{since:\s*<cohortBaseSeq>\}/, "SQ-SWARM-BOARD-SCOPE: specialist brief must guide read_board{since: <cohortBaseSeq>}");
-    assert.match(scopedDefaultPlan.integrityAuditPlan[0].swarmAdd.brief, /read_board\{seqs:/, "SQ-SWARM-BOARD-SCOPE: auditor brief must scope read_board via seqs");
+    assert.ok(leadWorker.endsWith("-lead"), `FIT-004: expected truncated lead name to preserve -lead suffix, got ${leadWorker}`);
+    assert.ok(s1Brief.includes("@coordinator"), `S8-01: Wave-1 specialist brief must report READY receipt to @coordinator, got:\n${s1Brief}`);
+    assert.ok(!s1Brief.includes(`@${leadWorker}`) && !s1Brief.includes("@skill_and_pr_review_audit-lead") && !s1Brief.includes("@<lead>"), "S8-01: Wave-1 specialist must not mention unspawned Wave-2 lead");
+    assert.match(s1Brief, /Board scope: skip Turn-1 read_board \(Step 1 has brief\); on wakeup, read_board\{since:\s*<ownSeq>\}/, "ROI-001: specialist brief must skip Turn-1 read_board");
+    assert.match(scopedDefaultPlan.integrityAuditPlan[0].swarmAdd.brief, /Board scope: read_board\{seqs:\s*\[<handoffSeqs\.\.\.>\]\} only\./, "ROI-001: auditor brief must restrict read_board strictly to handoff receipt seqs");
 
     const explicitBoardPlan = planSquadCohort({
       manifest: {
@@ -1034,7 +1037,7 @@ try {
     // W2-RUN-002: boardSince: 0 must not emit self-contradictory '(no unfiltered/since:0/limit:50)' or lead ', since: 0,'
     const zeroBoardPlan = planSquadCohort({ task: "Check zero cursor", boardSince: 0 }, root);
     const zeroBrief = zeroBoardPlan.workers[0].specialists[0].swarmAdd.brief;
-    assert.match(zeroBrief, /Board scope: read_board\{since:\s*0\} initially, then since: <last_read_seq>\./);
+    assert.match(zeroBrief, /Board scope: skip Turn-1 read_board \(Step 1 has brief\); on wakeup, read_board\{since:\s*0\} \(then <last_read_seq>\)\./);
     assert.doesNotMatch(zeroBrief, /no unfiltered\/since:0/, "W2-RUN-002: boardSince=0 must omit since:0 from negative clause");
     const zeroLayeredLeadPlan = planSquadCohort({
       manifest: {
@@ -1049,7 +1052,7 @@ try {
       boardSince: 0
     }, root);
     const zeroLeadBrief = zeroLayeredLeadPlan.workers[0].lead.swarmAdd.brief;
-    assert.match(zeroLeadBrief, /Board scope: read_board\{since:\s*0\} initially, then since: <last_read_seq>\./);
+    assert.match(zeroLeadBrief, /Board scope: skip Turn-1 read_board; read specialist report slots directly \(on later wakeup, read_board\{since:\s*0\}\)\./);
     assert.match(zeroLeadBrief, /\(never unfiltered read_board\(\) or limit: 50\)/, "W2-RUN-002: layered lead brief with boardSince=0 must phrase negative clause cleanly");
     assert.doesNotMatch(zeroLeadBrief, /since:\s*0,\s*or limit:\s*50/, "W2-RUN-002: layered lead brief with boardSince=0 must not forbid since: 0");
 
@@ -1126,23 +1129,23 @@ try {
     assert.match(swarmAuditLeadSpec.Prompt, /read-only '\|' pipes/);
     assert.match(swarmAuditLeadSpec.Prompt, /list --parent <coordId> --lineage --json/);
     assert.match(swarmAuditLeadSpec.Prompt, /health --id u1,u2 --json/);
-    assert.match(swarmAuditLeadSpec.Prompt, /outline --id <uuid> --full --out <scratch>\/t-<w>\.txt/);
-    assert.match(swarmAuditLeadSpec.Prompt, /step <N,M> --id <uuid> --field content --full/);
-    assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
+    assert.match(swarmAuditLeadSpec.Prompt, /step 1 --id <uuid> --field content/);
+    assert.match(swarmAuditLeadSpec.Prompt, /query --id <uuid> --tool write_file,edit_file --errors/);
+    assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--out <scratch>|read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
 
-    // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and /swarm lead wording
+    // SD2-SKILL-01 & SD2-SKILL-02: comparative-research-manifest.json has 0 writable scope overlaps and Wave-2 /swarm lead wording
     const compPlan = planSquadCohort(
       { manifestPath: ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json" },
       repoRoot
     );
     assert.deepEqual(compPlan.topology.scopeOverlaps, [], "SD2-SKILL-01: comparative-research-manifest specialists must be readOnly: true");
     const compLeadBrief = compPlan.workers[0].lead.swarmAdd.brief;
-    assert.match(compLeadBrief, /read_board\{since:/);
+    assert.match(compLeadBrief, /Board scope: skip Turn-1 read_board; read specialist report slots directly/);
     assert.doesNotMatch(compLeadBrief, /batch-read traces|agy-context transcript|transcript\.jsonl/);
     assert.match(compLeadBrief, /content only; no trace forensics/);
-    assert.match(compLeadBrief, /FIRST ACTION: Park via swarm_wait for receipts/);
-    assert.match(compLeadBrief, /Do NOT read repo files or run tests before receipts arrive/);
-    assert.match(compLeadBrief, /Spot-check scope \(park via swarm_wait first; do NOT pre-read\):/);
+    assert.match(compLeadBrief, /Wave-2 Squad Lead \(spawned after specialist reports exist on disk\): do NOT park upfront on swarm_wait/);
+    assert.match(compLeadBrief, /Specialist report slots:/);
+    assert.match(compLeadBrief, /Spot-check scope \(cite-check only; no bulk repo re-reads\):/);
     assert.match(compLeadBrief, /spot-check ONLY cited file:line\/checks.*no bulk repo re-reads/);
     assert.match(compLeadBrief, /Content Verdict/);
     assert.match(compLeadBrief, /post_message <= 500 UTF-8 bytes.*READY/);
@@ -1151,9 +1154,10 @@ try {
     assert.match(compAuditBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
     assert.match(compAuditBrief, /agy-context transcript/);
     assert.match(compAuditBrief, /list --parent <coordId> --lineage --json/);
-    assert.match(compAuditBrief, /outline --id <uuid> --full --out <scratch>\/t-<w>\.txt/);
-    assert.match(compAuditBrief, /agy-squad digest <rel-record>/);
-    assert.match(compAuditBrief, /agy-squad verdict --integrity <rel-slot>/);
+    assert.match(compAuditBrief, /step 1 --id <uuid> --field content/);
+    assert.match(compAuditBrief, /agy-squad digest --workspace .* scratch\/agy-squad\/squad-harness_comparative_audit\/record\.json/);
+    assert.match(compAuditBrief, /agy-squad verdict --workspace .* --integrity scratch\/agy-squad\/squad-integrity_auditor\/specialist-1\/report\.md/);
+    assert.doesNotMatch(compAuditBrief, /<rel-record>|<rel-slot>/);
     assert.match(compAuditBrief, /no unrelated repo source reads/);
     assert.match(compAuditBrief, /read-only '\|' pipes/);
 
@@ -1168,8 +1172,8 @@ try {
     for (const w of selfDiagDecoupledPlan.workers) {
       assert.ok(w.lead, `self-diagnosis squad '${w.squadId}' must retain its layered lead`);
       assert.ok(Array.isArray(w.lead.scopeFiles) && w.lead.scopeFiles.length > 0, `lead '${w.squadId}' must emit structured scopeFiles`);
-      assert.match(w.lead.swarmAdd.brief, /Park on swarm_wait for your 2 specialists' reports/);
-      assert.match(w.lead.swarmAdd.brief, /FIRST ACTION: Park via swarm_wait for receipts/);
+      assert.doesNotMatch(w.lead.swarmAdd.brief, /Park on swarm_wait for your 2 specialists' reports/);
+      assert.match(w.lead.swarmAdd.brief, /Wave-2 Squad Lead \(spawned after specialist reports exist on disk\): do NOT park upfront on swarm_wait/);
       for (const sp of w.specialists) {
         assert.ok(Array.isArray(sp.scopeFiles) && sp.scopeFiles.length > 0, `specialist '${sp.workerName}' must emit structured scopeFiles`);
       }
@@ -1183,8 +1187,8 @@ try {
       "verificationPipeline must surface --strict-citations on finalize"
     );
     assert.ok(
-      selfDiagDecoupledPlan.verificationPipeline.some(step => /agy-squad prune <bundle\.sources\.json> <sha256>/.test(step)),
-      "verificationPipeline must surface non-circular post-synthesis prune order"
+      selfDiagDecoupledPlan.verificationPipeline.some(step => /agy-squad prune --workspace .* --records/.test(step)),
+      "verificationPipeline must surface non-circular post-synthesis batch prune order"
     );
 
     // v0.1.3 Remediation Regressions: MCP-001, OPT-IO-6, OPT-BRIEF-03
@@ -1228,14 +1232,37 @@ try {
       topology: "layered",
       includeIntegrityAuditor: false
     }, repoRoot);
-    assert.equal(benchPlan.topology.scopeOverlaps.length, 3);
-    assert.equal(benchPlan.topology.siblingOverlaps.length, 1);
-    assert.equal(benchPlan.topology.leadSpecialistOverlaps.length, 2);
-    assert.ok(benchPlan.topology.siblingOverlaps.every(o => o.kind === "sibling"));
-    assert.ok(benchPlan.topology.leadSpecialistOverlaps.every(o => o.kind === "lead-specialist"));
+    assert.equal(benchPlan.topology.scopeOverlaps.length, 0, "ab_audit is readOnly: true so writable overlaps must be 0");
+    assert.equal(benchPlan.topology.readerSiblingOverlaps.length, 1, "ab_audit shares cross-contract files across readOnly specialists");
+    const selfDiagPlanCheck = planSquadCohort({
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+      topology: "layered"
+    }, repoRoot);
+    assert.equal(selfDiagPlanCheck.topology.readerSiblingOverlaps.length, 0, "self-diagnosis-manifest.json must have 0 readerSiblingOverlaps");
+
+    const writableOverlapPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          writable_relay: {
+            lead: { role: "Lead", objective: "Coordinate", scopeFiles: ["benchmarks/teamwork-vs-squad/fixture"] },
+            specialists: [
+              { role: "Spec 1", objective: "Edit gateway", scopeFiles: ["benchmarks/teamwork-vs-squad/fixture/gateway", "benchmarks/teamwork-vs-squad/fixture/config.json"] },
+              { role: "Spec 2", objective: "Edit worker", scopeFiles: ["benchmarks/teamwork-vs-squad/fixture/worker", "benchmarks/teamwork-vs-squad/fixture/config.json"] }
+            ]
+          }
+        }
+      },
+      topology: "layered",
+      includeIntegrityAuditor: false
+    }, repoRoot);
+    assert.equal(writableOverlapPlan.topology.scopeOverlaps.length, 3);
+    assert.equal(writableOverlapPlan.topology.siblingOverlaps.length, 1);
+    assert.equal(writableOverlapPlan.topology.leadSpecialistOverlaps.length, 2);
+    assert.ok(writableOverlapPlan.topology.siblingOverlaps.every(o => o.kind === "sibling"));
+    assert.ok(writableOverlapPlan.topology.leadSpecialistOverlaps.every(o => o.kind === "lead-specialist"));
     assert.ok(
-      benchPlan.warnings.some(w => /Detected 1 writable sibling scopeFiles overlap/.test(w)),
-      `OPT-IO-6: expected 1 writable sibling overlap warning, got: ${JSON.stringify(benchPlan.warnings)}`
+      writableOverlapPlan.warnings.some(w => /Detected 1 writable sibling scopeFiles overlap/.test(w)),
+      `OPT-IO-6: expected 1 writable sibling overlap warning, got: ${JSON.stringify(writableOverlapPlan.warnings)}`
     );
     assert.equal(writableLeadOverlap.topology.siblingOverlaps.length, 0);
     assert.equal(writableLeadOverlap.topology.leadSpecialistOverlaps.length, 1);
@@ -1328,29 +1355,29 @@ try {
     assert.doesNotMatch(layeredLeadBrief, /swarm add/);
     assert.doesNotMatch(layeredLeadBrief, /kill finished workers/);
     assert.doesNotMatch(layeredLeadBrief, /<cohortBaseSeq>/);
-    assert.match(layeredLeadBrief, /Board scope: read_board\{since:\s*11\} initially, then since: <last_read_seq>\./);
+    assert.match(layeredLeadBrief, /Board scope: skip Turn-1 read_board; read specialist report slots directly \(on later wakeup, read_board\{since:\s*11\}\)\./);
     assert.match(
       layeredLeadBrief,
-      /Park via swarm_wait for receipts; follow Board scope above/,
-      "Layered swarm lead must retain pre-receipt swarm_wait distinct from post-handoff Then swarm_wait"
+      /Wave-2 Squad Lead \(spawned after specialist reports exist on disk\): do NOT park upfront on swarm_wait/,
+      "Wave-2 layered swarm lead must immediately read specialist slots without parking upfront on swarm_wait"
     );
     assert.ok(
       Buffer.byteLength(superviseSwarmLayeredLead, "utf8") <= 600,
       `OPT-BRIEF-03: expected compact superviseSwarmLayeredLead <= 600 B, got ${Buffer.byteLength(superviseSwarmLayeredLead, "utf8")} B`
     );
 
-    // UX-SQ-003 & UX-SQ-015: handleSquadPlanner ENOENT recommends global 'agy-squad plan' and verificationPipeline surfaces 'agy-squad finalize'
+    // UX-SQ-003 & UX-SQ-015: handleSquadPlanner ENOENT recommends global 'agy-squad plan' and verificationPipeline surfaces interpolated 'agy-squad finalize'
     const missingPlanErr = handleSquadPlanner({ manifestPath: "missing-manifest.json" }, root);
     assert.equal(missingPlanErr.isError, true);
     assert.match(missingPlanErr.content[0].text, /agy-squad plan/);
     assert.doesNotMatch(missingPlanErr.content[0].text, /node bin\/agy-squad\.mjs/);
     assert.ok(
-      layeredLeadCheckPlan.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json>/.test(step)),
-      "UX-SQ-015: audited verificationPipeline must surface agy-squad finalize shorthand"
+      layeredLeadCheckPlan.verificationPipeline.some(step => /agy-squad finalize --workspace .* scratch\/agy-squad\/squad-alpha\/record\.json/.test(step)),
+      "UX-SQ-015: audited verificationPipeline must surface interpolated agy-squad finalize shorthand"
     );
     assert.ok(
-      defaultRoleScopeTask.verificationPipeline.some(step => /agy-squad finalize <bundle-record\.json> --allow-unaudited/.test(step)),
-      "UX-SQ-015: standalone (--no-integrity) verificationPipeline must surface finalize --allow-unaudited"
+      defaultRoleScopeTask.verificationPipeline.some(step => /agy-squad finalize --workspace .* scratch\/agy-squad\/squad-task_squad\/record\.json --allow-unaudited/.test(step)),
+      "UX-SQ-015: standalone (--no-integrity) verificationPipeline must surface interpolated finalize --allow-unaudited"
     );
 
     // UX-SQ-R2-001 & UX-SQ-R2-002: verificationPipeline bundle-init --digest includes --handoffs/--handoff, and README Quickstart plan runs warning-free with single-squad auditor slot
@@ -1474,7 +1501,7 @@ try {
       includeIntegrityAuditor: false
     });
     assert.ok(performance.now() - tSlug < 200, "planSquadCohort worker name allocation must stay linear-time on repeated dashes");
-    assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "task-squad-a-b");
+    assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "a-b-2");
 
     // Post-swarm live fixes: exact 24-char slug must not warn, 25-char warns, coordinator-* is reserved, includeIntegrityAuditor: false emitted on opt-out
     const exact24Plan = planSquadCohort({
@@ -1661,6 +1688,169 @@ try {
     assert.equal(wideOverlaps[0].workerB, "w-31");
     assert.deepEqual(wideOverlaps[0].pairs, ["pkg-0/sub/c.js <-> pkg-0/sub"]);
     assert.ok(sweepMs < 200, `OPT-IO-08: 32-worker prefix sweep took ${sweepMs.toFixed(1)} ms (>= 200 ms)`);
+
+    // Stage 3 Regressions: ROI-001, S8-01, FIT-001, FIT-002, ROI-002, FIT-004
+    // 1. S8-01 & FIT-004: self-diagnosis waves (6 -> 3 -> 3), swarmPane schema, and role-distinct <=24-char names
+    assert.equal(selfDiagDecoupledPlan.waves.wave1.length, 6);
+    assert.equal(selfDiagDecoupledPlan.waves.wave2.length, 3);
+    assert.equal(selfDiagDecoupledPlan.waves.wave3.length, 3);
+    for (const w of selfDiagDecoupledPlan.workers) {
+      assert.equal(w.lead.wave, 2);
+      assert.ok(w.lead.workerName.endsWith("-lead"), `FIT-004: expected -lead suffix on ${w.lead.workerName}`);
+      assert.ok(w.lead.workerName.length <= 24);
+      for (const [idx, sp] of w.specialists.entries()) {
+        assert.equal(sp.wave, 1);
+        assert.ok(sp.workerName.length <= 24);
+        assert.equal(sp.readOnly, true, "FIT-001: readOnly must persist on emitted specialist entry");
+        assert.match(sp.swarmAdd.brief, /Read-only mode: do NOT modify, create, or delete files outside <Report slot>\./);
+        assert.match(sp.swarmAdd.brief, /1 post_message <= 500 UTF-8 bytes \(@coordinator\):/);
+        assert.match(sp.swarmAdd.brief, /git grep -n/);
+        if (sp.workerName.length === 24) {
+          assert.ok(sp.workerName.endsWith(`-s${idx + 1}`) || !selfDiagDecoupledPlan.warnings.some(x => x.includes(sp.workerName)));
+        }
+      }
+      assert.equal(w.readOnly, true);
+      assert.ok(w.readOnlyBaseline && typeof w.readOnlyBaseline.files === "object");
+    }
+    for (const a of selfDiagDecoupledPlan.integrityAuditPlan) {
+      assert.equal(a.wave, 3);
+      assert.ok(a.workerName.startsWith("audit-"), `FIT-004: expected audit- prefix on ${a.workerName}`);
+      assert.ok(a.workerName.length <= 24);
+    }
+    assert.ok(selfDiagDecoupledPlan.swarmPane && typeof selfDiagDecoupledPlan.swarmPane.goal?.title === "string");
+    assert.ok(selfDiagDecoupledPlan.swarmPane.threads.length === 3);
+    assert.equal(Object.keys(selfDiagDecoupledPlan.swarmPane.tasks).length, 12);
+
+    // Custom workerPrefix & single-squad inline task prefix omission
+    const customPrefixPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          very_long_architecture_review_squad: {
+            workerPrefix: "arch",
+            lead: { role: "Lead", objective: "Synthesize", scopeFiles: ["mcp/planner.mjs"], readOnly: true },
+            specialists: [{ role: "Deep Reviewer Extra Words", objective: "Audit", scopeFiles: ["mcp/planner.mjs"], readOnly: true }]
+          }
+        }
+      }
+    }, root);
+    assert.equal(customPrefixPlan.workers[0].lead.workerName, "arch-lead");
+    assert.ok(customPrefixPlan.workers[0].specialists[0].workerName.startsWith("arch-"));
+    assert.ok(customPrefixPlan.workers[0].specialists[0].workerName.endsWith("-s1"));
+    assert.equal(customPrefixPlan.integrityAuditPlan[0].workerName, "audit-arch");
+
+    const singleInlineNamesPlan = planSquadCohort({
+      task: "Inline naming check",
+      roles: ["Security", "Perf"],
+      readOnly: true
+    }, root);
+    assert.deepEqual(
+      singleInlineNamesPlan.workers[0].specialists.map(s => s.workerName),
+      ["security", "perf"],
+      "FIT-004: single-squad inline task must omit redundant task-squad- prefix"
+    );
+    assert.equal(singleInlineNamesPlan.integrityAuditPlan[0].workerName, "audit-task");
+
+    // 2. FIT-002: CLI plan --out / --replace / --compact & MCP outPath / compact (< 2 KB receipt)
+    const cliPlanOut = runCli([
+      "plan",
+      "--mode", "swarm",
+      "--read-only",
+      "--scope", "src",
+      "--role", "Sec",
+      "--out", "scratch/cli-plan.json",
+      "Compact plan output check"
+    ]);
+    assert.equal(cliPlanOut.status, 0, cliPlanOut.stderr);
+    assert.ok(Buffer.byteLength(cliPlanOut.stdout, "utf8") < 2048, "FIT-002: plan --out stdout must stay < 2 KB");
+    const cliPlanReceipt = JSON.parse(cliPlanOut.stdout);
+    assert.equal(cliPlanReceipt.ok, true);
+    assert.equal(cliPlanReceipt.path, "scratch/cli-plan.json");
+    assert.ok(Array.isArray(cliPlanReceipt.waves.wave1));
+    assert.ok(fs.existsSync(path.join(root, "scratch/cli-plan.json")));
+    const cliPlanNoReplace = runCli(["plan", "--out", "scratch/cli-plan.json", "Collision check"]);
+    assert.notEqual(cliPlanNoReplace.status, 0, "FIT-002: plan --out without --replace must fail closed on existing file");
+    const cliPlanWithReplace = runCli(["plan", "--out", "scratch/cli-plan.json", "--replace", "Collision check"]);
+    assert.equal(cliPlanWithReplace.status, 0, cliPlanWithReplace.stderr);
+    const cliPlanCompactOnly = runCli(["plan", "--compact", "Compact stdout check"]);
+    assert.equal(cliPlanCompactOnly.status, 0, cliPlanCompactOnly.stderr);
+    assert.equal(JSON.parse(cliPlanCompactOnly.stdout).ok, true);
+
+    const mcpOutRes = handleSquadPlanner({
+      task: "MCP file-backed plan",
+      readOnly: true,
+      outPath: "scratch/mcp-plan.json"
+    }, root);
+    assert.equal(mcpOutRes.isError, undefined);
+    assert.ok(Buffer.byteLength(mcpOutRes.content[0].text, "utf8") < 2048);
+    const mcpReceipt = JSON.parse(mcpOutRes.content[0].text);
+    assert.equal(mcpReceipt.ok, true);
+    assert.equal(mcpReceipt.path, "scratch/mcp-plan.json");
+    const mcpSavedPlan = JSON.parse(fs.readFileSync(path.join(root, "scratch/mcp-plan.json"), "utf8"));
+    assert.equal(mcpSavedPlan.path, "scratch/mcp-plan.json");
+    assert.equal(handleSquadPlanner({ task: "Escape", outPath: "../outside.json" }, root).isError, true);
+
+    // Stage 2 verificationPipeline omits --digest on includeIntegrityAuditor: false and omits --from-scope on '.'
+    const noAuditWildcardPlan = planSquadCohort({
+      task: "Wildcard unaudited check",
+      scopeFiles: ["."],
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(noAuditWildcardPlan.verificationPipeline.some(s => /--digest/.test(s)), false);
+    assert.equal(noAuditWildcardPlan.verificationPipeline.some(s => /--from-scope/.test(s)), false);
+
+    // 3. ROI-002: readerSiblingOverlaps 25% threshold & Large files (>750L or >42KiB) slice hints
+    const roiDir = path.join(root, "roi002");
+    fs.mkdirSync(roiDir, { recursive: true });
+    for (let i = 1; i <= 5; i++) fs.writeFileSync(path.join(roiDir, `f${i}.js`), `// file ${i}\n`, "utf8");
+    const bigLines = Array.from({ length: 805 }, (_, i) => `const line_${i} = ${i};`).join("\n") + "\n";
+    fs.writeFileSync(path.join(roiDir, "big.js"), bigLines, "utf8");
+
+    // 1 shared file out of 5 each = 20% (<= 25%): 0 readerSiblingOverlaps
+    const lowOverlapReaders = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [
+              { role: "R1", objective: "Read 1", scopeFiles: ["roi002/f1.js", "roi002/f2.js", "roi002/f3.js", "roi002/f4.js", "roi002/big.js"], readOnly: true },
+              { role: "R2", objective: "Read 2", scopeFiles: ["roi002/f1.js", "mcp/briefs.mjs", "mcp/dispatch.mjs", "mcp/index.js", "mcp/verdicts.mjs"], readOnly: true }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    }, root);
+    // Note: f1.js is explicitly duplicated in scopeFiles ("roi002/f1.js"), which counts as duplicate path entry; test directory vs file 20% ratio without duplicate literal path:
+    fs.mkdirSync(path.join(roiDir, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(roiDir, "sub", "shared.js"), "// shared\n", "utf8");
+    const subRatioPlan = planSquadCohort({
+      manifest: {
+        squads: {
+          alpha: {
+            specialists: [
+              { role: "R1", objective: "Read dir", scopeFiles: ["roi002"], readOnly: true },
+              { role: "R2", objective: "Read 1 sub + 4 other", scopeFiles: ["roi002/sub/shared.js", "roi002/o1.js", "roi002/o2.js", "roi002/o3.js", "roi002/o4.js"].map((p, idx) => {
+                if (idx > 0) {
+                  const extDir = path.join(root, "roi002-other");
+                  fs.mkdirSync(extDir, { recursive: true });
+                  const rel = `roi002-other/o${idx}.js`;
+                  fs.writeFileSync(path.join(root, rel), "// other\n", "utf8");
+                  return rel;
+                }
+                return p;
+              }), readOnly: true }
+            ]
+          }
+        }
+      },
+      includeIntegrityAuditor: false
+    }, root);
+    assert.equal(subRatioPlan.topology.readerSiblingOverlaps.length, 0, "ROI-002: <=25% expanded reader overlap without duplicate path entry must not warn");
+    assert.equal(lowOverlapReaders.topology.readerSiblingOverlaps.length, 1, "ROI-002: duplicate literal path entry must trigger readerSiblingOverlaps");
+    assert.match(
+      lowOverlapReaders.workers[0].specialists[0].swarmAdd.brief,
+      /Large files \(slice <=600L, <45KiB\): roi002\/big\.js \(805L\//,
+      "ROI-002: files >750L must emit compact slice hint"
+    );
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

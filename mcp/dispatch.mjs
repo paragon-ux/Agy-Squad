@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AGENT_ALIAS_PAIRS, buildSubagentSpec } from "./briefs.mjs";
-import { isContainedPath, readRegularFileSafe, resolveCanonicalRoot } from "./handoffs.mjs";
+import { isContainedPath, readRegularFileSafe, recordSlotPath, reportPath, resolveCanonicalRoot } from "./handoffs.mjs";
 import { validateSquadId } from "./verdicts.mjs";
 
 const RETIRED_ADVERSARIAL_RE = /^adversarial_(?:review|l1|flat)$|^adversarial_/i;
@@ -163,13 +163,33 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
       );
     }
   }
+  let defaultAuditScopes = ["."];
+  if (resolvedTarget !== "all" && Object.hasOwn(squads, resolvedTarget)) {
+    try {
+      const specSlots = specialistAssignments(squads, resolvedTarget).map(({ number }) =>
+        reportPath(resolvedTarget, number, options.reportRoot)
+      );
+      defaultAuditScopes = [
+        ...specSlots,
+        reportPath(resolvedTarget, undefined, options.reportRoot),
+        recordSlotPath(resolvedTarget, options.reportRoot)
+      ];
+    } catch {
+      defaultAuditScopes = ["."];
+    }
+  }
   return [
     {
       spec: {
         role: "Integrity Auditor",
         objective: `Audit squad '${resolvedTarget}' alignment, traces, and evidence.`,
-        scopeFiles: ["."],
-        expectedDeliverable: `Target Squad: ${resolvedTarget}; Evidence Digest: <sha256>; Integrity Verdict: CLEAN | INTEGRITY VIOLATION (plain text, no backticks).`
+        scopeFiles: defaultAuditScopes,
+        expectedDeliverable: [
+          "Standalone lines (plain text, no backticks):",
+          `Target Squad: ${resolvedTarget}`,
+          "Evidence Digest: <sha256>",
+          "Integrity Verdict: CLEAN | INTEGRITY VIOLATION"
+        ].join("\n")
       },
       id: slotId,
       number: 1
@@ -320,10 +340,13 @@ function dispatchSquadData(
 
   const delegateWorkspace = argWorkspace !== undefined ? root : undefined;
   const warnings = [];
+  const fileMetricsCache = new Map();
   const build = ({ spec, id, number }, emitWarnings = false, validateOnly = false) =>
     buildSubagentSpec(spec, id, selectedManifest, number, undefined, {
       isIntegrityAuditor,
       workspace: delegateWorkspace,
+      workspaceRoot: root,
+      fileMetricsCache,
       validateOnly,
       ...(emitWarnings ? { warnings } : {})
     });

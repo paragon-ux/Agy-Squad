@@ -1,41 +1,45 @@
 {
   "squads": {
     "skill_and_pr_review_audit": {
+      "workerPrefix": "skill-rev",
       "lead": {
         "role": "Skill & PR-Review Standard Lead",
         "readOnly": true,
-        "objective": "Park on swarm_wait for your 2 specialists' reports, then synthesize and spot-check cited SKILL/DOC/ARCH/SCRIPT claims under PR Review Standard v1.5.0 (.agents/skills/pr-review/SKILL.md).",
+        "objective": "Synthesize your 2 specialists' reports and spot-check cited SKILL/DOC/ARCH/SCRIPT claims under PR Review Standard v1.5.0 (.agents/skills/pr-review/SKILL.md).",
         "scopeFiles": [
           ".agents/skills/self-diagnosis",
+          ".agents/skills/platform-fit",
           ".agents/skills/pr-review",
           ".agents/skills/full-review",
           ".agents/skills/day-one-review",
           ".agents/skills/swarm-governance",
           "docs/tools.md"
         ],
-        "instructions": "Do NOT read scopeFiles or run diagnose.mjs before specialist receipts arrive; read specialist reports first and spot-check only cited file:line claims. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line claims. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
         {
-          "role": "Self-Diagnosis Skill & Progressive Disclosure Auditor",
+          "role": "Maintainer Skills & Progressive Disclosure Auditor",
           "readOnly": true,
-          "objective": "Audit .agents/skills/self-diagnosis/SKILL.md, scripts/diagnose.mjs, resources/self-diagnosis-manifest.json, resources/comparative-research-manifest.json, and references/ (execution-and-teardown.md, optimization-and-review-rubric.md) using pr-review SKILL/DOC/SCRIPT criteria: verify frontmatter, relative links, CLI flags, progressive disclosure ratio (SKILL.md vs references/), and propose concrete token or runtime optimizations.",
+          "objective": "Audit .agents/skills/self-diagnosis/ and .agents/skills/platform-fit/ (SKILL.md, scripts/diagnose.mjs, resources/, and references/) using pr-review SKILL/DOC/SCRIPT criteria: verify frontmatter, relative links, CLI flags, progressive disclosure ratio (SKILL.md vs references/), and propose concrete token or runtime optimizations.",
           "scopeFiles": [
             ".agents/skills/self-diagnosis/SKILL.md",
             ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
             ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
             ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
             ".agents/skills/self-diagnosis/references/optimization-and-review-rubric.md",
-            ".agents/skills/self-diagnosis/references/execution-and-teardown.md"
+            ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
+            ".agents/skills/platform-fit/SKILL.md",
+            ".agents/skills/platform-fit/references/platform-fit-protocol.md"
           ],
           "instructions": "Run diagnose.mjs --json read-only once as needed; never prune or remove scratch/agy-squad/ mid-cohort.",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
-          "role": "PR-Review Skill & Contract Alignment Auditor",
+          "role": "Shipped Review Skills & Contract Alignment Auditor",
           "readOnly": true,
-          "objective": "Cross-check .agents/skills/pr-review, .agents/skills/full-review, .agents/skills/day-one-review, and .agents/skills/swarm-governance (including references/) against current Agy-Squad runtime contracts (mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, docs/plans/LEDGER.md, docs/tools.md) and identify stale guidance or token/prompt optimization opportunities.",
+          "objective": "Cross-check .agents/skills/pr-review, .agents/skills/full-review, .agents/skills/day-one-review, and .agents/skills/swarm-governance (including references/), docs/plans/LEDGER.md, and docs/tools.md against current Agy-Squad runtime contracts and identify stale guidance or prompt optimization opportunities.",
           "scopeFiles": [
             ".agents/skills/pr-review/SKILL.md",
             ".agents/skills/pr-review/references/pr-review-standard.md",
@@ -53,48 +57,45 @@
             "docs/plans/LEDGER.md",
             "docs/tools.md"
           ],
-          "instructions": "Inspect your listed scopeFiles directly without re-running diagnose.mjs or npm test.",
+          "instructions": "Inspect your listed scopeFiles directly (use <= 120-line targeted cross-checks only if verifying a specific MCP/CLI flag); do not re-run diagnose.mjs or npm test.",
           "expectedDeliverable": "Markdown evidence report with SKILL/ARCH/DOC P1/P2/P3 triage, contract provenance checks, and concrete optimization recommendations."
         }
       ]
     },
     "runtime_and_contract_diagnosis": {
+      "workerPrefix": "runtime-diag",
       "lead": {
         "role": "Runtime & Contract Diagnostics Lead",
         "readOnly": true,
-        "objective": "Park on swarm_wait for your 2 specialists' reports, then synthesize and spot-check cited MCP, RUN, SVC, SCRIPT, TEST, DEP, and SEC findings under PR Review Standard v1.5.0.",
+        "objective": "Synthesize your 2 specialists' reports and spot-check cited MCP, RUN, SVC, SCRIPT, TEST, DEP, and SEC findings under PR Review Standard v1.5.0.",
         "scopeFiles": [
-          "mcp/index.js",
-          "mcp/dispatch.mjs",
-          "mcp/briefs.mjs",
           "mcp/handoffs.mjs",
+          "mcp/verdicts.mjs",
           "mcp/planner.mjs",
           "bin/agy-squad.mjs",
-          "scripts/install-register.mjs"
+          "scripts/install-register.mjs",
+          "scripts/release-preflight.mjs"
         ],
-        "instructions": "Do NOT read scopeFiles or run npm test before specialist receipts arrive; read specialist reports first and spot-check only cited file:line claims and checks. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line claims and checks. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP/SEC findings."
       },
       "specialists": [
         {
-          "role": "MCP, Dispatch, Planner & Handoff Boundary Inspector",
+          "role": "Planner, Verdict & Handoff Boundary Inspector",
           "readOnly": true,
-          "objective": "Audit mcp/index.js, mcp/dispatch.mjs, mcp/briefs.mjs, mcp/handoffs.mjs, mcp/verdicts.mjs, and mcp/planner.mjs under pr-review MCP, RUN, SVC, and SEC criteria: verify input validation, injection/ReDoS safety, symlink/fd containment, TypeName/Workspace invariants, <= 500 byte receipt grammar, model provenance caveats, and readSynthesis verdict enforcement.",
+          "objective": "Audit mcp/handoffs.mjs, mcp/verdicts.mjs, and mcp/planner.mjs under pr-review MCP, RUN, SVC, and SEC criteria: verify input validation, ReDoS safety, symlink/fd containment, readOnlyBaseline immutability, <= 500 byte receipt grammar, wave staging, and verdict enforcement.",
           "scopeFiles": [
-            "mcp/index.js",
-            "mcp/dispatch.mjs",
-            "mcp/briefs.mjs",
             "mcp/handoffs.mjs",
             "mcp/verdicts.mjs",
             "mcp/planner.mjs"
           ],
-          "instructions": "Inspect mcp/ files directly; run only targeted single-file probes if needed (do not run full npm test or diagnose.mjs).",
+          "instructions": "Inspect your listed mcp/ files in bounded slices; run only targeted single-file probes if needed (do not run full npm test or diagnose.mjs).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC/SEC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
-          "role": "Governance CLI, Bundler & Test Coverage Inspector",
+          "role": "Governance CLI, Installer & Test Coverage Inspector",
           "readOnly": true,
-          "objective": "Audit bin/agy-squad.mjs, scripts/, and tests/ under pr-review SCRIPT, TEST, DEP, and SEC criteria: verify CLI argument validation, --allow-unaudited override behavior, bundle integrity and --expected-sha256 prune verification, release preflight, packaging, CI workflow permissions/concurrency, and adversarial test assertions.",
+          "objective": "Audit bin/agy-squad.mjs, scripts/, tests/, and .github/workflows under pr-review SCRIPT, TEST, DEP, and SEC criteria: verify --workspace and path normalization, multi-squad batch bundling, --expected-sha256 prune verification, installer symlink/rollback parity, release preflight, packaging, and CI workflow permissions.",
           "scopeFiles": [
             "bin/agy-squad.mjs",
             "scripts/install-register.mjs",
@@ -115,52 +116,54 @@
       ]
     },
     "token_and_execution_optimization": {
+      "workerPrefix": "token-opt",
       "lead": {
         "role": "Token & Execution Optimization Lead",
         "readOnly": true,
-        "objective": "Park on swarm_wait for your 2 specialists' reports, then synthesize and spot-check cited byte/token and syscall/latency measurements.",
+        "objective": "Synthesize your 2 specialists' reports and spot-check cited byte/token and execution/routing measurements.",
         "scopeFiles": [
           "mcp/briefs.mjs",
-          "mcp/dispatch.mjs",
-          "mcp/handoffs.mjs",
-          "mcp/planner.mjs",
           "mcp/index.js",
-          "bin/agy-squad.mjs",
-          ".agents/skills/self-diagnosis/SKILL.md",
-          ".agents/skills/pr-review/SKILL.md"
+          "mcp/dispatch.mjs",
+          "plugin.json",
+          "README.md",
+          "docs/getting-started.md",
+          "docs/benchmarks.md"
         ],
-        "instructions": "Do NOT read scopeFiles or run benchmarks before specialist receipts arrive; read specialist reports first and spot-check only cited file:line measurements. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line measurements. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [
         {
-          "role": "Prompt, Schema & Skill Token Optimizer",
+          "role": "Prompt, MCP Schema & Routing Docs Optimizer",
           "readOnly": true,
-          "objective": "Measure UTF-8 byte and token budgets across mcp/briefs.mjs, mcp/index.js (tools/list schema), and all .agents/skills/*/SKILL.md; identify concrete wording or progressive-disclosure optimizations that reduce context overhead while preserving all contract invariants.",
+          "objective": "Measure UTF-8 byte/token budgets and routing clarity across mcp/briefs.mjs, mcp/index.js, plugin.json, README.md, docs/index.md, docs/getting-started.md, docs/roles-and-workflows.md, and docs/skills/; identify concrete wording or progressive-disclosure optimizations.",
           "scopeFiles": [
             "mcp/briefs.mjs",
             "mcp/index.js",
-            ".agents/skills/self-diagnosis/SKILL.md",
-            ".agents/skills/pr-review/SKILL.md",
-            ".agents/skills/full-review/SKILL.md",
-            ".agents/skills/day-one-review/SKILL.md",
-            ".agents/skills/swarm-governance/SKILL.md"
+            "plugin.json",
+            "README.md",
+            "docs/index.md",
+            "docs/getting-started.md",
+            "docs/roles-and-workflows.md",
+            "docs/skills"
           ],
           "instructions": "Measure only your listed scopeFiles with targeted read-only node probes (do not re-run full npm test or diagnose.mjs).",
           "expectedDeliverable": "Markdown evidence report with exact byte/token measurements and concrete before/after optimization proposals."
         },
         {
-          "role": "I/O, Concurrency & Cohort Topology Optimizer",
+          "role": "Dispatch, Workflow & Benchmark Telemetry Optimizer",
           "readOnly": true,
-          "objective": "Inspect mcp/dispatch.mjs, mcp/planner.mjs, mcp/handoffs.mjs, and bin/agy-squad.mjs for redundant filesystem syscalls (realpathSync, openSync, statSync), cohort fan-out bottlenecks, and scopeFiles overlap; propose measurable runtime optimizations.",
+          "objective": "Inspect mcp/dispatch.mjs, docs/core-workflows.md, docs/concepts.md, docs/benchmarks.md, and benchmarks/teamwork-vs-squad/manifest.json for stage-compilation overhead, workflow friction, and benchmark parity; propose measurable runtime or context optimizations.",
           "scopeFiles": [
             "mcp/dispatch.mjs",
-            "mcp/planner.mjs",
-            "mcp/handoffs.mjs",
-            "bin/agy-squad.mjs"
+            "docs/core-workflows.md",
+            "docs/concepts.md",
+            "docs/benchmarks.md",
+            "benchmarks/teamwork-vs-squad/manifest.json"
           ],
           "instructions": "Measure only your listed scopeFiles with targeted read-only node probes (do not re-run full npm test or diagnose.mjs).",
-          "expectedDeliverable": "Markdown evidence report with syscall/latency analysis and ranked runtime optimization proposals."
+          "expectedDeliverable": "Markdown evidence report with dispatch/workflow latency analysis and ranked optimization proposals."
         }
       ]
     }

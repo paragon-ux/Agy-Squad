@@ -28,7 +28,7 @@ const estimateTokens = bytes => Math.ceil(bytes / 4);
 const trimLeadingSlashes = s => { let i = 0; while (i < s.length && s[i] === "/") i++; return s.slice(i); };
 
 function toFindingSlug(value) {
-  const raw = value.replace(/\.(?:md|mjs|js|svg)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const raw = value.replace(/\.(?:md|mjs|js|json|svg)$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
   let start = 0;
   let end = raw.length;
   while (start < end && raw[start] === "-") start++;
@@ -49,10 +49,13 @@ function stripHtmlComments(text) {
   return out;
 }
 
-function assertAgySquadWorkspace() {
-  const rawCwd = process.cwd();
-  let cursor;
-  try { cursor = fs.realpathSync.native(rawCwd); } catch { cursor = path.resolve(rawCwd); }
+function assertAgySquadWorkspace(explicitWorkspace = undefined) {
+  const candidate = explicitWorkspace || process.env.AGY_SQUAD_WORKSPACE || process.cwd();
+  let startDir;
+  try { startDir = fs.realpathSync.native(candidate); } catch { startDir = path.resolve(candidate); }
+  let realRepoRoot;
+  try { realRepoRoot = fs.realpathSync.native(repoRoot); } catch { realRepoRoot = path.resolve(repoRoot); }
+  let cursor = startDir;
   let foundPkgName = null;
   while (true) {
     const pkgPath = path.join(cursor, "package.json");
@@ -70,10 +73,19 @@ function assertAgySquadWorkspace() {
     if (parent === cursor) break;
     cursor = parent;
   }
+  // Allow invoking `node <parent>/Agy-Squad/.agents/.../diagnose.mjs` directly from the checkout's immediate parent workspace folder
+  if (foundPkgName === null && path.dirname(realRepoRoot) === startDir) {
+    const repoPkgPath = path.join(realRepoRoot, "package.json");
+    if (fs.existsSync(repoPkgPath)) {
+      try {
+        if (JSON.parse(fs.readFileSync(repoPkgPath, "utf8"))?.name === "agy-squad") return;
+      } catch { /* fall through to error */ }
+    }
+  }
   const detail = foundPkgName ? ` (found package "${foundPkgName}")` : ' (no package.json with name "agy-squad" found)';
   console.error(
     `Error: diagnose.mjs is an Agy-Squad maintainer check and must be run inside an Agy-Squad checkout.\n` +
-    `Current working directory: ${rawCwd}${detail}\n` +
+    `Current working directory: ${candidate}${detail}\n` +
     `To govern your own repository, use 'agy-squad plan', '/pr-review', '/full-review', '/day-one-review', or '/swarm-governance'.`
   );
   process.exit(1);
@@ -445,7 +457,14 @@ function runDiagnostics() {
   }
 
   const driftTargets = [
-    ...["mcp/briefs.mjs", "mcp/planner.mjs", "mcp/dispatch.mjs"]
+    ...[
+      "mcp/briefs.mjs",
+      "mcp/planner.mjs",
+      "mcp/dispatch.mjs",
+      ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json",
+      ".agents/skills/self-diagnosis/resources/comparative-research-manifest.json",
+      "benchmarks/teamwork-vs-squad/manifest.json"
+    ]
       .map(rel => path.join(repoRoot, rel))
       .filter(abs => fs.existsSync(abs))
       .map(filePath => ({ path: filePath, text: fs.readFileSync(filePath, "utf8") })),

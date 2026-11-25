@@ -1065,7 +1065,7 @@ try {
       const preStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(preStatusHuman.status, 1);
       assert.match(preStatusHuman.stdout, /Overall Status: NOT INSTALLED/);
-      assert.match(preStatusHuman.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+      assert.match(preStatusHuman.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/);
 
       const preStatusJson = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(preStatusJson.status, 1);
@@ -1111,7 +1111,7 @@ try {
       const partialStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(partialStatus.status, 1);
       assert.match(partialStatus.stdout, /Overall Status: PARTIAL INSTALLATION/);
-      assert.match(partialStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+      assert.match(partialStatus.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/);
 
       // UX-SQ-004: forceCopyFallback installed skills contain zero ../../../docs/ or ../../../../docs/ links
       process.env.AGY_TEST_PROFILE_DIR = uxProfile;
@@ -1686,7 +1686,7 @@ try {
         assert.equal(rfStatus.status, 1, "RF-SCRIPT-001: stale global MCP-only profile must exit 1");
         assert.match(rfStatus.stdout, /Overall Status: PARTIAL INSTALLATION/, "RF-SCRIPT-001: stale global MCP-only profile must report PARTIAL INSTALLATION");
         assert.doesNotMatch(rfStatus.stdout, /Overall Status: DISABLED/, "RF-SCRIPT-001: stale global MCP-only profile must not report DISABLED");
-        assert.match(rfStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/, "RF-SCRIPT-001: Next step setup hint must print");
+        assert.match(rfStatus.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/, "RF-SCRIPT-001: Next step setup hint must print");
       } finally {
         fs.rmSync(rfProfile, { recursive: true, force: true });
       }
@@ -1886,6 +1886,93 @@ try {
     } finally {
       process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
       fs.rmSync(asqProfile, { recursive: true, force: true });
+    }
+  }
+
+  // FLOW-001: populateLinkedPluginDir symlinks root manifests (package.json, plugin.json, README.md) and setup --check fails on drifted/partial install
+  {
+    const flowProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-flow001-")));
+    const flowEnv = { ...process.env, AGY_TEST_PROFILE_DIR: flowProfile };
+    try {
+      const freshCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(freshCheck.status, 0, `FLOW-001: uninstalled setup --check must exit 0: ${freshCheck.stderr}`);
+      assert.match(freshCheck.stdout, /currently installed: NO/);
+
+      const flowInstall = spawnSync(process.execPath, [cli, "setup"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(flowInstall.status, 0, flowInstall.stderr || flowInstall.stdout);
+
+      const flowPluginDir = path.join(flowProfile, ".gemini", "config", "plugins", "agy-squad");
+      const flowStatusJson = JSON.parse(
+        spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: flowEnv, encoding: "utf8" }).stdout
+      );
+      if (flowStatusJson.details.plugin.isSymlink) {
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          const linkedFile = path.join(flowPluginDir, rootFile);
+          assert.equal(
+            fs.lstatSync(linkedFile).isSymbolicLink(),
+            true,
+            `FLOW-001: expected ${rootFile} in linked plugin dir to be a symlink`
+          );
+          assert.equal(
+            fs.realpathSync.native(linkedFile),
+            fs.realpathSync.native(path.join(repoRoot, rootFile))
+          );
+        }
+      }
+
+      const healthyCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(healthyCheck.status, 0, healthyCheck.stderr);
+
+      // Simulate stale version drift on package.json: both status AND setup --check must exit 1
+      const pkgDest = path.join(flowPluginDir, "package.json");
+      fs.rmSync(pkgDest, { force: true });
+      fs.writeFileSync(pkgDest, JSON.stringify({ name: "agy-squad", version: "0.0.1" }, null, 2) + "\n", "utf8");
+      const driftedStatus = spawnSync(process.execPath, [cli, "status"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(driftedStatus.status, 1, "FLOW-001: drifted version status must exit 1");
+      const driftedCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(driftedCheck.status, 1, "FLOW-001: setup --check must fail closed on stale/incomplete installed profile");
+      assert.match(driftedCheck.stderr, /incomplete or out of sync.*stale plugin version 0\.0\.1/);
+
+      // EPERM symlink fallback copies root manifests cleanly
+      const cleanProf = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cleanprof-"));
+      try {
+        const epermDir = path.join(cleanProf, "linked");
+        await installerMod.populateLinkedPluginDir(repoRoot, epermDir, {
+          symlinkSync: () => {
+            const err = new Error("Operation not permitted");
+            err.code = "EPERM";
+            throw err;
+          }
+        });
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          assert.equal(fs.lstatSync(path.join(epermDir, rootFile)).isFile(), true);
+          assert.equal(fs.lstatSync(path.join(epermDir, rootFile)).isSymbolicLink(), false);
+        }
+      } finally {
+        fs.rmSync(cleanProf, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(flowProfile, { recursive: true, force: true });
     }
   }
 

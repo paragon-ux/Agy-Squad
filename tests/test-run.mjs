@@ -320,6 +320,19 @@ try {
   }
   const outsideHelp = spawnSync(process.execPath, [isoDiag, "--help"], { cwd: unrelatedApp, encoding: "utf8" });
   assert.equal(outsideHelp.status, 0, "UX-SQ-008: diagnose.mjs --help must still exit 0 from any cwd");
+  // ROI-003 & S8-03: diagnose.mjs succeeds from checkout's immediate parent workspace dir and catches retired symbols in .json manifests
+  const parentDirRun = spawnSync(process.execPath, [isoDiag], { cwd: path.dirname(isoRepo), encoding: "utf8" });
+  assert.equal(parentDirRun.status, 0, `ROI-003: diagnose.mjs must succeed from immediate parent workspace dir: ${parentDirRun.stderr}`);
+  const selfDiagManifestPath = path.join(isoRepo, ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json");
+  const savedSelfDiagManifest = fs.readFileSync(selfDiagManifestPath, "utf8");
+  try {
+    fs.writeFileSync(selfDiagManifestPath, savedSelfDiagManifest.replace('"instructions": "', '"instructions": "Run node mcp/handoffs.mjs first. '));
+    const jsonDriftRun = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, encoding: "utf8" });
+    assert.equal(jsonDriftRun.status, 1, "S8-03: retired symbol in .json manifest must fail diagnose.mjs");
+    assert.ok(JSON.parse(jsonDriftRun.stdout).findings.some(f => f.id.startsWith("DOC-MCP-DRIFT-")), "Expected DOC-MCP-DRIFT-* for .json manifest");
+  } finally {
+    fs.writeFileSync(selfDiagManifestPath, savedSelfDiagManifest);
+  }
 
   // SCRIPT-003: Spaced AGY_SQUAD_SCRATCH_ROOT handled cleanly by diagnose.mjs and CLI bundle; traversal rejected
   const spacedEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "scratch/custom spaced" };

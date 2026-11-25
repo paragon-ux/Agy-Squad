@@ -872,11 +872,14 @@ try {
     );
     assert.equal(initCli.status, 0, initCli.stderr);
     const initOut = JSON.parse(initCli.stdout);
+    assert.equal(initOut.ok, true);
     assert.equal(initOut.path, "scratch/bundle-record.json");
-    assert.equal(initOut.record.verdict, "PASS");
-    assert.equal(initOut.record.verifiedFiles["src/core.mjs"], fingerprint(svcCoord, ["src/core.mjs"])["src/core.mjs"]);
-    assert.equal(initOut.record.assignments.length, 2);
-    assert.equal(initOut.record.handoffs.length, 2);
+    assert.equal(initOut.record, undefined, "bundle-init --out must omit giant record echo unless --verbose is set");
+    const writtenInitRec = JSON.parse(fs.readFileSync(path.join(svcCoord, "scratch/bundle-record.json"), "utf8"));
+    assert.equal(writtenInitRec.verdict, "PASS");
+    assert.equal(writtenInitRec.verifiedFiles["src/core.mjs"], fingerprint(svcCoord, ["src/core.mjs"])["src/core.mjs"]);
+    assert.equal(writtenInitRec.assignments.length, 2);
+    assert.equal(writtenInitRec.handoffs.length, 2);
 
     // Overwriting existing --out rejects without --replace, succeeds with --replace
     const initDup = spawnSync(
@@ -2811,8 +2814,11 @@ try {
       );
       assert.equal(fromScopeCli.status, 0, fromScopeCli.stderr);
       const fromScopeOut = JSON.parse(fromScopeCli.stdout);
+      assert.equal(fromScopeOut.ok, true);
+      assert.equal(fromScopeOut.record, undefined);
+      const writtenScopedRec = JSON.parse(fs.readFileSync(path.join(scopeDir, "scratch/scoped-record.json"), "utf8"));
       assert.deepEqual(
-        Object.keys(fromScopeOut.record.verifiedFiles),
+        Object.keys(writtenScopedRec.verifiedFiles),
         ["docs/guide.md", "extra.txt", "src/a.mjs", "src/nested/b.mjs"],
         "--from-scope must expand subdirectories, deduplicate overlaps, skip .git/node_modules, and merge explicit --file"
       );
@@ -2891,6 +2897,392 @@ try {
   } finally {
     fs.rmSync(asqDir, { recursive: true, force: true });
     fs.rmSync(asqWt, { recursive: true, force: true });
+  }
+
+  // Stage 3 Regressions: FIT-001, FLOW-005, FIT-002/FIT-003/FLOW-003, ROI-003/FLOW-004, ROI-005
+  {
+    const s3Parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-s3-parent-")));
+    const s3Repo = path.join(s3Parent, "ChildRepo");
+    const s3Wt = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-s3-wt-")));
+    const s3Brain = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-s3-brain-")));
+    try {
+      fs.mkdirSync(path.join(s3Repo, "src"), { recursive: true });
+      fs.writeFileSync(path.join(s3Repo, "src/app.js"), "export const v = 1;\n", "utf8");
+      fs.writeFileSync(path.join(s3Repo, "src/util.js"), "export const u = 2;\n", "utf8");
+
+      // Initialize git repo inside ChildRepo to test FIT-001 git + SHA-256 readOnlyBaseline fail-closed checks
+      spawnSync("git", ["init", "-q"], { cwd: s3Repo });
+      spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: s3Repo });
+      spawnSync("git", ["config", "user.name", "Test"], { cwd: s3Repo });
+      spawnSync("git", ["add", "."], { cwd: s3Repo });
+      spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: s3Repo });
+
+      // 1. FIT-001: readOnlyBaseline fails closed in BOTH bundle-init and finalize on Stage-1 file mutation or untracked file
+      const roPlanRes = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "plan",
+          "--workspace", s3Repo,
+          "--mode", "swarm",
+          "--read-only",
+          "--scope", "src",
+          "--role", "Reader",
+          "--no-integrity",
+          "--out", "scratch/ro-plan.json",
+          "Read-only containment test"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(roPlanRes.status, 0, roPlanRes.stderr);
+      const roSpecSlot = "scratch/agy-squad/squad-task_squad/specialist-1/report.md";
+      const roLeadSlot = "scratch/agy-squad/squad-task_squad/lead/report.md";
+      fs.mkdirSync(path.join(s3Repo, path.dirname(roSpecSlot)), { recursive: true });
+      fs.mkdirSync(path.join(s3Repo, path.dirname(roLeadSlot)), { recursive: true });
+      fs.writeFileSync(path.join(s3Repo, roSpecSlot), "# Specialist\nChecked `src/app.js:1`.\n", "utf8");
+      fs.writeFileSync(path.join(s3Repo, roLeadSlot), "# Synthesis\nChecked `src/app.js:1`.\nContent Verdict: PASS\n", "utf8");
+
+      // Mutate tracked src/app.js -> bundle-init MUST fail closed
+      fs.writeFileSync(path.join(s3Repo, "src/app.js"), "export const v = 999;\n", "utf8");
+      const roMutatedInit = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--workspace", s3Repo,
+          "--plan", "scratch/ro-plan.json",
+          "--from-scope",
+          "--handoff", `reader=READY ${roSpecSlot} - checked`,
+          "--out", "scratch/ro-record.json"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.notEqual(roMutatedInit.status, 0, "FIT-001: bundle-init must fail closed when read-only scoped file was mutated");
+      assert.match(roMutatedInit.stderr, /Read-only containment violation/);
+
+      // Restore src/app.js -> bundle-init succeeds
+      fs.writeFileSync(path.join(s3Repo, "src/app.js"), "export const v = 1;\n", "utf8");
+      const roCleanInit = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--workspace", s3Repo,
+          "--plan", "scratch/ro-plan.json",
+          "--from-scope",
+          "--handoff", `reader=READY ${roSpecSlot} - checked`,
+          "--out", "scratch/ro-record.json"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(roCleanInit.status, 0, roCleanInit.stderr);
+
+      // Add rogue untracked file outside scratch/ before finalize -> finalize MUST fail closed
+      fs.writeFileSync(path.join(s3Repo, "rogue.txt"), "unauthorized write\n", "utf8");
+      const roRogueFinalize = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "ChildRepo/scratch/ro-record.json", "--allow-unaudited"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.notEqual(roRogueFinalize.status, 0, "FIT-001: finalize must fail closed on new untracked file outside scratch/");
+      assert.match(roRogueFinalize.stderr, /Read-only containment violation/);
+      fs.rmSync(path.join(s3Repo, "rogue.txt"), { force: true });
+
+      // Ancestor record.workspace inference (ROI-003): finalize from s3Parent WITHOUT --workspace succeeds!
+      const roCleanFinalize = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", "ChildRepo/scratch/ro-record.json", "--allow-unaudited"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(roCleanFinalize.status, 0, `ROI-003: parent-CWD ancestor record.workspace inference failed: ${roCleanFinalize.stderr}`);
+
+      // 2. FLOW-005: share/branch brief wt=<abs-worktree-root> & collect --handoff auto-discovery without --from
+      const sharePlanRes = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "plan",
+          "--workspace", s3Repo,
+          "--mode", "swarm",
+          "--workspace-isolation", "share",
+          "--scope", "src/app.js",
+          "--role", "IsoWorker",
+          "--no-integrity",
+          "--out", "scratch/share-plan.json",
+          "Isolated worktree collect test"
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(sharePlanRes.status, 0, sharePlanRes.stderr);
+      const sharePlanFull = JSON.parse(fs.readFileSync(path.join(s3Repo, "scratch/share-plan.json"), "utf8"));
+      assert.match(sharePlanFull.workers[0].specialists[0].swarmAdd.brief, /wt=<abs-worktree-root>/);
+
+      const wtSlot = "scratch/collect-test/squad-task_squad/specialist-1/report.md";
+      fs.mkdirSync(path.join(s3Wt, path.dirname(wtSlot)), { recursive: true });
+      fs.writeFileSync(path.join(s3Wt, wtSlot), "# Worktree Report\nVerified in share worktree.\n", "utf8");
+      const collectAuto = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "collect",
+          "--workspace", s3Repo,
+          "--plan", path.join(s3Repo, "scratch/share-plan.json"),
+          "--report-root", "scratch/collect-test",
+          "--handoff", `READY ${wtSlot} - wt=${s3Wt} completed`
+        ],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(collectAuto.status, 0, `FLOW-005: collect --handoff wt= auto-discovery failed: ${collectAuto.stderr}`);
+      const collectAutoOut = JSON.parse(collectAuto.stdout);
+      assert.deepEqual(collectAutoOut.collected.map(c => c.slot), [wtSlot]);
+      assert.equal(fs.existsSync(path.join(s3Repo, wtSlot)), true);
+
+      // 3. FIT-002 + FIT-003 + ROI-003 + ROI-005: Multi-squad --all-squads, bound auditSwarmAdd, audit-check/digest --verify-traces (<50ms), batch finalize, batch prune --records --clean-records
+      const multiManifestRel = "scratch/multi-manifest.json";
+      fs.writeFileSync(
+        path.join(s3Repo, multiManifestRel),
+        JSON.stringify({
+          squads: {
+            alpha: {
+              lead: { role: "Alpha Lead", objective: "Synthesize alpha", scopeFiles: ["src/app.js"], readOnly: true },
+              specialists: [{ role: "Alpha Spec", objective: "Audit app", scopeFiles: ["src/app.js"], readOnly: true }]
+            },
+            beta: {
+              lead: { role: "Beta Lead", objective: "Synthesize beta", scopeFiles: ["src/util.js"], readOnly: true },
+              specialists: [{ role: "Beta Spec", objective: "Audit util", scopeFiles: ["src/util.js"], readOnly: true }]
+            }
+          }
+        }, null, 2) + "\n",
+        "utf8"
+      );
+      // Use AGY_SQUAD_WORKSPACE fallback from parent directory + contained absolute manifest & out paths
+      const envWs = { ...process.env, AGY_SQUAD_WORKSPACE: s3Repo };
+      const multiPlanCli = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "plan",
+          "--manifest", path.join(s3Repo, multiManifestRel),
+          "--report-root", "scratch/multi-run",
+          "--out", path.join(s3Repo, "scratch/multi-plan.json")
+        ],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(multiPlanCli.status, 0, multiPlanCli.stderr);
+      const multiPlanObj = JSON.parse(fs.readFileSync(path.join(s3Repo, "scratch/multi-plan.json"), "utf8"));
+      const alphaSpecName = multiPlanObj.workers[0].specialists[0].workerName;
+      const betaSpecName = multiPlanObj.workers[1].specialists[0].workerName;
+      const alphaSpecSlot = multiPlanObj.workers[0].specialists[0].reportSlot;
+      const betaSpecSlot = multiPlanObj.workers[1].specialists[0].reportSlot;
+      const alphaLeadSlot = multiPlanObj.workers[0].lead.reportSlot;
+      const betaLeadSlot = multiPlanObj.workers[1].lead.reportSlot;
+
+      for (const [slot, body] of [
+        [alphaSpecSlot, "# Alpha Spec\nChecked `src/app.js:1`.\n"],
+        [alphaLeadSlot, "# Alpha Lead\nChecked `src/app.js:1`.\nContent Verdict: PASS\n"],
+        [betaSpecSlot, "# Beta Spec\nChecked `src/util.js:1`.\n"],
+        [betaLeadSlot, "# Beta Lead\nChecked `src/util.js:1`.\nContent Verdict: PASS\n"]
+      ]) {
+        fs.mkdirSync(path.join(s3Repo, path.dirname(slot)), { recursive: true });
+        fs.writeFileSync(path.join(s3Repo, slot), body, "utf8");
+      }
+
+      const coordUuid = "11111111-2222-3333-4444-555555555555";
+      const alphaUuid = "aaaaaaaa-1111-2222-3333-444444444444";
+      const betaUuid = "bbbbbbbb-1111-2222-3333-444444444444";
+      const batchInit = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "bundle-init",
+          "--plan", "scratch/multi-plan.json",
+          "--all-squads",
+          "--from-scope",
+          "--id-map", `${alphaSpecName}=${alphaUuid}`,
+          "--id-map", `${betaSpecName}=${betaUuid}`,
+          "--handoff", `${alphaUuid}=READY ${alphaSpecSlot} - ok`,
+          "--handoff", `${betaUuid}=READY ${betaSpecSlot} - ok`,
+          "--coord-id", coordUuid,
+          "--handoff-seqs", "14,19",
+          "--digest"
+        ],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(batchInit.status, 0, `FIT-003: bundle-init --all-squads failed: ${batchInit.stderr}`);
+      const batchInitOut = JSON.parse(batchInit.stdout);
+      assert.equal(batchInitOut.ok, true);
+      assert.equal(batchInitOut.squadCount, 2);
+      for (const recSummary of batchInitOut.records) {
+        assert.equal(recSummary.record, undefined);
+        assert.ok(recSummary.auditSwarmAdd && recSummary.auditSwarmAdd.action === "add");
+        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`--parent ${coordUuid}`));
+        assert.match(recSummary.auditSwarmAdd.brief, /read_board\{seqs: \[14, 19\]\} only\./);
+        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`Evidence Digest: ${recSummary.evidenceDigest}`));
+        assert.doesNotMatch(recSummary.auditSwarmAdd.brief, /<coordId>|<handoffSeqs|<sha256>|<rel-record>|<rel-slot>/);
+      }
+
+      // ROI-005: deterministic audit-check & digest --verify-traces (<50 ms)
+      const writeSyntheticTrace = (uuid, workerName, slotPath, readRelPaths = [], extraToolCalls = []) => {
+        const logDir = path.join(s3Brain, uuid, ".system_generated", "logs");
+        fs.mkdirSync(logDir, { recursive: true });
+        const lines = [
+          JSON.stringify({
+            step_index: 1,
+            type: "USER_INPUT",
+            status: "DONE",
+            content: `[Message] sender=${coordUuid} @${workerName} Report slot: ${slotPath}`
+          }),
+          JSON.stringify({
+            step_index: 2,
+            type: "PLANNER_RESPONSE",
+            status: "DONE",
+            tool_calls: [
+              ...readRelPaths.map(r => ({ name: "read_file", arguments: { Path: path.join(s3Repo, r) } })),
+              { name: "write_file", arguments: { Path: path.join(s3Repo, slotPath) } },
+              ...extraToolCalls
+            ]
+          })
+        ];
+        fs.writeFileSync(path.join(logDir, "transcript.jsonl"), lines.join("\n") + "\n", "utf8");
+      };
+      writeSyntheticTrace(alphaUuid, alphaSpecName, alphaSpecSlot, ["src/app.js"]);
+      writeSyntheticTrace(betaUuid, betaSpecName, betaSpecSlot, ["src/util.js"]);
+
+      const alphaRecRel = batchInitOut.records[0].path;
+      const betaRecRel = batchInitOut.records[1].path;
+      const auditCheckPass = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "audit-check",
+          "--record", path.join(s3Repo, alphaRecRel),
+          "--coord-id", coordUuid,
+          "--brain-dir", s3Brain
+        ],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(auditCheckPass.status, 0, `ROI-005: audit-check failed: ${auditCheckPass.stderr || auditCheckPass.stdout}`);
+      const auditCheckJson = JSON.parse(auditCheckPass.stdout);
+      assert.equal(auditCheckJson.ok, true);
+      assert.ok(auditCheckJson.elapsedMs < 200, `Expected fast JSONL trace check, got ${auditCheckJson.elapsedMs}ms`);
+
+      const digestVerifyPass = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "digest",
+          path.join(s3Repo, alphaRecRel),
+          "--verify-traces",
+          "--coord-id", coordUuid,
+          "--brain-dir", s3Brain
+        ],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(digestVerifyPass.status, 0, digestVerifyPass.stderr);
+      assert.equal(JSON.parse(digestVerifyPass.stdout).traceVerification.ok, true);
+
+      // Unauthorized write or ungrounded citation in read-only worker trace MUST fail closed with exit code 1
+      writeSyntheticTrace(alphaUuid, alphaSpecName, alphaSpecSlot, ["src/app.js"], [
+        { name: "edit_file", arguments: { Path: path.join(s3Repo, "src/app.js") } }
+      ]);
+      const auditCheckFail = spawnSync(
+        process.execPath,
+        [
+          agySquadCli, "audit-check",
+          "--record", alphaRecRel,
+          "--coord-id", coordUuid,
+          "--brain-dir", s3Brain
+        ],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(auditCheckFail.status, 1, "ROI-005: unauthorized write in read-only worker trace must exit 1");
+      assert.equal(JSON.parse(auditCheckFail.stdout).ok, false);
+
+      // Write CLEAN integrity audit reports for both squads, test verdict --workspace, batch finalize, and batch prune --records --clean-records
+      for (const [idx, recSummary] of batchInitOut.records.entries()) {
+        const auditSlot = multiPlanObj.integrityAuditPlan[idx].reportSlot;
+        fs.mkdirSync(path.join(s3Repo, path.dirname(auditSlot)), { recursive: true });
+        fs.writeFileSync(
+          path.join(s3Repo, auditSlot),
+          `# Audit\nTarget Squad: ${recSummary.squadId}\nEvidence Digest: ${recSummary.evidenceDigest}\nIntegrity Verdict: CLEAN\n`,
+          "utf8"
+        );
+        const vRes = spawnSync(
+          process.execPath,
+          [agySquadCli, "verdict", "--workspace", s3Repo, "--integrity", path.join(s3Repo, auditSlot)],
+          { cwd: s3Parent, encoding: "utf8" }
+        );
+        assert.equal(vRes.status, 0, vRes.stderr);
+        assert.equal(JSON.parse(vRes.stdout).verdict, "CLEAN");
+      }
+
+      // Also verify fingerprint, inspect, dispatch, verify --workspace from s3Parent, plus symlink escape rejection
+      assert.equal(
+        spawnSync(process.execPath, [agySquadCli, "fingerprint", "--workspace", s3Repo, path.join(s3Repo, "src/app.js")], { cwd: s3Parent, encoding: "utf8" }).status,
+        0
+      );
+      assert.equal(
+        spawnSync(process.execPath, [agySquadCli, "inspect", "--workspace", s3Repo, path.join(s3Repo, alphaRecRel)], { cwd: s3Parent, encoding: "utf8" }).status,
+        0
+      );
+      assert.equal(
+        spawnSync(process.execPath, [agySquadCli, "dispatch", "--workspace", s3Repo, "--manifest", multiManifestRel, "--squad", "alpha"], { cwd: s3Parent, encoding: "utf8" }).status,
+        0
+      );
+      const escapeSym = path.join(s3Repo, "scratch/escape-out.json");
+      fs.symlinkSync(path.join(s3Parent, "outside-target.json"), escapeSym);
+      const symEscRes = spawnSync(
+        process.execPath,
+        [agySquadCli, "fingerprint", "--workspace", s3Repo, escapeSym],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.notEqual(symEscRes.status, 0, "FLOW-004: symlink escaping workspace passed as absolute path must fail closed");
+      fs.unlinkSync(escapeSym);
+
+      // Batch finalize both records in 1 call
+      const batchFin = spawnSync(
+        process.execPath,
+        [agySquadCli, "finalize", path.join(s3Repo, alphaRecRel), path.join(s3Repo, betaRecRel)],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(batchFin.status, 0, `FIT-003: multi-record finalize failed: ${batchFin.stderr}`);
+      const batchFinJson = JSON.parse(batchFin.stdout);
+      assert.equal(batchFinJson.ok, true);
+      assert.equal(batchFinJson.count, 2);
+      assert.equal(
+        spawnSync(process.execPath, [agySquadCli, "verify", "--workspace", s3Repo, path.join(s3Repo, batchFinJson.results[0].bundlePath), batchFinJson.results[0].sha256], { cwd: s3Parent, encoding: "utf8" }).status,
+        0
+      );
+
+      // Batch prune --records --clean-records in 1 call
+      const batchPrune = spawnSync(
+        process.execPath,
+        [agySquadCli, "prune", "--records", alphaRecRel, "--records", betaRecRel, "--clean-records"],
+        { cwd: s3Parent, env: envWs, encoding: "utf8" }
+      );
+      assert.equal(batchPrune.status, 0, `FIT-003: batch prune --records --clean-records failed: ${batchPrune.stderr}`);
+      const batchPruneJson = JSON.parse(batchPrune.stdout);
+      assert.equal(batchPruneJson.ok, true);
+      assert.equal(batchPruneJson.count, 2);
+      assert.deepEqual(batchPruneJson.cleanedRecords, [alphaRecRel, betaRecRel]);
+      assert.equal(fs.existsSync(path.join(s3Repo, alphaRecRel)), false);
+      assert.equal(fs.existsSync(path.join(s3Repo, betaRecRel)), false);
+      assert.equal(fs.existsSync(path.join(s3Repo, alphaSpecSlot)), false);
+      assert.equal(fs.existsSync(path.join(s3Repo, batchFinJson.results[0].bundlePath)), true);
+
+      // Wildcard '.' bundle-init --digest empty-files error must NOT suggest --from-scope (FIT-002)
+      const dotPlanCli = spawnSync(
+        process.execPath,
+        [agySquadCli, "plan", "--workspace", s3Repo, "--scope", ".", "--out", "scratch/dot-plan.json", "Wildcard hint check"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.equal(dotPlanCli.status, 0, dotPlanCli.stderr);
+      const dotSpecSlot = "scratch/agy-squad/squad-task_squad/specialist-1/report.md";
+      fs.mkdirSync(path.join(s3Repo, path.dirname(dotSpecSlot)), { recursive: true });
+      fs.writeFileSync(path.join(s3Repo, dotSpecSlot), "# Dot\n", "utf8");
+      const dotEmptyDigest = spawnSync(
+        process.execPath,
+        [agySquadCli, "bundle-init", "--workspace", s3Repo, "--plan", "scratch/dot-plan.json", "--handoff", `task-worker=READY ${dotSpecSlot} - ok`, "--digest"],
+        { cwd: s3Parent, encoding: "utf8" }
+      );
+      assert.notEqual(dotEmptyDigest.status, 0);
+      assert.doesNotMatch(dotEmptyDigest.stderr, /Pass --from-scope/, "FIT-002: wildcard '.' empty-files error must not suggest --from-scope");
+    } finally {
+      fs.rmSync(s3Parent, { recursive: true, force: true });
+      fs.rmSync(s3Wt, { recursive: true, force: true });
+      fs.rmSync(s3Brain, { recursive: true, force: true });
+    }
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

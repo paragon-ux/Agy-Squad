@@ -406,6 +406,32 @@ export function detectExistingInstallation(options = {}) {
             }
           }
         }
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          const filePath = path.join(pluginDest, rootFile);
+          let fileLst = null;
+          try {
+            fileLst = fs.lstatSync(filePath);
+          } catch {}
+          if (fileLst && fileLst.isSymbolicLink()) {
+            details.plugin.isSymlink = true;
+            if (isLocalCheckout) {
+              try {
+                if (!pathsEqual(fs.realpathSync.native(filePath), fs.realpathSync.native(path.join(repoRoot, rootFile)))) {
+                  details.plugin.pointsElsewhere = true;
+                }
+              } catch {
+                details.plugin.pointsElsewhere = true;
+              }
+            }
+            if (!details.plugin.target) {
+              try {
+                details.plugin.target = path.dirname(fs.readlinkSync(filePath));
+              } catch {
+                details.plugin.target = "symlink";
+              }
+            }
+          }
+        }
         if (!details.plugin.isSymlink) {
           details.plugin.target = "direct folder or junction";
         }
@@ -616,7 +642,22 @@ export async function populateLinkedPluginDir(sourceRoot, targetPluginDir, optio
   for (const file of ["package.json", "plugin.json", "README.md"]) {
     const src = path.join(sourceRoot, file);
     if (fs.existsSync(src)) {
-      await fsPromises.copyFile(src, path.join(targetPluginDir, file));
+      const destFile = path.join(targetPluginDir, file);
+      try {
+        const stat = fs.lstatSync(destFile);
+        if (stat.isSymbolicLink()) await fsPromises.unlink(destFile);
+        else if (stat.isDirectory()) await fsPromises.rm(destFile, { recursive: true, force: true });
+        else await fsPromises.unlink(destFile);
+      } catch {}
+      try {
+        symlinkSyncImpl(src, destFile, "file");
+      } catch (err) {
+        if (err?.code === "EPERM" || err?.code === "ENOSYS" || err?.code === "EACCES") {
+          await fsPromises.copyFile(src, destFile);
+        } else {
+          throw err;
+        }
+      }
     }
   }
   const isWin = os.platform() === "win32";
@@ -878,6 +919,23 @@ export async function runCheckOnly(options = {}) {
   }
   if (status.details.config.corrupt) {
     throw new Error(`Corrupt config.json detected: ${status.details.config.error}`);
+  }
+  if (status.isInstalled && !status.isComplete) {
+    const reasons = [];
+    const d = status.details;
+    if (!d.runtime.supported) reasons.push(`unsupported Node.js ${d.runtime.nodeVersion}`);
+    if (!d.plugin.exists) reasons.push("missing plugin directory");
+    if (d.plugin.pointsElsewhere) reasons.push("plugin link points elsewhere");
+    if (d.plugin.versionMismatch) reasons.push(`stale plugin version ${d.plugin.version} != ${PACKAGE_VERSION}`);
+    if (!d.plugin.runtimeReady) reasons.push("incomplete plugin runtime files");
+    if (!d.plugin.skillsReady) reasons.push("missing governance skills");
+    if (!d.plugin.docsReady) reasons.push("missing plugin docs");
+    if (!d.mcp.registered) reasons.push(d.mcp.globalDuplicate ? "duplicate global MCP entry" : "unregistered MCP server");
+    if (!d.cliShim.exists) reasons.push("missing agy-squad CLI shim");
+    if (!d.config.enabled) reasons.push("plugin disabled in config.json");
+    throw new Error(
+      `Installed Agy-Squad profile is incomplete or out of sync (${reasons.join(", ") || "partial installation"}); run 'agy-squad setup' to repair.`
+    );
   }
   log(`[OK] Read-only check passed (currently installed: ${status.isInstalled ? "YES" : "NO"}).`);
   return status;
@@ -1380,7 +1438,11 @@ export function printStatus(options = {}) {
   if (!status.details.runtime.supported) {
     log(`Next step: upgrade Node.js to >= ${rt.minNodeVersion} (found ${foundNode}), then run 'npx --package=agy-squad@latest agy-squad setup'.`);
   } else if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
-    log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
+    if (plug.isSymlink || isLocalGitCheckout()) {
+      log("Next step: run 'agy-squad setup' (or 'npx --package=agy-squad agy-squad setup') to install/repair.");
+    } else {
+      log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
+    }
   }
   return status;
 }

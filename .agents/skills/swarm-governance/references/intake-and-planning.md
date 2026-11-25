@@ -4,30 +4,30 @@ Reference for [`SKILL.md`](../SKILL.md).
 
 ## Step 0: Sensible Defaults and Overrides
 
-Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/swarm` prompt explicitly specifies all four settings below. Trigger a single `ask_question` call **iff ANY** of the four settings is missing, asking **only** for the missing setting(s) with the recommended default listed first. Skip Step 0 **only** when all four settings are explicitly specified in the prompt.
+Launch immediately with the recommended defaults below on read-only cohorts and overlap-free scopes (matching native `/swarm` startup speed and supporting non-interactive `agy -p` runs). Trigger a single `ask_question` call **only** when `squad_planner` / `agy-squad plan` reports writable `siblingOverlaps` under `workspaceIsolation: "inherit"`, destructive state ambiguity exists, or the user explicitly asks to customize run settings.
 
-| Setting | Recommended Default (first option) | Alternatives / Override |
+| Setting | Recommended Default (applied automatically when safe) | Alternatives / Override |
 | --- | --- | --- |
-| **Topology** | `flat` for inline tasks; `layered` for multi-squad manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (domain leads). |
+| **Topology** | `flat` for inline tasks; wave-gated `layered` for manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (Wave-2 domain leads). |
 | **Model** | Coordinator model (omit `--model`) | `--model <id> --known-model <id>` (validated via `swarm{action: "models"}`). |
-| **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
-| **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
+| **Workspace isolation** | `inherit` (shared workspace; `readOnlyBaseline` enforced on `readOnly`) | `share` for concurrent edits; `branch` for isolated git history (`wt=<dir>` receipt locator). |
+| **Report retention** | `--prune` (prune verified loose reports after `.sources.json` archive) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
 
-- **Fast coordinator setup (1-2 turns to Step 0):** Read only the active `SKILL.md` entry file(s) and call `swarm{action: "models"}` before asking Step 0; defer reference docs and never pre-read historical `docs/reviews/` ledgers before launching.
-- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (skipping Stage 2 auditor wakeup and Stage 3 `verdict --integrity`) and close with `finalize --allow-unaudited [--prune]`, while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
+- **Fast coordinator setup (1 turn to Wave 1):** Read only the active `SKILL.md` entry file(s), run `agy-squad plan --out scratch/plan.json` (or `squad_planner` with `outPath`), write `swarmPane` to `.system_generated/swarm/plan.json`, and launch Wave 1 immediately when overlap-free; defer reference docs and never pre-read historical `docs/reviews/` ledgers before launching.
+- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (omitting `--digest` on `bundle-init` and closing with `finalize --allow-unaudited [--prune]`), while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
 
 ## Planner and Dispatch Commands
 
-Run via MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI:
+Run via MCP (`squad_planner` with `outPath` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI (`--workspace <repo-root>` works across all subcommands):
 
 ```bash
-# Plan all manifest squads (omit --squad; never pass all_l1):
-agy-squad plan --manifest swarm-manifest.json --topology flat --workspace-isolation inherit
+# Plan all manifest squads to disk with compact stdout receipt (omit --squad; never pass all_l1):
+agy-squad plan --manifest swarm-manifest.json --out scratch/plan.json --replace
 
 # Inline read-only task + follow-up scoping:
 agy-squad plan --mode swarm --read-only --scope src/app.js --role "Security Reviewer" \
-  --role-scope "Security Reviewer=src/app.js" --occupied-worker prev-1 --board-since 60 \
-  --report-root scratch/agy-squad-wave2 "Audit auth flow."
+  --role-scope "Security Reviewer=src/app.js" --occupied-worker prev-1 \
+  --report-root scratch/agy-squad-wave2 --out scratch/plan-wave2.json "Audit auth flow."
 
 # invoke_subagent fallback only:
 agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json

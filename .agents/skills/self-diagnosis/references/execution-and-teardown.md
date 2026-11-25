@@ -7,12 +7,12 @@ Commands and bundling reference for [`SKILL.md`](../SKILL.md).
 Run from the `Agy-Squad` repo root:
 
 ```bash
-# 1. Read-only zero-subagent check (skills, links, hygiene, brief/MCP byte budgets):
+# 1. Read-only zero-subagent check (skills, links, manifest/doc hygiene, brief/MCP byte budgets):
 node .agents/skills/self-diagnosis/scripts/diagnose.mjs [--json]
 
-# 2. Primary /swarm cohort plan (all 3 squads; manifests defining lead blocks compile layered unless --topology flat is explicitly passed):
+# 2. Primary wave-gated /swarm cohort plan (writes full plan to disk + prints compact < 2 KB receipt):
 agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json \
-  [--topology layered|flat] [--workspace-isolation inherit|share|branch]
+  --out scratch/self-diag-plan.json --replace [--topology layered|flat] [--workspace-isolation inherit|share|branch]
 
 # 3. Fallback invoke_subagent dispatch:
 agy-squad dispatch --squad all_l1 --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json
@@ -29,18 +29,15 @@ agy-squad dispatch --squad all_l1 --manifest .agents/skills/self-diagnosis/resou
 Each squad owns `scratch/agy-squad/squad-<id>/`, flat auditor `audit-<id>` (`scratch/agy-squad/squad-integrity_auditor-<id>/specialist-1/report.md`), and its own bundle record:
 
 ```bash
-# Per squad (or `node bin/agy-squad.mjs` inside a checkout):
-agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolated
-agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
-agy-squad bundle-init --plan <plan.json> --squad <id> \
-  (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) [--id-map <worker=id>] \
-  --from-scope --digest --out scratch/bundle-record-<id>.json
-agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-agy-squad finalize scratch/bundle-record-<id>.json --strict-citations [--replace]
-# Write docs/reviews/<slug>.md once with verified bundle SHA-256 hashes (reading lead/report.md in layered mode unless uncarriedUrls/raw detail requires specialist-N/report.md), then prune:
-agy-squad prune scratch/agy-squad/squad-<id>/lead/report.sources.json <sha256> [--keep-reports]
-# Or verify + prune in one call:
-agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune --expected-sha256 <sha256> [--keep-reports]
+# Batch across all 3 squads in 3 CLI calls (or `node bin/agy-squad.mjs --workspace <repo-root>`):
+agy-squad collect --plan scratch/self-diag-plan.json --handoffs scratch/handoffs.json   # only if isolated
+agy-squad bundle-init --plan scratch/self-diag-plan.json --all-squads \
+  --handoffs scratch/handoffs.json [--id-map <worker=id>] \
+  --from-scope --digest --out-dir scratch/records --replace
+# Launch Wave-3 audit-<id> workers (with agy-squad audit-check), then finalize all squads without --prune:
+agy-squad finalize scratch/records/*.json --strict-citations [--replace]
+# Write docs/reviews/<slug>.md once with verified bundle SHA-256 hashes (reading lead/report.md in layered mode unless uncarriedUrls/raw detail requires specialist-N/report.md), then prune & clean records:
+agy-squad prune --records scratch/records/*.json --clean-records [--keep-reports]
 ```
 
 - Write temp `<plan.json>` and `bundle-record-<id>.json` outside `scratch/agy-squad/squad-<id>/` (e.g., `scratch/bundle-record-<id>.json`) and remove once done.

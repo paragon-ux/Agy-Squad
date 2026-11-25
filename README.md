@@ -25,7 +25,9 @@ Reload Antigravity Desktop IDE after setup finishes so the MCP server and skills
 
 ## How Agy-Squad extends native swarm
 
-Agy-Squad configures Antigravity's native swarm runtime rather than replacing it, adding non-overlapping file scopes, explicit model pinning, file-backed worker reports, one-line status receipts, and independent integrity auditing on top of the built-in shared board:
+Agy-Squad configures Antigravity's native `/swarm` runtime rather than replacing it. It assigns non-overlapping file scopes, stages domain leads after specialist reports land, writes reports to local files with one-line status receipts, populates the Swarm UI Overview (`swarm/plan.json`), and checks worker transcripts and SHA-256 file hashes before you accept a review.
+
+You do not need Agy-Squad for every task. Use `/boost` when fixing or investigating a single module, `invoke_subagent` (`research`) for a few quick read-only lookups, and `run_workflow` for scripted batch jobs that return typed JSON and can cancel the batch if one worker fails. Reach for Agy-Squad when you split a review or change across several areas, want completed reports kept if a sibling worker hits an error, need reports copied out of `share` or `branch` worktrees before `swarm kill` deletes them, or want a SHA-256 proof bundle:
 
 ![Native Antigravity /swarm vs. Agy-Squad roles and configuration additions](docs/assets/swarm-vs-agy-squad-roles.svg)
 

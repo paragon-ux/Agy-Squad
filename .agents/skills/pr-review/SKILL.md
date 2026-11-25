@@ -23,7 +23,7 @@ Conduct PR, branch diff, and CI reviews in the active repository.
 
 ## Workflow
 
-1. **Mode:** Single-agent for small diffs, or [`swarm-governance`](../swarm-governance/SKILL.md#workflow) (Step 0 for missing `/swarm` settings) with flat `audit-<id>`.
+1. **Mode:** Single-agent (or `/boost`) for small cohesive diffs, or [`swarm-governance`](../swarm-governance/SKILL.md#workflow) (immediate safe read-only defaults) with flat `audit-<id>`.
 2. **Pin & Trace:** Pin repo, target, date, standard 1.5.0, base/head SHAs, dirty delta, CI SHAs, Session Provenance, and exclusions; trace architecture before runtime checks.
 3. **Audit:** Cover all 11 categories; write 10-field records (``#### `<ID>`: <Title> | <Priority> | <Status>``) for P0-P2 and 1-row-per-ID tables for P3.
 4. **Deliver:** Request changes on open P1/P2 blockers; mark Incomplete if any material category is unreviewed; Approve only after full coverage, fixed-revision recheck, and (in multi-agent or `/swarm` runs) `CLEAN` audit. Write Sections 1-8 (`None (0 open residuals, 0 deferred items)` when Section 8 is empty; Section 9 only for `/self-diagnosis`) to `docs/reviews/<slug>.md` when adopted/requested; else deliver in chat or an Antigravity artifact.
