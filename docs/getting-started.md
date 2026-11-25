@@ -9,7 +9,7 @@ Agy-Squad is a subagent planning, review, and SHA-256 proof-bundling harness for
 | Operating system | Linux, macOS, or Windows (Node 22/24 CI parity; live `agy` tested on Linux/WSL2) | `node -p "process.platform + ' ' + process.arch"` |
 | Node.js | `>= 22.0.0` | `node --version` |
 | Antigravity surface | Antigravity Desktop (IDE) or CLI (`agy`) with `/swarm` and/or `invoke_subagent` | `agy --version` / Desktop IDE |
-| Agy-Context-Saver (optional) | `>= 2.1.2` recommended (completely optional; adds a single global `~/.gemini/config/hooks.json` guard hook, narrow high-ROI `rtk >= 1.1.0` pre-gate, `300L / 24 KiB` `read_file` bounds, and `agy-context transcript` CLI; not required for standalone runs or live Integrity Audits) | `agy-context status` (or `npx --package=agy-context-saver agy-context setup`) |
+| Agy-Context-Saver (optional) | `>= 2.3.0` recommended (completely optional; adds a single global `~/.gemini/config/hooks.json` guard hook, narrow high-ROI `rtk >= 1.1.0` pre-gate, `300L / 24 KiB` `read_file` bounds, and `agy-context transcript health|stats|info|access` CLI; not required for standalone runs or live Integrity Audits) | `agy-context status` (or `npx --package=agy-context-saver agy-context setup`) |
 | Documentation site (optional) | Python 3.11+ with pinned `zensical==0.0.74` for `npm run docs` (`zensical serve`) / `zensical build` (use `python3 -m zensical ...` if `zensical` is not on `PATH`) | `pip install "zensical==0.0.74" && zensical --version` |
 | Native permissions | Controlled by Desktop IDE approvals and `/swarm` / `/agents` | Review before launching workers |
 

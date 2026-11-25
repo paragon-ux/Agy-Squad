@@ -24,7 +24,7 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 
 const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file) or git grep -n";
 const TRANSCRIPT_FORENSICS_BASE =
-  "agy-context: unchained 'agy-context transcript' (read-only '|' pipes; no &&/;/--out): 'list --parent <coordId> --lineage --json', 'health --id u1,u2 --json', 'step 1 --id <uuid> --field content', 'query \"write_file|edit_file\" --id <uuid> --summary --include-tools'; else ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl";
+  "bounded read_file slices of ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching transcript_full.jsonl line only if truncated_fields); counts via 'agy-context transcript health --id u1,u2 --json' when installed";
 const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [

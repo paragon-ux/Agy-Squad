@@ -15,7 +15,7 @@ Workflow reference for [../SKILL.md](../SKILL.md) under [PR Review Standard v1.5
 ## 2. Stage 2: Raw, Unguided Initial Review (`r1`)
 
 ### Anti-Anchoring (`r1` and `raw-final`)
-- Prepend `[agy-transcript-access: self-only]` (or `[agy-transcript-access: deny]`) on line 1 of `r1` and `raw-final` subagent prompts when `Agy-Context-Saver` is installed. `self-only` enforces identical cross-session isolation while letting long audits query their own post-compaction transcript.
+- Tell `r1` and `raw-final` reviewers not to read other sessions' transcripts. With `Agy-Context-Saver` 2.3.0 or newer, the coordinator may run `agy-context transcript access set self-only` before dispatching anti-anchoring auditors (the policy applies to sessions that coordinator launches, and each child then reads only its own transcript). Without it, anti-anchoring is a prompt-level instruction only and is not enforced.
 - Do not read `docs/reviews/*`, `scratch/day-one-review/day-one-review-r*.md`, `docs/plans/*`, `git log`, PR summaries, or hints before outside-in inspection.
 - Pass only repo root, pinned commit/branch, output path, and cold Day-1 persona. Never edit repo files during review passes.
 
@@ -54,7 +54,7 @@ Follow Standard v1.5.0 Sections 1-8 across all **11 categories** (`ARCH`..`DEP`,
 ## 4. Stage 4: Cumulative Follow-Ups and `raw-final`
 
 1. **Cumulative `r2+`:** Save `<auditDir>/day-one-review-r2.md` linking `Prior review: day-one-review-r1.md` and appending Session Provenance. Carry forward every prior Section 4-7 finding ID in Section 7's Closure Table using Section 4-7 statuses (`Open (Pre-Remediation)` or `Closed`), and carry forward residual, deferred, by-design, and informational IDs (`Residual (Open)`, `Closed (Post-Remediation)`, `Deferred / Won't Fix`, `Closed (By Design)`, or `Informational`) exclusively in **Section 8** (never Section 7). Keep previously `Closed` P1/P2 items as 1-line rows in Section 7 (referencing `r<N>` for their 10-field closure card), reserving full 10-field cards for findings newly opened, re-opened, or closed in the current round. On narrow intermediate deltas (1-2 open IDs without shared/cross-cutting edits), run targeted suites + `timeout 5`-bounded adversarial probes instead of repeating the full multi-suite gate, requiring one full-gate run on the `SHIP NOW` confirmation pass. Log new IDs (`R2-...`), enforce the 2-round escalation rule if an ID stays `Open` in `r3`, and auto-fix new in-repo P0-P3 before `raw-final` or merge.
-2. **Unanchored `raw-final`:** Under full launch gate (or on request), spawn one fresh read-only reviewer obeying Stage 2 Anti-Anchoring (`[agy-transcript-access: self-only]` or `deny` on line 1 when `Agy-Context-Saver` is installed; zero prior ledgers/`git log`) for a cold consumer install, compile, and live dogfooding trial.
+2. **Unanchored `raw-final`:** Under full launch gate (or on request), spawn one fresh read-only reviewer obeying Stage 2 Anti-Anchoring (no other sessions' transcripts, zero prior ledgers/`git log`; see the isolation note above) for a cold consumer install, compile, and live dogfooding trial.
 
 ## 5. Explicit `/swarm` Opt-In
 

@@ -1128,11 +1128,9 @@ try {
     assert.match(swarmAuditLeadSpec.Prompt, /Target Squad: <id>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
-    assert.match(swarmAuditLeadSpec.Prompt, /read-only '\|' pipes/);
-    assert.match(swarmAuditLeadSpec.Prompt, /list --parent <coordId> --lineage --json/);
+    assert.match(swarmAuditLeadSpec.Prompt, /bounded read_file slices of .*transcript\.jsonl/);
     assert.match(swarmAuditLeadSpec.Prompt, /health --id u1,u2 --json/);
-    assert.match(swarmAuditLeadSpec.Prompt, /step 1 --id <uuid> --field content/);
-    assert.match(swarmAuditLeadSpec.Prompt, /query "write_file\|edit_file" --id <uuid> --summary --include-tools/);
+    assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /transcript (query|step|read|export|list)|--lineage|--field content|\[agy-transcript-access:/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--tool\b|--errors\b/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--out <scratch>|read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
 
@@ -1156,13 +1154,13 @@ try {
     const compAuditBrief = compPlan.integrityAuditPlan[0].swarmAdd.brief;
     assert.match(compAuditBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
     assert.match(compAuditBrief, /agy-context transcript/);
-    assert.match(compAuditBrief, /list --parent <coordId> --lineage --json/);
-    assert.match(compAuditBrief, /step 1 --id <uuid> --field content/);
+    assert.doesNotMatch(compAuditBrief, /transcript (query|step|read|export|list)|--lineage|--field content|\[agy-transcript-access:/);
+    assert.match(compAuditBrief, /truncated_fields/);
     assert.match(compAuditBrief, /agy-squad digest --workspace .* scratch\/agy-squad\/squad-harness_comparative_audit\/record\.json/);
     assert.match(compAuditBrief, /agy-squad verdict --workspace .* --integrity scratch\/agy-squad\/squad-integrity_auditor\/specialist-1\/report\.md/);
     assert.doesNotMatch(compAuditBrief, /<rel-record>|<rel-slot>/);
     assert.match(compAuditBrief, /no unrelated repo source reads/);
-    assert.match(compAuditBrief, /read-only '\|' pipes/);
+    assert.match(compAuditBrief, /bounded read_file slices of .*transcript\.jsonl/);
 
     const selfDiagDecoupledPlan = planSquadCohort(
       { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" },

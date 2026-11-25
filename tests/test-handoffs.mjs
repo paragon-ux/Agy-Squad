@@ -3122,7 +3122,7 @@ try {
       for (const recSummary of batchInitOut.records) {
         assert.equal(recSummary.record, undefined);
         assert.ok(recSummary.auditSwarmAdd && recSummary.auditSwarmAdd.action === "add");
-        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`--parent ${coordUuid}`));
+        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`sender=${coordUuid}`));
         assert.match(recSummary.auditSwarmAdd.brief, /read_board\{seqs: \[14, 19\]\} only\./);
         assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`Evidence Digest: ${recSummary.evidenceDigest}`));
         assert.doesNotMatch(recSummary.auditSwarmAdd.brief, /<coordId>|<handoffSeqs|<sha256>|<rel-record>|<rel-slot>/);

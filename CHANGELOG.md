@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Layered squad leads now focus strictly on content verification (specialist reports, cited files, and checks) without running duplicate transcript forensics before independent integrity auditors.
-- Integrity auditor briefs and the swarm governance wire guide now specify explicit `agy-context transcript` flags (`--id`, `--include-tools`, `--full`, `--out`) and read-only `|` pipe usage alongside the standalone native JSONL transcript path.
+- Integrity auditor briefs and the swarm governance wire guide now tell auditors to read `transcript.jsonl` natively in bounded slices (jumping to `transcript_full.jsonl` only when `truncated_fields` is set) and to use `agy-context transcript health --id <ids> --json` for counts when Agy-Context-Saver is installed.
 - Swarm governance Stage 3 now directs coordinators to synthesize verified specialist and lead reports into the final deliverable before pruning loose reports (or to retain them with `--keep-reports`) and to carry forward `## Sources` citations.
 
 ## [0.2.1] - 2026-11-24

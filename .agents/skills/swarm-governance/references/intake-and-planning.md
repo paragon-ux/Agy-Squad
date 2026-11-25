@@ -40,7 +40,7 @@ agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
 
 - **`/swarm`:** Validate explicit models via `swarm{action: "models"}` (`knownModels`) and confirm with `swarm{action: "status"}`.
 - **`invoke_subagent`:** Accepts only `inherit`, `flash_lite`, `flash`, `pro`; other IDs fall back to `inherit`.
-- **ACS opt-in:** Share roster names, slots, and `conversationId`s with `audit-<id>` (never copy `.system_generated/` into `scratch/`). `Agy-Squad` emits zero `[agy-transcript-access: ...]` tags by default; with optional `Agy-Context-Saver`, opt in via line-1 `[agy-transcript-access: allow|deny]` on worker prompts or `agy-context transcript access`.
+- **ACS opt-in:** Share roster names, slots, and `conversationId`s with `audit-<id>` (never copy `.system_generated/` into `scratch/`). `Agy-Squad` does not enforce transcript isolation. With `Agy-Context-Saver` 2.3.0 or newer, the coordinator may run `agy-context transcript access set self-only` before dispatching anti-anchoring auditors (the policy applies to sessions that coordinator launches, and each child then reads only its own transcript). Without it, anti-anchoring is a prompt-level instruction only and is not enforced.
 
 ## Turn Lifecycle and `[done]` Control
 

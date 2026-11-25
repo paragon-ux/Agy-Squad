@@ -11,7 +11,7 @@ Agy-Squad is a multi-agent swarm planner, code-review harness, and SHA-256 proof
 
 ## Quickstart
 
-Requires Node.js 22 or newer and Google Antigravity Desktop IDE or CLI (agy) with native swarm or subagent support. Works 100% standalone, including live native JSONL Integrity Audits. Optionally pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.1.2+ recommended) adds hook-enforced context, shell, and transcript governance.
+Requires Node.js 22 or newer and Google Antigravity Desktop IDE or CLI (agy) with native swarm or subagent support. Works 100% standalone, including live native JSONL Integrity Audits. Optionally pairing with [Agy-Context-Saver](https://paragon-ux.github.io/Agy-Context-Saver/) (2.3.0+ recommended) adds hook-enforced context, shell, and transcript governance.
 
 ```bash
 # Install the plugin, skills, MCP server, and agy-squad CLI

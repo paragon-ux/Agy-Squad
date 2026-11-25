@@ -510,7 +510,9 @@ try {
   assert.match(platformFitSkill, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i);
   assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self".*Model:\s*"inherit".*Workspace:\s*"inherit"/s);
   assert.match(platformFitSkill, /no \/swarm/i);
-  assert.match(platformFitSkill, /\[agy-transcript-access: self-only\]/);
+  assert.match(platformFitSkill, /agy-context transcript access set self-only/);
+  assert.match(platformFitSkill, /prompt-level instruction only/);
+  assert.doesNotMatch(platformFitSkill, /\[agy-transcript-access:/);
   assert.match(platformFitSkill, /scratch\/platform-fit\//);
   assert.match(platformFitSkill, /\/boost/);
   assert.match(platformFitProto, /Platform-Fit Standard v1\.0\.0/);
@@ -559,7 +561,9 @@ try {
     for (const verdict of ["SHIP NOW", "SHIP WITH MINOR POLISH", "FIX BEFORE RELEASE", "HOLD BEFORE PUBLIC RELEASE"]) {
       assert.ok(txt.includes(verdict), `v0.2.1: ${label} must include 4-tier verdict '${verdict}'`);
     }
-    assert.match(txt, /\[agy-transcript-access: self-only\]/, `v0.2.1: ${label} must mandate hook-enforced self-only anti-anchoring`);
+    assert.match(txt, /agy-context transcript access set self-only/, `${label} must describe the optional self-only transcript policy`);
+    assert.match(txt, /prompt-level/, `${label} must state anti-anchoring is prompt-level unless the policy is set`);
+    assert.doesNotMatch(txt, /\[agy-transcript-access:/, `${label} must not use removed line-1 access directives`);
     assert.match(txt, /skipLibCheck:\s*false/, `v0.2.1: ${label} must mandate strict consumer typecheck`);
     assert.match(txt, /Section 8/, `v0.2.1: ${label} must separate Section 8 residuals from auto-fixed P0-P3`);
     assert.match(txt, /timeout 5/, `v0.2.1: ${label} must bound ReDoS probes with timeout 5`);
