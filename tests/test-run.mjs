@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fingerprint } from "../mcp/handoffs.mjs";
+import { MAINTAINER_SKILLS } from "../scripts/install-register.mjs";
 
 const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cli-diag-")));
 const cli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -385,6 +386,12 @@ try {
   const preflightLeakPlatformFit = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
   assert.notEqual(preflightLeakPlatformFit.status, 0, "platform-fit: release-preflight must fail if platform-fit exclusion is dropped from package.json files");
   assert.match(preflightLeakPlatformFit.stderr, /\.agents\/skills\/platform-fit/);
+  const pkgPartialPlatformFitExclusion = JSON.parse(origPkg);
+  pkgPartialPlatformFitExclusion.files = pkgPartialPlatformFitExclusion.files.filter(f => f !== "!.agents/skills/platform-fit/**");
+  writeIso("package.json", JSON.stringify(pkgPartialPlatformFitExclusion, null, 2) + "\n");
+  const preflightPartialPlatformFit = spawnSync(process.execPath, [preflightScript], { cwd: isoRepo, encoding: "utf8" });
+  assert.notEqual(preflightPartialPlatformFit.status, 0, "platform-fit: release-preflight must require explicit recursive !.agents/skills/platform-fit/**");
+  assert.match(preflightPartialPlatformFit.stderr, /!\.agents\/skills\/platform-fit\/\*\*/);
   writeIso("package.json", origPkg);
 
   // UX-SQ-010 & UX-SQ-013: grouped top-level --help (<= 100 chars/line) and focused per-subcommand --help
@@ -460,7 +467,7 @@ try {
     const text = fs.readFileSync(mdFile, "utf8");
     assert.doesNotMatch(text, /\/home\/paragon-ux/i, `UX-SQ-003: hardcoded author path in ${rel}`);
     assert.doesNotMatch(text, /\.\.\/\.\.\/\.\.\/docs\//, `UX-SQ-004: broken relative ../../../docs/ link in ${rel}`);
-    if (!rel.startsWith(".agents/skills/self-diagnosis/") && !rel.startsWith(".agents/skills/platform-fit/")) {
+    if (!MAINTAINER_SKILLS.some(skill => rel.startsWith(`.agents/skills/${skill}/`))) {
       assert.doesNotMatch(text, /node bin\/agy-squad\.mjs/, `UX-SQ-003: checkout-only 'node bin/agy-squad.mjs' in portable skill ${rel}`);
     }
   }
@@ -480,50 +487,43 @@ try {
   }
   assert.match(selfDiagSkillText, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i, "UX-SQ-008: self-diagnosis must gate for maintainers");
 
-  // Repo-only platform-fit meta-skill contract checks
-  const platformFitSkill = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/SKILL.md"), "utf8");
-  const platformFitPreflight = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/preflight-snapshot.md"), "utf8");
-  const platformFitRubric = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/specialist-rubric.md"), "utf8");
-  const platformFitScorecard = fs.readFileSync(path.join(repoRoot, ".agents/skills/platform-fit/references/scorecard-template.md"), "utf8");
+  // Repo-only platform-fit meta-skill structural checks (mechanism-agnostic, zero-script)
+  const platformFitDir = path.join(repoRoot, ".agents/skills/platform-fit");
+  const platformFitSkill = fs.readFileSync(path.join(platformFitDir, "SKILL.md"), "utf8");
+  const platformFitProto = fs.readFileSync(path.join(platformFitDir, "references/platform-fit-protocol.md"), "utf8");
+  assert.equal(fs.existsSync(path.join(platformFitDir, "scripts")), false, "platform-fit must remain zero-script");
+  const pfSkillBytes = Buffer.byteLength(platformFitSkill, "utf8");
+  assert.ok(pfSkillBytes <= 4000, `platform-fit/SKILL.md must stay concise (<= 4000 B, got ${pfSkillBytes} B)`);
   assert.match(platformFitSkill, /Agy-Squad maintainers only: run inside an Agy-Squad source checkout/i);
   assert.match(platformFitSkill, /invoke_subagent.*TypeName:\s*"self".*Model:\s*"inherit".*Workspace:\s*"inherit"/s);
   assert.match(platformFitSkill, /no \/swarm/i);
   assert.match(platformFitSkill, /\[agy-transcript-access: self-only\]/);
   assert.match(platformFitSkill, /scratch\/platform-fit\//);
-  assert.match(platformFitSkill, /Empirical Leverage Gate/);
-  assert.match(platformFitSkill, /Invariant Parity Gate/);
-  assert.match(platformFitSkill, /agy-context transcript health --id <s1,s2,s3> --json/);
-  assert.match(platformFitPreflight, /https:\/\/antigravity\.google\/llms\.txt/);
-  assert.match(platformFitPreflight, /curl -fsSL --max-time 10/);
-  assert.match(platformFitPreflight, /agy-customizations.*run-workflow.*swarm_pane.*plugin.*mcp-app-development/);
-  assert.match(platformFitPreflight, /Same-day baseline reuse/i);
-  assert.match(platformFitPreflight, /n\/a \(health-only\)/);
-  assert.match(platformFitPreflight, /00-platform-baseline\.md/);
-  assert.match(platformFitPreflight, /01-telemetry-extract\.md/);
-  assert.match(platformFitPreflight, /agy-context transcript health/);
-  assert.match(platformFitRubric, /Model:\s*"inherit"/);
-  assert.match(platformFitRubric, /do NOT full-read `mcp\/\*\.mjs`/);
-  assert.match(platformFitScorecard, /agy-context transcript health --id <s1,s2,s3> --json/);
-  for (const verdict of [
-    "Differentiated (Retain)",
-    "Align to Native Primitive",
-    "Consolidate / Automate Friction",
-    "Harden Determinism",
-    "Human Product Tradeoff"
-  ]) {
-    assert.ok(platformFitSkill.includes(verdict), `platform-fit/SKILL.md must include verdict '${verdict}'`);
-    assert.ok(platformFitRubric.includes(verdict), `platform-fit specialist-rubric.md must include verdict '${verdict}'`);
+  assert.match(platformFitSkill, /\/boost/);
+  assert.match(platformFitProto, /Platform-Fit Standard v1\.0\.0/);
+  assert.match(platformFitProto, /\/docs\/boost\.md/);
+  assert.match(platformFitProto, /Solution Hypothesis/);
+  assert.match(platformFitProto, /Fix Root Mechanism/);
+  assert.doesNotMatch(platformFitProto, /Why Agy-Squad Is Net-Negative/);
+  for (const refName of fs.readdirSync(path.join(platformFitDir, "references")).filter(f => f.endsWith(".md"))) {
+    assert.ok(platformFitSkill.includes(`./references/${refName}`), `platform-fit/SKILL.md must link ./references/${refName}`);
   }
-  assert.match(platformFitRubric, /Never invent or emit a `Delete`/);
-  assert.doesNotMatch(platformFitRubric, /^\|\s*\*\*`Delete/m, "platform-fit rubric must never define a Delete verdict row");
-  assert.match(platformFitRubric, /route automatically to \*\*`Human Product Tradeoff`\*\*/);
-  assert.match(platformFitScorecard, /20-platform-fit-scorecard\.md/);
-  assert.match(platformFitScorecard, /Handoff to `\/self-diagnosis`/);
+  for (const tier of [
+    "BEATS NATIVE",
+    "STRONG CORE: MINOR FRICTION",
+    "SIMPLIFY BEFORE BENCHMARKING",
+    "REALIGN AGAINST NATIVE"
+  ]) {
+    assert.ok(platformFitSkill.includes(tier), `platform-fit/SKILL.md must include 4-tier verdict '${tier}'`);
+    assert.ok(platformFitProto.includes(tier), `platform-fit-protocol.md must include 4-tier verdict '${tier}'`);
+  }
+  for (const cat of ["NATIVE", "OVERHEAD", "CONTEXT", "WORKFLOW", "SIGNAL", "SAFETY"]) {
+    assert.ok(platformFitSkill.includes(`\`${cat}\``), `platform-fit/SKILL.md must include category '${cat}'`);
+    assert.ok(platformFitProto.includes(`\`${cat}\``), `platform-fit-protocol.md must include category '${cat}'`);
+  }
   for (const [label, txt] of [
     ["platform-fit/SKILL.md", platformFitSkill],
-    ["platform-fit/references/preflight-snapshot.md", platformFitPreflight],
-    ["platform-fit/references/specialist-rubric.md", platformFitRubric],
-    ["platform-fit/references/scorecard-template.md", platformFitScorecard]
+    ["platform-fit/references/platform-fit-protocol.md", platformFitProto]
   ]) {
     assert.doesNotMatch(txt, /[\u2013\u2014]/, `${label} must not contain prose em/en dashes`);
   }
@@ -601,6 +601,14 @@ try {
   );
   assert.equal(getHeadingSlugs(virtualSelfFile, updatedSelfCache).has("foo"), true);
   assert.equal(getHeadingSlugs(virtualSelfFile, selfTextCache).has("foo"), false);
+  // P2-PKG-02: shipped skill linking to a repo-only maintainer skill must fail diagnose.mjs checkRelativeLinks
+  const shippedToMaintainerCache = new Map([[virtualSelfFile, "See [pf](../platform-fit/SKILL.md).\n"]]);
+  assert.ok(
+    checkRelativeLinks(virtualSelfFile, shippedToMaintainerCache.get(virtualSelfFile), shippedToMaintainerCache, new Map()).some(
+      msg => msg.includes("repo-only maintainer skill")
+    ),
+    "P2-PKG-02: shipped skill link to ../platform-fit/SKILL.md must be rejected by diagnose.mjs"
+  );
 
   const { matchesPackageEntry } = await import("../scripts/release-preflight.mjs");
   assert.equal(matchesPackageEntry("docs/skills/pr-review.md", "docs/**/*.md"), true);

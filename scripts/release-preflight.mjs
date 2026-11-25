@@ -244,7 +244,12 @@ if (pkg) {
   }
 
   for (const excludedPath of [
-    ...MAINTAINER_SKILLS.flatMap((skill) => [`.agents/skills/${skill}`, `.agents/skills/${skill}/SKILL.md`]),
+    ...MAINTAINER_SKILLS.flatMap((skill) => [
+      `.agents/skills/${skill}`,
+      `.agents/skills/${skill}/SKILL.md`,
+      `.agents/skills/${skill}/references/example.md`,
+      `.agents/skills/${skill}/scripts/example.mjs`
+    ]),
     "scripts/release-preflight.mjs",
     "docs/plans",
     "docs/plans/example.md",
@@ -253,6 +258,15 @@ if (pkg) {
   ]) {
     if (isCoveredByFiles(excludedPath)) {
       errors.push(`package.json "files" must exclude ${excludedPath}.`);
+    }
+  }
+  const skillsEntryIdx = fileEntries.findIndex((entry) => !entry.negated && entry.normalized === ".agents/skills");
+  for (const skill of MAINTAINER_SKILLS) {
+    const recursiveExclusionIdx = fileEntries.findIndex(
+      (entry) => entry.negated && entry.normalized === `.agents/skills/${skill}/**`
+    );
+    if (recursiveExclusionIdx === -1 || (skillsEntryIdx !== -1 && recursiveExclusionIdx < skillsEntryIdx)) {
+      errors.push(`package.json "files" must include "!.agents/skills/${skill}/**" after ".agents/skills".`);
     }
   }
 

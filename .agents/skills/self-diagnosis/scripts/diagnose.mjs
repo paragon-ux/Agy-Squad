@@ -279,6 +279,12 @@ function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache,
         broken.push(`${displayLink} (escapes .agents/skills/)`);
         continue;
       }
+      const sourceSkill = path.relative(skillsRootDir, skillFile).split(path.sep)[0];
+      const targetSkill = rel.split(path.sep)[0];
+      if (SHIPPED_SKILLS.includes(sourceSkill) && MAINTAINER_SKILLS.includes(targetSkill)) {
+        broken.push(`${displayLink} (links shipped skill to repo-only maintainer skill)`);
+        continue;
+      }
     }
     if (!existsCached(resolved, markdownTextCache, existsCache)) {
       broken.push(label);
@@ -428,10 +434,14 @@ function runDiagnostics() {
         });
       }
     }
+    const referenceBytes = files
+      .filter(f => f !== skillMd)
+      .reduce((sum, f) => sum + Buffer.byteLength(readMarkdownCached(f, markdownTextCache), "utf8"), 0);
+    const totalBytes = bytes + referenceBytes;
     if (lines > 300 || bytes > 12288) {
       findings.push({ id: `SKILL-BUDGET-${name}`, priority: "P2", summary: `.agents/skills/${name}/SKILL.md exceeds budget (${lines} lines, ${bytes} B)` });
     }
-    skills.push({ name, path: path.relative(repoRoot, skillMd), lines, bytes, estimatedTokens: estimateTokens(bytes), brokenLinksCount });
+    skills.push({ name, path: path.relative(repoRoot, skillMd), lines, bytes, referenceBytes, totalBytes, estimatedTokens: estimateTokens(bytes), brokenLinksCount });
   }
 
   const driftTargets = [

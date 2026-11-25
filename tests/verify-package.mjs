@@ -250,7 +250,7 @@ function selfTest() {
     ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
     ".agents/skills/platform-fit",
     ".agents/skills/platform-fit/SKILL.md",
-    ".agents/skills/platform-fit/references/specialist-rubric.md"
+    ".agents/skills/platform-fit/references/platform-fit-protocol.md"
   ];
   for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
@@ -323,7 +323,7 @@ function selfTest() {
   const linksMs = performance.now() - tLinks;
   assert.ok(linksMs < 500, `R1-SEC-004: verify-package link scanner took ${linksMs.toFixed(1)} ms (>= 500 ms)`);
 
-  console.log(`Package verifier self-test passed (positive + ${badCases.length + 4} negatives)`);
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 5} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

@@ -600,7 +600,18 @@ export function detectExistingInstallation(options = {}) {
   return { isInstalled, isComplete, details };
 }
 
-async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
+export function createCopyFilter(sourceRoot = repoRoot) {
+  return (src) => {
+    const rel = normalizeSlash(path.relative(sourceRoot, src));
+    if (!rel) return true;
+    if (COPY_EXCLUDED_TOP_DIRS.has(rel.split("/")[0])) return false;
+    return !COPY_EXCLUDED_PATHS.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
+  };
+}
+
+export async function populateLinkedPluginDir(sourceRoot, targetPluginDir, options = {}) {
+  const symlinkSyncImpl = options.symlinkSync || fs.symlinkSync;
+  const copyFilter = createCopyFilter(sourceRoot);
   await fsPromises.mkdir(targetPluginDir, { recursive: true });
   for (const file of ["package.json", "plugin.json", "README.md"]) {
     const src = path.join(sourceRoot, file);
@@ -629,12 +640,16 @@ async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
       }
     } catch {}
     try {
-      fs.symlinkSync(srcTarget, destPath, isWin ? "junction" : "dir");
+      symlinkSyncImpl(srcTarget, destPath, isWin ? "junction" : "dir");
     } catch {
-      await fsPromises.cp(srcTarget, destPath, { recursive: true });
+      if (name === "skills") {
+        // ensurePluginSkillsAndMcpManifest wires pluginDest/skills from the already-filtered .agents/skills copy
+        continue;
+      }
+      await fsPromises.cp(srcTarget, destPath, { recursive: true, filter: copyFilter });
     }
   }
-  await ensurePluginSkillsAndMcpManifest(targetPluginDir);
+  await ensurePluginSkillsAndMcpManifest(targetPluginDir, options);
 }
 function validateAndEscapePosixPath(value, label) {
   if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) {
@@ -670,6 +685,7 @@ export function formatPosixMcpLauncher(execPath = process.execPath) {
 }
 
 async function ensurePluginSkillsAndMcpManifest(targetPluginDir, options = {}) {
+  const symlinkSyncImpl = options.symlinkSync || fs.symlinkSync;
   const isWin = os.platform() === "win32";
   const dotAgentsSkills = path.join(targetPluginDir, ".agents", "skills");
   const skillsDest = path.join(targetPluginDir, "skills");
@@ -681,7 +697,7 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir, options = {}) {
       }
     } catch {}
     try {
-      fs.symlinkSync(
+      symlinkSyncImpl(
         isWin ? dotAgentsSkills : path.join(".agents", "skills"),
         skillsDest,
         isWin ? "junction" : "dir"
@@ -923,12 +939,7 @@ export async function runInstall(options = {}) {
 
   await fsPromises.mkdir(pluginsDir, { recursive: true });
   const isTempOrNpx = !isLocalGitCheckout();
-  const copyFilter = (src) => {
-    const rel = normalizeSlash(path.relative(repoRoot, src));
-    if (!rel) return true;
-    if (COPY_EXCLUDED_TOP_DIRS.has(rel.split("/")[0])) return false;
-    return !COPY_EXCLUDED_PATHS.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
-  };
+  const copyFilter = createCopyFilter(repoRoot);
 
   let pluginLst = null;
   try {

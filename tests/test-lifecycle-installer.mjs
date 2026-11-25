@@ -1412,6 +1412,36 @@ try {
       fs.rmSync(path.join(pluginDest, "skills", "pr-review", "SKILL.md"));
       assert.equal(installerMod.detectExistingInstallation().details.plugin.skillsReady, false, "A1: missing shipped skill must flip skillsReady to false");
 
+      // P1-PKG-01: populateLinkedPluginDir symlinkSync-failure fallback must apply copyFilter and exclude maintainer-only paths
+      const fallbackPluginDir = path.join(asqProfile, "linked-fallback-plugin");
+      await installerMod.populateLinkedPluginDir(repoRoot, fallbackPluginDir, {
+        symlinkSync: () => {
+          const err = new Error("EPERM: simulated symlink denial");
+          err.code = "EPERM";
+          throw err;
+        }
+      });
+      for (const excludedRel of [
+        ".agents/skills/self-diagnosis",
+        "skills/self-diagnosis",
+        ".agents/skills/platform-fit",
+        "skills/platform-fit",
+        "scripts/release-preflight.mjs",
+        "docs/plans",
+        "docs/reviews"
+      ]) {
+        assert.equal(
+          fs.existsSync(path.join(fallbackPluginDir, excludedRel)),
+          false,
+          `P1-PKG-01: populateLinkedPluginDir symlink-failure fallback must not copy '${excludedRel}'`
+        );
+      }
+      assert.deepEqual(
+        fs.readdirSync(path.join(fallbackPluginDir, "skills")).sort(),
+        ["day-one-review", "full-review", "pr-review", "swarm-governance"]
+      );
+      fs.rmSync(fallbackPluginDir, { recursive: true, force: true });
+
       // ASQ-SCRIPT-002: Windows off-PATH persistence guidance preserves REG_EXPAND_SZ via DoNotExpandEnvironmentNames + ExpandString
       const winGuidance = installerMod.formatPathGuidanceLines("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "win32").join("\n");
       assert.match(winGuidance, /DoNotExpandEnvironmentNames/);
