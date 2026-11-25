@@ -197,7 +197,7 @@ try {
   }, root);
   // Size budget excludes the workspace path (it appears many times and varies by OS temp dir).
   const threeSquadJson = JSON.stringify(compactThreeSquad);
-  const threeSquadBytes = Buffer.byteLength(threeSquadJson.split(JSON.stringify(root).slice(1, -1)).join(""), "utf8");
+  const threeSquadBytes = Buffer.byteLength([JSON.stringify(root).slice(1, -1), root, root.replaceAll("\\", "/")].reduce((acc, p) => acc.split(p).join(""), threeSquadJson), "utf8");
   assert.ok(
     threeSquadBytes < 16384,
     `Expected compact 3-squad swarm plan < 16 KB, got ${threeSquadBytes} B`
@@ -1937,7 +1937,7 @@ try {
 
     // RUN-02: swarmPaneOutPath supports symlinked ~/.gemini root (via both logical and canonical paths) while rejecting symlinks beneath ~/.gemini
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-home-"));
-    const realDotfilesGemini = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-dotfiles-"));
+    const realDotfilesGemini = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-dotfiles-")));
     const prevTestHome = process.env.AGY_TEST_HOME_DIR;
     try {
       fs.symlinkSync(realDotfilesGemini, path.join(fakeHome, ".gemini"));
