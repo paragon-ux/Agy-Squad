@@ -4669,10 +4669,120 @@ try {
       }
     }
 
+    function testBoostAdversarialShellAndCwdRegressions() {
+      const bDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-boost18-")));
+      try {
+        fs.mkdirSync(path.join(bDir, "src"), { recursive: true });
+        fs.mkdirSync(path.join(bDir, "scratch/src"), { recursive: true });
+        fs.writeFileSync(path.join(bDir, "src/a.js"), "export const a = 1;\n");
+        const slot = "scratch/agy-squad/squad-b18/specialist-1/report.md";
+        fs.mkdirSync(path.join(bDir, path.dirname(slot)), { recursive: true });
+        fs.writeFileSync(path.join(bDir, slot), "Checked src/a.js:1\n");
+        const traceFile = path.join(bDir, "brain/one/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(traceFile), { recursive: true });
+        const runAudit = (cmd) => {
+          fs.writeFileSync(
+            traceFile,
+            JSON.stringify({ step_index: 1, content: "sender=C @one" }) + "\n" +
+            JSON.stringify({ step_index: 2, tool_calls: [{ name: "read_file", args: { Path: path.join(bDir, "src/a.js") } }, { name: "run_command", args: { CommandLine: cmd } }] }) + "\n"
+          );
+          return verifyWorkerTraces(
+            bDir,
+            { squadId: "b18", readOnly: true, assignments: [{ conversationId: "one", report: slot }] },
+            { coordId: "C", brainRoot: path.join(bDir, "brain") }
+          );
+        };
+
+        // 1. Finding 2: Subshell, pipeline, conditional, and `cd -` redirect spoofing
+        if (process.platform !== "win32") {
+          const probe = path.join(bDir, "probe");
+          fs.mkdirSync(path.join(probe, "src"), { recursive: true });
+          fs.mkdirSync(path.join(probe, "scratch/src"), { recursive: true });
+          fs.writeFileSync(path.join(probe, "src/a.js"), "CLEAN\n");
+          assert.equal(spawnSync("sh", ["-c", "( cd scratch && pwd ) && echo CORRUPTED > src/a.js"], { cwd: probe }).status, 0);
+          assert.equal(fs.readFileSync(path.join(probe, "src/a.js"), "utf8"), "CORRUPTED\n");
+        }
+        for (const spoofCmd of [
+          "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
+          "cd scratch | true; echo CORRUPTED > src/a.js",
+          "if false; then cd scratch; fi; echo CORRUPTED > src/a.js",
+          "cd scratch && cd - >/dev/null && echo CORRUPTED > src/a.js",
+          "cd scratch && cd && echo CORRUPTED > src/a.js",
+          "cd nonexistent_scratch; echo CORRUPTED > src/a.js",
+          "cat() { touch m.txt; }",
+          "cat () { touch m.txt; }"
+        ]) {
+          const res = runAudit(spoofCmd);
+          assert.equal(res.ok, false, `PR #18 must reject redirect/function spoof: ${spoofCmd}`);
+          assert.equal(res.recommendedVerdict, "INTEGRITY VIOLATION");
+        }
+        // POSIX unspaced and spaced read-only subshell controls + valid top-level `cd scratch && echo ok > out.txt`
+        for (const okSub of [
+          "(head -n 1 src/a.js)",
+          "( head -n 1 src/a.js )",
+          "cd scratch && echo ok > out.txt",
+          "( cd scratch && pwd ) && head -n 1 src/a.js"
+        ]) {
+          assert.equal(runAudit(okSub).ok, true, `Safe subshell/cd control must pass: ${okSub}`);
+        }
+
+        // 2. Finding 6: Real marker probes & positive allowlist checks (`node -p`, `sed`, `git`, `xargs`, `sudo`, `awk`)
+        if (process.platform !== "win32") {
+          assert.equal(spawnSync(process.execPath, ["-p", '/"/; require("fs").writeFileSync("m-re.txt", "PWN"); /"/'], { cwd: bDir }).status, 0);
+          assert.equal(fs.existsSync(path.join(bDir, "m-re.txt")), true);
+          assert.equal(spawnSync(process.execPath, ["-p", '<!-- "\nrequire("fs").writeFileSync("m-html.txt", "PWN"); // "'], { cwd: bDir }).status, 0);
+          assert.equal(fs.existsSync(path.join(bDir, "m-html.txt")), true);
+          assert.equal(spawnSync("sh", ["-c", "echo m-xargs.txt | xargs -E cat touch"], { cwd: bDir }).status, 0);
+          assert.equal(fs.existsSync(path.join(bDir, "m-xargs.txt")), true);
+          assert.equal(spawnSync("sh", ["-c", "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'"], { cwd: bDir }).status, 0);
+          assert.equal(fs.existsSync(path.join(bDir, "m-awk.txt")), true);
+        }
+        for (const bypassCmd of [
+          'node -p \'/"/; require("fs").writeFileSync("m-node.txt", "PWN"); /"/\'',
+          'node -p \'<!-- "\\nrequire("fs").writeFileSync("m-html.txt", "PWN"); // "\'',
+          'sed -n "s|.*|PWN|w m-sed1.txt" src/a.js',
+          'sed -n "s#.*#touch m-sed2.txt#e" src/a.js',
+          'sed -n "wm-sed3.txt" src/a.js',
+          'sed -n "2!w m-neg.txt" src/a.js',
+          'sed -n "0~1w m-step.txt" src/a.js',
+          'sed -I "" "s/a/b/" src/a.js',
+          'sed -I.bak "s/a/b/" src/a.js',
+          "git diff --output=m-git1.txt",
+          "git diff --output m-git1b.txt",
+          "git log -n 1 --output=m-git2.txt",
+          "git grep -nO\"sh -c 'touch m-git3.txt' --\" export src/a.js",
+          "git --exec-path=/tmp status",
+          "GIT_DIR=/tmp git status",
+          "echo m-xargs1.txt | xargs -E cat touch",
+          'printf "m-xargs2.txt:" | xargs -d : touch',
+          "sudo -p cat touch m-sudo.txt",
+          "sudo -e src/a.js",
+          "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(bypassCmd), () => true), true, `Classifier must reject: ${bypassCmd}`);
+          assert.equal(runAudit(bypassCmd).ok, false, `Trace audit must reject: ${bypassCmd}`);
+        }
+        for (const safeCtrl of [
+          'node -p \'require("node:fs").readFileSync("src/a.js", "utf8")\'',
+          "sed -n '1,5p' src/a.js",
+          "sed -ne '1,2p;3q' src/a.js",
+          "sed -n '$p' src/a.js",
+          "git -C . diff -- src/a.js",
+          "echo src/a.js | xargs -n 1 head -n 1"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(safeCtrl), () => true), false, `Safe control must pass: ${safeCtrl}`);
+          assert.equal(runAudit(safeCtrl).ok, true, `Safe trace control must pass: ${safeCtrl}`);
+        }
+      } finally {
+        fs.rmSync(bDir, { recursive: true, force: true });
+      }
+    }
+
     testS1ShellGrammarAndExpansion();
     testS2ConservativeInterpreterPolicy();
     testS3RecordToBundleLifecycleCompatibility();
     testS4CollectHelpAndCanonicalReceiptRoots();
+    testBoostAdversarialShellAndCwdRegressions();
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

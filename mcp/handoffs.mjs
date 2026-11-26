@@ -3589,20 +3589,37 @@ function verifyWorkerTraces(root, record, options = {}) {
             const segments = scanShellCommand(cmd);
             const cwdRaw = args.Cwd ?? args.cwd;
             let commandCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
+            let cwdValid = true;
             for (const segment of segments) {
               const { head, args: words, cwd } = unwrapShellCommand(segment.words);
               const effectiveCwd = cwd ? path.resolve(commandCwd, cwd) : commandCwd;
+              const segCwdValid = Boolean(cwd || cwdValid);
               const allowRedirect = target => {
                 if (target === "/dev/null") return true;
+                if (!segCwdValid && !path.isAbsolute(target)) return false;
                 const rel = normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot);
                 if (!rel || rel.startsWith("external:")) return false;
                 if (rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`)) return rel === reportSlot;
                 return isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot;
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
-              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:"))) unauthorizedWrites.add("run_command");
+              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:")))) unauthorizedWrites.add("run_command");
               if (segment.dynamic || segment.incomplete || segment.unverifiable) continue;
-              if (head === "cd" && words[0]) { commandCwd = path.resolve(commandCwd, words[0]); continue; }
+              if (head === "cd") {
+                const inPipe = segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&";
+                if (segment.inSubshell || inPipe) continue;
+                if (!segment.inBranch && segment.prevSep !== "||" && segment.nextSep !== "||" && words.length === 1 && words[0] !== "-" && !words[0].startsWith("-")) {
+                  const nextDir = path.resolve(effectiveCwd, words[0]);
+                  let isDir = false;
+                  try { isDir = fs.statSync(nextDir).isDirectory(); } catch {}
+                  if (isDir) commandCwd = nextDir;
+                  else cwdValid = false;
+                } else {
+                  cwdValid = false;
+                }
+                continue;
+              }
+              if (!segCwdValid) continue;
               const gitRead = head === "git" && ["grep", "diff", "show", "log"].includes(words[0]);
               if (!["cat", "head", "tail", "sed", "awk", "rg", "grep"].includes(head) && !(head === "rtk" && ["read", "cat", "head", "tail", "grep", "rg", "diff"].includes(words[0])) && !gitRead) continue;
               const search = ["rg", "grep"].includes(head) || (head === "rtk" && words[0] === "grep") || (head === "git" && words[0] === "grep");
