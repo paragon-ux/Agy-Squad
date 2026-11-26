@@ -3143,6 +3143,11 @@ try {
       assert.equal(fs.existsSync(firstRecordPath), false);
       fs.writeFileSync(firstRecordPath, firstRecordBytes);
 
+      const invalidLaterDigest = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--workspace", s3Repo, "--plan", "scratch/multi-plan.json", "--all-squads", "--from-scope", "--out-dir", "scratch/atomic-digest", "--digest", "--handoff", `${alphaSpecName}=READY ${alphaSpecSlot} - ok`], { cwd: s3Repo, encoding: "utf8" });
+      assert.notEqual(invalidLaterDigest.status, 0);
+      assert.match(invalidLaterDigest.stderr, /requires specialist handoff receipts/);
+      assert.equal(fs.existsSync(path.join(s3Repo, "scratch/atomic-digest/alpha.record.json")), false);
+
       // ROI-005: deterministic audit-check & digest --verify-traces (<50 ms)
       const writeSyntheticTrace = (uuid, workerName, slotPath, readRelPaths = [], extraToolCalls = []) => {
         const logDir = path.join(s3Brain, uuid, ".system_generated", "logs");
@@ -4060,9 +4065,10 @@ try {
       for (const s of plan.workers[0].specialists) write(s.reportSlot, "Checked src/auth.js:1.\n");
       write(plan.workers[0].synthesisSlot, "Content Verdict: PASS\n");
       write("scratch/handoffs.json", JSON.stringify(handoffs));
+      write("scratch/provenance.json", JSON.stringify({ entries: [] }));
       const initialized = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--coord-id", "C", "--digest", "--out", "scratch/record.json", "src/auth.js"], { cwd: child, encoding: "utf8" });
       assert.equal(initialized.status, 0, initialized.stderr);
-      const inferred = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "Child/scratch/plan.json", "--handoffs", "Child/scratch/handoffs.json", "--digest", "--out", "Child/scratch/parent-record.json", "Child/src/auth.js"], { cwd: parent, encoding: "utf8" });
+      const inferred = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "Child/scratch/plan.json", "--handoffs", "Child/scratch/handoffs.json", "--provenance", "Child/scratch/provenance.json", "--digest", "--out", "Child/scratch/parent-record.json", "Child/src/auth.js"], { cwd: parent, encoding: "utf8" });
       assert.equal(inferred.status, 0, inferred.stderr);
       assert.equal(fs.existsSync(path.join(child, "scratch/parent-record.json")), true);
       assert.equal(fs.existsSync(path.join(child, "Child")), false);

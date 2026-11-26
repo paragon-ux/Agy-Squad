@@ -1496,7 +1496,6 @@ try {
       workspace: root,
       manifest: { squads: { a: { specialists: [{ role: evilRole, objective: "Linear slug test", scopeFiles: ["."], readOnly: true }] } } },
       executionMode: "swarm",
-      readOnly: true,
       occupiedWorkerNames: ["a-a-b"],
       includeIntegrityAuditor: false
     });
