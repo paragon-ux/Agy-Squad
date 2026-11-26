@@ -3751,6 +3751,149 @@ try {
       const noCoord = verifyWorkerTraces(tw, srec, { brainRoot: brain });
       assert.ok(noCoord.anomalies.some(a => a.includes("MISSING_TRACE")));
       assert.ok(!verifyWorkerTraces(tw, srec, { brainRoot: brain, coordId: "C" }).anomalies.some(a => a.includes("MISSING_TRACE")));
+
+      // Compact transcript.jsonl stores tool args as JSON-encoded strings (real brain log shape)
+      const compactWs = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-trace-compact-")));
+      try {
+        fs.mkdirSync(path.join(compactWs, "src"), { recursive: true });
+        fs.mkdirSync(path.join(compactWs, "scratch"), { recursive: true });
+        const srcFile = path.join(compactWs, "src", "a.js");
+        const reportFile = path.join(compactWs, "scratch", "r.md");
+        fs.writeFileSync(srcFile, "export const x = 1;\n", "utf8");
+        fs.writeFileSync(reportFile, "Checked src/a.js:1 and verified behavior.\n", "utf8");
+
+        const compactBrain = path.join(compactWs, "brain-root");
+        const sessId = "33333333-3333-3333-3333-333333333333";
+        const sessLogs = path.join(compactBrain, sessId, ".system_generated", "logs");
+        fs.mkdirSync(sessLogs, { recursive: true });
+        const artifactPath = path.join(compactBrain, sessId, "notes.md");
+        const compactLines = [
+          JSON.stringify({ step_index: 0, content: "sender=C @w1 Review src/a.js" }),
+          JSON.stringify({
+            step_index: 1,
+            tool_calls: [
+              { name: "read_file", args: { Path: JSON.stringify(srcFile), StartLine: "1", EndLine: "20" } },
+              { name: "run_command", args: { CommandLine: JSON.stringify("git grep -n x -- src/a.js"), WaitMsBeforeAsync: "5000" } }
+            ]
+          }),
+          JSON.stringify({
+            step_index: 2,
+            truncated_fields: ["tool_calls"],
+            tool_calls: [
+              {
+                name: "write_file",
+                args: {
+                  Path: JSON.stringify(reportFile),
+                  Content: "\"Checked src/a.js:1...",
+                  Overwrite: "true"
+                }
+              },
+              {
+                name: "write_file",
+                args: {
+                  Path: JSON.stringify(artifactPath),
+                  Content: "\"# Notes",
+                  ArtifactMetadata: JSON.stringify({ Summary: "notes", UserFacing: false, RequestFeedback: false })
+                }
+              }
+            ]
+          })
+        ];
+        const fullLines = [
+          JSON.stringify({ step_index: 0, content: "sender=C @w1 Review src/a.js" }),
+          JSON.stringify({
+            step_index: 1,
+            tool_calls: [
+              { name: "read_file", args: { Path: srcFile, StartLine: 1, EndLine: 20 } },
+              { name: "run_command", args: { CommandLine: "git grep -n x -- src/a.js", WaitMsBeforeAsync: 5000 } }
+            ]
+          }),
+          JSON.stringify({
+            step_index: 2,
+            tool_calls: [
+              { name: "write_file", args: { Path: reportFile, Content: "Checked src/a.js:1 and verified behavior.\n", Overwrite: true } },
+              {
+                name: "write_file",
+                args: {
+                  Path: artifactPath,
+                  Content: "# Notes\n",
+                  ArtifactMetadata: { Summary: "notes", UserFacing: false, RequestFeedback: false }
+                }
+              }
+            ]
+          })
+        ];
+        fs.writeFileSync(path.join(sessLogs, "transcript.jsonl"), compactLines.join("\n") + "\n", "utf8");
+        fs.writeFileSync(path.join(sessLogs, "transcript_full.jsonl"), fullLines.join("\n") + "\n", "utf8");
+
+        const compactRec = { squadId: "s", readOnly: true, assignments: [{ conversationId: "w1", report: "scratch/r.md" }] };
+        const hydrated = verifyWorkerTraces(compactWs, compactRec, { coordId: "C", brainRoot: compactBrain });
+        assert.equal(hydrated.ok, true, `Hydrated compact+full honest worker must be CLEAN: ${JSON.stringify(hydrated)}`);
+        assert.equal(hydrated.recommendedVerdict, "CLEAN");
+        assert.equal(hydrated.warningsCount, undefined);
+        assert.deepEqual(hydrated.workers[0].unauthorizedWrites, []);
+        assert.deepEqual(hydrated.workers[0].unverifiedCitations, []);
+
+        // Compact-only transcript (no transcript_full.jsonl, no truncated_fields) must also decode quoted args cleanly
+        const compactOnlyPath = path.join(compactWs, "compact-only.jsonl");
+        const compactOnlyLines = [
+          JSON.stringify({ step_index: 0, content: "sender=C @w1 Review src/a.js" }),
+          JSON.stringify({
+            step_index: 1,
+            tool_calls: [
+              { name: "read_file", args: { Path: JSON.stringify(srcFile), StartLine: "1", EndLine: "20" } },
+              {
+                name: "write_file",
+                args: {
+                  Path: JSON.stringify(reportFile),
+                  Content: JSON.stringify("Checked src/a.js:1 and verified behavior.\n")
+                }
+              },
+              {
+                name: "write_file",
+                args: {
+                  Path: JSON.stringify(artifactPath),
+                  Content: JSON.stringify("# Notes\n"),
+                  ArtifactMetadata: JSON.stringify({ Summary: "notes", UserFacing: false, RequestFeedback: false })
+                }
+              }
+            ]
+          })
+        ];
+        fs.writeFileSync(compactOnlyPath, compactOnlyLines.join("\n") + "\n", "utf8");
+        const compactOnly = verifyWorkerTraces(compactWs, compactRec, {
+          coordId: "C",
+          brainRoot: compactBrain,
+          traces: { w1: compactOnlyPath }
+        });
+        assert.equal(compactOnly.ok, true, `Compact-only honest worker must be CLEAN: ${JSON.stringify(compactOnly)}`);
+        assert.equal(compactOnly.warningsCount, undefined);
+        assert.deepEqual(compactOnly.workers[0].unauthorizedWrites, []);
+        assert.deepEqual(compactOnly.workers[0].unverifiedCitations, []);
+
+        // Compact-encoded unauthorized file write and mutating shell command must still be caught
+        const compactWritePath = path.join(compactWs, "compact-bad-write.jsonl");
+        fs.writeFileSync(
+          compactWritePath,
+          [
+            JSON.stringify({ step_index: 0, content: "sender=C @w1" }),
+            JSON.stringify({
+              step_index: 1,
+              tool_calls: [
+                { name: "write_file", args: { Path: JSON.stringify(srcFile), Content: JSON.stringify("bad") } },
+                { name: "run_command", args: { CommandLine: JSON.stringify("rm src/a.js") } }
+              ]
+            })
+          ].join("\n") + "\n",
+          "utf8"
+        );
+        const compactBad = verifyWorkerTraces(compactWs, compactRec, { coordId: "C", traces: { w1: compactWritePath } });
+        assert.equal(compactBad.ok, false);
+        assert.ok(compactBad.workers[0].unauthorizedWrites.includes("src/a.js"));
+        assert.ok(compactBad.workers[0].unauthorizedWrites.includes("run_command"));
+      } finally {
+        fs.rmSync(compactWs, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(tw, { recursive: true, force: true });
     }

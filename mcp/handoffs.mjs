@@ -3255,6 +3255,34 @@ const READ_TOOL_NAMES = new Set(["read_file", "view_file", "view_file_outline", 
 const SEARCH_TOOL_NAMES = new Set(["grep_search", "find_by_name", "list_dir"]);
 const COMMAND_TOOL_NAMES = new Set(["run_command", "execute_command", "bash"]);
 
+function decodeCompactToolArgValue(value) {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return value;
+  const first = trimmed[0];
+  const last = trimmed[trimmed.length - 1];
+  if (
+    (first === "\"" && last === "\"") ||
+    (first === "{" && last === "}") ||
+    (first === "[" && last === "]")
+  ) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function normalizeToolCallArgs(rawArgs) {
+  const out = {};
+  for (const [k, v] of Object.entries(rawArgs)) {
+    out[k] = decodeCompactToolArgValue(v);
+  }
+  return out;
+}
+
 function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) {
   if (typeof rawTarget !== "string" || !rawTarget.trim()) return null;
   const trimmed = rawTarget.trim().replace(/^file:\/\//i, "");
@@ -3496,6 +3524,7 @@ function verifyWorkerTraces(root, record, options = {}) {
           try { args = JSON.parse(args); } catch { args = {}; }
         }
         if (!isPlainObject(args)) continue;
+        args = normalizeToolCallArgs(args);
         const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
         if (READ_TOOL_NAMES.has(rawName)) {
           recordInspectedPath(targetRaw, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
