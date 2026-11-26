@@ -66,7 +66,7 @@ Repeat for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (
 ### 4.12 Integrity Audit Record (when used)
 - **Role contract:** [review roles](review-roles.md) | **Auditor / independence:** `<who/parent>`
 - **Coverage & Findings:** `<traces/ranges/gaps; IDs or None>`
-- **Lead recheck after CLEAN:** `<reviewer + final verdict>` | **Outcome:** `<CLEAN / INTEGRITY VIOLATION / N/A>`
+- **Lead recheck after VERIFIED / CLEAN:** `<reviewer + final verdict>` | **Outcome:** `<VERIFIED / NOT VERIFIED / CLEAN / INTEGRITY VIOLATION / N/A>`
 
 ## 5. Findings
 
@@ -153,7 +153,7 @@ Repeat for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (
 - [ ] `1 ID = 1 Row`; no umbrella/range IDs; Section 8 holds every residual, deferred, by-design, and informational item.
 - [ ] Locators on all claims; observed vs inferred separated; prior findings revalidated; gaps separate from defects.
 - [ ] Direction decision (if asked) has constraints, options, recommendation, and falsifiers.
-- [ ] If audited: separate verdicts, auditor never approved content, lead rechecked after `CLEAN`, `INTEGRITY VIOLATION` hard-blocks.
+- [ ] If audited: separate verdicts, auditor never approved content, lead rechecked after `VERIFIED` (or legacy `CLEAN`), `NOT VERIFIED` / `INTEGRITY VIOLATION` hard-blocks.
 - [ ] Disposition matches coverage/blockers; clean formatting; report delivered/linked.
 
 When an independent cohort audit runs, attach its `Target Squad`, `Evidence Digest`, `Work Verdict: VERIFIED | NOT VERIFIED`, and per-worker claim checks. Legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` reports remain accepted. Validate reports with `agy-squad verdict [--work | --integrity] <report.md>` before acceptance.

@@ -3482,14 +3482,10 @@ function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false, 
     if (!st.isSymbolicLink()) {
       normalizedResolved = fs.realpathSync.native(resolved);
     } else {
-      const parentReal = fs.realpathSync.native(path.dirname(resolved));
-      normalizedResolved = path.join(parentReal, path.basename(resolved));
+      normalizedResolved = path.join(tryRealPath(path.dirname(resolved)), path.basename(resolved));
     }
   } catch {
-    try {
-      const parentReal = fs.realpathSync.native(path.dirname(resolved));
-      normalizedResolved = path.join(parentReal, path.basename(resolved));
-    } catch {}
+    normalizedResolved = path.join(tryRealPath(path.dirname(resolved)), path.basename(resolved));
   }
   if (!isContainedPath(canonicalRoot, normalizedResolved, allowEqual)) {
     return `external:${trimmed}`;
@@ -3515,7 +3511,11 @@ function addOpenedFile(openedFilesMap, relPath, kind, range = null) {
 }
 
 function newSearchFilter() {
-  return { includes: [], excludes: [], iglobIncludes: [], iglobExcludes: [], excludeDirs: [], types: [], typeNots: [], unknown: false };
+  return { includes: [], excludes: [], globRules: [], excludeDirs: [], types: [], typeNots: [], maxDepth: null, unknown: false };
+}
+
+function isUnfilteredSearch(filter) {
+  return !filter.unknown && filter.maxDepth === null && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0);
 }
 
 function boundedGlobMatch(value, pattern) {
@@ -3577,11 +3577,25 @@ const SEARCH_TYPE_EXTENSIONS = {
 
 function searchCoversFile(filter, rel, dirRel) {
   if (filter.unknown) return false;
+  if (filter.maxDepth !== null) {
+    const sub = dirRel && dirRel !== "." ? path.posix.relative(dirRel, rel) : rel;
+    if (!sub || sub.startsWith("..") || sub.split("/").length > filter.maxDepth) return false;
+  }
   const typeMatches = type => SEARCH_TYPE_EXTENSIONS[type]?.includes(path.posix.extname(rel).slice(1));
   if ([...filter.types, ...filter.typeNots].some(t => !Object.hasOwn(SEARCH_TYPE_EXTENSIONS, t))) return false;
   if (filter.types.length && !filter.types.some(typeMatches) || filter.typeNots.some(typeMatches)) return false;
-  if ((filter.includes.length || filter.iglobIncludes.length) && !filter.includes.some(p => matchesSearchGlob(p, rel, dirRel) === true) && !filter.iglobIncludes.some(p => matchesSearchGlob(p.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase()) === true)) return false;
-  if (filter.iglobExcludes.some(p => matchesSearchGlob(p.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase()) !== false)) return false;
+  if (filter.globRules.length) {
+    let included = !filter.globRules.some(r => !r.negate);
+    for (const r of filter.globRules) {
+      const m = r.insensitive
+        ? matchesSearchGlob(r.pattern.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase())
+        : matchesSearchGlob(r.pattern, rel, dirRel);
+      if (m === null && r.negate) return false;
+      if (m === true) included = !r.negate;
+    }
+    if (!included) return false;
+  }
+  if (filter.includes.length && !filter.includes.some(p => matchesSearchGlob(p, rel, dirRel) === true)) return false;
   if (filter.excludes.some(p => matchesSearchGlob(p, rel, dirRel) !== false)) return false;
   const dirs = path.posix.dirname(rel).split("/");
   if (filter.excludeDirs.some(p => dirs.some(d => boundedGlobMatch(d, p) !== false))) return false;
@@ -3593,7 +3607,7 @@ function addSearchEntry(dirMap, rel, kind, filter = newSearchFilter()) {
   let entry = dirMap.get(rel);
   if (!entry) dirMap.set(rel, entry = { kinds: new Set(), filters: [], filterKeys: new Set(), unfiltered: false });
   entry.kinds.add(kind);
-  const unfiltered = !filter.unknown && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0);
+  const unfiltered = isUnfilteredSearch(filter);
   if (unfiltered) { entry.filters = [filter]; entry.filterKeys.clear(); entry.unfiltered = true; return; }
   if (entry.unfiltered) return;
   const key = JSON.stringify(filter);
@@ -3650,7 +3664,7 @@ function expandSimpleGlobInWorkspace(rawPattern, canonicalRoot, baseDir, openedF
     if (d.isSymbolicLink() || !d.isFile()) continue;
     if (!matchSimpleStarGlob(d.name, basePat)) continue;
     const rel = dirRel === "." ? d.name : `${dirRel}/${d.name}`;
-    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile(filter, rel, dirRel)) continue;
+    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile({ ...filter, maxDepth: null }, rel, dirRel)) continue;
     addOpenedFile(openedFilesMap, rel, kind);
     matched = true;
     count += 1;
@@ -3691,7 +3705,7 @@ function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap
     }
     return false;
   }
-  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile(filter, rel, path.posix.relative(canonicalRoot, baseDir)))) {
+  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile({ ...filter, maxDepth: null }, rel, path.posix.relative(canonicalRoot, baseDir)))) {
     addOpenedFile(openedFilesMap, rel, mode === "search" ? "shell_read" : "shell_read");
     return true;
   }
@@ -3700,7 +3714,7 @@ function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap
 
 const SHELL_VALUE_OPTIONS = new Set([
   '-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not', '--include', '--exclude', '--exclude-dir',
-  '-e', '--regexp', '-f', '--file', '-A', '-B', '-C', '--after-context', '--before-context', '--context',
+  '-e', '--regexp', '--expression', '-f', '--file', '-A', '-B', '-C', '--after-context', '--before-context', '--context',
   '-m', '--max-count', '--max-depth', '--max-filesize', '--color', '--colors', '--encoding', '-E',
   '--threads', '-j', '--sort', '--sortr', '--path-separator', '--replace', '-r', '--pre', '--pre-glob',
   '--format', '--pretty', '--date', '--max-age', '--min-age', '--author', '--committer', '--since', '--until', '--engine', '--type-add', '--type-clear', '--ignore-file', '--exclude-from', '--label', '--binary-files', '--directories', '-d'
@@ -3727,7 +3741,14 @@ function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
     let flag = token, value;
     const eq = token.indexOf('=');
     if (token.startsWith('--') && eq > 0) { flag = token.slice(0, eq); value = token.slice(eq + 1); }
-    else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2))) { flag = token.slice(0, 2); value = token.slice(2); }
+    else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (!['-E', '-r'].includes(token.slice(0, 2)) || head === 'rg')) { flag = token.slice(0, 2); value = token.slice(2); }
+    else if (head === 'sed' && !token.startsWith('--') && token.length > 2) {
+      const m = /^-[nErsuz]+([ef])([\s\S]*)$/.exec(token);
+      if (m) { flag = `-${m[1]}`; value = m[2] || undefined; }
+    } else if (search && head !== 'rg' && !token.startsWith('--') && token.length > 2) {
+      const m = /^-[rRniIsSFwxlLcqovHhaE]+([ef])([\s\S]*)$/.exec(token);
+      if (m) { flag = `-${m[1]}`; value = m[2] || undefined; }
+    }
     const interpreter = ['node', 'python', 'python3', 'ruby', 'perl'].includes(head);
     const programOption = interpreter && ['-e', '-c', '-p', '--eval', '--print'].includes(flag);
     const countOption = flag === '-n' && (['head', 'tail'].includes(head) || gitSub === 'log');
@@ -3739,25 +3760,30 @@ function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
       if (programOption) programs.push(value);
       if (['sed', 'awk'].includes(head) && ['-e', '--expression', '-f', '--file'].includes(flag)) hasProgram = true;
       if (flag === '-g' || flag === '--glob' || flag === '--iglob') {
-        const negative = value.startsWith('!');
-        const key = flag === '--iglob' ? (negative ? 'iglobExcludes' : 'iglobIncludes') : (negative ? 'excludes' : 'includes');
-        filter[key].push(negative ? value.slice(1) : value);
+        const negate = value.startsWith('!');
+        filter.globRules.push({ pattern: negate ? value.slice(1) : value, negate, insensitive: flag === '--iglob' });
       } else if (flag === '--include') filter.includes.push(value);
       else if (flag === '--exclude') filter.excludes.push(value);
       else if (flag === '--exclude-dir') filter.excludeDirs.push(value);
       else if (flag === '-t' || flag === '--type') filter.types.push(value);
       else if (flag === '-T' || flag === '--type-not') filter.typeNots.push(value);
-      else if (['--type-add', '--type-clear'].includes(flag)) filter.unknown = true;
+      else if (flag === '--max-depth' || (head === 'rg' && flag === '-d')) {
+        const depth = /^\d+$/.test(value) ? Number(value) : NaN;
+        if (Number.isSafeInteger(depth)) filter.maxDepth = filter.maxDepth === null ? depth : Math.min(filter.maxDepth, depth);
+        else filter.unknown = true;
+      } else if (head !== 'rg' && (flag === '-d' || flag === '--directories') && value === 'skip') {
+        filter.maxDepth = filter.maxDepth === null ? 1 : Math.min(filter.maxDepth, 1);
+      } else if (['--type-add', '--type-clear'].includes(flag)) filter.unknown = true;
       if (['-e', '--regexp', '-f', '--file'].includes(flag) && search) hasPattern = true;
       continue;
     }
     if (flag === '--files') listOnly = true;
-    if (SHELL_BOOLEAN_OPTIONS.has(flag) || !flag.startsWith('--') && /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/.test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
+    if (SHELL_BOOLEAN_OPTIONS.has(flag) || !flag.startsWith('--') && (head === 'rg' ? /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rniIsSFwxlLcqovHhaPRUz0bE]+$/).test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
     valid = false;
   }
   if (search && !hasPattern && !listOnly) operands.shift();
   if (!search && ['awk', 'sed'].includes(head) && !hasProgram) operands.shift();
-  for (const values of Object.values(filter)) if (Array.isArray(values) && (values.length > 64 || values.some(value => value.length > 512))) filter.unknown = true;
+  for (const values of Object.values(filter)) if (Array.isArray(values) && (values.length > 64 || values.some(value => (typeof value === "string" ? value.length : value.pattern.length) > 512))) filter.unknown = true;
   return { operands, programs, filter, valid, listOnly };
 }
 
@@ -3888,9 +3914,9 @@ function verifyWorkerTraces(root, record, options = {}) {
     let workerRoot = canonicalRoot;
     if (assignment.worktreeRoot !== undefined) {
       if (typeof assignment.worktreeRoot !== 'string' || !path.isAbsolute(assignment.worktreeRoot)) throw new Error(`Untrusted worker worktree for ${workerKey}.`);
-      const claimed = path.resolve(assignment.worktreeRoot);
+      const claimed = tryRealPath(assignment.worktreeRoot);
       const receipts = workerReceiptRoots(record.handoffs).filter(h => h.sender === workerKey || h.sender === explicitWorkerName);
-      if (!receipts.length || receipts.some(h => path.resolve(h.root) !== claimed)) throw new Error(`Untrusted worker worktree receipt for ${workerKey}.`);
+      if (!receipts.length || receipts.some(h => !isExpectedRealPath(tryRealPath(h.root), claimed))) throw new Error(`Untrusted worker worktree receipt for ${workerKey}.`);
       try { workerRoot = validateWorkerWorktreeRoot(canonicalRoot, claimed); }
       catch (error) {
         if (error.code !== 'ENOENT') throw error;
@@ -4183,7 +4209,7 @@ function verifyWorkerTraces(root, record, options = {}) {
               const cwdRel = normalizeReadTarget(rawCwd, true);
               const found = cwdRel && !cwdRel.startsWith('external:') ? evidencePath(workerRoot, cwdRel, canonicalRoot) : null;
               if (found?.stat.isDirectory()) cmdCwd = found.abs;
-              else cmdCwd = path.resolve(workerRoot, rawCwd);
+              else cmdCwd = tryRealPath(path.resolve(workerRoot, rawCwd));
             }
             recordShellCommandReads(scanShellCommand(cmd), workerRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, {
               fallbackRoot: canonicalRoot, baseOrder: order, onRead: noteReadOrder,
@@ -4309,7 +4335,7 @@ function verifyWorkerTraces(root, record, options = {}) {
       }));
     const searchedDirsList = [...searchedDirsMap.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([p, entry]) => ({ path: p, kinds: [...entry.kinds].sort(), filters: entry.filters.map(filter => ({ ...filter, unfiltered: !filter.unknown && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0) })) }));
+      .map(([p, entry]) => ({ path: p, kinds: [...entry.kinds].sort(), filters: entry.filters.map(filter => ({ ...filter, unfiltered: isUnfilteredSearch(filter) })) }));
     const listedDirsList = [...listedDirsMap.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([p, kinds]) => ({ path: p, kinds: [...kinds].sort() }));

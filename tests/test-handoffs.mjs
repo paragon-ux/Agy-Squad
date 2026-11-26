@@ -4370,6 +4370,79 @@ try {
       assert.deepEqual(uncovered('rg -T js line1 src', 'src/a.js:1'), ['src/a.js']);
       assert.deepEqual(uncovered('grep --exclude-dir=vendor line1 src', 'src/vendor/c.js:1'), ['src/vendor/c.js']);
       assert.deepEqual(uncovered("rg -g 'src/**/*.js' line1 src", 'src/nested/b.js:1'), []);
+      put('src/nested/deep/leaf.js', 'line1\n');
+      assert.deepEqual(uncovered("rg --max-depth 1 line1 src", 'src/a.js:1'), []);
+      assert.deepEqual(uncovered("rg --max-depth 1 line1 src", 'src/nested/b.js:1'), ['src/nested/b.js']);
+      assert.deepEqual(uncovered("rg -d 1 line1 src", 'src/nested/b.js:1'), ['src/nested/b.js']);
+      assert.deepEqual(uncovered("rg --max-depth=2 line1 src", 'src/nested/b.js:1'), []);
+      assert.deepEqual(uncovered("rg --max-depth=2 line1 src", 'src/nested/deep/leaf.js:1'), ['src/nested/deep/leaf.js']);
+      assert.deepEqual(uncovered("rg --max-depth 1 line1 src/nested/b.js", 'src/nested/b.js:1'), []);
+      const depthInfo = run([shell("rg --max-depth 1 line1 src")], 'src/a.js:1').workers[0].searchedDirs.find(d => d.path === 'src');
+      assert.equal(depthInfo.filters[0].unfiltered, false);
+      put('skills/a/SKILL.md', 'Review\n');
+      put('skills/a/README.md', 'Review\n');
+      assert.deepEqual(uncovered("rg -g '!*.md' -g 'SKILL.md' Review skills", 'skills/a/SKILL.md:1'), []);
+      assert.deepEqual(uncovered("rg -g '!*.md' -g 'SKILL.md' Review skills", 'skills/a/README.md:1'), ['skills/a/README.md']);
+      assert.deepEqual(uncovered("rg -g 'SKILL.md' -g '!*.md' Review skills", 'skills/a/SKILL.md:1'), ['skills/a/SKILL.md']);
+      assert.deepEqual(uncovered("rg --iglob '!*.MD' --iglob 'skill.md' Review skills", 'skills/a/SKILL.md:1'), []);
+      put('script.sed', '1,2p\n');
+      for (const sedCmd of ["sed -ne '1,2p' src/a.js", "sed -Ee '1,2p' src/a.js", "sed -re '1,2p' src/a.js", "sed -ne'1,2p' src/a.js", "sed -nEf script.sed src/a.js", "grep -re 'line1' src", "grep -rnE 'line1' src"]) {
+        const sr = run([shell(sedCmd), writeReport], 'src/a.js:1');
+        assert.equal(sr.recommendedWorkVerdict, 'VERIFIED', sedCmd);
+        assert.deepEqual(sr.workers[0].flags, [], sedCmd);
+      }
+      const nodeReadRes = run([shell(`node -p 'require("node:fs").readFileSync("src/a.js", "utf8")'`), writeReport], 'src/a.js:1');
+      assert.equal(nodeReadRes.ok, true);
+      assert.equal(nodeReadRes.recommendedWorkVerdict, 'VERIFIED');
+      assert.deepEqual(nodeReadRes.workers[0].flags, []);
+      assert.equal(nodeReadRes.workers[0].shellWriteCount, undefined);
+      assert.ok(nodeReadRes.workers[0].openedFiles.some(e => e.path === 'src/a.js'));
+      const nodeWriteRes = run([shell(`node -p 'require("node:fs").writeFileSync("src/a.js", "x")'`), writeReport], 'src/a.js:1');
+      assert.equal(nodeWriteRes.ok, true);
+      assert.equal(nodeWriteRes.recommendedWorkVerdict, 'REVIEW_REQUIRED');
+      assert.ok(nodeWriteRes.workers[0].flags.includes('SHELL_WRITE_DETECTED'));
+      assert.equal(nodeWriteRes.workers[0].shellWriteCount, 1);
+      const symParent19 = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agy-symwt19-')));
+      try {
+        const privBase = path.join(symParent19, 'private-base');
+        const varBase = path.join(symParent19, 'var-base');
+        fs.mkdirSync(path.join(privBase, 'repo/src'), { recursive: true });
+        fs.symlinkSync(privBase, varBase, process.platform === 'win32' ? 'junction' : 'dir');
+        fs.writeFileSync(path.join(privBase, 'repo/src/real.js'), 'export const x = 1;\n');
+        for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=T', '-c', 'user.email=t@e.com', 'commit', '-q', '-m', 'init'], ['worktree', 'add', '-q', '-b', 'wt-b', path.join(privBase, 'wt1')]]) {
+          assert.equal(spawnSync('git', ['-C', path.join(privBase, 'repo'), ...args], { encoding: 'utf8' }).status, 0);
+        }
+        const wtSlot19 = 'scratch/agy-squad/squad-s1/specialist-1/report.md';
+        fs.mkdirSync(path.join(privBase, 'repo', path.dirname(wtSlot19)), { recursive: true });
+        fs.writeFileSync(path.join(privBase, 'repo', wtSlot19), 'Checked src/real.js:1\n');
+        const wt1Var = path.join(varBase, 'wt1');
+        const wtTraceGood = path.join(symParent19, 'good.jsonl');
+        const wtTraceBad = path.join(symParent19, 'bad.jsonl');
+        fs.writeFileSync(wtTraceGood, [
+          JSON.stringify({ step_index: 0, content: 'sender=C @s1-1' }),
+          JSON.stringify({ step_index: 1, tool_calls: [{ name: 'read_file', args: { Path: path.join(wt1Var, 'src/real.js') } }] }),
+          JSON.stringify({ step_index: 2, tool_calls: [{ name: 'write_file', args: { Path: path.join(wt1Var, wtSlot19), Content: 'ok' } }] })
+        ].join('\n') + '\n');
+        fs.writeFileSync(wtTraceBad, [
+          JSON.stringify({ step_index: 0, content: 'sender=C @s1-1' }),
+          JSON.stringify({ step_index: 1, tool_calls: [{ name: 'write_file', args: { Path: path.join(wt1Var, 'src/real.js'), Content: 'x' } }] })
+        ].join('\n') + '\n');
+        const recSym19 = {
+          squadId: 's1',
+          readOnly: true,
+          assignments: [{ conversationId: 's1-1', workerName: 's1-1', report: wtSlot19, worktreeRoot: path.join(privBase, 'wt1') }],
+          handoffs: [{ sender: 's1-1', message: `@coordinator READY ${wtSlot19} -- ok wt="${wt1Var}"` }]
+        };
+        assert.equal(verifyWorkerTraces(path.join(privBase, 'repo'), recSym19, { coordId: 'C', traces: { 's1-1': wtTraceGood } }).recommendedWorkVerdict, 'VERIFIED');
+        assert.equal(verifyWorkerTraces(path.join(privBase, 'repo'), recSym19, { coordId: 'C', traces: { 's1-1': wtTraceBad } }).ok, false);
+        assert.equal(spawnSync('git', ['-C', path.join(privBase, 'repo'), 'worktree', 'remove', '--force', path.join(privBase, 'wt1')], { encoding: 'utf8' }).status, 0);
+        assert.equal(verifyWorkerTraces(path.join(privBase, 'repo'), recSym19, { coordId: 'C', traces: { 's1-1': wtTraceGood } }).recommendedWorkVerdict, 'VERIFIED');
+        const postDelBad = verifyWorkerTraces(path.join(privBase, 'repo'), recSym19, { coordId: 'C', traces: { 's1-1': wtTraceBad } });
+        assert.equal(postDelBad.ok, false);
+        assert.ok(postDelBad.workers[0].flags.includes('REPO_WRITE_IN_READ_ONLY'));
+      } finally {
+        fs.rmSync(symParent19, { recursive: true, force: true });
+      }
       const native = includes => ({ name: 'grep_search', args: { SearchPath: path.join(tmp, 'src'), Includes: includes } });
       assert.deepEqual(run([native(['*.js'])], 'src/settings.json:1').workers[0].citedUnopened, ['src/settings.json']);
       assert.deepEqual(run([native(['*.js']), native(['*.json'])], 'src/settings.json:1').workers[0].citedUnopened, []);
