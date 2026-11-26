@@ -3286,17 +3286,21 @@ function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
   if (typeof markdown !== "string" || !markdown) return [];
   const cleanMarkdown = stripFencedCodeBlocks(markdown);
   const cited = new Set();
-  const citeRe = /(?:^|[\s`(\["'])([A-Za-z0-9_./\x5b\x5d-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
+  // A bracket cannot also be a delimiter: failed bracket paths must scan once.
+  const citeRe = /(?:^|[\s`("'])([A-Za-z0-9_./\x5b\x5d-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
   for (let m; (m = citeRe.exec(cleanMarkdown)); ) {
-    const rawRel = m[1].replace(/^(?:\.\/)+/, "");
-    if (!rawRel || rawRel === selfSlot || rawRel.startsWith("/") || rawRel.includes("..")) continue;
-    const abs = path.join(canonicalRoot, rawRel);
-    try {
-      const st = fs.lstatSync(abs);
-      if (!st.isSymbolicLink() && st.isFile()) {
-        cited.add(rawRel);
-      }
-    } catch {}
+    const candidates = m[1].startsWith("[") ? [m[1], m[1].slice(1)] : [m[1]];
+    for (const candidate of candidates) {
+      const rawRel = candidate.replace(/^(?:\.\/)+/, "");
+      if (!rawRel || rawRel === selfSlot || rawRel.startsWith("/") || rawRel.includes("..")) continue;
+      try {
+        const st = fs.lstatSync(path.join(canonicalRoot, rawRel));
+        if (!st.isSymbolicLink() && st.isFile()) {
+          cited.add(rawRel);
+          break;
+        }
+      } catch {}
+    }
   }
   return [...cited].sort();
 }

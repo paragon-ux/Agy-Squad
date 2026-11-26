@@ -337,7 +337,24 @@ try {
   // SCRIPT-003: Spaced AGY_SQUAD_SCRATCH_ROOT handled cleanly by diagnose.mjs and CLI bundle; traversal rejected
   const spacedEnv = { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "scratch/custom spaced" };
   const spacedDiag = spawnSync(process.execPath, [isoDiag], { cwd: isoRepo, env: spacedEnv, encoding: "utf8" });
-  assert.equal(spacedDiag.status, 0, spacedDiag.stderr);
+  assert.equal(spacedDiag.status, 0, spacedDiag.stderr || spacedDiag.stdout);
+  const deepRepo = path.join(temporary, `deep-checkout-${"x".repeat(80)}`);
+  const deepDiag = copyIsolatedRepo(deepRepo);
+  const deepRun = spawnSync(process.execPath, [deepDiag], { cwd: deepRepo, env: spacedEnv, encoding: "utf8" });
+  assert.equal(deepRun.status, 0, deepRun.stderr || deepRun.stdout);
+  const deepReport = JSON.parse(deepRun.stdout);
+  assert.equal(deepReport.promptBudgets.swarmAuditorTemplateBytes, JSON.parse(spacedDiag.stdout).promptBudgets.swarmAuditorTemplateBytes);
+  assert.ok(deepReport.promptBudgets.swarmAuditorTemplateBytes <= 2000);
+  const deepPlanner = path.join(deepRepo, "mcp/planner.mjs");
+  const savedDeepPlanner = fs.readFileSync(deepPlanner, "utf8");
+  try {
+    fs.writeFileSync(deepPlanner, savedDeepPlanner.replace("slots/traces only", `slots/traces only ${"padding ".repeat(100)}`));
+    const oversizedRun = spawnSync(process.execPath, [deepDiag], { cwd: deepRepo, env: spacedEnv, encoding: "utf8" });
+    assert.equal(oversizedRun.status, 1, oversizedRun.stderr || oversizedRun.stdout);
+    assert.ok(JSON.parse(oversizedRun.stdout).findings.some(f => f.id === "RUN-BUDGET-SWARM-AUDIT"));
+  } finally {
+    fs.writeFileSync(deepPlanner, savedDeepPlanner);
+  }
   const badScratchDiag = spawnSync(process.execPath, [isoDiag], {
     cwd: isoRepo,
     env: { ...process.env, AGY_SQUAD_SCRATCH_ROOT: "../outside" },

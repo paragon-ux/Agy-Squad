@@ -507,6 +507,9 @@ function runDiagnostics() {
   const swarmSpecBrief = minSwarm.workers[0].specialists[0].swarmAdd.brief;
   const swarmLeadBrief = minSwarm.workers[0].lead.swarmAdd.brief;
   const swarmAuditBrief = minSwarm.integrityAuditPlan[0].swarmAdd.brief;
+  // Measure template overhead independently of the host's checkout path.
+  const workspaceArgument = /[\s"'`$\\]/.test(minSwarm.workspace) ? JSON.stringify(minSwarm.workspace) : minSwarm.workspace;
+  const templateBytes = text => Buffer.byteLength(text.replaceAll(workspaceArgument, '"<workspace>"'), "utf8");
   const mcpToolsListResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } }), "utf8");
 
   for (const [label, text] of [
@@ -530,9 +533,9 @@ function runDiagnostics() {
     specialistTemplateBytes: Buffer.byteLength(subSpecPrompt, "utf8"),
     leadTemplateBytes: Buffer.byteLength(subLeadPrompt, "utf8"),
     precompiledLeadTemplateBytes: Buffer.byteLength(subPreLeadPrompt, "utf8"),
-    swarmSpecialistTemplateBytes: Buffer.byteLength(swarmSpecBrief, "utf8"),
-    swarmLeadTemplateBytes: Buffer.byteLength(swarmLeadBrief, "utf8"),
-    swarmAuditorTemplateBytes: Buffer.byteLength(swarmAuditBrief, "utf8"),
+    swarmSpecialistTemplateBytes: templateBytes(swarmSpecBrief),
+    swarmLeadTemplateBytes: templateBytes(swarmLeadBrief),
+    swarmAuditorTemplateBytes: templateBytes(swarmAuditBrief),
     mcpToolsListResponseBytes
   };
   for (const [id, actual, limit, label] of [

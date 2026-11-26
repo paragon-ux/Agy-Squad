@@ -3992,6 +3992,10 @@ try {
         return verifyWorkerTraces(tmp, targetRecord, { coordId: "C", traces: { one: trace } });
       };
       const read = { name: "read_file", args: { Path: path.join(worktree, "src/a.js") } };
+      put(slot, "Read [src/a.js:1]\n");
+      const wrappedCitation = audit([read]);
+      assert.equal(wrappedCitation.workers[0].citedFilesCount, 1);
+      assert.deepEqual(wrappedCitation.workers[0].unverifiedCitations, []);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, slot) } }]).ok, true);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }]).ok, false);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }], { ...record, readOnly: false }).ok, true);
@@ -4021,6 +4025,13 @@ try {
       const fullWrite = audit([{ name: "write_file", args: { Path: "[2026]" } }], fullRecord, fullTrace);
       assert.equal(fullWrite.ok, false);
       assert.deepEqual(fullWrite.workers[0].unauthorizedWrites, ["[2026]"]);
+      for (const markdown of ["[".repeat(20000), "[".repeat(20000) + "missing.js:1"]) {
+        put(slot, markdown);
+        const citationStart = performance.now();
+        const bracketStress = audit([], fullRecord, fullTrace);
+        assert.ok(performance.now() - citationStart < 200);
+        assert.equal(bracketStress.workers[0].citedFilesCount, 0);
+      }
       fs.writeFileSync(path.join(tmp, slot), Buffer.from([0xff]));
       assert.equal(audit([read]).ok, false);
       fs.unlinkSync(path.join(tmp, slot));
@@ -4061,7 +4072,7 @@ try {
     try {
       fs.mkdirSync(path.join(child, "src"), { recursive: true });
       fs.writeFileSync(path.join(child, "src/auth.js"), "export const auth = true;\n");
-      const docs = fs.readFileSync(new URL("../docs/getting-started.md", import.meta.url), "utf8");
+      const docs = fs.readFileSync(new URL("../docs/getting-started.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
       const quickstart = docs.slice(docs.indexOf("### Generate a `/swarm` plan"));
       const planCommand = quickstart.match(/agy-squad plan[^]*?(?=\n\n# 2\.)/)[0].replaceAll("\\\n", " ");
       const words = scanShellCommand(planCommand)[0].words.slice(1);
