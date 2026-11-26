@@ -3286,7 +3286,7 @@ function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
   if (typeof markdown !== "string" || !markdown) return [];
   const cleanMarkdown = stripFencedCodeBlocks(markdown);
   const cited = new Set();
-  const citeRe = /(?:^|[\s`(\["'])([A-Za-z0-9_./-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
+  const citeRe = /(?:^|[\s`(\["'])([A-Za-z0-9_./\x5b\x5d-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
   for (let m; (m = citeRe.exec(cleanMarkdown)); ) {
     const rawRel = m[1].replace(/^(?:\.\/)+/, "");
     if (!rawRel || rawRel === selfSlot || rawRel.startsWith("/") || rawRel.includes("..")) continue;

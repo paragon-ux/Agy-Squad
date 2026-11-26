@@ -4013,7 +4013,14 @@ try {
       assert.deepEqual(audit([{ name: "run_command", args: { CommandLine: "rg -n line1 src" } }]).workers[0].unverifiedCitations, []);
       put(slot, "Read [2026]/a.js:1\n");
       const fullTrace = path.join(logdir, "transcript_full.jsonl");
-      assert.equal(audit([{ name: "grep_search", args: { SearchPath: "[2026]" } }], { ...record, assignments: [{ conversationId: "one", report: slot }] }, fullTrace).warningsCount, undefined);
+      const fullRecord = { ...record, assignments: [{ conversationId: "one", report: slot }] };
+      const fullSearch = audit([{ name: "grep_search", args: { SearchPath: "[2026]" } }], fullRecord, fullTrace);
+      assert.equal(fullSearch.ok, true);
+      assert.equal(fullSearch.workers[0].citedFilesCount, 1);
+      assert.deepEqual(fullSearch.workers[0].unverifiedCitations, []);
+      const fullWrite = audit([{ name: "write_file", args: { Path: "[2026]" } }], fullRecord, fullTrace);
+      assert.equal(fullWrite.ok, false);
+      assert.deepEqual(fullWrite.workers[0].unauthorizedWrites, ["[2026]"]);
       fs.writeFileSync(path.join(tmp, slot), Buffer.from([0xff]));
       assert.equal(audit([read]).ok, false);
       fs.unlinkSync(path.join(tmp, slot));
