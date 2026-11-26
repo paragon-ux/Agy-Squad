@@ -23,7 +23,7 @@ For native `/swarm` runs, read-only reviews and cohorts with separate file scope
 | --- | --- | --- |
 | **Topology** | Inline tasks default to **Flat** (specialists report to coordinator); manifests with `lead` blocks compile staged **Layered** waves (`wave1` specialists, `wave2` leads after specialist `READY` receipts, `wave3` `audit-<id>`) unless `--topology flat` is passed | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `<squadId>`) |
 | **Workspace isolation** | Default: `inherit` (shared coordinator root with `readOnlyBaseline` checks on `readOnly: true` cohorts); opt into `share` (shared-storage copy) or `branch` (isolated clone) for concurrent edits | `squad_planner` (`workspaceIsolation`, `/swarm` only; `subagent` requires `inherit`) |
-| **Teardown and provenance** | Default: verified report pruning after final synthesis (`agy-squad prune --records <record.json...> --clean-records` or `finalize --prune`); pass `--keep-reports` to retain `scratch/agy-squad/` reports | `agy-squad prune` / `agy-squad finalize` |
+| **Teardown and provenance** | Default: verified report pruning after final synthesis (`agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records` or `finalize --prune`); pass `--keep-reports` to retain `scratch/agy-squad/` reports | `agy-squad prune` / `agy-squad finalize` |
 | **Model** | Default: coordinator active model (omit `model`/`--model`); or explicit user-selected model ID (`swarm{action: "models"}`) | `squad_planner` (`model`, `knownModels`) and `swarm{action: "status"}` |
 | **Integrity rigor** | Default: independent flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; runs `agy-squad audit-check` and emits `CLEAN` or `INTEGRITY VIOLATION`); explicit `--no-integrity` / `--allow-unaudited` opt-out | `agy-squad audit-check`, `agy-squad bundle` / `finalize`, and `mcp/verdicts.mjs` |
 | **Instruction self-containment** | Explicit file paths, objectives, and criteria in every brief; unanchored codes (such as `H4` or `D2`) are rejected | `mcp/briefs.mjs` |
@@ -119,7 +119,7 @@ To prune verified specialist reports and temporary record files after archiving 
 ```bash
 agy-squad finalize scratch/agy-squad/squad-*/record.json
 # After transcribing findings and bundle SHA-256 digests into docs/reviews/<slug>.md:
-agy-squad prune --records scratch/agy-squad/squad-*/record.json --clean-records
+agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records
 # Optional: remove finished scratch bundles once findings are archived in docs/reviews/
 rm -rf scratch/agy-squad
 ```

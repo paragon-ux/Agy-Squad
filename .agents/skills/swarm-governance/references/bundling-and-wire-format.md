@@ -40,7 +40,8 @@ agy-squad bundle-init --plan <plan.json> --all-squads --handoffs <handoffs.json>
 # Run Wave-3 audit-<id> (using emitted auditSwarmAdd + agy-squad audit-check), then finalize all squads without --prune:
 agy-squad finalize scratch/records/*.json [--strict-citations] [--replace]
 # Synthesize final deliverable / ledger once with verified bundle SHA-256 hashes, then prune & clean records:
-agy-squad prune --records scratch/records/storage.record.json=<accepted-sha256> --clean-records [--keep-reports]
+# Pass one record=digest pair per accepted squad bundle.
+agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records [--keep-reports]
 ```
 
 *(Note: `bundle-init --digest` and `finalize` already enforce strict `Content Verdict` and `Integrity Verdict` parsing internally; standalone `agy-squad verdict [--integrity] <report.md>` remains available as an optional troubleshooting helper.)*

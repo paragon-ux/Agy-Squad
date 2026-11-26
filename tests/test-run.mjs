@@ -108,6 +108,40 @@ try {
     assert.equal(fs.existsSync(path.join(isoRepo, "scratch")), false, "Read-only diagnose.mjs must never write to scratch/");
   }
 
+  // Canonical recipes must bind roster-name audits and pin each cleanup record.
+  let boundRecipes = 0, pinnedRecipes = 0;
+  for (const rel of [
+    ".agents/skills/swarm-governance/SKILL.md",
+    ".agents/skills/swarm-governance/references/bundling-and-wire-format.md",
+    ".agents/skills/swarm-governance/references/large-swarms.md",
+    ".agents/skills/day-one-review/references/day-one-protocol.md",
+    ".agents/skills/self-diagnosis/SKILL.md",
+    ".agents/skills/self-diagnosis/references/execution-and-teardown.md",
+    "docs/skills/swarm-governance.md", "docs/skills/self-diagnosis.md",
+    "docs/core-workflows.md", "docs/getting-started.md",
+    "benchmarks/teamwork-vs-squad/README.md"
+  ]) {
+    const text = fs.readFileSync(path.join(repoRoot, rel), "utf8").replace(/\\\r?\n[ \t]*/g, " ");
+    const commands = [
+      ...[...text.matchAll(/`((?:(?:agy-squad|node bin\/agy-squad\.mjs) )?(?:bundle-init|prune)\b[^`\r\n]*)`/g)].map(m => m[1]),
+      ...text.split(/\r?\n/).map(line => line.trim()).filter(line => /^agy-squad (?:bundle-init|prune)\b/.test(line))
+    ];
+    for (const command of commands) {
+      if (/\bbundle-init\b/.test(command) && /--digest\b/.test(command) && /--(?:plan|all-squads)\b/.test(command)) {
+        assert.match(command, /--coord-id\s+<coordId>/, `${rel}: auditor recipe needs coordinator identity`);
+        boundRecipes++;
+      }
+      if (/\bprune\b/.test(command) && /--clean-records\b/.test(command)) {
+        const records = command.match(/--records\s+(.+?)(?=\s+(?:--|\[--)|$)/)?.[1];
+        if (!records || records === "...") continue;
+        for (const pair of records.split(/\s+/)) assert.ok(!pair.includes("*") && /^[^=]+=[^=]+$/.test(pair), `${rel}: cleanup requires explicit record=digest pairs`);
+        pinnedRecipes++;
+      }
+    }
+  }
+  assert.ok(boundRecipes >= 8);
+  assert.ok(pinnedRecipes >= 8);
+
   // Removed legacy diagnose.mjs flags must fail closed cleanly with Usage and no stack trace
   for (const removedArgs of [
     ["--print-dispatch", "all_l1"],
