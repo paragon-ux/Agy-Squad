@@ -56,7 +56,7 @@ const usage = [
   "  inspect <record.json>           Reconcile Pointer-Over-Wire handoff receipts",
   "  digest <record.json> [options]  Compute canonical Evidence Digest (+ --verify-traces)",
   "  audit-check (--record <rec.json> | <rec.json>) [options]",
-  "                                  Verify worker Step-1 attribution, writes, and citations",
+  "                                  Check worker reads, citation lines, report order, and writes",
   "  bundle <record.json> [options]  Create a SHA-256 verified proof bundle (.sources.json)",
   "  verify <report.sources.json> [sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
   "                                  Verify bundle integrity (+ optional --prune with SHA-256)",
@@ -64,8 +64,8 @@ const usage = [
   "                                  Run inspect -> bundle -> verify (+ optional --prune) in one call",
   "  prune (<report.sources.json> <sha256> | --records <record.json>=<accepted-sha256>...) [options]",
   "                                  Prune verified loose specialist reports (and optional records)",
-  "  verdict [--integrity] <report.md>",
-  "                                  Strictly parse a content or integrity verdict",
+  "  verdict [--integrity | --work] <report.md>",
+  "                                  Strictly parse content, work, or legacy integrity verdicts",
   "",
   "Global Options:",
   "  --help, -h                      Show this help message (or subcommand help)",
@@ -267,7 +267,7 @@ const SUBCOMMAND_HELP = {
   "audit-check": [
     "Usage: agy-squad audit-check (--record <record.json> | <record.json>) [--workspace <dir>] [--coord-id <uuid>] [--trace <worker=jsonl>...] [--brain-dir <dir>]",
     "",
-    "Run deterministic <50ms JSONL trace checks (Step-1 attribution, read-only writes, citation grounding).",
+    "Run deterministic <50ms work-evidence trace checks (opened files & ranges, citation line checks, read-before-write order, and read-only repo writes).",
     "",
     "Options:",
     "  --record <record.json>           Bundle record JSON defining cohort assignments (or pass positional <record.json>)",
@@ -350,16 +350,18 @@ const SUBCOMMAND_HELP = {
     "  agy-squad prune --records scratch/agy-squad/squad-a/record.json=<accepted-a-sha256> scratch/agy-squad/squad-b/record.json=<accepted-b-sha256> --clean-records"
   ].join("\n"),
   verdict: [
-    "Usage: agy-squad verdict [--workspace <dir>] [--integrity] <report.md>",
+    "Usage: agy-squad verdict [--workspace <dir>] [--integrity | --work] <report.md>",
     "",
-    "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED) or Integrity Verdict.",
+    "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED), Work Verdict (VERIFIED|NOT VERIFIED), or Integrity Verdict.",
     "",
     "Options:",
     "  --workspace <dir>                Coordinator workspace root",
-    "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION) plus targetSquad and evidenceDigest when present",
+    "  --work                           Parse Work Verdict (VERIFIED|NOT VERIFIED) plus targetSquad and evidenceDigest when present",
+    "  --integrity                      Parse Work Verdict or legacy Integrity Verdict (CLEAN|INTEGRITY VIOLATION) plus targetSquad and evidenceDigest when present",
     "",
     "Examples:",
     "  agy-squad verdict scratch/agy-squad/squad-auth/lead/report.md",
+    "  agy-squad verdict --work scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md",
     "  agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md"
   ].join("\n")
 };
@@ -1696,21 +1698,22 @@ async function main(args) {
     return 0;
   }
   if (command === "verdict") {
-    const usageLine = "Usage: agy-squad verdict [--workspace <dir>] [--integrity] <report.md>";
+    const usageLine = "Usage: agy-squad verdict [--workspace <dir>] [--integrity | --work] <report.md>";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       workspace: { type: "string" },
-      integrity: { type: "boolean", default: false }
+      integrity: { type: "boolean", default: false },
+      work: { type: "boolean", default: false }
     });
-    if (positionals.length !== 1) {
+    if (positionals.length !== 1 || (values.integrity && values.work)) {
       throw new Error(usageLine);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
-    const { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } = await import("../mcp/verdicts.mjs");
+    const { parseAuditVerdict, parseContentVerdict, parseEvidenceDigest, parseTargetSquad, parseWorkVerdict } = await import("../mcp/verdicts.mjs");
     const { targetRoot } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     const reportRel = normalizeWorkspaceCliPath(positionals[0], process.platform, targetRoot);
     const markdown = handoffsMod.decodeUtf8(handoffsMod.readFile(targetRoot, reportRel), reportRel);
-    if (values.integrity) {
-      const verdict = parseIntegrityVerdict(markdown);
+    if (values.work || values.integrity) {
+      const verdict = values.work ? parseWorkVerdict(markdown) : parseAuditVerdict(markdown).verdict;
       const targetSquad = parseTargetSquad(markdown);
       const evidenceDigest = parseEvidenceDigest(markdown);
       console.log(JSON.stringify({

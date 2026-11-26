@@ -16,18 +16,20 @@ Reference for [`SKILL.md`](../SKILL.md).
 
 | Role | Member | Strict Verdict | Responsibility |
 | --- | --- | --- | --- |
-| **Lead / Coord** | `<squad>-lead` / coordinator | `Content Verdict: PASS` \| `FAIL` \| `BLOCKED` | Verifies files/tests (`lead/report.md`). Never self-certifies integrity. |
-| **Auditor** | `audit-<id>` (flat peer) | `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION` | Audits traces, evidence, `Evidence Digest`, `Target Squad: <id>`. Never issues `PASS`. |
+| **Lead / Coord** | `<squad>-lead` / coordinator | `Content Verdict: PASS` \| `FAIL` \| `BLOCKED` | Verifies files/tests (`lead/report.md`). Never self-certifies work verification. |
+| **Auditor** | `audit-<id>` (flat peer) | `Work Verdict: VERIFIED` \| `NOT VERIFIED` (legacy `Integrity Verdict: CLEAN` \| `INTEGRITY VIOLATION`) | Reviews `audit-check` work evidence, spot-checks cited claims against source, emits `Evidence Digest` and `Target Squad: <id>`. Never issues `PASS`. |
 
-- Compound verdicts (`PASS with Advisories`, `CONDITIONAL PASS`) are rejected (`mcp/verdicts.mjs`).
+- Compound verdicts (`PASS with Advisories`, `CONDITIONAL PASS`, `VERIFIED with caveats`) are rejected (`mcp/verdicts.mjs`).
 - Slots: `squad-integrity_auditor/specialist-1/report.md` (single-squad) or `squad-integrity_auditor-<id>/specialist-1/report.md` (multi-squad).
 
 ## Dual-Path Trace Inspection
 
-- **Deterministic CLI pre-check + bounded trace inspection:** Run `agy-squad audit-check --record <record.json> --coord-id <coordId>` (`< 50 ms`) first to deterministically verify Step 1 attribution (`sender=<coordId>`, `@<workerName>`), `readOnly` containment (`0` unauthorized `write_file`/`edit_file`), and cited-file-vs-read grounding:
-  - **Native inspection (always available):** Single-pass bounded read of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` (+ matching `transcript_full.jsonl` lines only if `truncated_fields` is set). Never copy raw JSONL into `scratch/` or poll step-by-step.
-  - **Optional `Agy-Context-Saver` installed:** Inspect transcripts natively (bounded `read_file` slices of `transcript.jsonl` (jump to the matching `transcript_full.jsonl` line only when `truncated_fields` is present)) and run `agy-context transcript health --id u1,u2 --json` for counts, scoped strictly to squad report/record slots and worker transcripts (no unrelated repo source reads).
-- **Fail closed:** Workspace re-runs alone never justify `CLEAN`. Emit standalone lines `Target Squad: <id>`, `Evidence Digest: <64-hex>`, and `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` (plain text, no backticks; `INTEGRITY VIOLATION` if traces cannot be verified or tampering/fabrication is found).
+- **Deterministic work-evidence pre-check + focused source claim spot-check:** Run `agy-squad audit-check --record <record.json> --coord-id <coordId>` first. It parses worker JSONL transcripts (decoding compact JSON-encoded args and hydrating `truncated_fields` from `transcript_full.jsonl`) to emit per-worker work evidence:
+  - Provably opened files with inspection kind (`read_file` with `StartLine`/`EndLine` ranges, `shell_read`, `search`) separate from directory-only listings (`listedDirs`).
+  - Mechanical citation validation (`BAD_CITATION_LINE` when a cited line exceeds file length, `CITED_UNOPENED` when a cited file was not provably opened), read-before-write step ordering (`REPORT_BEFORE_READS`), and per-report SHA-256 digests.
+  - Hard-blocks (`ok: false`, exit 1) only on read-only file-tool writes into the repository outside `scratch/` (`REPO_WRITE_IN_READ_ONLY`) or unsafe/oversized trace paths (`O_NOFOLLOW` symlink checks). Missing or unrecognized traces degrade to `NO_TRACE` / `UNVERIFIED_TRACE` flags, and shell-command or external (`/tmp`) writes emit flags rather than hard violations because `readOnlyBaseline` already catches repository mutations.
+- **Auditor claim spot-check (no direct cross-session transcript reads):** The Wave-3 auditor reviews `audit-check` output and spot-checks up to 3 claims per worker (prioritizing flagged workers and `CITED_UNOPENED` files) by opening the cited `file:line`. Because `agy-squad audit-check` reads worker transcripts directly via the Node CLI (not restricted by Agy-Context-Saver 2.3.0 `self-only` tool-argument rules), treat `self-only` as a convenience against direct cross-session tool reads rather than an isolation boundary against the CLI.
+- **Fail closed:** Emit a per-worker table (`Worker | Flags | Claims checked | Result | Note`) plus standalone plain-text lines `Target Squad: <id>`, `Evidence Digest: <64-hex>`, and `Work Verdict: VERIFIED | NOT VERIFIED` (no backticks; `NOT VERIFIED` if claims are fabricated or read-only repo writes occurred; legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` remains accepted).
 
 ## Bundle Record Schema and CLI
 
@@ -44,7 +46,7 @@ agy-squad finalize scratch/records/*.json [--strict-citations] [--replace]
 agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records [--keep-reports]
 ```
 
-*(Note: `bundle-init --digest` and `finalize` already enforce strict `Content Verdict` and `Integrity Verdict` parsing internally; standalone `agy-squad verdict [--integrity] <report.md>` remains available as an optional troubleshooting helper.)*
+*(Note: `bundle-init --digest` and `finalize` already enforce strict content and audit verdict parsing internally; standalone `agy-squad verdict --work <report.md>` (or `--integrity` for a legacy deliverable) remains available as an optional troubleshooting helper.)*
 
 ```json
 {

@@ -95,11 +95,24 @@ try {
   assert.equal(overlapTask.integrityAuditPlan[0].swarmAdd.model, "gemini-3.8-flash-high");
   assert.doesNotMatch(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /or direct re-execution before CLEAN/);
   assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /no raw \.system_generated\/ copies/);
-  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /re-execution cannot satisfy CLEAN.*'Integrity Verdict: INTEGRITY VIOLATION' if traces missing\/tampered/);
+  assert.match(overlapTask.integrityAuditPlan[0].swarmAdd.brief, /'Work Verdict: NOT VERIFIED'\) on fabricated claims or read-only repo writes/);
   assert.equal(overlapTask.workspace, root);
   assert.equal(overlapTask.provenanceScaffold, undefined);
   assert.equal(overlapTask.bundleRecordTemplates, undefined);
   assert.equal(overlapTask.notes, undefined);
+
+  for (const executionMode of ['swarm', 'subagent']) {
+    const legacy = planSquadCohort({ executionMode, manifest: { squads: {
+      alpha: { specialists: [{ role: 'Worker', objective: 'Review', scopeFiles: ['src'] }] },
+      integrity_auditor: { specialists: [{ role: 'Legacy auditor', objective: 'Audit evidence', scopeFiles: ['src'], expectedDeliverable: 'Target Squad: alpha\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN | INTEGRITY VIOLATION' }] }
+    } } }, root);
+    const compiled = legacy.integrityAuditPlan[0];
+    const brief = compiled.swarmAdd?.brief ?? compiled.subagentSpec?.Prompt ?? compiled.Prompt ?? JSON.stringify(compiled);
+    assert.match(brief, /verdict --workspace .* --integrity/);
+    assert.match(brief, /fail closed \('Integrity Verdict: INTEGRITY VIOLATION'\)/);
+    assert.doesNotMatch(brief, /fail closed \('Work Verdict:/);
+    if (executionMode === 'swarm') assert.match(brief, /--coord-id <coordId>/);
+  }
 
   // 3. Subagent-mode honest modelProvenance warning when exact model ID cannot be pinned
   const subagentPlan = planSquadCohort({
@@ -789,7 +802,7 @@ try {
     );
     assert.match(
       overridePlan.integrityAuditPlan[0].swarmAdd.brief,
-      /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl.*sender=<coordId> \+ @<workerName>/
+      /agy-squad audit-check work evidence.*spot-check up to 3 claims\/worker.*do not read other sessions' transcripts/
     );
     assert.doesNotMatch(overridePlan.integrityAuditPlan[0].swarmAdd.brief, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
@@ -1116,7 +1129,7 @@ try {
     assert.equal(dotPlanJson.workers[0].specialists[0].reportSlot, "scratch/w2-custom/squad-task_squad/specialist-1/report.md");
     assert.match(dotPlanJson.workers[0].specialists[0].swarmAdd.brief, /^- src\/a\.js$/m);
 
-    // OPT-GAP-AUDIT-LEAD: swarm integrity auditor lead instructions include Target Squad, Evidence Digest, and Integrity Verdict
+    // OPT-GAP-AUDIT-LEAD: swarm work auditor lead instructions include Target Squad, Evidence Digest, and Work Verdict
     const swarmAuditLeadSpec = buildSubagentSpec(
       { role: "Audit Lead", objective: "Lead audit", scopeFiles: ["."] },
       "integrity_auditor-alpha",
@@ -1127,9 +1140,10 @@ try {
     );
     assert.match(swarmAuditLeadSpec.Prompt, /Target Squad: <id>/);
     assert.match(swarmAuditLeadSpec.Prompt, /Evidence Digest: <sha256>/);
-    assert.match(swarmAuditLeadSpec.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
-    assert.match(swarmAuditLeadSpec.Prompt, /bounded read_file slices of .*transcript\.jsonl/);
-    assert.match(swarmAuditLeadSpec.Prompt, /health --id u1,u2 --json/);
+    assert.match(swarmAuditLeadSpec.Prompt, /Work Verdict: VERIFIED \| NOT VERIFIED/);
+    assert.match(swarmAuditLeadSpec.Prompt, /agy-squad audit-check work evidence/);
+    assert.match(swarmAuditLeadSpec.Prompt, /spot-check up to 3 claims\/worker/);
+    assert.match(swarmAuditLeadSpec.Prompt, /do not read other sessions' transcripts/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /transcript (query|step|read|export|list)|--lineage|--field content|\[agy-transcript-access:/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--tool\b|--errors\b/);
     assert.doesNotMatch(swarmAuditLeadSpec.Prompt, /--out <scratch>|read\|step --id <uuid> --full|query --id <uuid> --summary --include-tools --full/);
@@ -1152,15 +1166,15 @@ try {
     assert.match(compLeadBrief, /post_message <= 500 UTF-8 bytes.*READY/);
     assert.doesNotMatch(compLeadBrief, /Send a <=500B READY receipt to parent|rtk grep|rtk find|rtk read|<=150-line|deterministic scratch teardown/);
     const compAuditBrief = compPlan.integrityAuditPlan[0].swarmAdd.brief;
-    assert.match(compAuditBrief, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
-    assert.match(compAuditBrief, /agy-context transcript/);
+    assert.match(compAuditBrief, /agy-squad audit-check/);
+    assert.match(compAuditBrief, /spot-check up to 3 claims\/worker/);
+    assert.match(compAuditBrief, /do not read other sessions' transcripts/);
     assert.doesNotMatch(compAuditBrief, /transcript (query|step|read|export|list)|--lineage|--field content|\[agy-transcript-access:/);
-    assert.match(compAuditBrief, /truncated_fields/);
     assert.match(compAuditBrief, /agy-squad digest --workspace .* scratch\/agy-squad\/squad-harness_comparative_audit\/record\.json/);
-    assert.match(compAuditBrief, /agy-squad verdict --workspace .* --integrity scratch\/agy-squad\/squad-integrity_auditor\/specialist-1\/report\.md/);
+    assert.match(compAuditBrief, /agy-squad verdict --workspace .* --work scratch\/agy-squad\/squad-integrity_auditor\/specialist-1\/report\.md/);
     assert.doesNotMatch(compAuditBrief, /<rel-record>|<rel-slot>/);
-    assert.match(compAuditBrief, /no unrelated repo source reads/);
-    assert.match(compAuditBrief, /bounded read_file slices of .*transcript\.jsonl/);
+    assert.match(compAuditBrief, /no bulk repo reads or other sessions' transcripts/);
+    assert.match(compAuditBrief, /Work Verdict: VERIFIED \| NOT VERIFIED/);
 
     const selfDiagDecoupledPlan = planSquadCohort(
       { manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json" },

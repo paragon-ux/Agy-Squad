@@ -5,6 +5,16 @@ All notable changes to `Agy-Squad` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `agy-squad audit-check` now outputs structured per-worker work evidence: provably opened workspace files with inspection kinds (`read_file` line ranges, shell reads, search) separate from directory-only listings, mechanical citation line-range validation (`BAD_CITATION_LINE`), read-before-write step ordering (`REPORT_BEFORE_READS`), per-report SHA-256 digests, and a fixed flag list.
+- Added `Work Verdict: VERIFIED | NOT VERIFIED` in `mcp/verdicts.mjs` and `agy-squad verdict --work` as an additive auditor verdict accepted alongside legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` in bundle and finalize gates, and bumped PR Review Standard to `1.6.0` (existing `1.5.0` and `1.4.0` ledgers remain valid).
+
+### Changed
+- Compiled auditor briefs now direct Wave-3 auditors to review `agy-squad audit-check` work evidence first and spot-check up to 3 claims per worker against cited `file:line` references without reading other sessions' transcripts directly.
+- `agy-squad audit-check` now hard-blocks only on read-only file-tool writes into the repository outside `scratch/` and on unsafe or oversized trace paths; missing or unrecognized transcripts degrade to `NO_TRACE` or `UNVERIFIED_TRACE` flags, and shell-regex or external writes report informational flags while `readOnlyBaseline` enforces repository immutability.
+
 ## [0.2.2] - 2026-11-24
 
 ### Added

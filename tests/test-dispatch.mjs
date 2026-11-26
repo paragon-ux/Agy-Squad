@@ -474,27 +474,22 @@ try {
   assert.doesNotMatch(uxSpecBrief, /Write shared slot \(no overwrite\); cite checks/, "OPT-BRIEF-03: non-auditor specialist must omit duplicate cite checks");
   assert.match(
     uxAuditBrief,
-    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
-    "subagent Integrity Auditor brief must include standalone native JSONL trace path"
+    /agy-squad audit-check work evidence.*spot-check up to 3 claims\/worker/,
+    "subagent Work Auditor brief must instruct reviewing audit-check work evidence and spot-checking claims"
   );
   assert.match(
     uxSwarmAuditBrief,
-    /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/,
-    "swarm Integrity Auditor brief must include standalone native JSONL trace path"
-  );
-  assert.match(
-    uxSwarmAuditBrief,
-    /sender=<coordId> \+ @<workerName>/,
-    "swarm Integrity Auditor brief must explain standalone Step 0/1 worker trace matching"
+    /agy-squad audit-check work evidence.*board: receipts\/roster only.*do not read other sessions' transcripts/,
+    "swarm Work Auditor brief must scope board reads and prohibit reading other sessions' transcripts directly"
   );
   assert.match(
     uxAuditBrief,
-    /Emit standalone lines \(plain text, no backticks, never ';'-joined\):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN \| INTEGRITY VIOLATION/,
-    "Integrity Auditor brief must explicitly disallow backticks and ';'-joining on standalone verdict lines"
+    /Emit standalone lines \(plain text, no backticks, never ';'-joined\):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nWork Verdict: VERIFIED \| NOT VERIFIED/,
+    "Work Auditor brief must explicitly disallow backticks and ';'-joining on standalone verdict lines"
   );
   assert.match(
     scopedAuditor[0].Prompt,
-    /Standalone lines \(plain text, no backticks\):\nTarget Squad: alpha\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN \| INTEGRITY VIOLATION/,
+    /Standalone lines \(plain text, no backticks\):\nTarget Squad: alpha\nEvidence Digest: <sha256>\nWork Verdict: VERIFIED \| NOT VERIFIED/,
     "Default integrity_auditor deliverable must emit standalone lines and disallow backticks"
   );
   const standaloneDispatch = handleDispatchSquad(

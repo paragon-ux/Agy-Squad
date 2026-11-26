@@ -34,7 +34,7 @@ agy-squad collect --plan scratch/self-diag-plan.json --handoffs scratch/handoffs
 agy-squad bundle-init --plan scratch/self-diag-plan.json --all-squads \
   --handoffs scratch/handoffs.json [--id-map <worker=id>] \
   --from-scope --coord-id <coordId> --digest --out-dir scratch/records --replace
-# Launch Wave-3 audit-<id> workers (with agy-squad audit-check), then finalize all squads without --prune:
+# Launch Wave-3 audit-<id> workers with audit-check and Work Verdict, then finalize without --prune:
 agy-squad finalize scratch/records/*.json --strict-citations [--replace]
 # Write docs/reviews/<slug>.md once with verified bundle SHA-256 hashes (reading lead/report.md in layered mode unless uncarriedUrls/raw detail requires specialist-N/report.md), then prune & clean records:
 agy-squad prune --records \
@@ -45,4 +45,6 @@ agy-squad prune --records \
 ```
 
 - Write temp `<plan.json>` and `bundle-record-<id>.json` outside `scratch/agy-squad/squad-<id>/` (e.g., `scratch/bundle-record-<id>.json`) and remove once done.
-- Finalize bundles without `--prune` first so verified bundle SHA-256 hashes are written into `docs/reviews/<slug>.md` (Standard v1.5.0 Sections 1-9, `1 ID = 1 Row`) in a single pass with zero placeholder patching, then run `agy-squad prune` and remove finished `scratch/agy-squad/` directories. On read-only runs where `git status` is clean on the baseline-tested `HEAD`, skip a duplicate closeout `npm test`.
+- Finalize bundles without `--prune` first so verified bundle SHA-256 hashes are written into `docs/reviews/<slug>.md` (Standard v1.6.0 Sections 1-9, `1 ID = 1 Row`) in a single pass with zero placeholder patching, then run `agy-squad prune` and remove finished `scratch/agy-squad/` directories. On read-only runs where `git status` is clean on the baseline-tested `HEAD`, skip a duplicate closeout `npm test`.
+
+Each independent auditor emits `Target Squad`, `Evidence Digest`, and `Work Verdict: VERIFIED | NOT VERIFIED`; legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` remains accepted. `REVIEW_REQUIRED` from `audit-check` calls for claim checks before the auditor can approve the work. Use `agy-squad verdict --work <report.md>` for current reports or `--integrity` for either supported audit format.

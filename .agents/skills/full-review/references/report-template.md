@@ -6,7 +6,7 @@ Save to `docs/reviews/<slug>.md` if adopted or requested; else deliver in chat o
 
 # <Review title>
 
-**Standard:** Agy-Squad PR Review Standard v1.5.0 ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md)) | **Type:** `<type>` | **Date:** `<YYYY-MM-DD>` | **Reviewer:** `<name>`
+**Standard:** Agy-Squad PR Review Standard v1.6.0 ([`pr-review-standard.md`](../../pr-review/references/pr-review-standard.md)) | **Type:** `<type>` | **Date:** `<YYYY-MM-DD>` | **Reviewer:** `<name>`
 
 ## 1. Metadata, Session Provenance & Limits
 
@@ -155,3 +155,5 @@ Repeat for `DOC` (`4.2`), `SKILL` (`4.3`), `MCP` (`4.4`), `RUN` (`4.5`), `SVC` (
 - [ ] Direction decision (if asked) has constraints, options, recommendation, and falsifiers.
 - [ ] If audited: separate verdicts, auditor never approved content, lead rechecked after `CLEAN`, `INTEGRITY VIOLATION` hard-blocks.
 - [ ] Disposition matches coverage/blockers; clean formatting; report delivered/linked.
+
+When an independent cohort audit runs, attach its `Target Squad`, `Evidence Digest`, `Work Verdict: VERIFIED | NOT VERIFIED`, and per-worker claim checks. Legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` reports remain accepted. Validate reports with `agy-squad verdict [--work | --integrity] <report.md>` before acceptance.

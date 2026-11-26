@@ -1,8 +1,8 @@
 # Self-Diagnosis & Optimization Rubric
 
-Pairs `self-diagnosis` with [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md) ([`pr-review`](../../pr-review/SKILL.md)).
+Pairs `self-diagnosis` with [PR Review Standard v1.6.0](../../pr-review/references/pr-review-standard.md) ([`pr-review`](../../pr-review/SKILL.md)).
 
-## 1. Category Mapping (Standard v1.5.0)
+## 1. Category Mapping (Standard v1.6.0)
 
 Trace `invariant -> decision (docs/plans/LEDGER.md) -> contract -> code -> verification`; assign one primary category:
 
@@ -39,9 +39,9 @@ Trace `invariant -> decision (docs/plans/LEDGER.md) -> contract -> code -> verif
 | --- | --- | --- | --- |
 | **Frontmatter & Links** | Bad YAML (`SKILL-FM-*`) or broken relative/hosted link in `SKILL.md` (`SKILL-LINKS-*`) or `references/` (`SKILL-REFLINKS-*`) | `SKILL` (P1) | Fix YAML or link/anchor target. |
 | **Tool/API Drift** | Active reference to retired Phase 1/2 symbols (`SKILL-DRIFT-*`) | `SKILL` (P2) | Use `squad_planner`, `dispatch_squad` (subagent), `audit-<id>`, `agy-squad` CLI. |
-| **Readability** | Plain numbers/statuses/sentences in backticks, or backticks on standalone verdict declarations | `DOC`/`SKILL` (P3) | Restrict backticks to code identifiers, paths, flags, commands, and prose-quoted verdicts (never standalone `Content Verdict:`/`Integrity Verdict:`/`Target Squad:`/`Evidence Digest:` lines). |
+| **Readability** | Plain numbers/statuses/sentences in backticks, or backticks on standalone verdict declarations | `DOC`/`SKILL` (P3) | Restrict backticks to code identifiers, paths, flags, commands, and prose-quoted verdicts (never standalone `Content Verdict:`/`Work Verdict:`/`Integrity Verdict:`/`Target Squad:`/`Evidence Digest:` lines). |
 | **Capabilities** | Built-in `TypeName` (`research`) or `Workspace !== "inherit"` | `RUN` (P1) | Enforce `TypeName: "self"` and `Workspace: "inherit"` (`mcp/briefs.mjs`). |
 | **Verdicts & Receipts** | Non-`PASS` bundled, > 500 B, multiline, bad sender/slot/delimiter | `SVC` (P1/P2) | Enforce strict enums (`mcp/verdicts.mjs`) and single-line `-`/`--`/em-dash receipts. |
 | **MCP & Planner** | Oversized stdio or missing `modelProvenance`/`integrityAuditPlan` | `MCP` (P1/P2) | Enforce `AGY_MAX_STDIO_PAYLOAD_BYTES` and `planSquadCohort` invariants. |
-| **Ledger Gate** | Edits/cleanup before ledger update, schema gap, open blockers, umbrella IDs | `DOC`/`SVC` (P1-P3) | Update `docs/reviews/<slug>.md` (v1.5.0 `1 ID = 1 Row`) first. |
+| **Ledger Gate** | Edits/cleanup before ledger update, schema gap, open blockers, umbrella IDs | `DOC`/`SVC` (P1-P3) | Update `docs/reviews/<slug>.md` (v1.6.0 `1 ID = 1 Row`) first. |
 | **Cleanup & Closure** | Lingering `scratch/agy-squad/squad-*`, workers, `monitor`, or tasks | `SVC` (P2) | Run `finalize`, update the review ledger, then `prune --records <record.json>=<accepted-sha256> --clean-records`, wake same cohort for recheck, pass [`swarm-governance` Section 5](../../swarm-governance/SKILL.md#5-runtime-closure-checklist-pre-handoff-gate). |

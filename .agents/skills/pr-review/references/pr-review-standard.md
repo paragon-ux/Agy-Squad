@@ -1,6 +1,6 @@
 # Agy-Squad PR Review Standard
 
-Version: 1.5.0 | Status: Active workflow standard | Established: 2026-11-08
+Version: 1.6.0 | Status: Active workflow standard | Established: 2026-11-08
 
 Reviews must make coverage, reasoning, findings, and evidence inspectable by category. Passing tests, polished docs, and prior approvals never prove architectural conformance. Standard changes require a version bump and rationale; reviewers cannot silently omit or weaken a category.
 
@@ -8,7 +8,7 @@ Reviews must make coverage, reasoning, findings, and evidence inspectable by cat
 
 Record at the top of the report:
 
-- Repository, PR URL/target, review date, reviewer, standard (`1.5.0`), base/head SHAs, and uncommitted dirty delta.
+- Repository, PR URL/target, review date, reviewer, standard (`1.6.0`), base/head SHAs, and uncommitted dirty delta.
 - Append-only **Session Provenance** table: `Session # | Operator Conversation ID | Parent Session | Date | Base..Head + Working-Tree State | Skill / Topology Invoked`.
 - Exact commit/tree run by each CI job (distinguish PR head from merge commit), changed-file inventory, unchanged dependencies examined, available evidence (sources, docs/ADRs, prior review, transcript, local runs, cross-platform CI), and explicit exclusions.
 
@@ -57,7 +57,7 @@ Keep all 3 triage buckets even when empty; escalate P0 emergencies explicitly. S
 ## 5. Required finding record
 
 - **`1 ID = 1 Row / Record`:** Assign one stable ID per independently remediable defect (e.g., `MCP-001`) and preserve IDs across revisions. Umbrella IDs, range IDs (`TEST-2..4`), combined rows (`A & B`), and silent omissions are prohibited because pruned loose reports leave this report as the sole record. Merge only exact duplicates (noting aliases in parentheses).
-- **Readability & backticks:** Keep prose and tables clean. Use inline backticks only for code identifiers, paths (`path#L10-L20`), flags, commands, and verdicts quoted inside prose; never wrap plain numbers, English statuses, or multi-sentence quotes. Standalone machine-parsed `Content Verdict:`, `Integrity Verdict:`, `Target Squad:`, and `Evidence Digest:` declaration lines must NEVER wrap the declaration (or verdict token) in backticks (use plain text or balanced `**...**` emphasis only).
+- **Readability & backticks:** Keep prose and tables clean. Use inline backticks only for code identifiers, paths (`path#L10-L20`), flags, commands, and verdicts quoted inside prose; never wrap plain numbers, English statuses, or multi-sentence quotes. Standalone machine-parsed `Content Verdict:`, `Work Verdict:`, `Integrity Verdict:`, `Target Squad:`, and `Evidence Digest:` declaration lines must NEVER wrap the declaration (or verdict token) in backticks (use plain text or balanced `**...**` emphasis only).
 - **Six canonical statuses:** Open (Pre-Remediation), Closed, Residual (Open), Closed (Post-Remediation), Deferred / Won't Fix, Closed (By Design) (+ Informational in Section 8). Route the last 4 + Informational **exclusively to Section 8** (never Sections 4-7, Section 9, or buried inside a Closed row).
 
 **Tiered density:**
@@ -82,7 +82,7 @@ Keep all 3 triage buckets even when empty; escalate P0 emergencies explicitly. S
 - Separate source inspection, reproduction, local runs, and CI logs; label unexecuted expectations as source-derived with repro steps.
 - Inspect test assertions (names and green summaries never prove a guarantee). Never inherit prior verdicts; explicitly accept, revise, or reject carried findings.
 - State assumptions, gaps, and unavailable artifacts; never claim to have read unexamined files.
-- *When reviewing `Agy-Squad` itself:* also check JSON-RPC/`AGY_MAX_STDIO_PAYLOAD_BYTES` framing, `O_NOFOLLOW`/realpath/fd containment, `TypeName`/`workspace: "inherit"` guards, `<= 500` B handoff/verdict/`Evidence Digest`/bundle checks, and real stdio/CLI subprocess parity.
+- *When reviewing `Agy-Squad` itself:* also check JSON-RPC/`AGY_MAX_STDIO_PAYLOAD_BYTES` framing, `O_NOFOLLOW`/realpath/fd containment, `TypeName`/`workspace: "inherit"` guards, `<= 500` B handoff/verdict/`Evidence Digest`/bundle checks, work-evidence trace checks (`audit-check` opened files, citation line validity, read-before-write order), and real stdio/CLI subprocess parity.
 
 ## 7. Verdict and closure
 
@@ -106,6 +106,7 @@ Save to `docs/reviews/<review-slug>.md` when the repo adopts `docs/reviews/` or 
 
 | Ver | Date | Summary |
 | --- | --- | --- |
+| 1.6.0 | 2026-11-25 | Added `Work Verdict: VERIFIED \| NOT VERIFIED` alongside legacy `Integrity Verdict: CLEAN \| INTEGRITY VIOLATION`, reframing the Wave-3 auditor around mechanical work evidence (`audit-check`) plus source claim spot-checks while retaining `Evidence Digest` and SHA-256 report binding; `v1.5.0` and `v1.4.0` ledgers remain valid. |
 | 1.5.0 | 2026-11-19 | Added mandatory 11th category `4.11 SEC` (ReDoS, CI permissions, trust boundaries); `v1.4.0` ledgers remain valid. |
 | 1.4.0 | 2026-11-14 | Added Sections 1-8 cross-section ID checks, `Evidence Digest`, `integrityAudits[]`, `auditPolicy`, and audit slots. |
 | 1.3.0 | 2026-11-08 | Enforced `1 ID = 1 Row`, 6-status enum, P3 table density, Session Provenance, Section 8, and Section 9. |

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle, verifyWorkerTraces } from "../mcp/handoffs.mjs";
@@ -3126,7 +3126,7 @@ try {
       for (const recSummary of batchInitOut.records) {
         assert.equal(recSummary.record, undefined);
         assert.ok(recSummary.auditSwarmAdd && recSummary.auditSwarmAdd.action === "add");
-        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`sender=${coordUuid}`));
+        assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`--coord-id ${coordUuid}`));
         assert.match(recSummary.auditSwarmAdd.brief, /read_board\{seqs: \[14, 19\]\} only\./);
         assert.match(recSummary.auditSwarmAdd.brief, new RegExp(`Evidence Digest: ${recSummary.evidenceDigest}`));
         assert.doesNotMatch(recSummary.auditSwarmAdd.brief, /<coordId>|<handoffSeqs|<sha256>|<rel-record>|<rel-slot>/);
@@ -3395,12 +3395,13 @@ try {
       assert.equal(cmInit.status, 0, `FIT-010: non-scratch plan/handoffs/record must pass readOnlyBaseline: ${cmInit.stderr}`);
       const cmInitOut = JSON.parse(cmInit.stdout);
       assert.match(cmInitOut.auditSwarmAdd.brief, /agy-squad audit-check --workspace .* --record meta\/record\.json --coord-id 11111111-2222-3333-4444-555555555555/, "ROI-009: bound auditSwarmAdd must include audit-check with bound record & coordId");
-      assert.match(cmInitOut.auditSwarmAdd.brief, new RegExp(`health --id ${cmMappedUuid} --json`), "ROI-009: bound auditSwarmAdd must interpolate mapped worker UUIDs in place of u1,u2");
+      assert.match(cmInitOut.auditSwarmAdd.brief, /agy-squad verdict --workspace .* --work/, "Bound auditSwarmAdd must reference verdict --work");
+      assert.match(cmInitOut.auditSwarmAdd.brief, /Work Verdict: VERIFIED \| NOT VERIFIED/);
       const cmSavedRec = JSON.parse(fs.readFileSync(path.join(s3Repo, "meta/record.json"), "utf8"));
       assert.equal(cmSavedRec.assignments[0].workerName, "custommetasec", "FLOW-011: workerName must persist alongside mapped UUID");
       assert.ok(Array.isArray(cmSavedRec.baselineIgnorePaths) && cmSavedRec.baselineIgnorePaths.includes("meta/handoffs.json"));
 
-      // FLOW-011: wrong @workerName under --id-map UUID MUST fail audit-check, and truncated transcript.jsonl hydrated from transcript_full.jsonl + grep_search SearchPath MUST pass
+      // FLOW-011: wrong @workerName under --id-map UUID flags UNVERIFIED_TRACE + MISSING_MENTION without hard-blocking, and hydrated transcript_full.jsonl + grep_search SearchPath passes cleanly
       const cmLogDir = path.join(s3Brain, cmMappedUuid, ".system_generated", "logs");
       fs.mkdirSync(cmLogDir, { recursive: true });
       fs.writeFileSync(
@@ -3413,7 +3414,11 @@ try {
         [agySquadCli, "audit-check", "--workspace", s3Repo, "--record", "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
         { cwd: s3Parent, encoding: "utf8" }
       );
-      assert.equal(wrongMentionRes.status, 1, "FLOW-011: --id-map UUID must still enforce @<workerName> in Step 1");
+      assert.equal(wrongMentionRes.status, 0, "Step-1 mismatch degrades to UNVERIFIED_TRACE flag instead of hard-blocking");
+      const wrongMentionJson = JSON.parse(wrongMentionRes.stdout);
+      assert.equal(wrongMentionJson.workers[0].step1Ok, false);
+      assert.equal(wrongMentionJson.workers[0].trace.status, "unverified");
+      assert.ok(wrongMentionJson.workers[0].flags.includes("UNVERIFIED_TRACE"));
       assert.match(wrongMentionRes.stdout, /MISSING_MENTION \(@custommetasec\)/);
 
       // Now test truncated_fields in transcript.jsonl hydrated from transcript_full.jsonl + grep_search SearchPath + fenced code citation ignored
@@ -3573,9 +3578,10 @@ try {
         [agySquadCli, "audit-check", "--workspace", s3Repo, "meta/record.json", "--coord-id", coordUuid, "--brain-dir", s3Brain],
         { cwd: s3Parent, encoding: "utf8" }
       );
-      assert.equal(sec02RedirRes.status, 1, "SEC-02: shell > redirection on readOnly cohort must fail closed");
+      assert.equal(sec02RedirRes.status, 0, "SEC-02: shell > redirection emits SHELL_WRITE_DETECTED flag (baseline enforces repo mutations)");
       const sec02Json = JSON.parse(sec02RedirRes.stdout);
-      assert.ok(sec02Json.workers[0].unauthorizedWrites.includes("run_command"));
+      assert.ok(sec02Json.workers[0].flags.includes("SHELL_WRITE_DETECTED"));
+      assert.ok(sec02Json.workers[0].flags.includes("CITED_UNOPENED"));
       assert.deepEqual(sec02Json.workers[0].unverifiedCitations, ["src/app.js"], "SEC-02: redirected output target must not be credited as grounded read");
 
       fs.writeFileSync(
@@ -3766,17 +3772,24 @@ try {
         return verifyWorkerTraces(tw, rec, { coordId: "C", traces: { w1: tp } });
       };
       const cmd = (CommandLine, n) => trace({ tool_calls: [{ name: "run_command", arguments: { CommandLine } }] }, n);
-      assert.equal(cmd("git grep -n patch -- mcp", "a").ok, true);
-      assert.equal(cmd("ls | grep rm", "b").ok, true);
-      assert.equal(cmd("rm file", "c").ok, false);
-      assert.equal(cmd("ls mcp > scratch/ls.txt", "d").ok, true);
-      assert.equal(cmd("ls mcp > src/x", "e").ok, false);
-      assert.equal(cmd("node -e 'require(\"fs\").writeFileSync(\"x\",\"y\")'", "f").ok, false);
-      assert.equal(cmd("git checkout .", "g").ok, false);
+      assert.equal(cmd("git grep -n patch -- mcp", "a").flagsCount, 0);
+      assert.equal(cmd("ls | grep rm", "b").flagsCount, 0);
+      const cRm = cmd("rm file", "c");
+      assert.equal(cRm.ok, true);
+      assert.ok(cRm.workers[0].flags.includes("SHELL_WRITE_DETECTED"));
+      assert.equal(cmd("ls mcp > scratch/ls.txt", "d").flagsCount, 0);
+      assert.ok(cmd("ls mcp > src/x", "e").workers[0].flags.includes("SHELL_WRITE_DETECTED"));
+      assert.ok(cmd("node -e 'require(\"fs\").writeFileSync(\"x\",\"y\")'", "f").workers[0].flags.includes("SHELL_WRITE_DETECTED"));
+      assert.ok(cmd("git checkout .", "g").workers[0].flags.includes("SHELL_WRITE_DETECTED"));
       const meta = { Summary: "a", UserFacing: false, RequestFeedback: false };
-      assert.equal(trace({ tool_calls: [{ name: "write_file", arguments: { Path: path.join(tw, "src/brain/x.js"), Content: "x", ArtifactMetadata: meta } }] }, "h").ok, false);
+      const brainSpoof = trace({ tool_calls: [{ name: "write_file", arguments: { Path: path.join(tw, "src/brain/x.js"), Content: "x", ArtifactMetadata: meta } }] }, "h");
+      assert.equal(brainSpoof.ok, false);
+      assert.ok(brainSpoof.workers[0].flags.includes("REPO_WRITE_IN_READ_ONLY"));
       const trunc = trace({ truncated_fields: ["tool_calls"], tool_calls: [{ name: "run_command", arguments: { CommandLine: "ls" } }] }, "i");
-      assert.ok(trunc.anomalies.some(a => a.includes("TRUNCATED_STEP_UNRESOLVED")));
+      assert.equal(trunc.ok, true);
+      assert.equal(trunc.workers[0].trace.status, "unverified");
+      assert.ok(trunc.workers[0].flags.includes("UNVERIFIED_TRACE"));
+      assert.ok(trunc.warnings.some(w => w.includes("TRUNCATED_STEP_UNRESOLVED")));
       const brain = path.join(tw, "brain");
       for (const id of ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]) {
         const d = path.join(brain, id, ".system_generated", "logs");
@@ -3785,8 +3798,10 @@ try {
       }
       const srec = { squadId: "s", readOnly: true, assignments: [{ conversationId: "specialist-1", report: "scratch/r.md" }] };
       const noCoord = verifyWorkerTraces(tw, srec, { brainRoot: brain });
-      assert.ok(noCoord.anomalies.some(a => a.includes("MISSING_COORD_ID")));
-      assert.ok(!verifyWorkerTraces(tw, srec, { brainRoot: brain, coordId: "C" }).anomalies.some(a => a.includes("MISSING_TRACE")));
+      assert.equal(noCoord.ok, true);
+      assert.equal(noCoord.workers[0].trace.status, "missing");
+      assert.ok(noCoord.workers[0].flags.includes("NO_TRACE"));
+      assert.equal(verifyWorkerTraces(tw, srec, { brainRoot: brain, coordId: "C" }).workers[0].trace.status, "ok");
 
       // Compact transcript.jsonl stores tool args as JSON-encoded strings (real brain log shape)
       const compactWs = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-trace-compact-")));
@@ -3928,7 +3943,182 @@ try {
         const compactBad = verifyWorkerTraces(compactWs, compactRec, { coordId: "C", traces: { w1: compactWritePath } });
         assert.equal(compactBad.ok, false);
         assert.ok(compactBad.workers[0].unauthorizedWrites.includes("src/a.js"));
-        assert.ok(compactBad.workers[0].unauthorizedWrites.includes("run_command"));
+        assert.ok(compactBad.workers[0].flags.includes("REPO_WRITE_IN_READ_ONLY"));
+        assert.ok(compactBad.workers[0].flags.includes("SHELL_WRITE_DETECTED"));
+
+        // Work-evidence fixtures: ranges, shell readers, dir-only & ls . gaming, bad citation lines, report-before-reads, citation-free report, delegated subagent, unknown format, external write
+        fs.mkdirSync(path.join(compactWs, "src", "sub"), { recursive: true });
+        const longFile = path.join(compactWs, "src", "long.js");
+        fs.writeFileSync(longFile, Array.from({ length: 40 }, (_, i) => `export const l${i + 1} = ${i + 1};`).join("\n") + "\n", "utf8");
+        const subFile = path.join(compactWs, "src", "sub", "helper.js");
+        fs.writeFileSync(subFile, "export const helper = true;\nexport const bar = 2;\n", "utf8");
+
+        const runEvidence = (reportText, steps, tag) => {
+          fs.writeFileSync(reportFile, reportText, "utf8");
+          const tp = path.join(compactWs, `ev-${tag}.jsonl`);
+          fs.writeFileSync(tp, steps.map(s => (typeof s === "string" ? s : JSON.stringify(s))).join("\n") + "\n", "utf8");
+          return verifyWorkerTraces(compactWs, compactRec, { coordId: "C", brainRoot: compactBrain, traces: { w1: tp } });
+        };
+
+        // 1. Honest worker with partial read_file range -> records range, sha256, writtenAfterFirstRead, 0 flags
+        const evHonest = runEvidence(
+          "Verified src/long.js:10-30 cleanly.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "read_file", args: { Path: JSON.stringify(longFile), StartLine: "10", EndLine: "30" } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "honest"
+        );
+        assert.equal(evHonest.ok, true);
+        assert.equal(evHonest.recommendedWorkVerdict, "VERIFIED");
+        assert.deepEqual(evHonest.workers[0].flags, []);
+        assert.equal(evHonest.workers[0].report.writtenAfterFirstRead, true);
+        assert.match(evHonest.workers[0].report.sha256, /^[0-9a-f]{64}$/);
+        assert.deepEqual(evHonest.workers[0].openedFiles, [{ path: "src/long.js", kinds: ["read_file"], ranges: [[10, 30]] }]);
+
+        // 2. Shell-only readers (cat, sed, rtk read, cd + head, quoted-pipe grep) ground citations with 0 flags
+        const evShell = runEvidence(
+          "Checked src/a.js:1, src/long.js:5, and src/sub/helper.js:2.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            {
+              step_index: 1,
+              tool_calls: [
+                { name: "run_command", args: { CommandLine: JSON.stringify("cat src/a.js && sed -n 1,10p src/long.js && cd src/sub && head -n 5 helper.js") } },
+                { name: "run_command", args: { CommandLine: JSON.stringify("grep -rnE \"helper|bar\" src/sub") } }
+              ]
+            },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "shell"
+        );
+        assert.equal(evShell.ok, true);
+        assert.deepEqual(evShell.workers[0].flags, []);
+        assert.equal(evShell.workers[0].report.writtenAfterFirstRead, true);
+        assert.ok(evShell.workers[0].openedFiles.some(f => f.path === "src/a.js" && f.kinds.includes("shell_read")));
+        assert.ok(evShell.workers[0].openedFiles.some(f => f.path === "src/sub/helper.js" && f.kinds.includes("shell_read")));
+
+        // 3. Directory-only listing (list_dir / ls src) does NOT ground citations -> CITED_UNOPENED
+        const evDirOnly = runEvidence(
+          "Reviewed src/a.js:1 thoroughly.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "list_dir", args: { DirectoryPath: JSON.stringify(path.join(compactWs, "src")) } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "dironly"
+        );
+        assert.equal(evDirOnly.ok, true);
+        assert.ok(evDirOnly.workers[0].flags.includes("CITED_UNOPENED"));
+        assert.ok(evDirOnly.workers[0].flags.includes("REPORT_BEFORE_READS"));
+        assert.deepEqual(evDirOnly.workers[0].listedDirs, [{ path: "src", kinds: ["dir_list"] }]);
+
+        // 4. Adversarial `ls .` gaming does NOT ground citations -> CITED_UNOPENED
+        const evLsDot = runEvidence(
+          "Audited src/a.js:1 and src/long.js:10.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "run_command", args: { CommandLine: JSON.stringify("ls .") } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "lsdot"
+        );
+        assert.equal(evLsDot.ok, true);
+        assert.ok(evLsDot.workers[0].flags.includes("CITED_UNOPENED"));
+        assert.deepEqual(evLsDot.workers[0].citedUnopened, ["src/a.js", "src/long.js"]);
+
+        // 5. Bad citation line number (beyond file length & inverted range) -> BAD_CITATION_LINE
+        const evBadLine = runEvidence(
+          "Bug at src/a.js:999 and src/long.js:30-10.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            {
+              step_index: 1,
+              tool_calls: [
+                { name: "read_file", args: { Path: JSON.stringify(srcFile) } },
+                { name: "read_file", args: { Path: JSON.stringify(longFile) } }
+              ]
+            },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "badline"
+        );
+        assert.equal(evBadLine.ok, true);
+        assert.ok(evBadLine.workers[0].flags.includes("BAD_CITATION_LINE"));
+        assert.equal(evBadLine.workers[0].report.invalidCitations.length, 2);
+        assert.equal(evBadLine.workers[0].report.invalidCitations[0].reason, "line_out_of_range");
+        assert.equal(evBadLine.workers[0].report.invalidCitations[1].reason, "invalid_range");
+
+        // 6. Report written before reads -> REPORT_BEFORE_READS
+        const evBeforeRead = runEvidence(
+          "Looked at src/a.js:1.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] },
+            { step_index: 2, tool_calls: [{ name: "read_file", args: { Path: JSON.stringify(srcFile) } }] }
+          ],
+          "beforeread"
+        );
+        assert.equal(evBeforeRead.ok, true);
+        assert.equal(evBeforeRead.workers[0].report.writtenAfterFirstRead, false);
+        assert.ok(evBeforeRead.workers[0].flags.includes("REPORT_BEFORE_READS"));
+
+        // 7. Fabricated report with zero file:line citations (code sees citedFilesCount 0 and relies on LLM spot-check; still catches REPORT_BEFORE_READS if zero reads)
+        const evNoCites = runEvidence(
+          "Everything looks great, architecture is solid and all modules passed.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "read_file", args: { Path: JSON.stringify(srcFile) } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "nocites"
+        );
+        assert.equal(evNoCites.ok, true);
+        assert.equal(evNoCites.workers[0].citedFilesCount, 0);
+        assert.equal(evNoCites.workers[0].flags.includes("CITED_UNOPENED"), false);
+
+        // 8. Worker delegating reading to subagent -> UNVERIFIED_TRACE (not CITED_UNOPENED, not hard violation)
+        const evDelegated = runEvidence(
+          "Subagent found issue at src/long.js:15.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "invoke_subagent", args: { Role: JSON.stringify("Reader"), Prompt: JSON.stringify("Read src/long.js") } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "delegated"
+        );
+        assert.equal(evDelegated.ok, true);
+        assert.equal(evDelegated.workers[0].delegatedSubagents, 1);
+        assert.equal(evDelegated.workers[0].trace.status, "unverified");
+        assert.ok(evDelegated.workers[0].flags.includes("UNVERIFIED_TRACE"));
+        assert.equal(evDelegated.workers[0].flags.includes("CITED_UNOPENED"), false);
+
+        // 9. Unknown transcript format degrades to UNVERIFIED_TRACE without violation
+        const evUnknown = runEvidence(
+          "Checked src/a.js:1.\n",
+          ['{"unrelated": true, "schema": 99}'],
+          "unknown"
+        );
+        assert.equal(evUnknown.ok, true);
+        assert.equal(evUnknown.workers[0].trace.status, "unverified");
+        assert.equal(evUnknown.workers[0].trace.reason, "unrecognized_format");
+        assert.ok(evUnknown.workers[0].flags.includes("UNVERIFIED_TRACE"));
+
+        // 10. External write (/tmp) on read-only worker is EXTERNAL_WRITE flag only (not hard-block)
+        const evExternalWrite = runEvidence(
+          "Checked src/a.js:1.\n",
+          [
+            { step_index: 0, content: "sender=C @w1 Audit" },
+            { step_index: 1, tool_calls: [{ name: "read_file", args: { Path: JSON.stringify(srcFile) } }] },
+            { step_index: 2, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(path.join(os.tmpdir(), "agy-ext-note.txt")), Content: JSON.stringify("note") } }] },
+            { step_index: 3, tool_calls: [{ name: "write_file", args: { Path: JSON.stringify(reportFile), Content: JSON.stringify("ok") } }] }
+          ],
+          "extwrite"
+        );
+        assert.equal(evExternalWrite.ok, true);
+        assert.ok(evExternalWrite.workers[0].flags.includes("EXTERNAL_WRITE"));
+        assert.equal(evExternalWrite.workers[0].flags.includes("REPO_WRITE_IN_READ_ONLY"), false);
       } finally {
         fs.rmSync(compactWs, { recursive: true, force: true });
       }
@@ -3982,7 +4172,7 @@ try {
       assert.equal(rootRecord.assignments[0].worktreeRoot, worktree);
 
       assert.throws(() => collectReportSlots(tmp, { plan, handoffs: [{ sender: "one", message: `READY ${slot} - wt="${path.dirname(tmp)}" checked` }] }), /Untrusted/);
-      const record = { squadId: "own", readOnly: true, assignments: [{ conversationId: "one", report: slot, worktreeRoot: worktree }] };
+      const record = { squadId: "own", readOnly: true, handoffs, assignments: [{ conversationId: "one", report: slot, worktreeRoot: worktree }] };
       put(slot, "Read src/a.js:1\n");
       const logdir = path.join(tmp, "brain", "session", ".system_generated", "logs");
       fs.mkdirSync(logdir, { recursive: true });
@@ -4000,9 +4190,10 @@ try {
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }]).ok, false);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }], { ...record, readOnly: false }).ok, true);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(tmp, "src/a.js") } }], { ...record, readOnly: false }).ok, false);
-      assert.equal(audit([{ name: "run_command", args: { CommandLine: `echo hijack > "${path.join(worktree, sibling)}"` } }]).ok, false);
+      assert.ok(audit([{ name: "run_command", args: { CommandLine: `echo hijack > "${path.join(worktree, sibling)}"` } }]).workers[0].flags.includes("SHELL_WRITE_DETECTED"));
       const metadata = { Summary: "notes", UserFacing: false, RequestFeedback: false };
       const ownNote = path.join(tmp, "brain/session/note.md");
+      assert.equal(audit([{ name: "write_file", args: { Path: pathToFileURL(ownNote).href, ArtifactMetadata: metadata } }]).ok, true);
       assert.equal(audit([{ name: "write_file", args: { Path: ownNote, ArtifactMetadata: metadata } }]).ok, true);
       for (const bad of [false, "false", null, "null", {}, { anything: true }]) assert.equal(audit([{ name: "write_file", args: { Path: ownNote, ArtifactMetadata: bad } }]).ok, false);
       for (const target of [path.join(tmp, "brain/other/note.md"), tracePath]) assert.equal(audit([{ name: "write_file", args: { Path: target, ArtifactMetadata: metadata } }]).ok, false);
@@ -4122,16 +4313,147 @@ try {
       assert.equal(fs.existsSync(path.join(tmp, slot)), true);
       fs.writeFileSync(tracePath, JSON.stringify({ step_index: 0, content: "x".repeat(20000) }) + "\n" + JSON.stringify({ step_index: 1, content: "sender=C @one" }) + "\n");
       assert.equal(verifyWorkerTraces(tmp, record, { coordId: "C", brainRoot: path.join(tmp, "brain") }).ok, true);
-      const stress = spawnSync(process.execPath, ["--input-type=module", "-e", `import assert from 'node:assert/strict'; import {scanShellCommand,shellCommandWrites} from ${JSON.stringify(new URL("../mcp/shell.mjs", import.meta.url).href)}; for(const token of ['git ','open(a','require(','Path(']) { const start=performance.now(); shellCommandWrites(scanShellCommand(token.repeat(20000)),()=>false); assert.ok(performance.now()-start<200, token); }`], { encoding: "utf8", timeout: 5000 });
+      const stress = spawnSync(process.execPath, ["--input-type=module", "-e", `import assert from 'node:assert/strict'; import {scanShellCommand,shellCommandWrites} from ${JSON.stringify(new URL("../mcp/shell.mjs", import.meta.url).href)}; for(const token of ['git ','open(a','require(','Path(']) { const start=performance.now(); shellCommandWrites(scanShellCommand(token.repeat(20000)),()=>false); assert.ok(performance.now()-start<50, token); }`], { encoding: "utf8", timeout: 5000 });
       assert.equal(stress.status, 0, stress.stderr);
       for (const cmd of [["digest", "--coord-id", "C", "missing.json"], ["digest", "--trace", "one=x", "missing.json"], ["audit-check", "--coord-id", "bad;touch-x", "missing.json"], ["bundle-init", "--plan", "missing.json", "--coord-id", "bad;touch-x"]]) {
         const result = spawnSync(process.execPath, [agySquadCli, ...cmd], { cwd: tmp, encoding: "utf8" });
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, /require --verify-traces|Invalid --coord-id/);
       }
+      put(slot, `Read ${pathToFileURL(path.join(worktree, 'src/a.js')).href}#L1\n`);
+      const uriRead = { name: 'read_file', args: { Path: pathToFileURL(path.join(worktree, 'src/a.js')).href } };
+      assert.deepEqual(audit([uriRead]).workers[0].citedUnopened, []);
+      assert.equal(audit([uriRead]).workers[0].citedFilesCount, 1);
+      git(['worktree', 'remove', '--force', worktree]);
+      const cleaned = audit([uriRead]);
+      assert.equal(cleaned.workers[0].citedFilesCount, 1);
+      assert.deepEqual(cleaned.workers[0].citedUnopened, []);
+      assert.equal(audit([{ name: 'write_file', args: { Path: pathToFileURL(path.join(worktree, 'src/a.js')).href } }]).ok, false);
     } finally {
       fs.rmSync(worktree, { recursive: true, force: true });
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // Evidence filters, shell ordering and filesystem containment are public audit contracts.
+  {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agy-work-evidence-')));
+    const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agy-work-outside-')));
+    try {
+      const put = (rel, value) => { const dest = path.join(tmp, rel); fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, value); };
+      const slot = 'scratch/agy-squad/squad-evidence/specialist-1/report.md';
+      const trace = path.join(tmp, 'brain/session/.system_generated/logs/transcript.jsonl');
+      fs.mkdirSync(path.dirname(trace), { recursive: true });
+      const rec = { squadId: 'evidence', readOnly: true, assignments: [{ conversationId: 'w1', report: slot }] };
+      for (const rel of ['src/a.js', 'src/settings.json', 'src/UPPER.JS', 'src/nested/b.js', 'src/vendor/c.js', '[2026]/a.js', 'legacy/a.js']) put(rel, 'line1\nline2\n');
+      put('*.js', 'option-value\n');
+      fs.writeFileSync(path.join(outside, 'secret.txt'), 'private\n');
+      const run = (calls, citation = 'src/a.js:1', record = rec) => {
+        put(slot, `Read ${citation}\n`);
+        fs.writeFileSync(trace, [JSON.stringify({ step_index: 0, content: 'sender=C @w1' }), JSON.stringify({ step_index: 1, tool_calls: calls })].join('\n') + '\n');
+        return verifyWorkerTraces(tmp, record, { coordId: 'C', traces: { w1: trace } });
+      };
+      const shell = (command, cwd) => ({ name: 'run_command', args: { CommandLine: command, ...(cwd ? { Cwd: cwd } : {}) } });
+      const writeReport = { name: 'write_file', args: { Path: path.join(tmp, slot) } };
+      const uncovered = (command, citation) => run([shell(command)], citation).workers[0].citedUnopened;
+      for (const command of ["rg -g '*.js' line1 src", "rg --glob='*.js' line1 src", 'rg -t js line1 src', 'grep --include=*.js line1 src', "grep -E 'line1' src", 'rg -A 2 -m 3 --max-depth 2 line1 src']) {
+        assert.deepEqual(uncovered(command, 'src/a.js:1'), [], command);
+      }
+      for (const command of ["rg -g '*.js' line1 src", 'rg -t js line1 src', 'grep --include=*.js line1 src']) assert.deepEqual(uncovered(command, 'src/settings.json:1'), ['src/settings.json'], command);
+      for (const command of ["rg -g '*.js' line1 src", 'rg --encoding src/a.js line1 missing', 'rg --max-depth src/a.js line1 missing', 'rg -e src/a.js missing', 'rg -f src/a.js missing']) {
+        assert.equal(run([shell(command)], '*.js:1').workers[0].openedFiles.some(entry => entry.path === '*.js'), false, command);
+      }
+      assert.deepEqual(uncovered("rg -g '!*.js' line1 src", 'src/a.js:1'), ['src/a.js']);
+      assert.deepEqual(uncovered("rg --iglob '*.js' line1 src", 'src/UPPER.JS:1'), []);
+      assert.deepEqual(uncovered('rg -T js line1 src', 'src/a.js:1'), ['src/a.js']);
+      assert.deepEqual(uncovered('grep --exclude-dir=vendor line1 src', 'src/vendor/c.js:1'), ['src/vendor/c.js']);
+      assert.deepEqual(uncovered("rg -g 'src/**/*.js' line1 src", 'src/nested/b.js:1'), []);
+      const native = includes => ({ name: 'grep_search', args: { SearchPath: path.join(tmp, 'src'), Includes: includes } });
+      assert.deepEqual(run([native(['*.js'])], 'src/settings.json:1').workers[0].citedUnopened, ['src/settings.json']);
+      assert.deepEqual(run([native(['*.js']), native(['*.json'])], 'src/settings.json:1').workers[0].citedUnopened, []);
+      assert.deepEqual(run([shell('rg line1 src'), native(['*.js'])], 'src/settings.json:1').workers[0].citedUnopened, []);
+      assert.deepEqual(run([native(['*.js']), shell('rg line1 src')], 'src/settings.json:1').workers[0].citedUnopened, []);
+      for (const command of ['rg "x => y" src', 'rg "=>" src', "awk '$1 > 0' src/a.js", "sed -e '1p' src/a.js"]) {
+        const result = run([shell(command), writeReport]);
+        assert.deepEqual(result.workers[0].citedUnopened, [], command);
+        assert.equal(result.workers[0].report.writtenAfterFirstRead, true, command);
+        assert.equal(result.workers[0].flags.includes('SHELL_WRITE_DETECTED'), false, command);
+      }
+      for (const command of ['rg line1', 'rg line1 .', 'git grep line1', 'git diff', 'git log', 'git show']) {
+        const result = run([shell(command), writeReport]);
+        assert.equal(result.workers[0].report.writtenAfterFirstRead, true, command);
+        assert.deepEqual(result.workers[0].citedUnopened, ['src/a.js'], command);
+        assert.equal(result.workers[0].searchedDirs?.some(entry => entry.path === '.'), undefined, command);
+      }
+      const quotedReport = JSON.stringify(path.join(tmp, slot));
+      for (const command of [`cat src/a.js; echo done > ${quotedReport}`, `cd src && cat a.js; echo done > ${quotedReport}`, `cat src/a.js > '/dev/null'; echo done > ${quotedReport}`]) {
+        const result = run([shell(command)]);
+        assert.equal(result.workers[0].report.writtenAfterFirstRead, true, command);
+        assert.equal(result.workers[0].flags.includes('SHELL_WRITE_DETECTED'), false, command);
+      }
+      assert.equal(run([shell(`echo done > ${quotedReport}; cat src/a.js`)]).workers[0].report.writtenAfterFirstRead, false);
+      assert.equal(run([shell(`cat a.js; echo done > ${quotedReport}`, path.join(tmp, 'src'))]).workers[0].report.writtenAfterFirstRead, true);
+      for (const call of [shell(`cd ${JSON.stringify(outside)} && git show`), shell('git show', outside)]) {
+        const result = run([call, writeReport]);
+        assert.equal(result.workers[0].report.writtenAfterFirstRead, false);
+      }
+      for (const citation of ['[2026]/a.js:1', '[legacy/a.js]:1', '[legacy/a.js:1]']) {
+        const target = citation.includes('2026') ? '[2026]/a.js' : 'legacy/a.js';
+        const result = run([{ name: 'read_file', args: { Path: path.join(tmp, target) } }], citation);
+        assert.equal(result.workers[0].citedFilesCount, 1, citation);
+        assert.deepEqual(result.workers[0].citedUnopened, [], citation);
+      }
+      fs.symlinkSync(outside, path.join(tmp, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+      const leak = run([shell('cat escape/*.txt')], 'escape/secret.txt:500');
+      assert.equal(leak.workers[0].citedFilesCount, 0);
+      assert.equal(leak.workers[0].report.invalidCitations, undefined);
+      assert.deepEqual(leak.workers[0].openedFiles, []);
+      assert.equal(run([shell('git -C escape show'), writeReport]).workers[0].report.writtenAfterFirstRead, false);
+      assert.throws(() => run([], 'secret.txt:500', { ...rec, assignments: [{ ...rec.assignments[0], worktreeRoot: outside }] }), /Untrusted worker worktree/);
+      put('large.txt', 'x'.repeat(8 * 1024 * 1024 + 1));
+      const oversized = run([], 'large.txt:999');
+      assert.equal(oversized.workers[0].citedFilesCount, 0);
+      assert.equal(oversized.workers[0].report.invalidCitations, undefined);
+      assert.throws(() => readOpenedFileWithStat(path.join(tmp, 'large.txt'), 'large.txt', { maxBytes: 8 * 1024 * 1024 }), error => error.code === 'EFBIG');
+      const globStart = performance.now();
+      assert.deepEqual(uncovered(`rg -g '${'*a'.repeat(20000)}' line1 src`, 'src/a.js:1'), ['src/a.js']);
+      assert.ok(performance.now() - globStart < 50, 'Oversized glob must fail closed within the scanner budget');
+      const goodRead = { name: 'read_file', args: { Path: path.join(tmp, 'src/a.js') } };
+      const clean = run([goodRead, writeReport]);
+      assert.equal(clean.recommendedWorkVerdict, 'VERIFIED');
+      assert.equal(clean.recommendedVerdict, 'CLEAN');
+      const advisory = run([writeReport]);
+      assert.equal(advisory.ok, true);
+      assert.equal(advisory.recommendedWorkVerdict, 'REVIEW_REQUIRED');
+      assert.equal(advisory.recommendedVerdict, 'REVIEW_REQUIRED');
+      const badLine = run([goodRead], 'src/a.js:500');
+      assert.equal(badLine.recommendedWorkVerdict, 'REVIEW_REQUIRED');
+      const hard = run([{ name: 'write_file', args: { Path: path.join(tmp, 'src/a.js') } }]);
+      assert.equal(hard.ok, false);
+      assert.equal(hard.recommendedWorkVerdict, 'NOT VERIFIED');
+      assert.equal(hard.recommendedVerdict, 'INTEGRITY VIOLATION');
+      const noTrace = verifyWorkerTraces(tmp, rec, { brainRoot: path.join(tmp, 'missing-brain') });
+      assert.equal(noTrace.ok, true);
+      assert.equal(noTrace.recommendedWorkVerdict, 'REVIEW_REQUIRED');
+      const cohort = { ...rec, assignments: [] }, traces = {};
+      for (let i = 0; i < 13; i++) {
+        const worker = `worker-${i}`, report = `scratch/agy-squad/squad-many/specialist-${i + 1}/report.md`;
+        put(report, 'Read src/a.js:1\n');
+        const file = path.join(path.dirname(trace), `worker-${i}.jsonl`);
+        fs.writeFileSync(file, JSON.stringify({ step_index: 0, content: `sender=C @${worker}`, tool_calls: [goodRead] }) + '\n');
+        cohort.assignments.push({ conversationId: worker, report }); traces[worker] = file;
+      }
+      const all = verifyWorkerTraces(tmp, cohort, { coordId: 'C', traces });
+      assert.equal(all.workersChecked, 13); assert.equal(all.workers.length, 13);
+      assert.equal(all.workers[12].worker, 'worker-12');
+      assert.equal(all.recommendedWorkVerdict, 'VERIFIED');
+      run([goodRead, writeReport]);
+      put('record.json', JSON.stringify(rec));
+      const cli = spawnSync(process.execPath, [agySquadCli, 'audit-check', '--workspace', tmp, '--record', 'record.json', '--coord-id', 'C', '--trace', `w1=${trace}`], { cwd: tmp, encoding: 'utf8' });
+      assert.equal(cli.status, 0, cli.stderr);
+      assert.ok(JSON.parse(cli.stdout).workers[0].report.sha256);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true });
     }
   }
 

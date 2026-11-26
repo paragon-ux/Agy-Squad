@@ -1,6 +1,6 @@
 # Evidence Intake for Full Reviews
 
-Procedure for [../SKILL.md](../SKILL.md) under [PR Review Standard v1.5.0](../../pr-review/references/pr-review-standard.md).
+Procedure for [../SKILL.md](../SKILL.md) under [PR Review Standard v1.6.0](../../pr-review/references/pr-review-standard.md).
 
 ## 0. Target Types and Minimum Evidence
 
@@ -32,6 +32,8 @@ git status --porcelain && git diff --stat <base>..HEAD && git diff --name-status
 For PRs, pin URL, base/head, mergeability, and CI commit (PR head vs merge commit). For local runs, record `cwd`, runtime/OS, exact `command`, `exit`, and relevant excerpt.
 
 ## 3. Transcript Protocol (Batch, Never Poll)
+
+For an independent cohort audit, run `agy-squad audit-check` first, then spot-check cited claims against source files. The auditor records `Work Verdict: VERIFIED | NOT VERIFIED`; legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` remains accepted. The auditor does not read other sessions' transcripts directly. The transcript indexing procedure below applies when transcripts are the supplied review evidence.
 
 Index in **one batch pass** (counts by `type`/`source`, user turns, assistant messages, tool calls, errors). For Antigravity traces (standalone JSONL vs optional `Agy-Context-Saver`), follow [dual-path trace inspection](../../swarm-governance/references/bundling-and-wire-format.md#dual-path-trace-inspection).
 

@@ -3,10 +3,10 @@ name: day-one-review
 description: >-
   [Task Spec: cold Day-1 user & ship-readiness review + remediation; no /swarm
   by default] Unguided first-time-user audit and launch remediation on the
-  active repo under Standard v1.5.0 in scratch/day-one-review/.
+  active repo under Standard v1.6.0 in scratch/day-one-review/.
 ---
 
-# Agy-Squad Day-One Review Skill (Standard v1.5.0)
+# Agy-Squad Day-One Review Skill (Standard v1.6.0)
 
 Audit any repo cold as a Day-1 developer launching it tomorrow, then remediate and re-verify.
 

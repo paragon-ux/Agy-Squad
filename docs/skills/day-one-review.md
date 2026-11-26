@@ -4,7 +4,7 @@ Use `day-one-review` when auditing a repository from the perspective of a cold D
 
 - **Source specification:** [`.agents/skills/day-one-review/SKILL.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/day-one-review/SKILL.md)
 - **Protocol reference:** [`day-one-protocol.md`](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/day-one-review/references/day-one-protocol.md)
-- **Governing standard:** [PR Review Standard v1.5.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md)
+- **Governing standard:** [PR Review Standard v1.6.0](https://github.com/paragon-ux/Agy-Squad/blob/main/.agents/skills/pr-review/references/pr-review-standard.md)
 - **Canonical role map & closure gate:** [Roles, skill workflows, and runtime closure](../roles-and-workflows.md)
 
 ## Execution defaults vs. explicit `/swarm` opt-in
@@ -26,7 +26,7 @@ Use `day-one-review` when auditing a repository from the perspective of a cold D
    - Everyday usage inside an unrelated user project (zero checkout assumptions, live CLI/SDK/MCP dogfooding, error clarity, friction)
    - Security and trust boundaries (`4.11 SEC`: execution surface, downloads/checksums, permissions, secret hygiene, `timeout 5`-bounded linear-time regex / ReDoS probes, least-privilege CI workflow `permissions:` / `concurrency:`, uninstall cleanliness)
    - Packaging, CI, and release pipeline (tarball allowlist, exact artifact publish, multi-OS CI)
-   Write `scratch/day-one-review/day-one-review-r1.md` conforming to Standard `v1.5.0` Sections 1-8 (`ARCH`..`DEP`, `SEC`), the **Cold Day-1 User-Journey Trace Matrix**, and the explicit **4-tier Ship Verdict**:
+   Write `scratch/day-one-review/day-one-review-r1.md` conforming to Standard `v1.6.0` Sections 1-8 (`ARCH`..`DEP`, `SEC`), the **Cold Day-1 User-Journey Trace Matrix**, and the explicit **4-tier Ship Verdict**:
    - **`SHIP NOW`**: `0` open P0/P1/P2/P3 actionable in-repo defects (only tracked Section 8 residuals, upstream deferrals, or informational notes remain, if any).
    - **`SHIP WITH MINOR POLISH`**: `0` P0/P1/SEC blockers and at most `<= 2` small, localized P2/P3 polish items with zero broken consumer install, compile, SDK, or core-command contracts.
    - **`FIX BEFORE RELEASE`**: `0` P0/P1/SEC blockers, but **`>= 3` open P2/P3 items** or any P2 breaking consumer compilation, installation, or core documented workflows (under Stage 3, all concrete in-repo P0-P3 defects are fixed automatically to reach the target stop verdict).

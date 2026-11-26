@@ -5,7 +5,7 @@
       "lead": {
         "role": "Skill & PR-Review Standard Lead",
         "readOnly": true,
-        "objective": "Synthesize your 2 specialists' reports and spot-check cited SKILL/DOC/ARCH/SCRIPT claims under PR Review Standard v1.5.0 (.agents/skills/pr-review/SKILL.md).",
+        "objective": "Synthesize your 2 specialists' reports and spot-check cited SKILL/DOC/ARCH/SCRIPT claims under PR Review Standard v1.6.0 (.agents/skills/pr-review/SKILL.md).",
         "scopeFiles": [
           ".agents/skills/self-diagnosis",
           ".agents/skills/platform-fit",
@@ -15,7 +15,7 @@
           ".agents/skills/swarm-governance",
           "docs/tools.md"
         ],
-        "instructions": "Read specialist report slots first and spot-check only cited file:line claims. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line claims. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md. The independent auditor uses agy-squad audit-check and emits Work Verdict: VERIFIED | NOT VERIFIED; legacy Integrity Verdict: CLEAN | INTEGRITY VIOLATION remains accepted.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, SKILL/DOC/ARCH/SCRIPT triage, and verified SHA-256 hashes."
       },
       "specialists": [
@@ -67,7 +67,7 @@
       "lead": {
         "role": "Runtime & Contract Diagnostics Lead",
         "readOnly": true,
-        "objective": "Synthesize your 2 specialists' reports and spot-check cited MCP, RUN, SVC, SCRIPT, TEST, DEP, and SEC findings under PR Review Standard v1.5.0.",
+        "objective": "Synthesize your 2 specialists' reports and spot-check cited MCP, RUN, SVC, SCRIPT, TEST, DEP, and SEC findings under PR Review Standard v1.6.0.",
         "scopeFiles": [
           "mcp/handoffs.mjs",
           "mcp/verdicts.mjs",
@@ -76,7 +76,7 @@
           "scripts/install-register.mjs",
           "scripts/release-preflight.mjs"
         ],
-        "instructions": "Read specialist report slots first and spot-check only cited file:line claims and checks. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line claims and checks. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md. The independent auditor uses agy-squad audit-check and emits Work Verdict: VERIFIED | NOT VERIFIED; legacy Integrity Verdict: CLEAN | INTEGRITY VIOLATION remains accepted.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED summarizing MCP/RUN/SVC/SCRIPT/TEST/DEP/SEC findings."
       },
       "specialists": [
@@ -130,7 +130,7 @@
           "docs/getting-started.md",
           "docs/benchmarks.md"
         ],
-        "instructions": "Read specialist report slots first and spot-check only cited file:line measurements. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md.",
+        "instructions": "Read specialist report slots first and spot-check only cited file:line measurements. Preserve 1-ID-per-finding granularity. Coordinator handles Stage 2 audit/bundling per .agents/skills/self-diagnosis/references/execution-and-teardown.md. The independent auditor uses agy-squad audit-check and emits Work Verdict: VERIFIED | NOT VERIFIED; legacy Integrity Verdict: CLEAN | INTEGRITY VIOLATION remains accepted.",
         "expectedDeliverable": "Synthesis report with Content Verdict: PASS | FAIL | BLOCKED, ranked optimizations, and measured byte/latency deltas."
       },
       "specialists": [

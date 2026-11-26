@@ -3,10 +3,10 @@ name: full-review
 description: >-
   [Task Spec: non-diff triage, evidence bundles & Direction decisions; pair with
   swarm-governance on /swarm] Run a full review, root-cause diagnosis, or
-  direction decision on the active repo under Standard v1.5.0.
+  direction decision on the active repo under Standard v1.6.0.
 ---
 
-# Agy-Squad Full Review Skill (Standard v1.5.0)
+# Agy-Squad Full Review Skill (Standard v1.6.0)
 
 Review a repository target, subsystem, or evidence bundle and answer the user's question without unauthorized edits.
 
@@ -15,10 +15,10 @@ Review a repository target, subsystem, or evidence bundle and answer the user's 
 
 ## Invariants
 
-1. **Standard v1.5.0:** Enforce [`pr-review-standard.md`](../pr-review/references/pr-review-standard.md) Sections 1-9 (`1 ID = 1 Row`, 6 statuses + `Informational`, Section 8 exclusivity) plus non-PR intake and Direction decisions.
+1. **Standard v1.6.0:** Enforce [`pr-review-standard.md`](../pr-review/references/pr-review-standard.md) Sections 1-9 (`1 ID = 1 Row`, 6 statuses + `Informational`, Section 8 exclusivity) plus non-PR intake and Direction decisions.
 2. **Pin & Trace First:** Pin revisions, hashes, dirty state, access, and exclusions; trace `invariant -> decision -> contract -> implementation -> verification` first.
-3. **11 Categories & Roles:** Cover `ARCH`..`DEP`, `SEC` (`DB` Not applicable on filesystem-only state). Content lead owns `Content Verdict: PASS | FAIL | BLOCKED`; flat auditor (`audit-<id>` / `integrity_auditor[:<target>]`) owns `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` ([review roles](./references/review-roles.md)); lead rechecks after `CLEAN`.
-4. **Locators & Readability:** Separate `Observed` from `Source-derived inference` (`path#Lx-Ly`, transcript `SHA-256 + step N @ ISO`, command + exit, prior ID + `accepted/revised/rejected`). Never wrap standalone `Content Verdict:`, `Integrity Verdict:`, `Target Squad:`, or `Evidence Digest:` lines or verdict tokens in backticks (plain text or balanced `**...**` only).
+3. **11 Categories & Roles:** Cover `ARCH`..`DEP`, `SEC` (`DB` Not applicable on filesystem-only state). Content lead owns `Content Verdict: PASS | FAIL | BLOCKED`; flat auditor (`audit-<id>` / `integrity_auditor[:<target>]`) owns `Work Verdict: VERIFIED | NOT VERIFIED` (legacy `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` remains accepted; [review roles](./references/review-roles.md)); lead rechecks after `VERIFIED` (or `CLEAN`).
+4. **Locators & Readability:** Separate `Observed` from `Source-derived inference` (`path#Lx-Ly`, transcript `SHA-256 + step N @ ISO`, command + exit, prior ID + `accepted/revised/rejected`). Never wrap standalone `Content Verdict:`, `Work Verdict:`, `Integrity Verdict:`, `Target Squad:`, or `Evidence Digest:` lines or verdict tokens in backticks (plain text or balanced `**...**` only).
 
 ## Workflow
 

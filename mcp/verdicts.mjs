@@ -1,5 +1,7 @@
 const CONTENT_VERDICTS = new Set(["PASS", "FAIL", "BLOCKED"]);
 const INTEGRITY_VERDICTS = new Set(["CLEAN", "INTEGRITY VIOLATION"]);
+const WORK_VERDICTS = new Set(["VERIFIED", "NOT VERIFIED"]);
+const ACCEPTED_AUDIT_VERDICTS = new Set(["CLEAN", "VERIFIED"]);
 const SQUAD_ID_RE = /^[A-Za-z0-9_.-]*[A-Za-z0-9_-]$/;
 const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const MAX_RESERVED_KEY_LEN = Math.max(...[...RESERVED_OBJECT_KEYS].map(k => k.length));
@@ -27,11 +29,12 @@ const HISTORICAL_CONTEXT_RE =
 const CURRENT_CONTEXT_RE = /\b(?:current|now|final|post|after)\b/i;
 const LEADING_HISTORICAL_RE =
   /^\s*(?:(?:on|in|from|during)\s+)?(?:(?:the|a|an|this|our)\s+)?(?:(?:prior|previous|baseline|historical|old|initial|original|earlier)\b|before\s+(?:the\s+|this\s+|our\s+)?(?:fix(?:es)?|patch(?:es)?|remediation|change(?:s)?|update(?:s)?|refactor(?:ing)?|migration|edit(?:s)?|commit)\b)/i;
-const PRESERVED_VERDICT_TOKENS = new Set(["PASS", "FAIL", "BLOCKED", "CLEAN", "INTEGRITY VIOLATION"]);
+const PRESERVED_VERDICT_TOKENS = new Set(["PASS", "FAIL", "BLOCKED", "CLEAN", "INTEGRITY VIOLATION", "VERIFIED", "NOT VERIFIED"]);
 const LABELED_VERDICT_PREFIX_RE =
   /^\s*(?:(?:\d+[.)]|[-*+])\s+|#+\s+)?(?:[*_]*#?[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?[*_]*\s+){0,3}[*_]*(?:verdict|status|result|check|disposition|outcome)(?:\s*[*_]+)?(?:\s*[:—–]|\s+-(?=\s|$))\s*(?:[*_]+\s+)?[*_]*/i;
 const STRICT_UPPERCASE_VERDICT_RE = /^(PASS|FAIL|BLOCKED)(?![*_]*[-A-Za-z0-9/])/;
 const STRICT_UPPERCASE_INTEGRITY_VERDICT_RE = /^(CLEAN|INTEGRITY VIOLATION)(?![*_]*[-A-Za-z0-9/])/;
+const STRICT_UPPERCASE_WORK_VERDICT_RE = /^(VERIFIED|NOT VERIFIED)(?![*_]*[-A-Za-z0-9/])/;
 const VERDICT_NEGATION_RE =
   /\b(not|no|never|isn't|wasn't|aren't|weren't|didn't|doesn't|don't|won't|cannot|can't|did\s+not|does\s+not|do\s+not|will\s+not)\s+(pass)\b/gi;
 const VERDICT_SUBJECT_NOUN_RE =
@@ -49,8 +52,11 @@ const TAIL_ADJUNCT_WORD_RE =
   /^(?:on|in|at|under|during|for|with|without|due\s+to|because|after|before|when|while|yet|still|here|locally|today)\b/i;
 const INTEGRITY_NEGATION_RE =
   /\b(?:not|never|isn't|wasn't|cannot\s+be|can't\s+be)\s+(CLEAN)\b/gi;
+const WORK_NEGATION_RE =
+  /\b(?:not|never|isn't|wasn't|aren't|weren't|(?:has|have|had)\s+not\s+been|cannot\s+be|can't\s+be)\s+(VERIFIED)\b/gi;
+const WORK_SUBJECT_RE = /\b(?:work|workers?|cohort|squad|audit|verdict|verification|report|claims?|checks?)\b/i;
 
-function createClauseTracker(line) {
+function createClauseTracker(line, subjectRe = VERDICT_SUBJECT_NOUN_RE) {
   let scanFrom = 0;
   let hasHistorical = false;
   let hasCurrent = false;
@@ -64,7 +70,7 @@ function createClauseTracker(line) {
     if (!text) return;
     if (HISTORICAL_CONTEXT_RE.test(text)) hasHistorical = true;
     if (CURRENT_CONTEXT_RE.test(text)) hasCurrent = true;
-    if (VERDICT_SUBJECT_NOUN_RE.test(text)) hasSubject = true;
+    if (subjectRe.test(text)) hasSubject = true;
     if (NEGATIVE_EXPECTATION_RE.test(text)) hasNegExpectation = true;
   };
 
@@ -80,7 +86,7 @@ function createClauseTracker(line) {
       updateFlags(chunk);
       hasPriorClauseBreak = true;
       if (m.groups?.colon) {
-        const labelHasSubject = VERDICT_LABEL_SUBJECT_RE.test(chunk);
+        const labelHasSubject = VERDICT_LABEL_SUBJECT_RE.test(chunk) || subjectRe.test(chunk);
         const labelHasNegExpectation = NEGATIVE_EXPECTATION_LABEL_RE.test(chunk);
         if (labelHasNegExpectation) {
           hasNegExpectation = true;
@@ -163,9 +169,18 @@ function matchLabeledIntegrityVerdict(line) {
   return verdictMatch ? { verdict: verdictMatch[1], prefix: prefixMatch[0] } : null;
 }
 
+function matchLabeledWorkVerdict(line) {
+  const prefixMatch = LABELED_VERDICT_PREFIX_RE.exec(line);
+  if (!prefixMatch) return null;
+  const verdictMatch = STRICT_UPPERCASE_WORK_VERDICT_RE.exec(line.slice(prefixMatch[0].length));
+  return verdictMatch ? { verdict: verdictMatch[1], prefix: prefixMatch[0] } : null;
+}
+
 const CONTENT_CELL_VERDICT_RE = /^[*_]*(?:`[*_]*(PASS|FAIL|BLOCKED)\.?[*_]*`|(PASS|FAIL|BLOCKED))\.?[*_]*\.?$/;
 const INTEGRITY_CELL_VERDICT_RE =
   /^[*_]*(?:`[*_]*(CLEAN|INTEGRITY VIOLATION)\.?[*_]*`|(CLEAN|INTEGRITY VIOLATION))\.?[*_]*\.?$/;
+const WORK_CELL_VERDICT_RE =
+  /^[*_]*(?:`[*_]*(VERIFIED|NOT VERIFIED)\.?[*_]*`|(VERIFIED|NOT VERIFIED))\.?[*_]*\.?$/;
 
 function matchTwoColumnContentVerdict(cells) {
   if (cells.length !== 2) return null;
@@ -173,7 +188,7 @@ function matchTwoColumnContentVerdict(cells) {
   const isVerdictKey =
     /^(?:(?:content|overall|final)\s+)?(?:verdict|gate)$/i.test(keyText) ||
     (/\b(?:content\s+verdict|overall\s+verdict|final\s+verdict|verdict)\b/i.test(keyText) &&
-      !/\b(?:category|integrity)\b/i.test(keyText) &&
+      !/\b(?:category|integrity|work)\b/i.test(keyText) &&
       !isHistoricalLine(keyText));
   if (!isVerdictKey) return null;
   const m = cells[1].match(CONTENT_CELL_VERDICT_RE);
@@ -193,10 +208,23 @@ function matchTwoColumnIntegrityVerdict(cells) {
   return m ? (m[1] || m[2]) : null;
 }
 
+function matchTwoColumnWorkVerdict(cells) {
+  if (cells.length !== 2) return null;
+  const keyText = unwrapOuterCodeSpan(cells[0]);
+  const isWorkKey =
+    /^(?:(?:work|audit|overall|final)\s+)?(?:verdict|status|result|outcome)$/i.test(keyText) ||
+    (/\b(?:work\s+verdict|audit\s+(?:verdict|status)|verdict)\b/i.test(keyText) &&
+      !/\b(?:category|content)\b/i.test(keyText) &&
+      !isHistoricalLine(keyText));
+  if (!isWorkKey) return null;
+  const m = cells[1].match(WORK_CELL_VERDICT_RE);
+  return m ? (m[1] || m[2]) : null;
+}
+
 const CONTENT_TABLE_CONFIG = {
   isVerdictHeader: h =>
     /\b(?:content\s+verdict|overall(?:\s+verdict)?|verdict)\b/i.test(h) &&
-    !/\b(?:category|integrity)\b/i.test(h),
+    !/\b(?:category|integrity|work)\b/i.test(h),
   cellVerdictRe: CONTENT_CELL_VERDICT_RE,
   matchTwoColumn: matchTwoColumnContentVerdict
 };
@@ -207,6 +235,14 @@ const INTEGRITY_TABLE_CONFIG = {
     !/\b(?:category|content)\b/i.test(h),
   cellVerdictRe: INTEGRITY_CELL_VERDICT_RE,
   matchTwoColumn: matchTwoColumnIntegrityVerdict
+};
+
+const WORK_TABLE_CONFIG = {
+  isVerdictHeader: h =>
+    /\b(?:work\s+verdict|audit\s+(?:verdict|status)|verdict)\b/i.test(h) &&
+    !/\b(?:category|content)\b/i.test(h),
+  cellVerdictRe: WORK_CELL_VERDICT_RE,
+  matchTwoColumn: matchTwoColumnWorkVerdict
 };
 
 function createTableVerdictScanner(config) {
@@ -550,50 +586,89 @@ function parseContentVerdict(markdown) {
  * @param {string} markdown
  * @returns {"CLEAN"|"INTEGRITY VIOLATION"}
  */
-function parseIntegrityVerdict(markdown) {
-  const found = parseStrictLines(markdown, ["Integrity Verdict"], INTEGRITY_VERDICTS);
-  if (found.size === 0) {
-    throw new Error("Integrity audit report must record an unambiguous single-line 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.");
-  }
-
+// Both audit labels describe the same pass/fail decision, including secondary declarations.
+function scanAuditDeclarations(markdown) {
+  const found = new Set();
+  const add = verdict => found.add(verdict === 'VERIFIED' || verdict === 'CLEAN');
+  for (const verdict of parseStrictLines(markdown, ['Work Verdict'], WORK_VERDICTS)) add(verdict);
+  for (const verdict of parseStrictLines(markdown, ['Integrity Verdict'], INTEGRITY_VERDICTS)) add(verdict);
   const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
-  const tableScanner = createTableVerdictScanner(INTEGRITY_TABLE_CONFIG);
+  const tables = [createTableVerdictScanner(WORK_TABLE_CONFIG), createTableVerdictScanner(INTEGRITY_TABLE_CONFIG)];
   for (const rawLine of clean.split(/\r?\n/)) {
     const line = stripInlineCodeLine(rawLine, true);
-    if (found.has("CLEAN")) {
-      const tracker = createClauseTracker(line);
-      for (const m of line.matchAll(INTEGRITY_NEGATION_RE)) {
-        const clause = tracker.advanceTo(m.index);
-        const matchEnd = m.index + m[0].length;
-        if (m[1] === "CLEAN" && !clause.isHistorical) {
-          found.add("INTEGRITY VIOLATION");
-          break;
-        }
-        tracker.markConsumed(matchEnd);
-      }
+    for (const match of [matchLabeledWorkVerdict(line), matchLabeledIntegrityVerdict(line)]) {
+      if (match && !isHistoricalLine(match.prefix)) add(match.verdict);
     }
-    const labeled = matchLabeledIntegrityVerdict(line);
-    if (labeled && !isHistoricalLine(labeled.prefix)) {
-      found.add(labeled.verdict);
+    const leading = line.match(/^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(VERIFIED|NOT VERIFIED|CLEAN|INTEGRITY VIOLATION)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/);
+    if (leading && !isHistoricalLeadingDesc(line.slice(leading[0].length))) add(leading[1]);
+    const tracker = createClauseTracker(line, WORK_SUBJECT_RE);
+    for (const match of line.matchAll(WORK_NEGATION_RE)) {
+      const clause = tracker.advanceTo(match.index);
+      const end = match.index + match[0].length;
+      const tail = classifyNegationTail(line, end);
+      if (!clause.isHistorical && (clause.isLineInitial && tail.isClauseEnd || clause.hasVerdictSubject && (tail.isClauseEnd || tail.isAdjunctTail))) found.add(false);
+      tracker.markConsumed(end);
     }
-    const leading = line.match(
-      /^\s*(?:\d+[.)]\s+|[-*+]\s+|#+\s+)?[*_]*(CLEAN|INTEGRITY VIOLATION)[*_]*(?:\s*[:—–]|\s+-(?=\s|$)|\.?\s*$)/
-    );
-    if (leading && !isHistoricalLeadingDesc(line.slice(leading[0].length))) {
-      found.add(leading[1]);
+    const integrityTracker = createClauseTracker(line);
+    for (const match of line.matchAll(INTEGRITY_NEGATION_RE)) {
+      const clause = integrityTracker.advanceTo(match.index);
+      if (!clause.isHistorical) found.add(false);
+      integrityTracker.markConsumed(match.index + match[0].length);
     }
-    for (const verdict of tableScanner.scanLine(rawLine)) {
-      found.add(verdict);
-    }
+    for (const table of tables) for (const verdict of table.scanLine(rawLine)) add(verdict);
   }
+  if (found.size > 1) throw new Error('Audit report contains conflicting verdicts across work and integrity declarations.');
+}
 
-  if (found.size > 1) {
-    throw new Error(`Integrity audit report contains conflicting verdicts: ${[...found].join(", ")}.`);
-  }
-  if (hasContentVerdictAttempt(markdown)) {
-    throw new Error("Integrity audit report must not declare a content verdict (role conflation).");
-  }
+function parseIntegrityVerdict(markdown) {
+  const found = parseStrictLines(markdown, ['Integrity Verdict'], INTEGRITY_VERDICTS);
+  if (found.size === 0) throw new Error("Integrity audit report must record an unambiguous single-line 'Integrity Verdict: CLEAN' or 'Integrity Verdict: INTEGRITY VIOLATION'.");
+  scanAuditDeclarations(markdown);
+  if (hasContentVerdictAttempt(markdown)) throw new Error('Integrity audit report must not declare a content verdict (role conflation).');
   return [...found][0];
+}
+
+function parseWorkVerdict(markdown) {
+  const found = parseStrictLines(markdown, ['Work Verdict'], WORK_VERDICTS);
+  if (found.size === 0) throw new Error("Work audit report must record an unambiguous single-line 'Work Verdict: VERIFIED' or 'Work Verdict: NOT VERIFIED'.");
+  scanAuditDeclarations(markdown);
+  if (hasContentVerdictAttempt(markdown)) throw new Error('Work audit report must not declare a content verdict (role conflation).');
+  return [...found][0];
+}
+
+/**
+ * Parse either a `Work Verdict: VERIFIED|NOT VERIFIED` or legacy
+ * `Integrity Verdict: CLEAN|INTEGRITY VIOLATION` from an auditor report.
+ * @param {string} markdown
+ * @returns {{ kind: "work"|"integrity", verdict: "VERIFIED"|"NOT VERIFIED"|"CLEAN"|"INTEGRITY VIOLATION", passed: boolean }}
+ */
+function parseAuditVerdict(markdown) {
+  const clean = stripFencedCodeBlocks(markdown, { stripIndented: true });
+  const hasWorkLine = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Work Verdict${POST_LABEL_EMPH}\\s*:`, "im").test(clean);
+  const hasIntegrityLine = new RegExp(`^\\s*${LINE_ITEM_PREFIX}Integrity Verdict${POST_LABEL_EMPH}\\s*:`, "im").test(clean);
+  if (!hasWorkLine && !hasIntegrityLine) {
+    throw new Error(
+      "Audit report must record an unambiguous single-line 'Work Verdict: VERIFIED' / 'Work Verdict: NOT VERIFIED' or 'Integrity Verdict: CLEAN' / 'Integrity Verdict: INTEGRITY VIOLATION'."
+    );
+  }
+  if (hasWorkLine && hasIntegrityLine) {
+    const workVerdict = parseWorkVerdict(markdown);
+    const integrityVerdict = parseIntegrityVerdict(markdown);
+    const workPassed = workVerdict === "VERIFIED";
+    const integrityPassed = integrityVerdict === "CLEAN";
+    if (workPassed !== integrityPassed) {
+      throw new Error(
+        `Audit report contains conflicting verdicts: Work Verdict '${workVerdict}' disagrees with Integrity Verdict '${integrityVerdict}'.`
+      );
+    }
+    return { kind: "work", verdict: workVerdict, passed: workPassed };
+  }
+  if (hasWorkLine) {
+    const verdict = parseWorkVerdict(markdown);
+    return { kind: "work", verdict, passed: verdict === "VERIFIED" };
+  }
+  const verdict = parseIntegrityVerdict(markdown);
+  return { kind: "integrity", verdict, passed: verdict === "CLEAN" };
 }
 
 /**
@@ -695,15 +770,19 @@ function parseEvidenceDigest(markdown) {
 }
 
 export {
+  ACCEPTED_AUDIT_VERDICTS,
   CONTENT_VERDICTS,
   INTEGRITY_VERDICTS,
   RESERVED_OBJECT_KEYS,
   SQUAD_ID_RE,
+  WORK_VERDICTS,
   hasContentVerdictAttempt,
+  parseAuditVerdict,
   parseContentVerdict,
   parseEvidenceDigest,
   parseIntegrityVerdict,
   parseTargetSquad,
+  parseWorkVerdict,
   stripCode,
   stripFencedCodeBlocks,
   validateSquadId

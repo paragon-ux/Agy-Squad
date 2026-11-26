@@ -1187,9 +1187,10 @@ function planSquadCohort(
             overriddenSubagentModels
           );
           recordSubagentWorkerModel(auditModel);
+          const auditVerdictFlag = /Integrity Verdict:/i.test(rawAudit.expectedDeliverable ?? "") && !/Work Verdict:/i.test(rawAudit.expectedDeliverable ?? "") ? "--integrity" : "--work";
           const targetScopeNote = executionMode === "swarm"
-            ? `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot} --coord-id <coordId>', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots/traces only (no unrelated repo source reads).`
-            : `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot}', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
+            ? `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot} --coord-id <coordId>', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} ${auditVerdictFlag} ${auditSlot}'; inspect '${id}' slots & spot-check cited file:line only (no bulk repo reads or other sessions' transcripts).`
+            : `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot}', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} ${auditVerdictFlag} ${auditSlot}'; inspect '${id}' slots & spot-check cited file:line only (no bulk repo reads or other sessions' transcripts).`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,

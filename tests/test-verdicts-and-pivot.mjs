@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildSubagentSpec } from "../mcp/briefs.mjs";
 import { handleDispatchSquad } from "../mcp/dispatch.mjs";
 import { bundleReports, computeEvidenceDigest, fingerprint, pruneReports, reportPath, verifyBundle } from "../mcp/handoffs.mjs";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
+import { hasContentVerdictAttempt, parseAuditVerdict, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, parseWorkVerdict, stripCode, validateSquadId } from "../mcp/verdicts.mjs";
 
 const cliPath = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
 const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-pivot-")));
@@ -201,10 +201,11 @@ try {
   assert.equal(payload.Subagents.length, 1);
   assert.equal(payload.Subagents[0].Role, "Integrity Auditor");
   assert.match(payload.Subagents[0].Prompt, /squad-integrity_auditor-alpha\/specialist-1\/report\.md/);
-  assert.match(payload.Subagents[0].Prompt, /Integrity Verdict: CLEAN/);
+  assert.match(payload.Subagents[0].Prompt, /Work Verdict: VERIFIED \| NOT VERIFIED/);
   assert.match(payload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(payload.Subagents[0].Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
-  assert.match(payload.Subagents[0].Prompt, /agy-context transcript/);
+  assert.match(payload.Subagents[0].Prompt, /agy-squad audit-check/);
+  assert.match(payload.Subagents[0].Prompt, /spot-check up to 3 claims\/worker/);
+  assert.match(payload.Subagents[0].Prompt, /do not read other sessions' transcripts/);
   assert.doesNotMatch(payload.Subagents[0].Prompt, /rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
 
   // Untargeted on multi-squad manifest throws; empty target and retired adversarial targets return isError
@@ -236,11 +237,11 @@ try {
   assert.equal(singlePayload.Subagents.length, 1);
   assert.ok(Array.isArray(singlePayload.warnings) && singlePayload.warnings.some(w => /ignored/.test(w)), "Custom integrity_auditor.lead must emit explicit warning (SQ-RUN-007)");
   assert.match(singlePayload.Subagents[0].Prompt, /Target Squad: alpha/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Auditor:/);
-  assert.match(singlePayload.Subagents[0].Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Work Auditor:/);
+  assert.match(singlePayload.Subagents[0].Prompt, /Work Verdict: VERIFIED \| NOT VERIFIED/);
   assert.doesNotMatch(singlePayload.Subagents[0].Prompt, /query_transcript|read_transcript/, "SQ-MCP-002: briefs must not reference retired MCP transcript tools");
 
-  // GOV-07: Swarm integrity auditor briefs must not treat workspace re-execution alone as sufficient for CLEAN
+  // GOV-07: Swarm work auditor briefs use audit-check evidence and claim spot-checks without reading other sessions' transcripts
   const swarmAuditSpec = buildSubagentSpec(
     { role: "Integrity Auditor", objective: "Audit swarm alpha", scopeFiles: ["."] },
     "integrity_auditor-alpha",
@@ -251,10 +252,11 @@ try {
   );
   assert.doesNotMatch(swarmAuditSpec.Prompt, /or direct workspace artifact\/command re-execution/);
   assert.doesNotMatch(swarmAuditSpec.Prompt, /query_transcript|read_transcript|rtk grep|rtk find|rtk read|<=150-line|\[agy-transcript-access:/);
-  assert.match(swarmAuditSpec.Prompt, /~\/\.gemini\/antigravity\*\/brain\/<id>\/\.system_generated\/logs\/transcript\.jsonl/);
-  assert.match(swarmAuditSpec.Prompt, /sender=<coordId> \+ @<workerName>/);
+  assert.match(swarmAuditSpec.Prompt, /agy-squad audit-check work evidence/);
+  assert.match(swarmAuditSpec.Prompt, /spot-check up to 3 claims\/worker/);
+  assert.match(swarmAuditSpec.Prompt, /do not read other sessions' transcripts/);
   assert.match(swarmAuditSpec.Prompt, /no raw \.system_generated\/ copies/);
-  assert.match(swarmAuditSpec.Prompt, /re-execution cannot satisfy CLEAN.*'Integrity Verdict: INTEGRITY VIOLATION' if traces missing\/tampered/);
+  assert.match(swarmAuditSpec.Prompt, /'Work Verdict: NOT VERIFIED'\) on fabricated claims or read-only repo writes/);
 
   // S1-F3: Integrity Auditor lead prompt must never instruct emitting PASS
   const intLeadCompiled = buildSubagentSpec(
@@ -264,7 +266,7 @@ try {
   );
   assert.doesNotMatch(intLeadCompiled.Prompt, /Base PASS on verified proof|PASS on proof/);
   assert.match(intLeadCompiled.Prompt, /Integrity Auditor Lead/);
-  assert.match(intLeadCompiled.Prompt, /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION/);
+  assert.match(intLeadCompiled.Prompt, /Work Verdict: VERIFIED \| NOT VERIFIED/);
 
   // 4. Governance CLI positive & negative security tests (SCRIPT-PR4-01..03, SCRIPT-P3-04, ARCH-PR4-03, TEST-PR4-01)
   assert.equal(JSON.parse(runCli(["verdict", lead])).verdict, "PASS");
@@ -1141,6 +1143,82 @@ try {
     /conflicting verdicts/,
     "PR15-RUN-001: post-fix integrity contradiction after semicolon must throw"
   );
+
+  // Work Verdict (VERIFIED | NOT VERIFIED) strict parsing, CLI --work/--integrity, and bundle gating alongside legacy CLEAN
+  assert.equal(parseWorkVerdict("Target Squad: alpha\nWork Verdict: VERIFIED\n"), "VERIFIED");
+  assert.equal(parseWorkVerdict("**Work Verdict:** **NOT VERIFIED**\nFabricated citation.\n"), "NOT VERIFIED");
+  assert.equal(parseWorkVerdict("Work Verdict: VERIFIED\nNot verified on Windows locally.\n"), "VERIFIED");
+  assert.equal(parseWorkVerdict("Work Verdict: VERIFIED\nBefore the fix: work was not VERIFIED.\n"), "VERIFIED");
+  assert.deepEqual(parseAuditVerdict("Work Verdict: VERIFIED\n"), { kind: "work", verdict: "VERIFIED", passed: true });
+  assert.deepEqual(parseAuditVerdict("Work Verdict: NOT VERIFIED\n"), { kind: "work", verdict: "NOT VERIFIED", passed: false });
+  assert.deepEqual(parseAuditVerdict("Integrity Verdict: CLEAN\n"), { kind: "integrity", verdict: "CLEAN", passed: true });
+  assert.deepEqual(parseAuditVerdict("Integrity Verdict: INTEGRITY VIOLATION\n"), { kind: "integrity", verdict: "INTEGRITY VIOLATION", passed: false });
+
+  for (const badWorkMd of [
+    "Work Verdict: VERIFIED with caveats\n",
+    "`Work Verdict: VERIFIED`\n",
+    "Work Verdict: `VERIFIED`\n",
+    "Work Verdict: VERIFIED\nContent Verdict: PASS\n",
+    "Work Verdict: VERIFIED\nWork is NOT VERIFIED.\n",
+    "Work Verdict: VERIFIED\nAudit Status: NOT VERIFIED\n",
+    "Work Verdict: VERIFIED\n| Field | Value |\n| --- | --- |\n| Work Verdict | NOT VERIFIED |\n"
+  ]) {
+    assert.throws(() => parseWorkVerdict(badWorkMd), /Malformed|Unsupported|conflicting|role conflation|Work Verdict:/i, `Bad Work Verdict must throw: ${JSON.stringify(badWorkMd)}`);
+  }
+  assert.throws(
+    () => parseAuditVerdict("Work Verdict: VERIFIED\nIntegrity Verdict: INTEGRITY VIOLATION\n"),
+    /conflicting verdicts/i
+  );
+
+  // Every entry point checks both audit vocabularies and clause-aware negation.
+  for (const [header, parse, contradictions] of [
+    ['Work Verdict: VERIFIED', parseWorkVerdict, ['Integrity Verdict: INTEGRITY VIOLATION', 'Audit Status: INTEGRITY VIOLATION', 'INTEGRITY VIOLATION: fabricated', '| Integrity Verdict | INTEGRITY VIOLATION |', 'The audit was not clean.']],
+    ['Integrity Verdict: CLEAN', parseIntegrityVerdict, ['Work Verdict: NOT VERIFIED', 'Audit Status: NOT VERIFIED', 'NOT VERIFIED: fabricated', '| Work Verdict | NOT VERIFIED |', 'The cohort has not been verified.']]
+  ]) {
+    for (const contradiction of contradictions) {
+      const report = `${header}\n${contradiction}\n`;
+      assert.throws(() => parse(report), /conflicting verdicts/i, report);
+      assert.throws(() => parseAuditVerdict(report), /conflicting verdicts/i, report);
+    }
+  }
+  for (const observation of ["Workers weren't VERIFIED.", 'The cohort was not verified.', "Claims aren't verified.", "The checks weren't verified.", 'The work has not been verified.', 'The report had not been verified.', 'Not verified.']) {
+    assert.throws(() => parseWorkVerdict(`Work Verdict: VERIFIED\n${observation}\n`), /conflicting verdicts/i, observation);
+  }
+  for (const observation of ['Not verified on Windows locally.', 'Before the fix: work had not been verified.', 'The endpoint has not been verified by an unrelated browser.']) {
+    assert.equal(parseWorkVerdict(`Work Verdict: VERIFIED\n${observation}\n`), 'VERIFIED', observation);
+  }
+  assert.equal(parseWorkVerdict('Work Verdict: VERIFIED\nIntegrity Verdict: CLEAN\n'), 'VERIFIED');
+  assert.equal(parseIntegrityVerdict('Integrity Verdict: INTEGRITY VIOLATION\nWork Verdict: NOT VERIFIED\n'), 'INTEGRITY VIOLATION');
+  write('cross-audit.md', 'Work Verdict: VERIFIED\nAudit Status: INTEGRITY VIOLATION\n');
+  for (const flag of ['--work', '--integrity']) assert.notEqual(runCliFail(['verdict', flag, 'cross-audit.md']).status, 0);
+
+  // Bundle + verify acceptance with Work Verdict: VERIFIED passes, NOT VERIFIED hard-blocks
+  const workAuditRel = "scratch/agy-squad/squad-integrity_auditor-alpha/specialist-1/report.md";
+  write(
+    workAuditRel,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nWork Verdict: NOT VERIFIED\nWorker fabricated src/app.js:99.\n`
+  );
+  assert.throws(
+    () => bundleReports(root, { ...record, integrityAuditSlots: [workAuditRel], replaceExisting: true }),
+    /Acceptance blocked: Integrity audit verdict is NOT VERIFIED\./
+  );
+  assert.equal(JSON.parse(runCli(["verdict", "--work", workAuditRel])).verdict, "NOT VERIFIED");
+  assert.equal(JSON.parse(runCli(["verdict", "--integrity", workAuditRel])).verdict, "NOT VERIFIED");
+
+  write(
+    workAuditRel,
+    `Target Squad: alpha\nEvidence Digest: ${alphaDigest}\nWork Verdict: VERIFIED\n| Worker | Flags | Claims checked | Result | Note |\n| --- | --- | --- | --- | --- |\n| w1 | none | src/app.js:1 | supported | verified |\n`
+  );
+  assert.deepEqual(JSON.parse(runCli(["verdict", "--work", workAuditRel])), {
+    verdict: "VERIFIED",
+    targetSquad: "alpha",
+    evidenceDigest: alphaDigest
+  });
+  const workBundled = bundleReports(root, { ...record, integrityAuditSlots: [workAuditRel], replaceExisting: true });
+  const workVerified = verifyBundle(root, workBundled.path, workBundled.sha256);
+  assert.equal(workVerified.auditPolicy, "required");
+  const workBundleObj = JSON.parse(fs.readFileSync(path.join(root, workBundled.path), "utf8"));
+  assert.equal(workBundleObj.integrityAudit.verdict, "VERIFIED");
 
   console.log("✓ Strict verdicts, programmatic integrity hash binding, flat integrity_auditor, and governance CLI");
 } finally {

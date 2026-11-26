@@ -4,8 +4,9 @@ import fs from "node:fs";
 import { scanShellCommand, shellCommandWrites, unwrapShellCommand } from "./shell.mjs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
+import { ACCEPTED_AUDIT_VERDICTS, hasContentVerdictAttempt, parseAuditVerdict, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -704,14 +705,14 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expecte
     throw new Error(`Empty evidence report: ${report}`);
   }
   const markdown = decodeUtf8(bytes, report);
-  let verdict;
+  let parsedVerdict;
   try {
-    verdict = parseIntegrityVerdict(markdown);
+    parsedVerdict = parseAuditVerdict(markdown);
   } catch (error) {
-    throw new Error(`Acceptance blocked: Integrity audit verdict is not CLEAN. (${error.message})`);
+    throw new Error(`Acceptance blocked: Integrity audit verdict is not CLEAN or VERIFIED. (${error.message})`);
   }
-  if (verdict !== "CLEAN") {
-    throw new Error(`Acceptance blocked: Integrity audit verdict is ${verdict}.`);
+  if (!parsedVerdict.passed) {
+    throw new Error(`Acceptance blocked: Integrity audit verdict is ${parsedVerdict.verdict}.`);
   }
   const targetSquad = parseTargetSquad(markdown);
   if (expectedSquadId && (!targetSquad || targetSquad !== expectedSquadId)) {
@@ -734,7 +735,7 @@ function readIntegrityAudit(root, report, expectedSquadId, verifiedDirs, expecte
       );
     }
   }
-  return { bytes, verdict: "CLEAN", targetSquad, evidenceDigest };
+  return { bytes, verdict: parsedVerdict.verdict, targetSquad, evidenceDigest };
 }
 
 function canonicalSnapshotDigest(squadId, synthesisSha, verifiedFiles, reports) {
@@ -1310,8 +1311,8 @@ function verifyBundleInternal(root, relative, acceptedHash, verifiedDirs = new S
     if (!audit || typeof audit !== "object" || typeof audit.path !== "string" || typeof audit.sha256 !== "string") {
       throw new Error("Invalid integrityAudit entry in bundle.");
     }
-    if (audit.verdict !== "CLEAN") {
-      throw new Error(`Integrity audit entry verdict '${audit.verdict}' is not CLEAN.`);
+    if (!ACCEPTED_AUDIT_VERDICTS.has(audit.verdict)) {
+      throw new Error(`Integrity audit entry verdict '${audit.verdict}' is not CLEAN or VERIFIED.`);
     }
     if (audit.targetSquad !== undefined && audit.targetSquad !== squadId) {
       throw new Error(`Integrity audit targetSquad '${audit.targetSquad}' does not match bundle squad '${squadId}'.`);
@@ -1320,7 +1321,7 @@ function verifyBundleInternal(root, relative, acceptedHash, verifiedDirs = new S
       throw new Error(`Integrity audit evidenceDigest '${audit.evidenceDigest}' does not match verified bundle snapshot.`);
     }
     const auditCheck = readIntegrityAudit(root, audit.path, squadId, verifiedDirs, snapshotDigest);
-    if (sha256(auditCheck.bytes) !== audit.sha256) {
+    if (auditCheck.verdict !== audit.verdict || sha256(auditCheck.bytes) !== audit.sha256) {
       throw new Error(`Integrity audit report changed: ${audit.path}`);
     }
   }
@@ -3301,27 +3302,104 @@ function discoverBrainTranscriptForWorker(
   return null;
 }
 
-function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
-  if (typeof markdown !== "string" || !markdown) return [];
-  const cleanMarkdown = stripFencedCodeBlocks(markdown);
-  const cited = new Set();
-  // A bracket cannot also be a delimiter: failed bracket paths must scan once.
-  const citeRe = /(?:^|[\s`("'])([A-Za-z0-9_./\x5b\x5d-]+\.[A-Za-z0-9]+):[1-9]\d*\b/g;
-  for (let m; (m = citeRe.exec(cleanMarkdown)); ) {
-    const candidates = m[1].startsWith("[") ? [m[1], m[1].slice(1)] : [m[1]];
-    for (const candidate of candidates) {
-      const rawRel = candidate.replace(/^(?:\.\/)+/, "");
-      if (!rawRel || rawRel === selfSlot || rawRel.startsWith("/") || rawRel.includes("..")) continue;
-      try {
-        const st = fs.lstatSync(path.join(canonicalRoot, rawRel));
-        if (!st.isSymbolicLink() && st.isFile()) {
-          cited.add(rawRel);
-          break;
-        }
-      } catch {}
+const MAX_LINE_COUNT_FILE_BYTES = 8 * 1024 * 1024;
+
+function countBufferLines(buf) {
+  if (!buf || buf.length === 0) return 0;
+  let count = 0;
+  let idx = -1;
+  while ((idx = buf.indexOf(0x0a, idx + 1)) !== -1) count += 1;
+  return buf[buf.length - 1] === 0x0a ? count : count + 1;
+}
+
+function evidencePath(root, rel, fallbackRoot = root) {
+  for (const candidateRoot of [...new Set([root, fallbackRoot])]) {
+    try {
+      if (!isExpectedRealPath(candidateRoot, fs.realpathSync.native(candidateRoot))) return null;
+      assertNoSymlinkedAncestors(candidateRoot, rel === "." ? ".evidence-probe" : rel);
+      const abs = rel === "." ? candidateRoot : path.join(candidateRoot, rel);
+      const stat = fs.lstatSync(abs);
+      if (stat.isSymbolicLink() || !isContainedPath(candidateRoot, fs.realpathSync.native(abs), true)) return null;
+      return { abs, stat, root: candidateRoot };
+    } catch (error) {
+      if (error.code !== "ENOENT") return null;
     }
   }
-  return [...cited].sort();
+  return null;
+}
+
+function getWorkspaceFileLineCount(canonicalRoot, relPath, lineCountCache, workerRoot = canonicalRoot) {
+  const key = `${workerRoot}\0${relPath}`;
+  if (lineCountCache.has(key)) return lineCountCache.get(key);
+  let lines = null;
+  try {
+    const found = evidencePath(workerRoot, relPath, canonicalRoot);
+    if (found?.stat.isFile()) {
+      const opened = readOpenedFileWithStat(found.abs, relPath, { maxBytes: MAX_LINE_COUNT_FILE_BYTES });
+      lines = countBufferLines(opened.bytes);
+    }
+  } catch {}
+  lineCountCache.set(key, lines);
+  return lines;
+}
+
+function extractCitationsWithLines(markdown, canonicalRoot, selfSlot, lineCountCache = new Map(), workerRoot = canonicalRoot) {
+  if (typeof markdown !== "string" || !markdown) {
+    return { citedFiles: [], citations: [], invalidCitations: [] };
+  }
+  const cleanMarkdown = stripFencedCodeBlocks(markdown);
+  const cited = new Set();
+  const seenRefs = new Set();
+  const citations = [];
+  const invalidCitations = [];
+
+  const recordRef = (rawRel, startLine, endLine) => {
+    let cleanedRel = rawRel.replace(/^(?:\.\/)+/, "");
+    if (!cleanedRel || cleanedRel === selfSlot || cleanedRel.startsWith("/") || cleanedRel.includes("..")) return;
+    let fileLines = getWorkspaceFileLineCount(canonicalRoot, cleanedRel, lineCountCache, workerRoot);
+    if (fileLines === null && cleanedRel.startsWith("[")) {
+      cleanedRel = cleanedRel.slice(1).replace(/^(?:\.\/)+/, "");
+      if (!cleanedRel || cleanedRel === selfSlot || cleanedRel.startsWith("/") || cleanedRel.includes("..")) return;
+      fileLines = getWorkspaceFileLineCount(canonicalRoot, cleanedRel, lineCountCache, workerRoot);
+    }
+    if (fileLines === null) return;
+    cited.add(cleanedRel);
+    const refKey = `${cleanedRel}:${startLine}-${endLine ?? ""}`;
+    if (seenRefs.has(refKey)) return;
+    seenRefs.add(refKey);
+    const entry = { path: cleanedRel, line: startLine, ...(endLine !== null ? { endLine } : {}) };
+    citations.push(entry);
+    if (endLine !== null && endLine < startLine) {
+      invalidCitations.push({ ...entry, ...(fileLines !== null ? { fileLines } : {}), reason: "invalid_range" });
+    } else if (fileLines !== null && (startLine > fileLines || (endLine !== null && endLine > fileLines))) {
+      invalidCitations.push({ ...entry, fileLines, reason: "line_out_of_range" });
+    }
+  };
+
+  // Matches rel/path.ext:42, rel/path.ext:42-55, rel/path.ext:L42-L55, rel/path.ext#L42-L55
+  const citeRe = /(?:^|[\s`("'])([A-Za-z0-9_./\x5b\x5d-]+\.[A-Za-z0-9]+)\]?(?::L?|#L)([1-9]\d*)(?:-L?([1-9]\d*))?\b/g;
+  for (let m; (m = citeRe.exec(cleanMarkdown)); ) {
+    const startLine = Number(m[2]);
+    const endLine = m[3] ? Number(m[3]) : null;
+    recordRef(m[1], startLine, endLine);
+  }
+  // Matches file:///abs/path/to/file.ext#L42(-L55) markdown links pointing inside canonicalRoot
+  const fileUriRe = /file:\/\/\/([^\s)#"'`]+)#L([1-9]\d*)(?:-L?([1-9]\d*))?/g;
+  for (let m; (m = fileUriRe.exec(cleanMarkdown)); ) {
+    const candidate = `file:///${m[1]}`;
+    let rel = normalizeToolTargetToRel(candidate, workerRoot, false);
+    if (rel?.startsWith("external:")) rel = normalizeToolTargetToRel(candidate, canonicalRoot, false);
+    if (!rel || rel.startsWith("external:")) continue;
+    const startLine = Number(m[2]);
+    const endLine = m[3] ? Number(m[3]) : null;
+    recordRef(rel, startLine, endLine);
+  }
+
+  return { citedFiles: [...cited].sort(), citations, invalidCitations };
+}
+
+function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
+  return extractCitationsWithLines(markdown, canonicalRoot, selfSlot).citedFiles;
 }
 
 const WRITE_TOOL_NAMES = new Set([
@@ -3335,7 +3413,50 @@ const WRITE_TOOL_NAMES = new Set([
 ]);
 const READ_TOOL_NAMES = new Set(["read_file", "view_file", "view_file_outline", "view_code_item"]);
 const SEARCH_TOOL_NAMES = new Set(["grep_search", "find_by_name", "list_dir"]);
+const DIR_ONLY_TOOL_NAMES = new Set(["find_by_name", "list_dir"]);
 const COMMAND_TOOL_NAMES = new Set(["run_command", "execute_command", "bash"]);
+const DELEGATION_TOOL_NAMES = new Set(["invoke_subagent", "swarm"]);
+const SHELL_DIR_LIST_CMDS = new Set(["ls", "find", "tree", "fd", "du"]);
+const SHELL_SEARCH_CMDS = new Set(["rg", "grep", "egrep", "fgrep", "ag", "ack"]);
+const SHELL_READ_CMDS = new Set([
+  "cat", "head", "tail", "sed", "awk", "nl", "less", "more", "wc", "jq",
+  "diff", "cmp", "strings", "cut", "sort", "uniq", "tr", "perl", "ruby",
+  "node", "python", "python3", "stat", "file", "readlink", "od", "xxd", "hexdump"
+]);
+const GIT_READ_SUBCMDS = new Set(["show", "diff", "log", "blame", "cat-file"]);
+const GIT_LIST_SUBCMDS = new Set(["status", "ls-files", "ls-tree", "branch", "rev-parse"]);
+
+function parsePositiveInt(value) {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+function matchSimpleStarGlob(name, pattern) {
+  const parts = pattern.split("*");
+  if (parts.length === 1) return name === pattern;
+  if (parts[0] && !name.startsWith(parts[0])) return false;
+  let pos = parts[0].length;
+  const last = parts[parts.length - 1];
+  if (last && !name.endsWith(last)) return false;
+  const endLimit = name.length - last.length;
+  if (pos > endLimit) return false;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const seg = parts[i];
+    if (!seg) continue;
+    const found = name.indexOf(seg, pos);
+    if (found === -1 || found + seg.length > endLimit) return false;
+    pos = found + seg.length;
+  }
+  return true;
+}
+
+function stripOuterQuotes(token) {
+  if (token.length >= 2 && ((token[0] === "\"" && token[token.length - 1] === "\"") || (token[0] === "'" && token[token.length - 1] === "'"))) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
 
 function decodeCompactToolArgValue(value, key) {
   if (typeof value !== "string") return value;
@@ -3348,10 +3469,13 @@ function normalizeToolCallArgs(rawArgs, compact = true) {
   return compact ? Object.fromEntries(Object.entries(rawArgs).map(([key, value]) => [key, decodeCompactToolArgValue(value, key)])) : rawArgs;
 }
 
-function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) {
+function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false, baseDir = canonicalRoot) {
   if (typeof rawTarget !== "string" || !rawTarget.trim()) return null;
-  const trimmed = rawTarget.trim().replace(/^file:\/\//i, "");
-  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(canonicalRoot, trimmed);
+  let trimmed = rawTarget.trim();
+  if (/^file:\/\//i.test(trimmed)) {
+    try { trimmed = fileURLToPath(trimmed); } catch { return `external:${rawTarget}`; }
+  }
+  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(baseDir, trimmed);
   let normalizedResolved = resolved;
   try {
     const st = fs.lstatSync(resolved);
@@ -3374,40 +3498,386 @@ function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) 
   return rel || (allowEqual ? "." : null);
 }
 
-function recordInspectedPath(rawTarget, canonicalRoot, inspectedFiles, inspectedDirs, state) {
-  const rel = normalizeToolTargetToRel(rawTarget, canonicalRoot, true);
-  if (!rel || rel.startsWith("external:")) return;
-  if (rel === ".") {
-    state.inspectedRoot = true;
-    return;
+function addOpenedFile(openedFilesMap, relPath, kind, range = null) {
+  if (!relPath || relPath === "." || relPath.startsWith("external:")) return;
+  let entry = openedFilesMap.get(relPath);
+  if (!entry) {
+    entry = { kinds: new Set(), ranges: [] };
+    openedFilesMap.set(relPath, entry);
   }
-  const abs = path.join(canonicalRoot, rel);
-  try {
-    const st = fs.lstatSync(abs);
-    if (st.isDirectory()) {
-      inspectedDirs.add(rel);
-      return;
+  entry.kinds.add(kind);
+  if (range && entry.ranges.length < 16) {
+    const key = `${range[0] ?? ""}:${range[1] ?? ""}`;
+    if (!entry.ranges.some(r => `${r[0] ?? ""}:${r[1] ?? ""}` === key)) {
+      entry.ranges.push(range);
     }
-  } catch {}
-  inspectedFiles.add(rel);
+  }
+}
+
+function newSearchFilter() {
+  return { includes: [], excludes: [], iglobIncludes: [], iglobExcludes: [], excludeDirs: [], types: [], typeNots: [], unknown: false };
+}
+
+function boundedGlobMatch(value, pattern) {
+  if (pattern.length > 512 || value.length > 4096 || /[\[\]{}\\]/.test(pattern)) return null;
+  let budget = 32 * (value.length + pattern.length + 1);
+  const matchSegment = (text, glob) => {
+    let p = 0, v = 0, star = -1, retry = 0;
+    while (v < text.length) {
+      if (--budget < 0) return null;
+      if (glob[p] === '?' || glob[p] === text[v]) { p++; v++; }
+      else if (glob[p] === '*') { star = ++p; retry = v; }
+      else if (star >= 0 && retry < text.length) { p = star; v = ++retry; }
+      else return false;
+    }
+    while (glob[p] === '*') p++;
+    return p === glob.length;
+  };
+  const parts = pattern.split('/'), values = value.split('/');
+  let p = 0, v = 0, star = -1, retry = 0;
+  while (v < values.length) {
+    if (--budget < 0) return null;
+    if (parts[p] === '**') { star = ++p; retry = v; continue; }
+    const matched = p < parts.length ? matchSegment(values[v], parts[p]) : false;
+    if (matched === null) return null;
+    if (matched) { p++; v++; }
+    else if (star >= 0 && retry < values.length) { p = star; v = ++retry; }
+    else return false;
+  }
+  while (parts[p] === '**') p++;
+  return p === parts.length;
+}
+
+function matchesSearchGlob(pattern, rel, dirRel) {
+  if (typeof pattern !== "string" || pattern.length > 512) return null;
+  const open = pattern.indexOf("{");
+  if (open !== -1) {
+    const close = pattern.indexOf("}", open);
+    if (close === -1 || pattern.indexOf("{", open + 1) !== -1) return null;
+    const alternatives = pattern.slice(open + 1, close).split(",");
+    if (alternatives.length > 32 || alternatives.some(s => s.includes(".."))) return null;
+    const results = alternatives.map(s => matchesSearchGlob(pattern.slice(0, open) + s + pattern.slice(close + 1), rel, dirRel));
+    return results.includes(true) ? true : results.includes(null) ? null : false;
+  }
+  const normalized = pattern.replace(/^\//, "");
+  const candidates = normalized.includes("/")
+    ? [rel, path.posix.relative(dirRel || ".", rel)]
+    : [path.posix.basename(rel)];
+  const patterns = normalized.startsWith("**/") ? [normalized, normalized.slice(3)] : [normalized];
+  const results = candidates.flatMap(candidate => patterns.map(p => boundedGlobMatch(candidate, p)));
+  return results.includes(true) ? true : results.includes(null) ? null : false;
+}
+
+const SEARCH_TYPE_EXTENSIONS = {
+  js: ["js", "jsx", "mjs", "cjs"], ts: ["ts", "tsx"], json: ["json", "jsonc"],
+  py: ["py", "pyi"], rust: ["rs"], go: ["go"], java: ["java"], c: ["c", "h"], cpp: ["cpp", "cc", "hpp", "h"],
+  html: ["html", "htm"], css: ["css"], md: ["md", "markdown"], markdown: ["md", "markdown"],
+  yaml: ["yaml", "yml"], xml: ["xml"], toml: ["toml"], sh: ["sh", "bash"], txt: ["txt"], sql: ["sql"]
+};
+
+function searchCoversFile(filter, rel, dirRel) {
+  if (filter.unknown) return false;
+  const typeMatches = type => SEARCH_TYPE_EXTENSIONS[type]?.includes(path.posix.extname(rel).slice(1));
+  if ([...filter.types, ...filter.typeNots].some(t => !Object.hasOwn(SEARCH_TYPE_EXTENSIONS, t))) return false;
+  if (filter.types.length && !filter.types.some(typeMatches) || filter.typeNots.some(typeMatches)) return false;
+  if ((filter.includes.length || filter.iglobIncludes.length) && !filter.includes.some(p => matchesSearchGlob(p, rel, dirRel) === true) && !filter.iglobIncludes.some(p => matchesSearchGlob(p.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase()) === true)) return false;
+  if (filter.iglobExcludes.some(p => matchesSearchGlob(p.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase()) !== false)) return false;
+  if (filter.excludes.some(p => matchesSearchGlob(p, rel, dirRel) !== false)) return false;
+  const dirs = path.posix.dirname(rel).split("/");
+  if (filter.excludeDirs.some(p => dirs.some(d => boundedGlobMatch(d, p) !== false))) return false;
+  return true;
+}
+
+function addSearchEntry(dirMap, rel, kind, filter = newSearchFilter()) {
+  if (!rel || rel === "." || rel.startsWith("external:")) return;
+  let entry = dirMap.get(rel);
+  if (!entry) dirMap.set(rel, entry = { kinds: new Set(), filters: [], filterKeys: new Set(), unfiltered: false });
+  entry.kinds.add(kind);
+  const unfiltered = !filter.unknown && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0);
+  if (unfiltered) { entry.filters = [filter]; entry.filterKeys.clear(); entry.unfiltered = true; return; }
+  if (entry.unfiltered) return;
+  const key = JSON.stringify(filter);
+  if (!entry.filterKeys.has(key)) { entry.filterKeys.add(key); entry.filters.push(filter); }
+}
+
+function nativeSearchFilter(args) {
+  const filter = newSearchFilter();
+  for (const [key, value] of [["includes", args.Includes ?? args.includes], ["excludes", args.Excludes ?? args.excludes]]) {
+    if (value === undefined) continue;
+    let patterns = value;
+    if (typeof patterns === "string" && patterns.startsWith("[")) {
+      try { patterns = JSON.parse(patterns); } catch { filter.unknown = true; }
+    }
+    if (typeof patterns === "string") patterns = [patterns];
+    if (!Array.isArray(patterns) || patterns.length > 64 || patterns.some(p => typeof p !== "string" || p.length > 512)) filter.unknown = true;
+    else filter[key] = patterns;
+  }
+  return filter;
+}
+
+function addDirEntry(dirMap, relPath, kind) {
+  if (!relPath || relPath.startsWith("external:")) return;
+  let set = dirMap.get(relPath);
+  if (!set) {
+    set = new Set();
+    dirMap.set(relPath, set);
+  }
+  set.add(kind);
+}
+
+function expandSimpleGlobInWorkspace(rawPattern, canonicalRoot, baseDir, openedFilesMap, kind, filter = newSearchFilter(), fallbackRoot = canonicalRoot) {
+  if (!rawPattern.includes("*") || rawPattern.includes("**")) return false;
+  const normalizedPat = rawPattern.replace(/\\/g, "/");
+  const slashIdx = normalizedPat.lastIndexOf("/");
+  const dirPart = slashIdx === -1 ? "." : normalizedPat.slice(0, slashIdx) || "/";
+  const basePat = slashIdx === -1 ? normalizedPat : normalizedPat.slice(slashIdx + 1);
+  if (!basePat || dirPart.includes("*")) return false;
+  let dirRel = normalizeToolTargetToRel(dirPart, canonicalRoot, true, baseDir);
+  if (dirRel?.startsWith("external:")) dirRel = normalizeToolTargetToRel(dirPart, fallbackRoot, true, baseDir);
+  if (!dirRel || dirRel.startsWith("external:")) return false;
+  const foundDir = evidencePath(canonicalRoot, dirRel, fallbackRoot);
+  if (!foundDir?.stat.isDirectory()) return false;
+  const dirAbs = foundDir.abs;
+  let dirents;
+  try {
+    dirents = fs.readdirSync(dirAbs, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  let matched = false;
+  let count = 0;
+  for (const d of dirents) {
+    if (d.isSymbolicLink() || !d.isFile()) continue;
+    if (!matchSimpleStarGlob(d.name, basePat)) continue;
+    const rel = dirRel === "." ? d.name : `${dirRel}/${d.name}`;
+    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile(filter, rel, dirRel)) continue;
+    addOpenedFile(openedFilesMap, rel, kind);
+    matched = true;
+    count += 1;
+    if (count >= 128) break;
+  }
+  return matched;
+}
+
+function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap, searchedDirsMap, listedDirsMap, mode, filter = newSearchFilter(), fallbackRoot = canonicalRoot) {
+  if (typeof rawTarget !== "string" || !rawTarget.trim()) return false;
+  const cleaned = stripOuterQuotes(rawTarget.trim()).replace(/:[1-9]\d*(?:-[1-9]\d*)?$/, "").replace(/\/+$/, "");
+  if (!cleaned) return false;
+  if (cleaned.includes("*")) {
+    if (mode === "read" || mode === "search") {
+      return expandSimpleGlobInWorkspace(cleaned, canonicalRoot, baseDir, openedFilesMap, "shell_read", filter, fallbackRoot);
+    }
+    return false;
+  }
+  let rel = normalizeToolTargetToRel(cleaned, canonicalRoot, true, baseDir);
+  if (rel?.startsWith("external:")) rel = normalizeToolTargetToRel(cleaned, fallbackRoot, true, baseDir);
+  if (!rel || rel.startsWith("external:")) return false;
+  if (rel === ".") {
+    if (mode === "list") addDirEntry(listedDirsMap, ".", "dir_list");
+    return mode === "search";
+  }
+  const found = evidencePath(canonicalRoot, rel, fallbackRoot);
+  const isDir = found?.stat.isDirectory() ?? false;
+  const exists = found !== null;
+  if (mode === "list") {
+    if (isDir) addDirEntry(listedDirsMap, rel, "dir_list");
+    else if (exists) addDirEntry(listedDirsMap, path.posix.dirname(rel), "dir_list");
+    return false;
+  }
+  if (isDir) {
+    if (mode === "search") {
+      addSearchEntry(searchedDirsMap, rel, "shell_search", filter);
+      return true;
+    }
+    return false;
+  }
+  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile(filter, rel, path.posix.relative(canonicalRoot, baseDir)))) {
+    addOpenedFile(openedFilesMap, rel, mode === "search" ? "shell_read" : "shell_read");
+    return true;
+  }
+  return false;
+}
+
+const SHELL_VALUE_OPTIONS = new Set([
+  '-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not', '--include', '--exclude', '--exclude-dir',
+  '-e', '--regexp', '-f', '--file', '-A', '-B', '-C', '--after-context', '--before-context', '--context',
+  '-m', '--max-count', '--max-depth', '--max-filesize', '--color', '--colors', '--encoding', '-E',
+  '--threads', '-j', '--sort', '--sortr', '--path-separator', '--replace', '-r', '--pre', '--pre-glob',
+  '--format', '--pretty', '--date', '--max-age', '--min-age', '--author', '--committer', '--since', '--until', '--engine', '--type-add', '--type-clear', '--ignore-file', '--exclude-from', '--label', '--binary-files', '--directories', '-d'
+]);
+const SHELL_BOOLEAN_OPTIONS = new Set([
+  '--hidden', '--no-hidden', '--no-ignore', '--no-ignore-vcs', '--no-ignore-parent', '--no-ignore-dot', '--follow',
+  '--line-number', '--no-line-number', '--with-filename', '--no-filename', '--ignore-case', '--case-sensitive', '--smart-case',
+  '--fixed-strings', '--word-regexp', '--line-regexp', '--invert-match', '--text', '--binary', '--pcre2', '--multiline',
+  '--multiline-dotall', '--json', '--pretty', '--stats', '--files', '--files-with-matches', '--files-without-match', '--count',
+  '--count-matches', '--heading', '--no-heading', '--column', '--no-messages', '--quiet', '--recursive', '--line-buffered',
+  '--crlf', '--no-config', '--trim', '--null', '--null-data', '--only-matching', '--oneline', '--stat', '--numstat',
+  '--name-only', '--name-status', '--no-pager', '--no-ext-diff', '--no-textconv', '--', '-n', '-i', '-s', '-S', '-F',
+  '-w', '-x', '-v', '-a', '-P', '-U', '-l', '-L', '-c', '-H', '-h', '-q', '-o', '-u', '-z', '-0', '-b', '-I', '-R'
+]);
+
+function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
+  const filter = newSearchFilter();
+  const operands = [], programs = [];
+  let hasPattern = false, positional = false, valid = true, listOnly = false, hasProgram = false;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (positional || !token.startsWith('-') || token === '-') { operands.push(token); continue; }
+    if (token === '--') { positional = true; continue; }
+    let flag = token, value;
+    const eq = token.indexOf('=');
+    if (token.startsWith('--') && eq > 0) { flag = token.slice(0, eq); value = token.slice(eq + 1); }
+    else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2))) { flag = token.slice(0, 2); value = token.slice(2); }
+    const interpreter = ['node', 'python', 'python3', 'ruby', 'perl'].includes(head);
+    const programOption = interpreter && ['-e', '-c', '-p', '--eval', '--print'].includes(flag);
+    const countOption = flag === '-n' && (['head', 'tail'].includes(head) || gitSub === 'log');
+    const separatorOption = head === 'awk' && ['-F', '-v'].includes(flag);
+    const valueOption = SHELL_VALUE_OPTIONS.has(flag) && (!['-E', '-r'].includes(flag) || head === 'rg') || programOption || countOption || separatorOption;
+    if (valueOption) {
+      if (value === undefined) value = args[++i];
+      if (typeof value !== 'string') { valid = false; break; }
+      if (programOption) programs.push(value);
+      if (['sed', 'awk'].includes(head) && ['-e', '--expression', '-f', '--file'].includes(flag)) hasProgram = true;
+      if (flag === '-g' || flag === '--glob' || flag === '--iglob') {
+        const negative = value.startsWith('!');
+        const key = flag === '--iglob' ? (negative ? 'iglobExcludes' : 'iglobIncludes') : (negative ? 'excludes' : 'includes');
+        filter[key].push(negative ? value.slice(1) : value);
+      } else if (flag === '--include') filter.includes.push(value);
+      else if (flag === '--exclude') filter.excludes.push(value);
+      else if (flag === '--exclude-dir') filter.excludeDirs.push(value);
+      else if (flag === '-t' || flag === '--type') filter.types.push(value);
+      else if (flag === '-T' || flag === '--type-not') filter.typeNots.push(value);
+      else if (['--type-add', '--type-clear'].includes(flag)) filter.unknown = true;
+      if (['-e', '--regexp', '-f', '--file'].includes(flag) && search) hasPattern = true;
+      continue;
+    }
+    if (flag === '--files') listOnly = true;
+    if (SHELL_BOOLEAN_OPTIONS.has(flag) || !flag.startsWith('--') && /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/.test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
+    valid = false;
+  }
+  if (search && !hasPattern && !listOnly) operands.shift();
+  if (!search && ['awk', 'sed'].includes(head) && !hasProgram) operands.shift();
+  for (const values of Object.values(filter)) if (Array.isArray(values) && (values.length > 64 || values.some(value => value.length > 512))) filter.unknown = true;
+  return { operands, programs, filter, valid, listOnly };
+}
+
+function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFilesMap, searchedDirsMap, listedDirsMap, options = {}) {
+  const { fallbackRoot = effectiveRoot, onRead = () => {}, onCommand = () => {}, baseOrder = 0, orderScale = 1, depth = 0 } = options;
+  let sawContentRead = false;
+  let segmentCwd = initialCwd || effectiveRoot;
+  const normalize = (target, allowEqual = true, cwd = segmentCwd) => {
+    const rel = normalizeToolTargetToRel(target, effectiveRoot, allowEqual, cwd);
+    return rel?.startsWith('external:') ? normalizeToolTargetToRel(target, fallbackRoot, allowEqual, cwd) : rel;
+  };
+  const canonicalCwd = candidate => {
+    const rel = normalize(candidate);
+    if (!rel || rel.startsWith('external:')) return null;
+    const found = evidencePath(effectiveRoot, rel, fallbackRoot);
+    return found?.stat.isDirectory() ? found.abs : null;
+  };
+  const step = orderScale / (segments.length + 1);
+  for (const [index, segment] of segments.entries()) {
+    const order = baseOrder + (index + 1) * step;
+    const command = unwrapShellCommand(segment.words);
+    const head = command.head;
+    let args = command.args;
+    const cmdCwd = canonicalCwd(command.cwd ? path.resolve(segmentCwd, command.cwd) : segmentCwd);
+    onCommand(segment, cmdCwd || segmentCwd, order, Boolean(cmdCwd));
+    if (!cmdCwd) continue;
+    if (head === 'cd') {
+      const next = args.find(a => a && !a.startsWith('-'));
+      if (next && !next.includes('$')) segmentCwd = path.resolve(cmdCwd, next);
+      continue;
+    }
+    if (['sh', 'bash', 'zsh', 'dash'].includes(head) && depth < 2) {
+      const flag = args.findIndex(a => /^-[a-z]*c$/.test(a));
+      if (flag !== -1 && args[flag + 1] && recordShellCommandReads(scanShellCommand(args[flag + 1]), effectiveRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, { ...options, baseOrder: order, orderScale: step, depth: depth + 1 })) sawContentRead = true;
+      continue;
+    }
+    let mode = null, gitSub = '', commandHead = head;
+    if (head === 'git') {
+      gitSub = args[0] || ''; args = args.slice(1);
+      mode = gitSub === 'grep' ? 'search' : GIT_READ_SUBCMDS.has(gitSub) ? 'read' : GIT_LIST_SUBCMDS.has(gitSub) ? 'list' : null;
+    } else if (head === 'rtk') {
+      commandHead = args[0] || ''; args = args.slice(1);
+      mode = ['grep', 'rg'].includes(commandHead) ? 'search' : ['read', 'diff', 'log', 'show'].includes(commandHead) ? 'read' : ['find', 'ls'].includes(commandHead) ? 'list' : null;
+    } else mode = SHELL_SEARCH_CMDS.has(head) ? 'search' : SHELL_READ_CMDS.has(head) ? 'read' : SHELL_DIR_LIST_CMDS.has(head) ? 'list' : null;
+    if (!mode) continue;
+    const parsed = shellOperands(args, { search: mode === 'search', head: commandHead, gitSub });
+    if (!parsed.valid) continue;
+    if (parsed.listOnly) mode = 'list';
+    let recorded = false;
+    for (let target of parsed.operands) {
+      if (gitSub === 'show' || gitSub === 'cat-file') {
+        const colon = target.indexOf(':');
+        if (colon > 0 && !WINDOWS_DRIVE_RE.test(target)) target = target.slice(colon + 1);
+      }
+      if (classifyAndRecordPath(target, effectiveRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, mode, parsed.filter, fallbackRoot)) recorded = true;
+    }
+    for (const program of parsed.programs) {
+      if (!program.includes('readFile') && !program.includes('open(') && !program.includes('read_text')) continue;
+      const fileRe = /["'`]([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8})["'`]/g;
+      for (const match of program.matchAll(fileRe)) if (classifyAndRecordPath(match[1], effectiveRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, 'read', parsed.filter, fallbackRoot)) recorded = true;
+    }
+    if (!parsed.operands.length && mode === 'search') {
+      const cwdRel = normalize(cmdCwd);
+      if (cwdRel && !cwdRel.startsWith('external:')) {
+        if (cwdRel !== '.') addSearchEntry(searchedDirsMap, cwdRel, 'shell_search', parsed.filter);
+        recorded = true;
+      }
+    }
+    if (!parsed.operands.length && mode === 'list') {
+      const cwdRel = normalize(cmdCwd);
+      if (cwdRel && !cwdRel.startsWith('external:')) addDirEntry(listedDirsMap, cwdRel, 'dir_list');
+    }
+    if (gitSub && ['diff', 'log', 'show'].includes(gitSub) && !parsed.operands.some(a => normalize(a, true, cmdCwd)?.startsWith('external:'))) recorded = true;
+    if (recorded) { sawContentRead = true; onRead(order); }
+  }
+  return sawContentRead;
 }
 
 function verifyWorkerTraces(root, record, options = {}) {
   const t0 = performance.now();
   const verifiedDirs = new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
-  if (!isPlainObject(record) || !Array.isArray(record.assignments) || record.assignments.length === 0) {
+  if (!isPlainObject(record) || !Array.isArray(record.assignments) || record.assignments.length === 0 || record.assignments.length > 64) {
     throw new Error("Provide a valid bundle record with assignments for trace verification.");
   }
+  const resolvedReportRoot = resolveReportRoot(record, true);
   const coordId = typeof options.coordId === "string" && options.coordId.trim() ? options.coordId.trim() : undefined;
   validateCoordId(coordId);
   const traceMap = isPlainObject(options.traces) ? options.traces : {};
   const isReadOnly = Boolean(record.readOnly === true || isPlainObject(record.readOnlyBaseline) || options.readOnly === true);
   const anomalies = [];
+  const allFlags = [];
   const warnings = [];
   const workerResults = [];
   const headCache = new Map();
-  const resolvedReportRoot = resolveReportRoot(record);
+  const lineCountCache = new Map();
+  const inspectWorkerReport = (reportSlot, workerRoot) => {
+    let reportExists = false;
+    let reportBytes = 0;
+    let reportSha256 = null;
+    let citedFiles = [];
+    let citedLineRefs = [];
+    let invalidCitations = [];
+    let readError = null;
+    try {
+      const opened = readIfPresentWithStat(canonicalRoot, reportSlot, verifiedDirs);
+      if (opened) {
+        reportExists = true;
+        reportBytes = opened.bytes.length;
+        reportSha256 = sha256(opened.bytes);
+        const md = decodeUtf8(opened.bytes, reportSlot);
+        const extracted = extractCitationsWithLines(md, canonicalRoot, reportSlot, lineCountCache, workerRoot);
+        citedFiles = extracted.citedFiles;
+        citedLineRefs = extracted.citations;
+        invalidCitations = extracted.invalidCitations;
+      }
+    } catch (error) { readError = error.code ?? 'ERR'; }
+    return { reportExists, reportBytes, reportSha256, citedFiles, citedLineRefs, invalidCitations, readError };
+  };
+
   for (const assignment of record.assignments) {
     const workerKey = String(assignment?.conversationId ?? "").trim();
     const explicitWorkerName =
@@ -3415,16 +3885,37 @@ function verifyWorkerTraces(root, record, options = {}) {
         ? assignment.workerName.trim()
         : undefined;
     const reportSlot = String(assignment?.report ?? "").trim();
-    const workerRoot = assignment.worktreeRoot ? path.resolve(assignment.worktreeRoot) : canonicalRoot;
-    const normalizeTarget = (target, allowEqual = false) => {
-      const workerRel = normalizeToolTargetToRel(target, workerRoot, allowEqual);
-      if (workerRel && !workerRel.startsWith("external:")) return workerRel;
-      return normalizeToolTargetToRel(target, canonicalRoot, allowEqual);
+    let workerRoot = canonicalRoot;
+    if (assignment.worktreeRoot !== undefined) {
+      if (typeof assignment.worktreeRoot !== 'string' || !path.isAbsolute(assignment.worktreeRoot)) throw new Error(`Untrusted worker worktree for ${workerKey}.`);
+      const claimed = path.resolve(assignment.worktreeRoot);
+      const receipts = workerReceiptRoots(record.handoffs).filter(h => h.sender === workerKey || h.sender === explicitWorkerName);
+      if (!receipts.length || receipts.some(h => path.resolve(h.root) !== claimed)) throw new Error(`Untrusted worker worktree receipt for ${workerKey}.`);
+      try { workerRoot = validateWorkerWorktreeRoot(canonicalRoot, claimed); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        workerRoot = claimed;
+      }
+    }
+    const normalizeReadTarget = (target, allowEqual = true, cwd = workerRoot) => {
+      const rel = normalizeToolTargetToRel(target, workerRoot, allowEqual, cwd);
+      return rel?.startsWith('external:') ? normalizeToolTargetToRel(target, canonicalRoot, allowEqual, cwd) : rel;
     };
-    const inspectTarget = target => {
-      const rel = normalizeTarget(target, true);
-      if (rel && !rel.startsWith("external:")) recordInspectedPath(rel, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+    const reportInfo = inspectWorkerReport(reportSlot, workerRoot);
+    if (reportInfo.readError) anomalies.push(`${workerKey}: UNREADABLE_REPORT (${reportInfo.readError})`);
+    const workerFlags = new Set();
+    const addWorkerFlag = (flag, detail = null) => {
+      workerFlags.add(flag);
+      const text = detail ? `${workerKey}: ${flag} (${detail})` : `${workerKey}: ${flag}`;
+      if (!allFlags.includes(text)) allFlags.push(text);
     };
+    if (reportInfo.invalidCitations.length > 0) {
+      addWorkerFlag("BAD_CITATION_LINE", `${reportInfo.invalidCitations[0].path}:${reportInfo.invalidCitations[0].line}`);
+      for (const inv of reportInfo.invalidCitations) {
+        warnings.push(`${workerKey}: BAD_CITATION_LINE (${inv.path}:${inv.line})`);
+      }
+    }
+
     const explicitTrace = traceMap[workerKey] ?? (explicitWorkerName ? traceMap[explicitWorkerName] : undefined);
     const discovered = discoverBrainTranscriptForWorker(
       workerKey,
@@ -3436,30 +3927,44 @@ function verifyWorkerTraces(root, record, options = {}) {
       headCache
     );
     if (!discovered) {
-      anomalies.push(`${workerKey}: ${!coordId && !explicitTrace && !/^[0-9a-f]{8}-/i.test(workerKey) ? "MISSING_COORD_ID: pass --coord-id <coordUuid> or --trace <worker=jsonlPath>" : "MISSING_TRACE"}`);
+      addWorkerFlag("NO_TRACE");
+      warnings.push(`${workerKey}: NO_TRACE`);
+      if (!coordId && !explicitTrace && !/^[0-9a-f]{8}-/i.test(workerKey)) addWorkerFlag('MISSING_COORD_ID', 'pass --coord-id <coordUuid> or --trace <worker=jsonlPath>');
       workerResults.push({
         worker: workerKey,
         ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
+        trace: { status: "missing" },
         step1Ok: false,
+        openedFiles: [],
+        report: {
+          path: reportSlot,
+          exists: reportInfo.reportExists,
+          ...(reportInfo.reportExists ? { bytes: reportInfo.reportBytes, sha256: reportInfo.reportSha256 } : {}),
+          citedFilesCount: reportInfo.citedFiles.length,
+          citedLineRefsCount: reportInfo.citedLineRefs.length,
+          ...(reportInfo.invalidCitations.length > 0 ? { invalidCitations: reportInfo.invalidCitations.slice(0, 8) } : {})
+        },
         unauthorizedWrites: [],
-        citedFilesCount: 0,
-        unverifiedCitations: []
+        citedFilesCount: reportInfo.citedFiles.length,
+        unverifiedCitations: [],
+        citedUnopened: [],
+        flags: [...workerFlags]
       });
       continue;
     }
     const { tracePath, brainBaseDir } = discovered;
-    const isInBrainDir = rawTarget => {
-      if (typeof rawTarget !== "string") return false;
-      if (path.basename(path.dirname(tracePath)) !== "logs" || path.basename(path.dirname(path.dirname(tracePath))) !== ".system_generated") return false;
-      const sessionRoot = path.dirname(path.dirname(path.dirname(tracePath)));
-      const target = path.resolve(rawTarget.replace(/^file:\/\//i, ""));
-      if (!isContainedPath(sessionRoot, target, false)) return false;
-      const rel = path.relative(sessionRoot, target).split(path.sep).join("/");
-      if (rel.split("/").includes(".system_generated")) return false;
+    const isInBrainDir = target => {
+      if (typeof target !== 'string' || path.basename(path.dirname(tracePath)) !== 'logs' || path.basename(path.dirname(path.dirname(tracePath))) !== '.system_generated') return false;
+      let absolute;
+      try { absolute = /^file:\/\//i.test(target) ? fileURLToPath(target) : path.resolve(target); } catch { return false; }
+      const session = path.dirname(path.dirname(path.dirname(tracePath)));
+      if (!isContainedPath(session, absolute, false)) return false;
+      const rel = path.relative(session, absolute).split(path.sep).join('/');
+      if (rel.split('/').includes('.system_generated')) return false;
       try {
-        assertNoSymlinkedAncestors(sessionRoot, rel, new Set());
-        if (fs.lstatSync(target).isSymbolicLink()) return false;
-      } catch (error) { if (error.code !== "ENOENT") return false; }
+        assertNoSymlinkedAncestors(session, rel);
+        if (fs.lstatSync(absolute).isSymbolicLink()) return false;
+      } catch (error) { if (error.code !== 'ENOENT') return false; }
       return true;
     };
     let rawJsonl;
@@ -3467,15 +3972,33 @@ function verifyWorkerTraces(root, record, options = {}) {
       rawJsonl = readSafeJsonlFile(tracePath, canonicalRoot, brainBaseDir);
     } catch (err) {
       const errCode = err?.code || "ERR";
+      const isSecurityBlock = errCode === "EFBIG" || errCode === "ELOOP" || errCode === "ENOTREG";
       const tag = errCode === "EFBIG" ? "OVERSIZED_TRACE" : errCode === "ELOOP" || errCode === "ENOTREG" ? `UNSAFE_TRACE (${errCode})` : `UNREADABLE_TRACE (${errCode})`;
-      anomalies.push(`${workerKey}: ${tag}`);
+      if (isSecurityBlock) {
+        anomalies.push(`${workerKey}: ${tag}`);
+      } else {
+        addWorkerFlag("UNVERIFIED_TRACE", tag);
+        warnings.push(`${workerKey}: ${tag}`);
+      }
       workerResults.push({
         worker: workerKey,
         ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
+        trace: { status: "unverified", reason: tag },
         step1Ok: false,
+        openedFiles: [],
+        report: {
+          path: reportSlot,
+          exists: reportInfo.reportExists,
+          ...(reportInfo.reportExists ? { bytes: reportInfo.reportBytes, sha256: reportInfo.reportSha256 } : {}),
+          citedFilesCount: reportInfo.citedFiles.length,
+          citedLineRefsCount: reportInfo.citedLineRefs.length,
+          ...(reportInfo.invalidCitations.length > 0 ? { invalidCitations: reportInfo.invalidCitations.slice(0, 8) } : {})
+        },
         unauthorizedWrites: [],
-        citedFilesCount: 0,
-        unverifiedCitations: []
+        citedFilesCount: reportInfo.citedFiles.length,
+        unverifiedCitations: [],
+        citedUnopened: [],
+        flags: [...workerFlags]
       });
       continue;
     }
@@ -3489,11 +4012,25 @@ function verifyWorkerTraces(root, record, options = {}) {
     let sawEarlyContent = false;
     let sawWorkerMention = !mentionRe;
     let sawCoordSender = !coordId;
-    const inspectedFiles = new Set();
-    const inspectedDirs = new Set();
-    const inspectState = { inspectedRoot: false };
+    let parsedStepCount = 0;
+    let sawRecognizedStepShape = false;
+    const openedFilesMap = new Map();
+    const searchedDirsMap = new Map();
+    const listedDirsMap = new Map();
     const unauthorizedWrites = new Set();
+    const externalWrites = new Set();
+    let shellWriteCount = 0;
+    let delegatedSubagents = 0;
+    let firstReadOrder = null;
+    let reportWriteOrder = null;
+    const noteReadOrder = (order) => {
+      if (firstReadOrder === null || order < firstReadOrder) firstReadOrder = order;
+    };
+    const noteReportWriteOrder = (order) => {
+      if (reportWriteOrder === null || order < reportWriteOrder) reportWriteOrder = order;
+    };
     let corruptLineSeen = false;
+    let traceUnverifiedReason = null;
 
     const fullSteps = new WeakSet();
     let fullTraceLoaded = false;
@@ -3529,7 +4066,12 @@ function verifyWorkerTraces(root, record, options = {}) {
             }
           } catch (err) {
             const errCode = err?.code || "ERR";
-            anomalies.push(`${workerKey}: UNSAFE_FULL_TRACE (${errCode})`);
+            if (errCode === "EFBIG" || errCode === "ELOOP" || errCode === "ENOTREG") {
+              anomalies.push(`${workerKey}: UNSAFE_FULL_TRACE (${errCode})`);
+            } else {
+              traceUnverifiedReason ??= `unreadable_full_trace_${errCode}`;
+              addWorkerFlag("UNVERIFIED_TRACE", `UNREADABLE_FULL_TRACE (${errCode})`);
+            }
           }
         }
       }
@@ -3541,7 +4083,9 @@ function verifyWorkerTraces(root, record, options = {}) {
       }
       if (Array.isArray(compactStep.tool_calls) && compactStep.tool_calls.length > 0 && !truncatedUnresolved) {
         truncatedUnresolved = true;
-        anomalies.push(`${workerKey}: TRUNCATED_STEP_UNRESOLVED`);
+        traceUnverifiedReason ??= "truncated_step_unresolved";
+        addWorkerFlag("UNVERIFIED_TRACE", "TRUNCATED_STEP_UNRESOLVED");
+        warnings.push(`${workerKey}: TRUNCATED_STEP_UNRESOLVED`);
       }
       return compactStep;
     };
@@ -3553,9 +4097,22 @@ function verifyWorkerTraces(root, record, options = {}) {
       } catch {
         if (!corruptLineSeen) {
           corruptLineSeen = true;
-          anomalies.push(`${workerKey}: CORRUPT_JSONL_LINE_${idx + 1}`);
+          traceUnverifiedReason ??= `corrupt_jsonl_line_${idx + 1}`;
+          addWorkerFlag("UNVERIFIED_TRACE", `CORRUPT_JSONL_LINE_${idx + 1}`);
+          warnings.push(`${workerKey}: CORRUPT_JSONL_LINE_${idx + 1}`);
         }
         continue;
+      }
+      if (!isPlainObject(step)) continue;
+      parsedStepCount += 1;
+      if (
+        typeof step.step_index === "number" ||
+        typeof step.content === "string" ||
+        Array.isArray(step.tool_calls) ||
+        typeof step.type === "string" ||
+        typeof step.role === "string"
+      ) {
+        sawRecognizedStepShape = true;
       }
       step = hydrateTruncatedStep(step, idx);
       const stepIdx = typeof step?.step_index === "number" ? step.step_index : idx;
@@ -3566,7 +4123,9 @@ function verifyWorkerTraces(root, record, options = {}) {
         if (coordId && content.includes(`sender=${coordId}`)) sawCoordSender = true;
       }
       const toolCalls = Array.isArray(step?.tool_calls) ? step.tool_calls : [];
-      for (const tc of toolCalls) {
+      for (let callIdx = 0; callIdx < toolCalls.length; callIdx++) {
+        const tc = toolCalls[callIdx];
+        const order = stepIdx * 10000 + callIdx;
         const rawName = String(tc?.name ?? tc?.tool_name ?? tc?.function?.name ?? "").replace(/^default_api:/, "");
         let args = tc?.arguments ?? tc?.args ?? tc?.input ?? tc?.function?.arguments ?? {};
         if (typeof args === "string") {
@@ -3575,129 +4134,233 @@ function verifyWorkerTraces(root, record, options = {}) {
         if (!isPlainObject(args)) continue;
         args = normalizeToolCallArgs(args, path.basename(tracePath) !== "transcript_full.jsonl" && !fullSteps.has(step));
         const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
+
+        if (DELEGATION_TOOL_NAMES.has(rawName)) {
+          if (rawName === "invoke_subagent" || args.action === "add") {
+            delegatedSubagents += 1;
+          }
+          continue;
+        }
+
         if (READ_TOOL_NAMES.has(rawName)) {
-          inspectTarget(targetRaw);
+          const rel = normalizeReadTarget(targetRaw);
+          if (rel && !rel.startsWith("external:") && rel !== ".") {
+            const startLine = parsePositiveInt(args.StartLine ?? args.start_line ?? args.startLine);
+            const endLine = parsePositiveInt(args.EndLine ?? args.end_line ?? args.endLine);
+            const range = startLine !== null || endLine !== null ? [startLine, endLine] : null;
+            addOpenedFile(openedFilesMap, rel, "read_file", range);
+            noteReadOrder(order);
+          }
         } else if (SEARCH_TOOL_NAMES.has(rawName)) {
+          const isDirOnly = DIR_ONLY_TOOL_NAMES.has(rawName);
           for (const searchField of [args.SearchPath, args.SearchDirectory, args.DirectoryPath, targetRaw]) {
-            if (typeof searchField === "string" && searchField.trim()) {
-              inspectTarget(searchField);
+            if (typeof searchField !== "string" || !searchField.trim()) continue;
+            const rel = normalizeReadTarget(searchField);
+            if (!rel || rel.startsWith("external:")) continue;
+            if (isDirOnly) {
+              addDirEntry(listedDirsMap, rel, "dir_list");
+              continue;
             }
+            if (rel === ".") {
+              noteReadOrder(order);
+              continue;
+            }
+            let isDir = false;
+            try { isDir = evidencePath(workerRoot, rel, canonicalRoot)?.stat.isDirectory() ?? false; } catch {}
+            if (isDir) {
+              addSearchEntry(searchedDirsMap, rel, "grep_search", nativeSearchFilter(args));
+            } else if (evidencePath(workerRoot, rel, canonicalRoot)?.stat.isFile() && searchCoversFile(nativeSearchFilter(args), rel, '.')) {
+              addOpenedFile(openedFilesMap, rel, "search");
+            }
+            noteReadOrder(order);
           }
         } else if (COMMAND_TOOL_NAMES.has(rawName)) {
           const cmd = args.CommandLine ?? args.command;
           if (typeof cmd === "string" && cmd.trim()) {
-            const segments = scanShellCommand(cmd);
-            const cwdRaw = args.Cwd ?? args.cwd;
-            let commandCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
-            let cwdValid = true;
-            for (const segment of segments) {
-              const { head, args: words, cwd } = unwrapShellCommand(segment.words);
-              const effectiveCwd = cwd ? path.resolve(commandCwd, cwd) : commandCwd;
-              const segCwdValid = Boolean(cwd || cwdValid);
-              const allowRedirect = target => {
-                if (target === "/dev/null") return true;
-                if (!segCwdValid && !path.isAbsolute(target)) return false;
-                const rel = normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot);
-                if (!rel || rel.startsWith("external:")) return false;
-                if (rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`)) return rel === reportSlot;
-                return isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot;
-              };
-              if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
-              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:")))) unauthorizedWrites.add("run_command");
-              if (segment.dynamic || segment.incomplete || segment.unverifiable) continue;
-              if (head === "cd") {
-                const inPipe = segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&";
-                if (segment.inSubshell || inPipe) continue;
-                if (!segment.inBranch && segment.prevSep !== "||" && segment.nextSep !== "||" && words.length === 1 && words[0] !== "-" && !words[0].startsWith("-")) {
-                  const nextDir = path.resolve(effectiveCwd, words[0]);
-                  let isDir = false;
-                  try { isDir = fs.statSync(nextDir).isDirectory(); } catch {}
-                  if (isDir) commandCwd = nextDir;
-                  else cwdValid = false;
-                } else {
-                  cwdValid = false;
-                }
-                continue;
-              }
-              if (!segCwdValid) continue;
-              const gitRead = head === "git" && ["grep", "diff", "show", "log"].includes(words[0]);
-              if (!["cat", "head", "tail", "sed", "awk", "rg", "grep"].includes(head) && !(head === "rtk" && ["read", "cat", "head", "tail", "grep", "rg", "diff"].includes(words[0])) && !gitRead) continue;
-              const search = ["rg", "grep"].includes(head) || (head === "rtk" && words[0] === "grep") || (head === "git" && words[0] === "grep");
-              let positional = words.slice(head === "git" || head === "rtk" ? 1 : 0).filter(w => !w.startsWith("-"));
-              if (search) positional = positional.slice(1);
-              for (const token of positional) inspectTarget(path.resolve(effectiveCwd, token));
-              if ((search || gitRead) && positional.length === 0 && normalizeTarget(effectiveCwd, true) === ".") inspectState.inspectedRoot = true;
+            const rawCwd = args.Cwd ?? args.cwd;
+            let cmdCwd = workerRoot;
+            if (typeof rawCwd === 'string' && rawCwd.trim()) {
+              const cwdRel = normalizeReadTarget(rawCwd, true);
+              const found = cwdRel && !cwdRel.startsWith('external:') ? evidencePath(workerRoot, cwdRel, canonicalRoot) : null;
+              if (found?.stat.isDirectory()) cmdCwd = found.abs;
+              else cmdCwd = path.resolve(workerRoot, rawCwd);
             }
+            recordShellCommandReads(scanShellCommand(cmd), workerRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, {
+              fallbackRoot: canonicalRoot, baseOrder: order, onRead: noteReadOrder,
+              onCommand: (segment, cwd, commandOrder, validCwd) => {
+                const allowRedirect = target => {
+                  if (target === '/dev/null') return true;
+                  if (!validCwd) return false;
+                  const rel = normalizeToolTargetToRel(target, workerRoot, false, cwd);
+                  if (rel === reportSlot) return true;
+                  if (!rel || rel.startsWith('external:') || rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`)) return false;
+                  return isScratchOrReportRelPath(rel, resolvedReportRoot);
+                };
+                if (validCwd && segment.redirections.some(target => normalizeToolTargetToRel(target, workerRoot, false, cwd) === reportSlot)) noteReportWriteOrder(commandOrder);
+                if (isReadOnly && shellCommandWrites([segment], allowRedirect)) {
+                  shellWriteCount++;
+                  addWorkerFlag('SHELL_WRITE_DETECTED', 'run_command');
+                  warnings.push(`${workerKey}: SHELL_WRITE_DETECTED (run_command)`);
+                }
+              }
+            });
           }
         } else if (WRITE_TOOL_NAMES.has(rawName)) {
           if (isPlainObject(args.ArtifactMetadata) && typeof args.ArtifactMetadata.Summary === "string" && typeof args.ArtifactMetadata.UserFacing === "boolean" && typeof args.ArtifactMetadata.RequestFeedback === "boolean" && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
             continue;
           }
-          const rel = normalizeToolTargetToRel(targetRaw, workerRoot);
-          if (isReadOnly && rel !== reportSlot) {
-            unauthorizedWrites.add(rel ?? String(targetRaw));
-          } else if (!isReadOnly && rel && rel.startsWith("external:")) {
-            unauthorizedWrites.add(rel);
+          let rel = normalizeToolTargetToRel(targetRaw, workerRoot);
+          const coordinatorRel = rel?.startsWith('external:') ? normalizeToolTargetToRel(targetRaw, canonicalRoot) : null;
+          if (coordinatorRel && !coordinatorRel.startsWith('external:')) {
+            if (!isReadOnly) { unauthorizedWrites.add(coordinatorRel); anomalies.push(`${workerKey}: WRITE_OUTSIDE_WORKTREE (${coordinatorRel})`); continue; }
+            rel = coordinatorRel;
+          }
+          if (rel === reportSlot && !coordinatorRel) {
+            noteReportWriteOrder(order);
+            continue;
+          }
+          if (isReadOnly) {
+            if (rel && !rel.startsWith("external:") && (!isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`))) {
+              unauthorizedWrites.add(rel);
+              addWorkerFlag("REPO_WRITE_IN_READ_ONLY", rel);
+              anomalies.push(`${workerKey}: REPO_WRITE_IN_READ_ONLY (${rel})`);
+            } else if (!rel) {
+              const label = String(targetRaw ?? "");
+              unauthorizedWrites.add(label);
+              addWorkerFlag("REPO_WRITE_IN_READ_ONLY", label);
+              anomalies.push(`${workerKey}: REPO_WRITE_IN_READ_ONLY (${label})`);
+            } else if (rel.startsWith("external:")) {
+              externalWrites.add(rel);
+              addWorkerFlag("EXTERNAL_WRITE", rel);
+              warnings.push(`${workerKey}: EXTERNAL_WRITE (${rel})`);
+            } else {
+              warnings.push(`${workerKey}: SCRATCH_WRITE_OUTSIDE_SLOT (${rel})`);
+            }
+          } else if (rel && rel.startsWith("external:")) {
+            externalWrites.add(rel);
+            addWorkerFlag("EXTERNAL_WRITE", rel);
+            warnings.push(`${workerKey}: EXTERNAL_WRITE (${rel})`);
           }
         }
       }
     }
 
-    const step1Ok = sawEarlyContent && sawWorkerMention && sawCoordSender && !corruptLineSeen;
-    if (!sawEarlyContent) anomalies.push(`${workerKey}: EMPTY_STEP1`);
-    else {
-      if (!sawWorkerMention) anomalies.push(`${workerKey}: MISSING_MENTION (@${expectedMentionName})`);
-      if (!sawCoordSender) anomalies.push(`${workerKey}: COORD_SENDER_MISMATCH (expected ${coordId})`);
-    }
-    for (const wPath of unauthorizedWrites) {
-      anomalies.push(`${workerKey}: UNAUTHORIZED_WRITE (${wPath})`);
+    if (lines.length === 0 || parsedStepCount === 0 || !sawRecognizedStepShape) {
+      traceUnverifiedReason ??= "unrecognized_format";
+      addWorkerFlag("UNVERIFIED_TRACE", "unrecognized_format");
+      warnings.push(`${workerKey}: UNVERIFIED_TRACE (unrecognized_format)`);
     }
 
-    let citedFiles = [];
-    let unverifiedCitations = [];
-    const isFileGrounded = (relFile) => {
-      if (inspectState.inspectedRoot || inspectedFiles.has(relFile)) return true;
-      for (const dirRel of inspectedDirs) {
-        if (relFile === dirRel || relFile.startsWith(`${dirRel}/`)) return true;
+    const step1Ok = sawEarlyContent && sawWorkerMention && sawCoordSender && !corruptLineSeen;
+    if (!sawEarlyContent && sawRecognizedStepShape) {
+      traceUnverifiedReason ??= "empty_step1";
+      addWorkerFlag("UNVERIFIED_TRACE", "EMPTY_STEP1");
+      warnings.push(`${workerKey}: EMPTY_STEP1`);
+    } else if (sawEarlyContent) {
+      if (!sawWorkerMention) {
+        traceUnverifiedReason ??= "missing_mention";
+        addWorkerFlag("UNVERIFIED_TRACE", `MISSING_MENTION (@${expectedMentionName})`);
+        warnings.push(`${workerKey}: MISSING_MENTION (@${expectedMentionName})`);
+      }
+      if (!sawCoordSender) {
+        traceUnverifiedReason ??= "coord_sender_mismatch";
+        addWorkerFlag("UNVERIFIED_TRACE", `COORD_SENDER_MISMATCH (expected ${coordId})`);
+        warnings.push(`${workerKey}: COORD_SENDER_MISMATCH (expected ${coordId})`);
+      }
+    }
+
+    const writtenAfterFirstRead =
+      reportWriteOrder === null
+        ? null
+        : firstReadOrder !== null && reportWriteOrder >= firstReadOrder;
+    if (writtenAfterFirstRead === false && delegatedSubagents === 0) {
+      addWorkerFlag("REPORT_BEFORE_READS");
+      warnings.push(`${workerKey}: REPORT_BEFORE_READS`);
+    }
+
+    const isFileProvablyOpened = (relFile) => {
+      if (openedFilesMap.has(relFile)) return true;
+      for (const [dirRel, entry] of searchedDirsMap) {
+        if ((relFile === dirRel || relFile.startsWith(`${dirRel}/`)) && entry.filters.some(filter => searchCoversFile(filter, relFile, dirRel))) return true;
       }
       return false;
     };
-    try {
-      const opened = readIfPresentWithStat(canonicalRoot, reportSlot, verifiedDirs);
-      if (opened) {
-        const md = decodeUtf8(opened.bytes, reportSlot);
-        citedFiles = extractCitedWorkspaceFiles(md, canonicalRoot, reportSlot);
-        unverifiedCitations = citedFiles.filter(f => !isFileGrounded(f));
-        for (const uFile of unverifiedCitations) {
-          warnings.push(`${workerKey}: UNVERIFIED_CITATION (${uFile})`);
-        }
+
+    const citedUnopened = reportInfo.citedFiles.filter(f => !isFileProvablyOpened(f));
+    if (citedUnopened.length > 0) {
+      if (delegatedSubagents > 0) {
+        traceUnverifiedReason ??= "delegated_subagents";
+        addWorkerFlag("UNVERIFIED_TRACE", "delegated_subagents");
+      } else {
+        addWorkerFlag("CITED_UNOPENED", citedUnopened[0]);
       }
-    } catch (error) { anomalies.push(`${workerKey}: UNREADABLE_REPORT (${error.code ?? "ERR"})`); }
+      for (const uFile of citedUnopened) {
+        warnings.push(`${workerKey}: CITED_UNOPENED (${uFile})`);
+      }
+    }
+
+    const traceStatus = traceUnverifiedReason ? "unverified" : "ok";
+    const openedFilesList = [...openedFilesMap.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([p, info]) => ({
+        path: p,
+        kinds: [...info.kinds].sort(),
+        ...(info.ranges.length > 0 ? { ranges: info.ranges } : {})
+      }));
+    const searchedDirsList = [...searchedDirsMap.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([p, entry]) => ({ path: p, kinds: [...entry.kinds].sort(), filters: entry.filters.map(filter => ({ ...filter, unfiltered: !filter.unknown && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0) })) }));
+    const listedDirsList = [...listedDirsMap.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([p, kinds]) => ({ path: p, kinds: [...kinds].sort() }));
 
     workerResults.push({
       worker: workerKey,
       ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
+      trace: { status: traceStatus, ...(traceUnverifiedReason ? { reason: traceUnverifiedReason } : {}) },
       step1Ok,
+      ...(delegatedSubagents > 0 ? { delegatedSubagents } : {}),
+      openedFiles: openedFilesList.slice(0, 32),
+      ...(openedFilesList.length > 32 ? { openedFilesTruncated: openedFilesList.length - 32 } : {}),
+      ...(searchedDirsList.length > 0 ? { searchedDirs: searchedDirsList.slice(0, 16) } : {}),
+      ...(listedDirsList.length > 0 ? { listedDirs: listedDirsList.slice(0, 16) } : {}),
+      report: {
+        path: reportSlot,
+        exists: reportInfo.reportExists,
+        ...(reportInfo.reportExists ? { bytes: reportInfo.reportBytes, sha256: reportInfo.reportSha256 } : {}),
+        ...(writtenAfterFirstRead !== null ? { writtenAfterFirstRead } : {}),
+        citedFilesCount: reportInfo.citedFiles.length,
+        citedLineRefsCount: reportInfo.citedLineRefs.length,
+        ...(reportInfo.invalidCitations.length > 0 ? { invalidCitations: reportInfo.invalidCitations.slice(0, 8) } : {})
+      },
       unauthorizedWrites: [...unauthorizedWrites].slice(0, 5),
-      citedFilesCount: citedFiles.length,
-      unverifiedCitations: unverifiedCitations.slice(0, 5)
+      ...(shellWriteCount > 0 ? { shellWriteCount } : {}),
+      ...(externalWrites.size > 0 ? { externalWrites: [...externalWrites].slice(0, 5) } : {}),
+      citedFilesCount: reportInfo.citedFiles.length,
+      unverifiedCitations: citedUnopened.slice(0, 5),
+      citedUnopened: citedUnopened.slice(0, 8),
+      flags: [...workerFlags]
     });
   }
 
   const ok = anomalies.length === 0;
   const maxAnomalies = 8;
   const cappedAnomalies = anomalies.slice(0, maxAnomalies).map(a => (a.length > 110 ? `${a.slice(0, 107)}...` : a));
+  const cappedFlags = allFlags.slice(0, maxAnomalies).map(f => (f.length > 110 ? `${f.slice(0, 107)}...` : f));
   const cappedWarnings = warnings.slice(0, maxAnomalies).map(w => (w.length > 110 ? `${w.slice(0, 107)}...` : w));
   return {
     ok,
-    recommendedVerdict: ok ? "CLEAN" : "INTEGRITY VIOLATION",
+    recommendedVerdict: !ok ? "INTEGRITY VIOLATION" : allFlags.length > 0 || workerResults.some(worker => worker.trace.status !== 'ok') ? "REVIEW_REQUIRED" : "CLEAN",
+    recommendedWorkVerdict: !ok ? "NOT VERIFIED" : allFlags.length > 0 || workerResults.some(worker => worker.trace.status !== 'ok') ? "REVIEW_REQUIRED" : "VERIFIED",
     squadId: record.squadId ?? "unknown",
     readOnly: isReadOnly,
     workersChecked: workerResults.length,
     anomaliesCount: anomalies.length,
+    flagsCount: allFlags.length,
+    ...(allFlags.length > 0 ? { flags: cappedFlags } : {}),
     ...(warnings.length > 0 ? { warningsCount: warnings.length, warnings: cappedWarnings } : {}),
     elapsedMs: Number((performance.now() - t0).toFixed(2)),
-    workers: workerResults.slice(0, 12),
+    workers: workerResults,
     anomalies: cappedAnomalies
   };
 }

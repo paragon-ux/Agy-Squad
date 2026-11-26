@@ -182,13 +182,13 @@ function resolveIntegrityAuditor(squads, targetSquad, warnings = null, options =
     {
       spec: {
         role: "Integrity Auditor",
-        objective: `Audit '${resolvedTarget}' traces & evidence.`,
+        objective: `Verify '${resolvedTarget}' work evidence & spot-check cited claims.`,
         scopeFiles: defaultAuditScopes,
         expectedDeliverable: [
           "Standalone lines (plain text, no backticks):",
           `Target Squad: ${resolvedTarget}`,
           "Evidence Digest: <sha256>",
-          "Integrity Verdict: CLEAN | INTEGRITY VIOLATION"
+          "Work Verdict: VERIFIED | NOT VERIFIED"
         ].join("\n")
       },
       id: slotId,

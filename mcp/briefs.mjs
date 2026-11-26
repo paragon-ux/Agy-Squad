@@ -23,9 +23,6 @@ const AGENT_ALIAS_PAIRS = Object.freeze([
 ]);
 
 const NATIVE_READ_TOOLS = "native search/read (grep_search/find_by_name + bounded read_file) or git grep -n";
-const TRANSCRIPT_FORENSICS_BASE =
-  "bounded read_file slices of ~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl (matching transcript_full.jsonl line only if truncated_fields); counts via 'agy-context transcript health --id u1,u2 --json' when installed";
-const TRANSCRIPT_FORENSICS_SWARM = `${TRANSCRIPT_FORENSICS_BASE} (swarm: sender=<coordId> + @<workerName>)`;
 
 const superviseCohort = [
   "Map conversationId->slot in shared workspace; yield via Reactive Wakeup, reconcile 1 receipt/slot; at 10m checkpoint operator checks /agents (stop own children only).",
@@ -285,16 +282,16 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const isSwarm = executionMode === "swarm";
   const normalizedObjective = normalizeModeObjective(objective, executionMode, isLead, isIntegrityAuditor);
 
-  const traceForensics = isSwarm ? TRANSCRIPT_FORENSICS_SWARM : TRANSCRIPT_FORENSICS_BASE;
   const deliverableHasAuditFields =
     deliverable.includes("Target Squad:") &&
     deliverable.includes("Evidence Digest:") &&
-    deliverable.includes("Integrity Verdict:");
+    (deliverable.includes("Work Verdict:") || deliverable.includes("Integrity Verdict:"));
   const auditEmitClause = deliverableHasAuditFields
     ? ""
-    : "\nEmit standalone lines (plain text, no backticks, never ';'-joined):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN | INTEGRITY VIOLATION";
+    : "\nEmit standalone lines (plain text, no backticks, never ';'-joined):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nWork Verdict: VERIFIED | NOT VERIFIED";
+  const auditNegativeVerdict = /Integrity Verdict:/i.test(deliverable) && !/Work Verdict:/i.test(deliverable) ? "Integrity Verdict: INTEGRITY VIOLATION" : "Work Verdict: NOT VERIFIED";
   const alignmentLine = isIntegrityAuditor
-    ? `Integrity Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Traces (${traceForensics}${isSwarm ? "; board/status: receipts/roster only; re-execution cannot satisfy CLEAN" : ""}). Fail closed: 'Integrity Verdict: INTEGRITY VIOLATION' if traces missing/tampered.${auditEmitClause}`
+    ? `Work Auditor: ${NATIVE_READ_TOOLS}; no raw .system_generated/ copies. Review agy-squad audit-check work evidence first, then spot-check up to 3 claims/worker (prioritize flagged workers & cited-unopened files) at cited file:line${isSwarm ? "; board: receipts/roster only" : ""}; do not read other sessions' transcripts. Emit a Worker | Flags | Claims checked | Result | Note table; fail closed ('${auditNegativeVerdict}') on fabricated claims or read-only repo writes.${auditEmitClause}`
     : `${isSwarm ? "Worker Alignment Policy: Follow squad lead/coordinator policy." : "Subagent Alignment Policy: Follow squad lead policy."} Anti-cheating rule: cite executed checks or file:line; use ${NATIVE_READ_TOOLS}. Retry when inputs change/transient; else partial+blocker.`;
 
   const hasManifestFile =
