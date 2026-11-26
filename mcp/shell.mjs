@@ -24,7 +24,10 @@ export function scanShellCommand(command) {
       word += c; continue;
     }
     if (c === "'" || c === '"') { quote = c; active = true; continue; }
-    if (c === "\\" && i + 1 < command.length) { word += command[++i]; active = true; continue; }
+    if (c === "\\" && i + 1 < command.length) {
+      word += /^[A-Za-z]:/.test(word) || word.startsWith("\\") ? c : command[++i];
+      active = true; continue;
+    }
     if (c === "`" || (c === "$" && command[i + 1] === "(")) dynamic = true;
     if (c === ">") {
       if (/^\d+$/.test(word)) { word = ""; active = false; }
