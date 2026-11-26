@@ -65,22 +65,13 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     if (cache.has(relPosix)) return;
     try {
       absPath = workspacePath(canonicalRoot, relPosix);
-      const st = fs.lstatSync(absPath);
-      if (st.isSymbolicLink() || !st.isFile()) {
-        cache.set(relPosix, null);
-        return;
-      }
+      const opened = readOpenedFileWithStat(absPath, relPosix, { maxBytes: 4 * 1024 * 1024 });
+      const st = opened.stat;
       if (st.size < LARGE_FILE_LINE_THRESHOLD && st.size <= LARGE_FILE_BYTE_THRESHOLD) {
         cache.set(relPosix, null);
         return;
       }
-      let lines = 0;
-      if (st.size <= 4 * 1024 * 1024) {
-        const buf = readOpenedFileWithStat(absPath, relPosix, { maxBytes: 4 * 1024 * 1024 }).bytes;
-        lines = countBufferLines(buf);
-      } else {
-        lines = Math.ceil(st.size / 80);
-      }
+      const lines = countBufferLines(opened.bytes);
       if (lines > LARGE_FILE_LINE_THRESHOLD || st.size > LARGE_FILE_BYTE_THRESHOLD) {
         cache.set(relPosix, {
           relPath: relPosix,

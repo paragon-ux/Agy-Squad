@@ -1494,15 +1494,14 @@ try {
     const tSlug = performance.now();
     const slugPlan = planSquadCohort({
       workspace: root,
-      task: "Linear slug test",
+      manifest: { squads: { a: { specialists: [{ role: evilRole, objective: "Linear slug test", scopeFiles: ["."], readOnly: true }] } } },
       executionMode: "swarm",
       readOnly: true,
-      roles: [evilRole],
-      occupiedWorkerNames: [evilRole],
+      occupiedWorkerNames: ["a-a-b"],
       includeIntegrityAuditor: false
     });
     assert.ok(performance.now() - tSlug < 200, "planSquadCohort worker name allocation must stay linear-time on repeated dashes");
-    assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "a-b-2");
+    assert.equal(slugPlan.workers[0].specialists[0].swarmAdd.name, "a-a-b-2");
 
     // Post-swarm live fixes: exact 24-char slug must not warn, 25-char warns, coordinator-* is reserved, includeIntegrityAuditor: false emitted on opt-out
     const exact24Plan = planSquadCohort({
