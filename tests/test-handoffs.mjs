@@ -4171,6 +4171,510 @@ try {
     } finally { fs.rmSync(parent, { recursive: true, force: true }); }
   }
 
+  // S1, S2, S3, S4: Shared shell grammar/expansion classifier, conservative interpreter policy,
+  // lifecycle record-to-bundle compatibility, and collect help/canonical-root polish.
+  {
+    const { scanShellCommand, shellCommandWrites } = await import("../mcp/shell.mjs");
+    const { doesRecordMatchAcceptedBundle } = await import("../mcp/handoffs.mjs");
+
+    function testS1ShellGrammarAndExpansion() {
+      const s1Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-s1-")));
+      try {
+        fs.mkdirSync(path.join(s1Dir, "src"), { recursive: true });
+        fs.writeFileSync(path.join(s1Dir, "src/a.js"), "export const a = 1;\n");
+        const slot = "scratch/agy-squad/squad-s1/specialist-1/report.md";
+        fs.mkdirSync(path.join(s1Dir, path.dirname(slot)), { recursive: true });
+        fs.writeFileSync(path.join(s1Dir, slot), "Checked src/a.js:1\n");
+        const traceFile = path.join(s1Dir, "brain/one/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(traceFile), { recursive: true });
+        const runTraceAudit = (toolCalls) => {
+          const lines = [
+            JSON.stringify({ step_index: 1, content: "sender=C @one" }),
+            JSON.stringify({ step_index: 2, tool_calls: toolCalls })
+          ];
+          fs.writeFileSync(traceFile, lines.join("\n") + "\n");
+          return verifyWorkerTraces(
+            s1Dir,
+            { squadId: "s1", readOnly: true, assignments: [{ conversationId: "one", report: slot }] },
+            { coordId: "C", brainRoot: path.join(s1Dir, "brain") }
+          );
+        };
+        const readCall = { name: "read_file", args: { Path: path.join(s1Dir, "src/a.js") } };
+        const allowScratchOrNull = t => t === "/dev/null" || t.startsWith("scratch/");
+
+        // Real /bin/sh & find behavioral marker oracles on POSIX
+        if (process.platform !== "win32") {
+          const oracleDir = path.join(s1Dir, "oracle");
+          fs.mkdirSync(oracleDir, { recursive: true });
+          for (const [marker, cmd] of [
+            ["m1", "</dev/null touch m1"],
+            ["m2", "if true; then touch m2; fi"],
+            ["m3", "find . -maxdepth 0 -exec touch m3 \\;"],
+            ["m4", "X=touch; $X m4"]
+          ]) {
+            const shRes = spawnSync("/bin/sh", ["-c", cmd], { cwd: oracleDir, encoding: "utf8" });
+            assert.equal(shRes.status, 0, shRes.stderr);
+            assert.equal(fs.existsSync(path.join(oracleDir, marker)), true, `Real shell must create marker for: ${cmd}`);
+          }
+        }
+
+        for (const unsafeCmd of [
+          "</dev/null touch marker",
+          "< /dev/null touch marker",
+          "0</dev/null touch marker",
+          "if true; then touch marker; fi",
+          "while true; do touch marker; done",
+          "for f in a b; do touch marker; done",
+          "{ touch marker; }",
+          "find . -maxdepth 0 -exec touch marker \\;",
+          "find . -execdir rm {} +",
+          "find . -ok rm {} \\;",
+          "find . -fprint scratch/leaked.txt",
+          "find . -fls scratch/leaked.txt",
+          "X=rm; $X src/a.js",
+          "G=checkout; git $G -- src/a.js",
+          "${CMD} src/a.js",
+          'node -p "$X"',
+          "echo $((1+1)) > src/a.js",
+          "cmd /c '%EVIL%'",
+          "echo '%TEMP%'",
+          "%COMSPEC% /c del src/a.js",
+          "unknown-custom-binary --inspect src/a.js",
+          "then head -n 1 src/a.js",
+          "if true; then head -n 1 src/a.js",
+          "find . -exec",
+          "cat <"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(unsafeCmd), allowScratchOrNull), true, `S1 classifier must flag: ${unsafeCmd}`);
+          const traced = runTraceAudit([readCall, { name: "run_command", args: { CommandLine: unsafeCmd } }]);
+          assert.equal(traced.ok, false, `S1 verifyWorkerTraces must fail readOnly check for: ${unsafeCmd}`);
+          assert.equal(traced.recommendedVerdict, "INTEGRITY VIOLATION");
+        }
+
+        // Dynamic commands must not grant citation coverage
+        const ungroundedDyn = runTraceAudit([{ name: "run_command", args: { CommandLine: "cat $TARGET_FILE" } }]);
+        assert.equal(ungroundedDyn.ok, false);
+        assert.ok((ungroundedDyn.warnings ?? []).some(w => w.includes("UNVERIFIED_CITATION (src/a.js)")));
+
+        // Legitimate-use controls: literal single-quoted $, supported read commands, allowed output redirects
+        for (const safeCmd of [
+          "awk '$1 > 0' src/a.js",
+          "rg 'foo$' src",
+          'rg "x => y" src',
+          "printf '%s\\n' ok",
+          'echo hi > "scratch/ok.txt"',
+          "echo hi > '/dev/null'",
+          "</dev/null head -n 5 src/a.js",
+          "if true; then head -n 5 src/a.js; fi",
+          "find src -name '*.js' -exec head -n 1 {} \\;",
+          "git status --short",
+          "git diff -- src/a.js",
+          "sed -n '1,5p' src/a.js"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(safeCmd), allowScratchOrNull), false, `S1 safe control must pass: ${safeCmd}`);
+          const traced = runTraceAudit([readCall, { name: "run_command", args: { CommandLine: safeCmd } }]);
+          assert.equal(traced.ok, true, `S1 verifyWorkerTraces safe control must pass: ${safeCmd}`);
+        }
+      } finally {
+        fs.rmSync(s1Dir, { recursive: true, force: true });
+      }
+    }
+
+    function testS2ConservativeInterpreterPolicy() {
+      const s2Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-s2-")));
+      try {
+        fs.mkdirSync(path.join(s2Dir, "src"), { recursive: true });
+        fs.writeFileSync(path.join(s2Dir, "src/a.js"), "export const a = 1;\n");
+        const slot = "scratch/agy-squad/squad-s2/specialist-1/report.md";
+        fs.mkdirSync(path.join(s2Dir, path.dirname(slot)), { recursive: true });
+        fs.writeFileSync(path.join(s2Dir, slot), "Checked src/a.js:1\n");
+        const traceFile = path.join(s2Dir, "brain/one/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(traceFile), { recursive: true });
+        const runTraceAudit = (cmd) => {
+          fs.writeFileSync(
+            traceFile,
+            JSON.stringify({ step_index: 1, content: "sender=C @one" }) + "\n" +
+            JSON.stringify({ step_index: 2, tool_calls: [{ name: "read_file", args: { Path: path.join(s2Dir, "src/a.js") } }, { name: "run_command", args: { CommandLine: cmd } }] }) + "\n"
+          );
+          return verifyWorkerTraces(
+            s2Dir,
+            { squadId: "s2", readOnly: true, assignments: [{ conversationId: "one", report: slot }] },
+            { coordId: "C", brainRoot: path.join(s2Dir, "brain") }
+          );
+        };
+
+        // Mandatory Perl `BEGIN` compile-time execution marker oracle (`perl -c`)
+        const perlProbe = spawnSync("perl", ["-v"], { encoding: "utf8" });
+        if (!perlProbe.error && perlProbe.status === 0) {
+          const checkPl = path.join(s2Dir, "check.pl");
+          const perlMarker = path.join(s2Dir, "perl-begin-marker.txt");
+          fs.writeFileSync(checkPl, 'BEGIN { open my $fh, ">", "perl-begin-marker.txt" or die $!; print $fh "ran\\n"; close $fh; }\nmy $x = 1;\n');
+          const perlCheck = spawnSync("perl", ["-c", "check.pl"], { cwd: s2Dir, encoding: "utf8" });
+          assert.equal(perlCheck.status, 0, perlCheck.stderr);
+          assert.match(perlCheck.stderr, /syntax OK/i);
+          assert.equal(fs.existsSync(perlMarker), true, "perl -c executes BEGIN block and writes marker");
+        }
+
+        // Real Node script-file & `-r` preload marker oracles
+        fs.writeFileSync(path.join(s2Dir, "write-script.mjs"), 'import fs from "node:fs"; fs.writeFileSync("node-script-marker.txt", "ran\\n");\n');
+        fs.writeFileSync(path.join(s2Dir, "preload.cjs"), 'require("node:fs").writeFileSync("node-preload-marker.txt", "ran\\n");\n');
+        assert.equal(spawnSync(process.execPath, ["write-script.mjs"], { cwd: s2Dir }).status, 0);
+        assert.equal(fs.existsSync(path.join(s2Dir, "node-script-marker.txt")), true);
+        assert.equal(spawnSync(process.execPath, ["-r", "./preload.cjs", "-p", "process.version"], { cwd: s2Dir }).status, 0);
+        assert.equal(fs.existsSync(path.join(s2Dir, "node-preload-marker.txt")), true);
+
+        for (const unsafeInterp of [
+          "perl -c check.pl",
+          "perl check.pl",
+          "perl -v check.pl",
+          "node write-script.mjs",
+          "node .agents/skills/self-diagnosis/scripts/diagnose.mjs --json",
+          "node -r ./preload.cjs -p process.version",
+          "node --require=./preload.cjs --check src/a.js",
+          "node --import ./preload.mjs -v",
+          "node --loader ./loader.mjs --check src/a.js",
+          "node --check src/a.js extra.js",
+          "node -v extra.js",
+          'NODE_OPTIONS="--require ./preload.cjs" node -v',
+          'NODE_OPTIONS="-r ./preload.cjs" node --check src/a.js',
+          "python3 evil.py",
+          "python3 -V extra.py",
+          "PYTHONSTARTUP=evil.py python3 -V",
+          "ruby evil.rb",
+          "sh evil.sh",
+          "bash -n evil.sh",
+          "bash --version extra.sh",
+          "pwsh -EncodedCommand ZWNobyBoYWNrZWQ=",
+          "pwsh -enc ZWNobyBoYWNrZWQ=",
+          "powershell -ec ZWNobyBoYWNrZWQ=",
+          "powershell -e ZWNobyBoYWNrZWQ=",
+          "pwsh -File evil.ps1",
+          "pwsh -f evil.ps1",
+          "pwsh Set-Content src/a.js hacked",
+          "powershell -v Set-Content",
+          "cmd /c dir",
+          "npm test"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(unsafeInterp), () => true), true, `S2 must reject: ${unsafeInterp}`);
+          assert.equal(runTraceAudit(unsafeInterp).ok, false, `S2 trace check must reject: ${unsafeInterp}`);
+        }
+
+        // Validated per-runtime version/help, plain Node syntax check, narrow safe prints, literal AWK control
+        for (const safeInterp of [
+          "perl -v",
+          "perl --version",
+          "perl -h",
+          "perl --help",
+          "python3 -V",
+          "python3 --version",
+          "python3 -h",
+          "python3 --help",
+          "ruby -v",
+          "ruby --help",
+          "pwsh -v",
+          "pwsh --version",
+          "powershell -?",
+          "bash --version",
+          "sh --help",
+          "node -v",
+          "node --version",
+          "node -h",
+          "node --help",
+          "node -c src/a.js",
+          "node --check src/a.js",
+          "node -p process.version",
+          'node --print="process.platform"',
+          "awk '$1 > 0' src/a.js"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(safeInterp), () => true), false, `S2 safe control must allow: ${safeInterp}`);
+          assert.equal(runTraceAudit(safeInterp).ok, true, `S2 trace control must allow: ${safeInterp}`);
+        }
+      } finally {
+        fs.rmSync(s2Dir, { recursive: true, force: true });
+      }
+    }
+
+    function testS3RecordToBundleLifecycleCompatibility() {
+      const s3Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-s3-")));
+      const writeS3 = (rel, text) => {
+        const full = path.join(s3Dir, rel);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, text, "utf8");
+        return full;
+      };
+      try {
+        writeS3("src/a.js", "export const a = 1;\n");
+        writeS3("src/b.js", "export const b = 2;\n");
+        const vf = fingerprint(s3Dir, ["src/a.js"]);
+
+        // 1. Full `plan -> bundle-init -> finalize --allow-non-passing --allow-unaudited -> prune --records` with unchanged generated record
+        for (const nonPassVerdict of ["FAIL", "BLOCKED"]) {
+          const sq = `gen_${nonPassVerdict.toLowerCase()}`;
+          const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+          writeS3(`scratch/${sq}-manifest.json`, JSON.stringify({
+            squads: { [sq]: { lead: { role: "Lead", objective: "Synthesize", scopeFiles: ["src/a.js"] }, specialists: [{ role: "Spec", objective: "Check", scopeFiles: ["src/a.js"] }] } }
+          }));
+          assert.equal(spawnSync(process.execPath, [agySquadCli, "plan", "--manifest", `scratch/${sq}-manifest.json`, "--out", `scratch/${sq}-plan.json`], { cwd: s3Dir, encoding: "utf8" }).status, 0);
+          writeS3(spSlot, "Checked src/a.js:1\n");
+          writeS3(ldSlot, `Content Verdict: ${nonPassVerdict}\n`);
+          const specName = JSON.parse(fs.readFileSync(path.join(s3Dir, `scratch/${sq}-plan.json`), "utf8")).workers[0].specialists[0].workerName;
+          const recRel = `scratch/${sq}-gen.record.json`;
+          const initRes = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", `scratch/${sq}-plan.json`, "--handoff", `${specName}=READY ${spSlot} - ok`, "--out", recRel, "src/a.js"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(initRes.status, 0, initRes.stderr);
+          const initBytes = fs.readFileSync(path.join(s3Dir, recRel));
+
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", recRel, "--allow-non-passing", "--allow-unaudited"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          assert.equal(Buffer.compare(fs.readFileSync(path.join(s3Dir, recRel)), initBytes), 0, "Generated record must remain byte-identical before prune");
+          const sha = JSON.parse(finRes.stdout).bundled.sha256;
+          const prnRes = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${sha}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(prnRes.status, 0, prnRes.stderr);
+          assert.equal(fs.existsSync(path.join(s3Dir, recRel)), false);
+          assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), false);
+        }
+
+        // 2. Omitted-verdict (`'verdict' in record === false`) lifecycles for FAIL, BLOCKED, and PASS (record bytes unchanged before prune)
+        for (const [omittedVerdict, flags] of [
+          ["FAIL", ["--allow-non-passing"]],
+          ["BLOCKED", ["--allow-non-passing"]],
+          ["PASS", []]
+        ]) {
+          const sq = `omit_${omittedVerdict.toLowerCase()}`;
+          const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+          const recRel = `scratch/${sq}.record.json`;
+          writeS3(spSlot, "Checked src/a.js:1\n");
+          writeS3(ldSlot, `Content Verdict: ${omittedVerdict}\n`);
+          const omittedObj = {
+            squadId: sq,
+            workspace: s3Dir,
+            verifiedFiles: vf,
+            assignments: [{ conversationId: "w1", report: spSlot }],
+            handoffs: [{ sender: "w1", message: `READY ${spSlot} - ok` }],
+            requireIntegrityAudit: false
+          };
+          const recFull = writeS3(recRel, JSON.stringify(omittedObj, null, 2) + "\n");
+          const bytesBefore = fs.readFileSync(recFull);
+          assert.equal("verdict" in JSON.parse(bytesBefore.toString("utf8")), false, "verdict property must be absent before finalization");
+
+          if (omittedVerdict !== "PASS") {
+            const withoutFlag = spawnSync(process.execPath, [agySquadCli, "finalize", recRel], { cwd: s3Dir, encoding: "utf8" });
+            assert.notEqual(withoutFlag.status, 0, "Non-passing omitted-verdict record must fail without --allow-non-passing");
+          }
+
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", recRel, ...flags], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          assert.equal(Buffer.compare(fs.readFileSync(recFull), bytesBefore), 0, "Omitted-verdict record bytes must remain unchanged before prune");
+          const sha = JSON.parse(finRes.stdout).bundled.sha256;
+          const prnRes = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${sha}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(prnRes.status, 0, prnRes.stderr);
+          assert.equal(fs.existsSync(recFull), false);
+          assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), false);
+        }
+
+        // 3. Optional audit (`requireIntegrityAudit: false`) WITH explicit clean `integrityReport` / `integrityAuditSlots` -> `auditPolicy: "required"` accepted
+        for (const [modeIdx, explicitField] of [["integrityReport"], ["integrityAuditSlots"]].entries()) {
+          const sq = `opt_clean_${modeIdx}`;
+          const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+          const audSlot = `scratch/agy-squad/squad-integrity_auditor-${sq}/specialist-1/report.md`;
+          const recRel = `scratch/${sq}.record.json`;
+          writeS3(spSlot, "Checked src/a.js:1\n");
+          writeS3(ldSlot, "Content Verdict: PASS\n");
+          const recObj = {
+            squadId: sq,
+            workspace: s3Dir,
+            verifiedFiles: vf,
+            assignments: [{ conversationId: "w1", report: spSlot }],
+            handoffs: [{ sender: "w1", message: `READY ${spSlot} - ok` }],
+            requireIntegrityAudit: false,
+            ...(explicitField === "integrityReport" ? { integrityReport: audSlot } : { integrityAuditSlots: [audSlot] })
+          };
+          const digest = computeEvidenceDigest(s3Dir, recObj).evidenceDigest;
+          writeS3(audSlot, `Target Squad: ${sq}\nEvidence Digest: ${digest}\nIntegrity Verdict: CLEAN\n`);
+          const recFull = writeS3(recRel, JSON.stringify(recObj, null, 2) + "\n");
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", recRel], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          const finJson = JSON.parse(finRes.stdout);
+          assert.equal(finJson.verified.auditPolicy, "required", "Explicit clean audit on optional-audit record produces required auditPolicy");
+          const prnRes = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${finJson.bundled.sha256}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(prnRes.status, 0, prnRes.stderr);
+          assert.equal(fs.existsSync(recFull), false);
+          assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), false);
+        }
+
+        // 4. Combined `--allow-unaudited --allow-non-passing --allow-partial` on omitted-verdict record with named audit slots
+        {
+          const sq = "combo_ovr";
+          const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+          const recRel = `scratch/${sq}.record.json`;
+          writeS3(spSlot, "Partial check src/a.js:1\n");
+          writeS3(ldSlot, "Content Verdict: BLOCKED\n");
+          const comboRec = {
+            squadId: sq,
+            workspace: s3Dir,
+            verifiedFiles: vf,
+            assignments: [{ conversationId: "w1", report: spSlot }],
+            handoffs: [{ sender: "w1", message: `PARTIAL ${spSlot} - blocked` }],
+            requireIntegrityAudit: true,
+            integrityAuditSlots: [`scratch/agy-squad/squad-integrity_auditor-${sq}/specialist-1/report.md`]
+          };
+          const recFull = writeS3(recRel, JSON.stringify(comboRec, null, 2) + "\n");
+          const rawBefore = fs.readFileSync(recFull);
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", recRel, "--allow-unaudited", "--allow-non-passing", "--allow-partial"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          assert.equal(Buffer.compare(fs.readFileSync(recFull), rawBefore), 0);
+          const sha = JSON.parse(finRes.stdout).bundled.sha256;
+          const prnRes = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${sha}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(prnRes.status, 0, prnRes.stderr);
+          assert.equal(fs.existsSync(recFull), false);
+        }
+
+        // 5. Audit cohort (`integrity_auditor` and `integrity_auditor-target`) + retryable prune
+        for (const audSq of ["integrity_auditor", "integrity_auditor-alpha"]) {
+          const spSlot = `scratch/agy-squad/squad-${audSq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${audSq}/lead/report.md`;
+          const recRel = `scratch/${audSq}.record.json`;
+          writeS3(spSlot, "Audit evidence\n");
+          writeS3(ldSlot, "Content Verdict: PASS\n");
+          const audRec = {
+            squadId: audSq,
+            workspace: s3Dir,
+            verifiedFiles: vf,
+            assignments: [{ conversationId: "aud1", report: spSlot }],
+            handoffs: [{ sender: "aud1", message: `READY ${spSlot} - ok` }],
+            requireIntegrityAudit: true
+          };
+          writeS3(recRel, JSON.stringify(audRec, null, 2) + "\n");
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", recRel], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          const sha = JSON.parse(finRes.stdout).bundled.sha256;
+          // Audit-cohort helper control: ordinary `required` auditPolicy bundle must NOT match an audit cohort
+          assert.equal(doesRecordMatchAcceptedBundle(audRec, { squadId: audSq, verdict: "PASS", auditPolicy: "required", verifiedFiles: vf, assignments: audRec.assignments }), false);
+          // First prune keeps record (no --clean-records), second prune retries cleanly and cleans record
+          assert.equal(spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${sha}`], { cwd: s3Dir, encoding: "utf8" }).status, 0);
+          assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), false);
+          assert.equal(spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${sha}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" }).status, 0);
+          assert.equal(fs.existsSync(path.join(s3Dir, recRel)), false);
+        }
+
+        // 6. Negative controls: wrong pin, explicit verdict mismatch, dropped one-way requirement, changed identity/assignments/verifiedFiles/auditSlot -> reject with zero deletion
+        {
+          const sq = "neg_guard";
+          const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+          const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+          const audSlot = `scratch/agy-squad/squad-integrity_auditor-${sq}/specialist-1/report.md`;
+          writeS3(spSlot, "Checked src/a.js:1\n");
+          writeS3(ldSlot, "Content Verdict: FAIL\n");
+          const baseRec = {
+            squadId: sq,
+            workspace: s3Dir,
+            verdict: "FAIL",
+            allowNonPassing: true,
+            verifiedFiles: vf,
+            assignments: [{ conversationId: "w1", report: spSlot }],
+            handoffs: [{ sender: "w1", message: `READY ${spSlot} - ok` }],
+            requireIntegrityAudit: true,
+            integrityAuditSlots: [audSlot]
+          };
+          const digest = computeEvidenceDigest(s3Dir, baseRec).evidenceDigest;
+          writeS3(audSlot, `Target Squad: ${sq}\nEvidence Digest: ${digest}\nIntegrity Verdict: CLEAN\n`);
+          const baseRecRel = `scratch/${sq}-base.record.json`;
+          writeS3(baseRecRel, JSON.stringify(baseRec, null, 2) + "\n");
+          const finRes = spawnSync(process.execPath, [agySquadCli, "finalize", baseRecRel], { cwd: s3Dir, encoding: "utf8" });
+          assert.equal(finRes.status, 0, finRes.stderr);
+          const validSha = JSON.parse(finRes.stdout).bundled.sha256;
+
+          // Wrong SHA pin
+          const badPin = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${baseRecRel}=${"0".repeat(64)}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+          assert.notEqual(badPin.status, 0);
+          assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), true);
+
+          for (const [label, mutatedRec] of [
+            ["explicit PASS vs FAIL bundle", { ...baseRec, verdict: "PASS" }],
+            ["explicit BLOCKED vs FAIL bundle", { ...baseRec, verdict: "BLOCKED" }],
+            ["dropped allowPartial true", { ...baseRec, allowPartial: true }],
+            ["dropped retainReports true", { ...baseRec, retainReports: true }],
+            ["changed verifiedFiles", { ...baseRec, verifiedFiles: fingerprint(s3Dir, ["src/a.js", "src/b.js"]) }],
+            ["changed assignments", { ...baseRec, assignments: [{ conversationId: "w2", report: spSlot }] }],
+            ["contradictory explicit audit slot", { ...baseRec, integrityAuditSlots: ["scratch/agy-squad/squad-integrity_auditor-other/specialist-1/report.md"] }],
+            ["changed squadId", { ...baseRec, squadId: "other_sq" }]
+          ]) {
+            const mutRel = `scratch/mut-${label.replace(/\s+/g, "_")}.record.json`;
+            writeS3(mutRel, JSON.stringify(mutatedRec, null, 2) + "\n");
+            const res = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${mutRel}=${validSha}`, "--clean-records"], { cwd: s3Dir, encoding: "utf8" });
+            assert.notEqual(res.status, 0, `Negative S3 case '${label}' must reject`);
+            assert.equal(fs.existsSync(path.join(s3Dir, spSlot)), true, `Specialist report must not be deleted on '${label}'`);
+            assert.equal(fs.existsSync(path.join(s3Dir, mutRel)), true, `Record file must not be deleted on '${label}'`);
+          }
+        }
+      } finally {
+        fs.rmSync(s3Dir, { recursive: true, force: true });
+      }
+    }
+
+    function testS4CollectHelpAndCanonicalReceiptRoots() {
+      for (const args of [["collect", "--help"], ["help", "collect"]]) {
+        const res = spawnSync(process.execPath, [agySquadCli, ...args], { encoding: "utf8" });
+        assert.equal(res.status, 0, res.stderr);
+        assert.match(res.stdout, /filter --plan\)/);
+        assert.doesNotMatch(res.stdout, /filter --plan\/--record/);
+      }
+
+      const s4Base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-s4-")));
+      try {
+        const realParent = path.join(s4Base, "real");
+        const aliasParent = path.join(s4Base, "alias");
+        const repoDir = path.join(realParent, "repo");
+        const wtDir = path.join(realParent, "wt1");
+        fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
+        fs.symlinkSync(realParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+        fs.writeFileSync(path.join(repoDir, "src/a.js"), "export const a = 1;\n");
+        for (const gitArgs of [
+          ["init", "-q"],
+          ["add", "-A"],
+          ["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "init"],
+          ["worktree", "add", "-q", "-b", "wt-s4", wtDir]
+        ]) {
+          assert.equal(spawnSync("git", ["-C", repoDir, ...gitArgs], { encoding: "utf8" }).status, 0);
+        }
+        const slot1 = "scratch/agy-squad/squad-s4/specialist-1/report.md";
+        const slot2 = "scratch/agy-squad/squad-s4/specialist-2/report.md";
+        fs.mkdirSync(path.join(wtDir, path.dirname(slot1)), { recursive: true });
+        fs.mkdirSync(path.join(wtDir, path.dirname(slot2)), { recursive: true });
+        fs.writeFileSync(path.join(wtDir, slot1), "Spec 1 report\n");
+        fs.writeFileSync(path.join(wtDir, slot2), "Spec 2 report\n");
+
+        const planObj = {
+          executionMode: "swarm",
+          workers: [{
+            squadId: "s4",
+            specialists: [
+              { workerName: "s4-1", reportSlot: slot1, swarmAdd: { workspace: "share" } },
+              { workerName: "s4-2", reportSlot: slot2, swarmAdd: { workspace: "share" } }
+            ]
+          }]
+        };
+        // Only s4-1 reported wt=aliasParent/wt1; slot2 must NOT be collected from wt1 without s4-2's sender-bound receipt
+        const singleSenderCollect = collectReportSlots(repoDir, {
+          plan: planObj,
+          handoffs: [{ sender: "s4-1", message: `@coordinator READY ${slot1} -- ok wt="${path.join(aliasParent, "wt1")}"` }]
+        });
+        assert.deepEqual(singleSenderCollect.collected.map(c => c.slot), [slot1]);
+        assert.equal(fs.existsSync(path.join(repoDir, slot2)), false, "Sender binding must prevent unattributed slot2 copy");
+      } finally {
+        fs.rmSync(s4Base, { recursive: true, force: true });
+      }
+    }
+
+    testS1ShellGrammarAndExpansion();
+    testS2ConservativeInterpreterPolicy();
+    testS3RecordToBundleLifecycleCompatibility();
+    testS4CollectHelpAndCanonicalReceiptRoots();
+  }
+
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

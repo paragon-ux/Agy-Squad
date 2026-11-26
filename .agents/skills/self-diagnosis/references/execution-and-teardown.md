@@ -18,7 +18,7 @@ agy-squad plan --manifest .agents/skills/self-diagnosis/resources/self-diagnosis
 agy-squad dispatch --squad all_l1 --manifest .agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json
 ```
 
-- **Working squads ([`self-diagnosis-manifest.json`](../resources/self-diagnosis-manifest.json), `readOnly: true`):**
+- **Working squads ([`self-diagnosis-manifest.json`](../resources/self-diagnosis-manifest.json), `readOnly: true`):** Coordinator runs `diagnose.mjs --json` and `npm test` in Fast Setup because `readOnly: true` trace checks reject arbitrary script execution (such as `node diagnose.mjs` or `npm test`) as unverifiable.
   - `skill_and_pr_review_audit`: 2 specialists (`SKILL`, `DOC`, `ARCH`, `SCRIPT`).
   - `runtime_and_contract_diagnosis`: 2 specialists (`MCP`, `RUN`, `SVC`, `SCRIPT`, `TEST`, `DEP`, `SEC`).
   - `token_and_execution_optimization`: 2 specialists (`RUN`, `SKILL`, `SVC`, `ARCH`).

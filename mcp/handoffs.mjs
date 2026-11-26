@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { scanShellCommand, shellCommandWrites, unwrapShellCommand } from "./shell.mjs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
@@ -1064,7 +1065,7 @@ function bundleReports(root, record, options = {}) {
     throw new Error("integrityAuditSlots must be an array of nonempty workspace-relative paths.");
   }
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
-  if (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS") {
+  if (verdict !== undefined && (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS")) {
     throw new Error("Only independently passing cohorts are eligible for bundling.");
   }
   const {
@@ -1554,7 +1555,10 @@ function collectReportSlots(root, options = {}) {
   if (!Array.isArray(sources)) {
     throw new Error("Provide at least one worktree directory via --from <dir>.");
   }
-  const receiptRoots = workerReceiptRoots([...(Array.isArray(handoffs) ? handoffs : []), ...(Array.isArray(record?.handoffs) ? record.handoffs : [])]);
+  const receiptRoots = workerReceiptRoots([
+    ...(Array.isArray(handoffs) ? handoffs : []),
+    ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
+  ]).map(r => ({ ...r, realRoot: tryRealPath(r.root) }));
   const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
   if (inferredSources.length === 0) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
   if (sources.length === 0 && plan === undefined && record === undefined) {
@@ -1586,7 +1590,7 @@ function collectReportSlots(root, options = {}) {
     const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
-      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(tryRealPath(r.root), realSrc)).map(r => r.sender));
+      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(r.realRoot, realSrc)).map(r => r.sender));
       if (senders) validateWorkerWorktreeRoot(root, realSrc);
       resolvedSources.push({ raw: src, real: realSrc, senders });
     }
@@ -3597,6 +3601,7 @@ function verifyWorkerTraces(root, record, options = {}) {
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
               if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:"))) unauthorizedWrites.add("run_command");
+              if (segment.dynamic || segment.incomplete || segment.unverifiable) continue;
               if (head === "cd" && words[0]) { commandCwd = path.resolve(commandCwd, words[0]); continue; }
               const gitRead = head === "git" && ["grep", "diff", "show", "log"].includes(words[0]);
               if (!["cat", "head", "tail", "sed", "awk", "rg", "grep"].includes(head) && !(head === "rtk" && ["read", "cat", "head", "tail", "grep", "rg", "diff"].includes(words[0])) && !gitRead) continue;
@@ -3680,6 +3685,60 @@ function verifyWorkerTraces(root, record, options = {}) {
   };
 }
 
+function doesRecordMatchAcceptedBundle(record, bundle) {
+  if (!isPlainObject(record) || !isPlainObject(bundle)) return false;
+  if (bundle.squadId !== record.squadId) return false;
+  if (!isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles)) return false;
+  if (!isDeepStrictEqual(bundle.assignments, record.assignments)) return false;
+
+  if (Boolean(record.allowNonPassing) && bundle.allowNonPassing !== true) return false;
+  if (Boolean(record.allowPartial) && bundle.allowPartial !== true) return false;
+  if (record.retainReports === true && bundle.retainReports !== true) return false;
+
+  if (record.verdict !== undefined) {
+    if (bundle.verdict !== record.verdict) return false;
+    if (bundle.verdict !== "PASS" && bundle.allowNonPassing !== true) return false;
+  } else if (bundle.verdict !== "PASS") {
+    if (bundle.allowNonPassing !== true || (bundle.verdict !== "FAIL" && bundle.verdict !== "BLOCKED")) {
+      return false;
+    }
+  }
+
+  const isAuditCohort =
+    record.squadId === "integrity_auditor" ||
+    (typeof record.squadId === "string" && record.squadId.startsWith("integrity_auditor-"));
+  if (isAuditCohort) {
+    return bundle.auditPolicy === "unaudited-explicit" && !bundle.integrityAudit && !bundle.integrityAudits;
+  }
+
+  const explicitAuditSet = new Set();
+  if (typeof record.integrityReport === "string" && record.integrityReport.trim()) {
+    explicitAuditSet.add(record.integrityReport);
+  }
+  if (Array.isArray(record.integrityAuditSlots)) {
+    for (const slot of record.integrityAuditSlots) {
+      if (typeof slot === "string" && slot.trim()) explicitAuditSet.add(slot);
+    }
+  }
+  const hasExplicitRecordAudit = explicitAuditSet.size > 0;
+
+  if (record.requireIntegrityAudit === false) {
+    if (!hasExplicitRecordAudit) return bundle.auditPolicy === "unaudited-explicit";
+    if (bundle.auditPolicy === "unaudited-explicit") return true;
+    if (bundle.auditPolicy !== "required") return false;
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+
+  if (bundle.auditPolicy === "unaudited-explicit") return true;
+  if (bundle.auditPolicy !== "required") return false;
+  if (hasExplicitRecordAudit) {
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+  return true;
+}
+
 export {
   CONTROL_CHAR_RE,
   assertNoSymlinkedAncestors,
@@ -3694,6 +3753,7 @@ export {
   collectReportSlots,
   computeEvidenceDigest,
   decodeUtf8,
+  doesRecordMatchAcceptedBundle,
   ensureDirectory,
   expandScopeEntriesToFiles,
   extractCitationUrls,

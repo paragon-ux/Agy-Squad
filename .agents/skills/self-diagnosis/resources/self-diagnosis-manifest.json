@@ -33,7 +33,7 @@
             ".agents/skills/platform-fit/SKILL.md",
             ".agents/skills/platform-fit/references/platform-fit-protocol.md"
           ],
-          "instructions": "Run diagnose.mjs --json read-only once as needed; never prune or remove scratch/agy-squad/ mid-cohort.",
+          "instructions": "Inspect your listed scopeFiles directly using read-only file/search tools (coordinator runs diagnose.mjs --json in Fast Setup; do not run script files or prune scratch/agy-squad/ mid-cohort).",
           "expectedDeliverable": "Markdown evidence report with SKILL/DOC/SCRIPT P1/P2/P3 triage, progressive disclosure byte counts, concrete optimization proposals, and exact line references."
         },
         {
@@ -89,7 +89,7 @@
             "mcp/verdicts.mjs",
             "mcp/planner.mjs"
           ],
-          "instructions": "Inspect your listed mcp/ files in bounded slices; run only targeted single-file probes if needed (do not run full npm test or diagnose.mjs).",
+          "instructions": "Inspect your listed mcp/ files in bounded slices using read-only file/search tools or narrow node -p probes (do not run script files, npm test, or diagnose.mjs).",
           "expectedDeliverable": "Markdown evidence report with MCP/RUN/SVC/SEC P1/P2/P3 triage and reproduction or test coverage evidence."
         },
         {
@@ -110,7 +110,7 @@
             "tests/verify-package.mjs",
             ".github/workflows"
           ],
-          "instructions": "Run targeted CLI/preflight/package checks (or npm test once if needed); never prune scratch/ mid-cohort.",
+          "instructions": "Inspect your listed CLI, script, test, and workflow files directly using read-only file/search tools (coordinator runs baseline npm test and preflight; do not run script files or prune scratch/ mid-cohort).",
           "expectedDeliverable": "Markdown evidence report with SCRIPT/TEST/DEP/SEC P1/P2/P3 triage and verification gap analysis."
         }
       ]

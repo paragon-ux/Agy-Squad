@@ -180,7 +180,7 @@ const SUBCOMMAND_HELP = {
     "Options:",
     "  --plan <plan.json>               Planner JSON output defining expected report slots",
     "  --record <record.json>           Bundle record JSON defining expected report slots",
-    "  --squad <id>                     Collect slots for one squad ID (with --from, or filter --plan/--record)",
+    "  --squad <id>                     Collect slots for one squad ID (with --from, or filter --plan)",
     "  --from <worktree-dir>            Repeatable source worktree directory",
     "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts (requires --plan or --record)",
     "  --handoff <receipt>              Repeatable inline handoff receipt containing wt=<dir>",
@@ -1618,7 +1618,7 @@ async function main(args) {
         const bundleRel = handoffsMod.bundlePath(record.squadId, resolvedRootPrefix);
         handoffsMod.verifyBundle(effectiveRoot, bundleRel, acceptedSha, { verifiedDirs });
         const bundle = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs), bundleRel));
-        if (bundle.squadId !== record.squadId || (record.requireIntegrityAudit === false && bundle.auditPolicy !== "unaudited-explicit") || bundle.verdict !== (record.verdict ?? "PASS") || (Boolean(record.allowNonPassing) && !bundle.allowNonPassing) || (Boolean(record.allowPartial) && !bundle.allowPartial) || !isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles) || !isDeepStrictEqual(bundle.assignments, record.assignments)) throw new Error("Record does not match the accepted bundle.");
+        if (!handoffsMod.doesRecordMatchAcceptedBundle(record, bundle)) throw new Error("Record does not match the accepted bundle.");
         const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, acceptedSha, {
           keepReports: values["keep-reports"],
           verifiedDirs
