@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
 import {
   CONTROL_CHAR_RE,
+  validateCoordId,
   normalizeContainedJsonOutPath,
   relativizeContainedCliPath
 } from "../mcp/handoffs.mjs";
@@ -61,7 +62,7 @@ const usage = [
   "                                  Verify bundle integrity (+ optional --prune with SHA-256)",
   "  finalize <record.json...> [options]",
   "                                  Run inspect -> bundle -> verify (+ optional --prune) in one call",
-  "  prune (<report.sources.json> <sha256> | --records <record.json...>) [options]",
+  "  prune (<report.sources.json> <sha256> | --records <record.json>=<accepted-sha256>...) [options]",
   "                                  Prune verified loose specialist reports (and optional records)",
   "  verdict [--integrity] <report.md>",
   "                                  Strictly parse a content or integrity verdict",
@@ -334,19 +335,19 @@ const SUBCOMMAND_HELP = {
     "  agy-squad finalize scratch/agy-squad/squad-a/record.json scratch/agy-squad/squad-b/record.json --replace --prune"
   ].join("\n"),
   prune: [
-    "Usage: agy-squad prune (<report.sources.json> <accepted-sha256> | <bundle>=<sha256>... | --records <record.json...>) [--workspace <dir>] [--keep-reports] [--clean-records]",
+    "Usage: agy-squad prune (<report.sources.json> <accepted-sha256> | <bundle>=<sha256>... | --records <record.json>=<accepted-sha256>...) [--workspace <dir>] [--keep-reports] [--clean-records]",
     "",
     "Safely remove verified loose specialist reports matching accepted bundle SHA-256 digests.",
     "",
     "Options:",
     "  --workspace <dir>                Coordinator workspace root",
-    "  --records <record.json>          Prune bundles corresponding to 1..M verified record files",
+    "  --records <record.json>=<sha256> Pin each record to its accepted bundle digest",
     "  --clean-records                  With --records, unlink verified record.json files after pruning",
     "  --keep-reports                   Verify bundle and retain loose reports on disk",
     "",
     "Examples:",
     "  agy-squad prune scratch/agy-squad/squad-auth/lead/report.sources.json <64-hex-sha256>",
-    "  agy-squad prune --records scratch/agy-squad/squad-a/record.json scratch/agy-squad/squad-b/record.json --clean-records"
+    "  agy-squad prune --records scratch/agy-squad/squad-a/record.json=<accepted-a-sha256> scratch/agy-squad/squad-b/record.json=<accepted-b-sha256> --clean-records"
   ].join("\n"),
   verdict: [
     "Usage: agy-squad verdict [--workspace <dir>] [--integrity] <report.md>",
@@ -645,6 +646,7 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpe
         if (err.code === "ENOENT" && !isExpectedRealPath(workspaceCandidate, cwdResolved)) {
           try {
             raw = decodeUtf8(readRegularFileSafe(cwdResolved, trimmedInput), trimmedInput);
+            resolvedRelPath = relativizeContainedCliPath(cwdResolved, targetRoot) ?? undefined;
           } catch (fallbackErr) {
             throw fallbackErr.code === "ENOENT" ? err : fallbackErr;
           }
@@ -768,7 +770,9 @@ function parseCollectHandoffEntries(items) {
     if (typeof item !== "string" || !item.trim()) {
       throw new Error(`Invalid --handoff entry '${item}'; expected a nonempty receipt line.`);
     }
-    return item.trim();
+    const receipt = item.trim();
+    const match = /^([A-Za-z0-9_.:-]+)=(.+)$/.exec(receipt);
+    return match ? { sender: match[1], message: match[2] } : receipt;
   });
 }
 
@@ -1015,9 +1019,10 @@ async function main(args) {
       throw new Error(usageLine);
     }
     const targetRoot = inferChildWorkspaceIfContained(baseRoot, explicit, plan?.workspace ?? record?.workspace, handoffsMod);
+    const rebaseInput = p => targetRoot !== baseRoot && p !== "-" ? path.resolve(baseRoot, p) : p;
     let handoffs;
     if (values.handoffs !== undefined) {
-      const parsedHandoffs = await readJsonInput(targetRoot, values.handoffs, "handoffs", handoffsMod);
+      const parsedHandoffs = await readJsonInput(targetRoot, rebaseInput(values.handoffs), "handoffs", handoffsMod);
       if (!Array.isArray(parsedHandoffs)) {
         throw new Error("--handoffs JSON file must contain an array of handoff entries.");
       }
@@ -1075,6 +1080,7 @@ async function main(args) {
       replace: { type: "boolean", default: false },
       verbose: { type: "boolean", default: false }
     });
+    validateCoordId(values["coord-id"]);
     if (values.plan === undefined) {
       throw new Error(usageLine);
     }
@@ -1094,7 +1100,8 @@ async function main(args) {
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     const plan = await readJsonInput(baseRoot, values.plan, "plan", handoffsMod);
     const targetRoot = inferChildWorkspaceIfContained(baseRoot, explicit, plan?.workspace, handoffsMod);
-    const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, values.provenance, "provenance", handoffsMod) : undefined;
+    const rebaseInput = p => targetRoot !== baseRoot && p !== "-" ? path.resolve(baseRoot, p) : p;
+    const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, rebaseInput(values.provenance), "provenance", handoffsMod) : undefined;
     if (
       provenance !== undefined &&
       (!provenance ||
@@ -1107,7 +1114,7 @@ async function main(args) {
     let handoffs;
     let parsedHandoffsInput;
     if (values.handoffs !== undefined) {
-      parsedHandoffsInput = await readJsonInput(targetRoot, values.handoffs, "handoffs", handoffsMod);
+      parsedHandoffsInput = await readJsonInput(targetRoot, rebaseInput(values.handoffs), "handoffs", handoffsMod);
       if (!Array.isArray(parsedHandoffsInput)) {
         throw new Error("--handoffs JSON file must contain an array of { sender, message } entries.");
       }
@@ -1118,7 +1125,7 @@ async function main(args) {
     }
     const handoffSeqs = parseHandoffSeqOptions(values["handoff-seq"], values["handoff-seqs"]);
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
-    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p, process.platform, targetRoot));
+    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(rebaseInput(p), process.platform, targetRoot));
     const customReportRoot =
       values["report-root"] !== undefined
         ? normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot)
@@ -1155,7 +1162,7 @@ async function main(args) {
     if (values["all-squads"]) {
       const outDirRel =
         values["out-dir"] !== undefined
-          ? handoffsMod.normalizeReportRoot(normalizeWorkspaceCliPath(values["out-dir"], process.platform, targetRoot))
+          ? handoffsMod.normalizeReportRoot(normalizeWorkspaceCliPath(rebaseInput(values["out-dir"]), process.platform, targetRoot))
           : undefined;
       const batchItems = handoffsMod.buildBundleRecordsForAllSquads(targetRoot, {
         plan,
@@ -1176,7 +1183,7 @@ async function main(args) {
             ? `${outDirRel}/${encodeURIComponent(sqId)}.record.json`
             : handoffsMod.recordSlotPath(sqId, customReportRoot ?? plan?.reportRoot)
       });
-      const recordsOut = [];
+      const prepared = [];
       for (const item of batchItems) {
         const rec = item.record;
         if (values.digest && (!Array.isArray(rec.handoffs) || rec.handoffs.length === 0)) {
@@ -1198,18 +1205,15 @@ async function main(args) {
           warnUncarriedCitations(digestResult.citations, `${item.squadId} synthesis report`);
         }
         const outRel = normalizeBundleOutCliPath(item.outRel, process.platform, targetRoot);
-        const parentDir = path.posix.dirname(outRel);
-        if (parentDir && parentDir !== ".") {
-          handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
+        if (!values.replace) {
+          try { fs.lstatSync(path.join(targetRoot, outRel)); throw new Error(`Target already exists: ${outRel}`); }
+          catch (error) { if (error.code !== "ENOENT") throw error; }
         }
-        const outBytes = Buffer.from(JSON.stringify(rec, null, 2) + "\n", "utf8");
-        handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
         const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, rec, outRel, digestResult, {
           coordId: values["coord-id"],
-          handoffSeqs,
-          idMap
+          handoffSeqs
         });
-        recordsOut.push({
+        prepared.push({ rec, outRel, result: {
           path: outRel,
           squadId: rec.squadId,
           verifiedFilesCount: Object.keys(rec.verifiedFiles).length,
@@ -1217,13 +1221,19 @@ async function main(args) {
           ...(auditSwarmAdds.length > 0 ? { auditSwarmAdd: auditSwarmAdds[0] } : {}),
           ...(auditSwarmAdds.length > 1 ? { auditSwarmAdds } : {}),
           ...(values.verbose ? { record: rec } : {})
-        });
+        }});
       }
+      for (const { rec, outRel } of prepared) {
+        const parentDir = path.posix.dirname(outRel);
+        if (parentDir && parentDir !== ".") handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
+        handoffsMod.publish(targetRoot, outRel, Buffer.from(JSON.stringify(rec, null, 2) + "\n"), values.replace, initVerifiedDirs, undefined, { sync: false });
+      }
+      const recordsOut = prepared.map(item => item.result);
       console.log(JSON.stringify({ ok: true, squadCount: recordsOut.length, records: recordsOut }, null, 2));
       return 0;
     }
 
-    const outRel = values.out !== undefined ? normalizeBundleOutCliPath(values.out, process.platform, targetRoot) : undefined;
+    const outRel = values.out !== undefined ? normalizeBundleOutCliPath(rebaseInput(values.out), process.platform, targetRoot) : undefined;
     let preReadSynthesis;
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
@@ -1270,8 +1280,7 @@ async function main(args) {
       handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
       const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult, {
         coordId: values["coord-id"],
-        handoffSeqs,
-        idMap
+        handoffSeqs
       });
       console.log(JSON.stringify({
         ok: true,
@@ -1331,6 +1340,8 @@ async function main(args) {
       trace: { type: "string", multiple: true },
       "brain-dir": { type: "string" }
     });
+    validateCoordId(values["coord-id"]);
+    if (!values["verify-traces"] && (values["coord-id"] !== undefined || values.trace !== undefined || values["brain-dir"] !== undefined)) throw new Error("--coord-id, --trace, and --brain-dir require --verify-traces on digest.");
     if (positionals.length !== 1) throw new Error(usageLine);
     const handoffsMod = await import("../mcp/handoffs.mjs");
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
@@ -1374,6 +1385,7 @@ async function main(args) {
       throw new Error(usageLine);
     }
     const rawRecordArg = values.record ?? positionals[0];
+    validateCoordId(values["coord-id"]);
     const handoffsMod = await import("../mcp/handoffs.mjs");
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(
@@ -1576,7 +1588,7 @@ async function main(args) {
   }
   if (command === "prune") {
     const usageLine =
-      "Usage: agy-squad prune [--workspace <dir>] (<report.sources.json> <accepted-sha256> | <report.sources.json>=<accepted-sha256>... | --records <record.json...> [--clean-records]) [--keep-reports]";
+      "Usage: agy-squad prune [--workspace <dir>] (<report.sources.json> <accepted-sha256> | <report.sources.json>=<accepted-sha256>... | --records <record.json>=<accepted-sha256>... [--clean-records]) [--keep-reports]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       workspace: { type: "string" },
       records: { type: "string", multiple: true },
@@ -1584,28 +1596,33 @@ async function main(args) {
       "keep-reports": { type: "boolean", default: false }
     });
     if (values["clean-records"] && values.records === undefined) {
-      throw new Error(`Flag '--clean-records' requires '--records <record.json...>' on 'agy-squad prune'.\n${usageLine}`);
+      throw new Error(`Flag '--clean-records' requires '--records <record.json>=<accepted-sha256>...' on 'agy-squad prune'.\n${usageLine}`);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
     const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     if (values.records !== undefined) {
-      const recordArgs = [...values.records, ...positionals];
+      const recordArgs = [...new Set([...values.records, ...positionals])];
       if (!recordArgs.length) throw new Error(usageLine);
       const results = [];
       const removed = [];
       const cleanedRecords = [];
       for (const rawRecArg of recordArgs) {
-        const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecArg, handoffsMod);
+        const pinIndex = rawRecArg.lastIndexOf("=");
+        if (pinIndex < 1 || !/^[a-f0-9]{64}$/.test(rawRecArg.slice(pinIndex + 1))) throw new Error("prune --records requires <record.json>=<accepted-sha256>.");
+        const acceptedSha = rawRecArg.slice(pinIndex + 1);
+        const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecArg.slice(0, pinIndex), handoffsMod);
         const verifiedDirs = new Set([effectiveRoot]);
         const resolvedRootPrefix = handoffsMod.resolveReportRoot(record);
         const bundleRel = handoffsMod.bundlePath(record.squadId, resolvedRootPrefix);
-        const acceptedSha = handoffsMod.sha256(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs));
+        handoffsMod.verifyBundle(effectiveRoot, bundleRel, acceptedSha, { verifiedDirs });
+        const bundle = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs), bundleRel));
+        if (bundle.squadId !== record.squadId || (record.requireIntegrityAudit !== false && bundle.auditPolicy !== "required") || bundle.verdict !== (record.verdict ?? "PASS") || Boolean(bundle.allowNonPassing) !== Boolean(record.allowNonPassing) || Boolean(bundle.allowPartial) !== Boolean(record.allowPartial) || !isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles) || !isDeepStrictEqual(bundle.assignments, record.assignments)) throw new Error("Record does not match the accepted bundle.");
         const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, acceptedSha, {
           keepReports: values["keep-reports"],
           verifiedDirs
         });
         removed.push(...(pruned.removed ?? []));
-        if (values["clean-records"] && !values["keep-reports"] && !path.isAbsolute(recRel)) {
+        if (values["clean-records"] && !values["keep-reports"] && !pruned.retained && !path.isAbsolute(recRel)) {
           const recFull = handoffsMod.workspacePath(effectiveRoot, recRel, verifiedDirs);
           try {
             handoffsMod.readOpenedFileWithStat(recFull, recRel);

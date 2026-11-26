@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.2] - 2026-11-24
 
 ### Added
+- `audit-check` verifies worker attribution, allowed writes, and citation reads before auditors inspect transcripts.
+- Planner output supports staged launch files with `--out`, `--emit-wave`, and `--swarm-pane-out`.
+- Read-only plans capture file hashes and Git state. Mixed plans protect read-only scopes while allowing disjoint writable work.
+- `bundle-init --all-squads` initializes records together; `--from-scope` selects verified files from each squad's scope.
+- `collect --handoffs` copies each isolated worker's report from a validated worktree receipt.
+- `prune --records <record.json>=<accepted-sha256>` checks accepted bundle digests and record parity before cleanup. Unpinned record arguments are rejected; retained reports keep their records.
 - `agy-squad bundle-init --digest`, `digest`, `bundle`, and `finalize` now report a deterministic `citations` summary (`specialistUrls`, `synthesisUrls`, `uncarriedUrls`) and print a warning on stderr before pruning when specialist URLs are missing from the synthesis report.
 - Added `--strict-citations` on `agy-squad bundle` and `agy-squad finalize` to fail closed before bundling or pruning if any specialist URL is not carried into the synthesis report.
 

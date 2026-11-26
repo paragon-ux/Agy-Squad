@@ -5,7 +5,7 @@ Reference for [`SKILL.md`](../SKILL.md).
 ## Pointer-Over-Wire Convention
 
 1. **Report slots:** Write reports to `scratch/agy-squad/squad-<id>/specialist-N/report.md` (or inside `share`/`branch` before `collect`; undeclared `tasks`/`n` shards fail `bundle`).
-2. **Single-line receipt (`<= 500` B):** No newlines; address `@coordinator` (both flat and wave-gated layered; append `wt=<abs-worktree-root>` in `<note>` under `share`/`branch`). Accepts spaced `-`, `--`, or `—`:
+2. **Single-line receipt (`<= 500` B):** No newlines; address `@coordinator` (both flat and wave-gated layered; append `wt="<abs-worktree-root>"` in `<note>` under `share`/`branch`). Accepts spaced `-`, `--`, or `—`:
    - `@coordinator READY <slot> - <note>` (also `--` or `—`)
    - `@coordinator PARTIAL <slot> -- <note and blocker>`
    - `@coordinator NO_REPORT - <reason>`
@@ -24,7 +24,7 @@ Reference for [`SKILL.md`](../SKILL.md).
 
 ## Dual-Path Trace Inspection
 
-- **Deterministic CLI pre-check + bounded trace inspection:** Run `agy-squad audit-check --record <record.json> [--coord-id <coordId>]` (`< 50 ms`) first to deterministically verify Step 1 attribution (`sender=<coordId>`, `@<workerName>`), `readOnly` containment (`0` unauthorized `write_file`/`edit_file`), and cited-file-vs-read grounding:
+- **Deterministic CLI pre-check + bounded trace inspection:** Run `agy-squad audit-check --record <record.json> --coord-id <coordId>` (`< 50 ms`) first to deterministically verify Step 1 attribution (`sender=<coordId>`, `@<workerName>`), `readOnly` containment (`0` unauthorized `write_file`/`edit_file`), and cited-file-vs-read grounding:
   - **Native inspection (always available):** Single-pass bounded read of `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` (+ matching `transcript_full.jsonl` lines only if `truncated_fields` is set). Never copy raw JSONL into `scratch/` or poll step-by-step.
   - **Optional `Agy-Context-Saver` installed:** Inspect transcripts natively (bounded `read_file` slices of `transcript.jsonl` (jump to the matching `transcript_full.jsonl` line only when `truncated_fields` is present)) and run `agy-context transcript health --id u1,u2 --json` for counts, scoped strictly to squad report/record slots and worker transcripts (no unrelated repo source reads).
 - **Fail closed:** Workspace re-runs alone never justify `CLEAN`. Emit standalone lines `Target Squad: <id>`, `Evidence Digest: <64-hex>`, and `Integrity Verdict: CLEAN | INTEGRITY VIOLATION` (plain text, no backticks; `INTEGRITY VIOLATION` if traces cannot be verified or tampering/fabrication is found).
@@ -36,11 +36,11 @@ Verified bundles (`lead/report.sources.json`) prove SHA-256 **file integrity** a
 ```bash
 agy-squad collect --plan <plan.json> --handoffs <handoffs.json>                  # auto-extracts wt=<dir> if isolated
 agy-squad bundle-init --plan <plan.json> --all-squads --handoffs <handoffs.json> \
-  --from-scope --digest --out-dir scratch/records                                # enforces Content Verdict + readOnlyBaseline
+  --from-scope --coord-id <coordId> --digest --out-dir scratch/records                                # enforces Content Verdict + readOnlyBaseline
 # Run Wave-3 audit-<id> (using emitted auditSwarmAdd + agy-squad audit-check), then finalize all squads without --prune:
 agy-squad finalize scratch/records/*.json [--strict-citations] [--replace]
 # Synthesize final deliverable / ledger once with verified bundle SHA-256 hashes, then prune & clean records:
-agy-squad prune --records scratch/records/*.json --clean-records [--keep-reports]
+agy-squad prune --records scratch/records/storage.record.json=<accepted-sha256> --clean-records [--keep-reports]
 ```
 
 *(Note: `bundle-init --digest` and `finalize` already enforce strict `Content Verdict` and `Integrity Verdict` parsing internally; standalone `agy-squad verdict [--integrity] <report.md>` remains available as an optional troubleshooting helper.)*
@@ -50,7 +50,7 @@ agy-squad prune --records scratch/records/*.json --clean-records [--keep-reports
   "squadId": "storage", "workspace": "/path/to/repo", "verdict": "PASS", "requireIntegrityAudit": true,
   "verifiedFiles": { "src/storage.js": "<64-hex-sha256>" },
   "assignments": [{ "conversationId": "storage-wal-reviewer", "report": "scratch/agy-squad/squad-storage/specialist-1/report.md" }],
-  "handoffs": [{ "sender": "storage-wal-reviewer", "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md - fsync guard verified" }]
+  "handoffs": [{ "sender": "storage-wal-reviewer", "message": "@coordinator READY scratch/agy-squad/squad-storage/specialist-1/report.md - fsync guard verified" }]
 }
 ```
 

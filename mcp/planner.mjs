@@ -660,6 +660,18 @@ function planSquadCohort(
     }
   }
 
+  for (const [key, maxItems, maxLength] of [["scopeFiles", 256, 512], ["roles", 64, 160], ["knownModels", 128, 160], ["occupiedWorkerNames", 256, 64], ["boardSeqs", 256, null]]) {
+    const value = args[key];
+    if (value !== undefined && (!Array.isArray(value) || value.length > maxItems || (key !== "occupiedWorkerNames" && value.length === 0) || (maxLength && value.some(v => typeof v !== "string" || v.length === 0 || v.length > maxLength)))) throw new Error(`${key} exceeds its schema bounds.`);
+  }
+  for (const [key, maxLength] of [["reportRoot", 256], ["outPath", 512], ["swarmPaneOutPath", 512]]) {
+    if (args[key] !== undefined && (typeof args[key] !== "string" || !args[key].length || args[key].length > maxLength)) throw new Error(`${key} exceeds its schema bounds.`);
+  }
+  if (args.roleScopes !== undefined) {
+    const value = args.roleScopes;
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length < 1 || Object.keys(value).length > 64 || Object.values(value).some(v => !Array.isArray(v) || !v.length || v.length > 256 || v.some(p => typeof p !== "string" || !p.length || p.length > 512))) throw new Error("roleScopes exceeds its schema bounds.");
+  }
+
   const {
     manifestPath,
     manifest,
@@ -1084,7 +1096,7 @@ function planSquadCohort(
       readOnly === true ||
       (compiledSpecialists.length > 0 &&
         compiledSpecialists.every(s => s.readOnly === true) &&
-        (!compiledLead || leadReadOnlyVal !== false));
+        (!compiledLead || leadReadOnlyVal === true));
     if (squadIsReadOnly) {
       anySquadReadOnly = true;
       for (const s of compiledSpecialists) {
@@ -1176,7 +1188,7 @@ function planSquadCohort(
           );
           recordSubagentWorkerModel(auditModel);
           const targetScopeNote = executionMode === "swarm"
-            ? `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot} [--coord-id <coordId>]', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots/traces only (no unrelated repo source reads).`
+            ? `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot} --coord-id <coordId>', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots/traces only (no unrelated repo source reads).`
             : `Run 'agy-squad audit-check --workspace ${wsCliArg} --record ${squadRecordSlot}', 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
           const compiledAudit = buildSubagentSpec(
             {
@@ -1399,6 +1411,7 @@ function planSquadCohort(
 
   const paneTasks = Object.create(null);
   const rawThreads = [];
+  const usedThreadIds = new Set(["t-additional-squads"]);
   for (const w of workers) {
     const meta = w._paneMeta;
     delete w._paneMeta;
@@ -1415,8 +1428,12 @@ function planSquadCohort(
         paneTasks[a.workerName] = `Audit ${w.squadId} traces`.slice(0, 64);
         threadWorkers.push(a.workerName);
       }
+      const threadBase = `t-${slugifyName(w.squadId, "squad")}`;
+      let threadId = threadBase;
+      for (let suffix = 2; usedThreadIds.has(threadId); suffix++) threadId = `${threadBase}-${suffix}`;
+      usedThreadIds.add(threadId);
       rawThreads.push({
-        id: `t-${slugifyName(w.squadId, "squad")}`,
+        id: threadId,
         title: w.squadId.replace(/[_-]+/g, " ").slice(0, 48),
         goal: `Verify & bundle ${w.squadId}.`,
         tasks: threadWorkers
@@ -1469,7 +1486,8 @@ function planSquadCohort(
   const allSquadsReadOnly = workers.length > 0 && workers.every(w => w.readOnly === true);
   const planReadOnlyBaseline = anySquadReadOnly
     ? captureReadOnlyBaseline(root, [...readOnlyBaselineScopes], normalizedReportRoot, baselineCache, {
-        ignoreRelPaths: planIgnorePaths
+        ignoreRelPaths: planIgnorePaths,
+        scoped: !allSquadsReadOnly
       })
     : undefined;
   const hasWildcardScope = workers.some(w =>
@@ -1483,6 +1501,7 @@ function planSquadCohort(
   const singleRecordSlot = singleWorker ? singleWorker.recordSlot : null;
   const singleBundleSlot = singleWorker ? bundlePath(singleWorker.squadId, normalizedReportRoot) : null;
   const multiRecordSlots = workers.map(w => w.recordSlot).join(" ");
+  const multiRecordPins = workers.map(w => `${w.recordSlot}=<accepted-sha256>`).join(" ");
 
   const verificationPipeline = [
     ...(workspaceIsolation !== "inherit"
@@ -1492,14 +1511,14 @@ function planSquadCohort(
       ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
       : []),
     singleRecordSlot
-      ? `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} --out ${singleRecordSlot} ${fileSpecArg}`
-      : `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --all-squads --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} ${fileSpecArg}`,
+      ? `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>${includeIntegrityAuditor ? " --coord-id <coordId> --digest" : ""} --out ${singleRecordSlot} ${fileSpecArg}`
+      : `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --all-squads --handoffs <handoffs.json>${includeIntegrityAuditor ? " --coord-id <coordId> --digest" : ""} ${fileSpecArg}`,
     singleRecordSlot
       ? `agy-squad finalize --workspace ${wsCliArg} ${singleRecordSlot}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`
       : `agy-squad finalize --workspace ${wsCliArg} ${multiRecordSlots}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`,
     singleBundleSlot
       ? `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} ${singleBundleSlot} <sha256>`
-      : `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} --records ${multiRecordSlots} [--clean-records]`
+      : `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} --records ${multiRecordPins} [--clean-records]`
   ];
 
   const recordedSwarmPanePath = swarmPaneTarget
@@ -1546,6 +1565,13 @@ function planSquadCohort(
     verificationPipeline
   };
 
+  if (!replace) {
+    const targets = [normalizedOutRel && path.join(root, normalizedOutRel), ...Object.values(waveFiles ?? {}).map(rel => path.join(root, rel)), swarmPaneTarget?.absPath ?? (swarmPaneTarget?.relPath ? path.join(root, swarmPaneTarget.relPath) : undefined)].filter(Boolean);
+    for (const target of targets) {
+      try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`Refusing symlink output path: ${target}`); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      throw new Error(`Target already exists: ${target} (pass --replace / replace: true to overwrite).`);
+    }
+  }
   const verifiedOutDirs = new Set([root]);
   if (normalizedOutRel !== undefined) {
     const parentDir = path.posix.dirname(normalizedOutRel);
@@ -1665,8 +1691,9 @@ function writeBrainSwarmPaneFile(baseDir, absPath, bytes, allowReplace) {
   let cur = baseDir;
   for (let i = 0; i < relParts.length - 1; i++) {
     cur = path.join(cur, relParts[i]);
-    if (fs.existsSync(cur)) {
-      const st = fs.lstatSync(cur);
+    let st;
+    try { st = fs.lstatSync(cur); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (st) {
       if (st.isSymbolicLink() || !st.isDirectory()) {
         throw new Error(`Invalid or symlinked directory along swarmPaneOutPath: ${cur}`);
       }
@@ -1674,8 +1701,10 @@ function writeBrainSwarmPaneFile(baseDir, absPath, bytes, allowReplace) {
       fs.mkdirSync(cur, { mode: 0o700 });
     }
   }
-  if (fs.existsSync(absPath)) {
-    const st = fs.lstatSync(absPath);
+  let outputStat;
+  try { outputStat = fs.lstatSync(absPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (outputStat) {
+    const st = outputStat;
     if (st.isSymbolicLink() || !st.isFile()) {
       throw new Error(`Refusing to write non-regular file at swarmPaneOutPath: ${absPath}`);
     }

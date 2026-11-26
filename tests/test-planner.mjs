@@ -1856,7 +1856,7 @@ try {
 
     // Stage 3b Regressions: ROI-009, FIT-009/ROI-010, FLOW-012, ROI-011
     for (const a of selfDiagDecoupledPlan.integrityAuditPlan) {
-      assert.match(a.swarmAdd.brief, /agy-squad audit-check --workspace .* --record .* \[--coord-id <coordId>\]/, "ROI-009: compiled auditor brief must wire audit-check");
+      assert.match(a.swarmAdd.brief, /agy-squad audit-check --workspace .* --record .* --coord-id <coordId>/, "ROI-009: compiled auditor brief must wire audit-check");
       assert.doesNotMatch(a.swarmAdd.brief, /--tool\b|--errors\b/, "ROI-009: auditor brief must not emit invalid --tool/--errors flags");
     }
     assert.equal(
@@ -1928,7 +1928,6 @@ try {
     const cliEmitW2 = runCli(["plan", "--mode", "swarm", "--scope", "src", "--role", "A", "--emit-wave", "1", "Wave slice CLI test"]);
     assert.equal(cliEmitW2.status, 0, cliEmitW2.stderr);
     const cliEmitW2Obj = JSON.parse(cliEmitW2.stdout);
-    assert.equal(cliEmitW2.status, 0);
     assert.equal(cliEmitW2Obj.wave, 1);
     assert.equal(cliEmitW2Obj.swarmAdd.length, 1);
     assert.equal(handleSquadPlanner({ task: "Bad pane escape", swarmPaneOutPath: "/tmp/outside-pane.json" }, root).isError, true);
@@ -1981,6 +1980,51 @@ try {
       fs.rmSync(fakeHome, { recursive: true, force: true });
       fs.rmSync(realDotfilesGemini, { recursive: true, force: true });
     }
+
+    // Runtime schema bounds and output planning fail before any file is published.
+    for (const [key, value] of [
+      ["scopeFiles", Array(257).fill("src")], ["scopeFiles", ["x".repeat(513)]],
+      ["roles", Array(65).fill("Reader")], ["roles", ["x".repeat(161)]],
+      ["knownModels", Array(129).fill("model")], ["knownModels", ["x".repeat(161)]],
+      ["occupiedWorkerNames", Array(257).fill("worker")], ["occupiedWorkerNames", ["x".repeat(65)]],
+      ["boardSeqs", Array(257).fill(1)], ["reportRoot", "x".repeat(257)],
+      ["outPath", "x".repeat(513)], ["swarmPaneOutPath", "x".repeat(513)],
+      ["roleScopes", Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`role${i}`, ["src"]]))],
+      ["roleScopes", { Reader: Array(257).fill("src") }], ["roleScopes", { Reader: ["x".repeat(513)] }]
+    ]) assert.throws(() => planSquadCohort({ task: "Bounded options", [key]: value }, root), /schema bounds/, key);
+    const layeredManifest = { squads: { layered: { lead: { role: "Lead", objective: "Review", scopeFiles: ["src"] }, specialists: [{ role: "Reader", objective: "Review", scopeFiles: ["src"], readOnly: true }] } } };
+    const writableLead = planSquadCohort({ manifest: layeredManifest }, root);
+    assert.notEqual(writableLead.workers[0].readOnly, true);
+    const threadPlan = planSquadCohort({ manifest: { squads: {
+      "a_b": { specialists: [{ role: "A", objective: "Review", scopeFiles: ["src"], readOnly: true }] },
+      "a-b": { specialists: [{ role: "B", objective: "Review", scopeFiles: ["src"], readOnly: true }] }
+    } } }, root);
+    assert.equal(new Set(threadPlan.swarmPane.threads.map(t => t.id)).size, 2);
+    for (const existing of ["atomic.wave1.json", "atomic.wave2.json", "pane.json"]) {
+      const out = `scratch/${existing}`;
+      fs.mkdirSync(path.join(root, "scratch"), { recursive: true });
+      fs.writeFileSync(path.join(root, out), "existing\n");
+      assert.throws(() => planSquadCohort({ task: "Atomic outputs", outPath: "scratch/atomic.json", swarmPaneOutPath: "scratch/pane.json" }, root), /already exists/);
+      assert.equal(fs.existsSync(path.join(root, "scratch/atomic.json")), false);
+      fs.unlinkSync(path.join(root, out));
+    }
+    const layeredPath = "scratch/layered-hardening.json";
+    fs.writeFileSync(path.join(root, layeredPath), JSON.stringify(layeredManifest));
+    for (const wave of [2, 3]) {
+      const result = runCli(["plan", "--manifest", layeredPath, "--emit-wave", String(wave)]);
+      assert.equal(result.status, 0, result.stderr);
+      const parsed = JSON.parse(result.stdout);
+      assert.equal(parsed.wave, wave);
+      assert.equal(parsed.swarmAdd.length, 1);
+    }
+    const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "agy-hint-outside-")));
+    try {
+      fs.writeFileSync(path.join(outside, "secret.js"), "private\n".repeat(900));
+      const link = path.join(root, "hint-escape");
+      fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+      const escapedHint = planSquadCohort({ task: "Safe hints", scopeFiles: ["hint-escape/secret.js"] }, root);
+      assert.doesNotMatch(escapedHint.workers[0].specialists[0].swarmAdd.brief, /Large files|secret.js \(900L/);
+    } finally { fs.rmSync(outside, { recursive: true, force: true }); }
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

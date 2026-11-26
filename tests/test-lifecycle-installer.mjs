@@ -1442,6 +1442,16 @@ try {
       );
       fs.rmSync(fallbackPluginDir, { recursive: true, force: true });
 
+      const linkedPluginDir = path.join(asqProfile, "linked-normal-plugin");
+      try {
+        await installerMod.populateLinkedPluginDir(repoRoot, linkedPluginDir);
+        assert.equal(fs.lstatSync(path.join(linkedPluginDir, "skills")).isDirectory(), true);
+        assert.equal(fs.lstatSync(path.join(linkedPluginDir, ".agents/skills")).isDirectory(), true);
+        for (const rel of ["skills/platform-fit", "skills/self-diagnosis", ".agents/skills/platform-fit", ".agents/skills/self-diagnosis", "docs/plans", "docs/reviews", "scripts/release-preflight.mjs"]) assert.equal(fs.existsSync(path.join(linkedPluginDir, rel)), false, rel);
+        assert.deepEqual(fs.readdirSync(path.join(linkedPluginDir, "skills")).sort(), [...installerMod.SHIPPED_SKILLS].sort());
+        for (const name of installerMod.SHIPPED_SKILLS) assert.equal(fs.realpathSync.native(path.join(linkedPluginDir, "skills", name)), fs.realpathSync.native(path.join(repoRoot, ".agents", "skills", name)));
+      } finally { fs.rmSync(linkedPluginDir, { recursive: true, force: true }); }
+
       // ASQ-SCRIPT-002: Windows off-PATH persistence guidance preserves REG_EXPAND_SZ via DoNotExpandEnvironmentNames + ExpandString
       const winGuidance = installerMod.formatPathGuidanceLines("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "win32").join("\n");
       assert.match(winGuidance, /DoNotExpandEnvironmentNames/);

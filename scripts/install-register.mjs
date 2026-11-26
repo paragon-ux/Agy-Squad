@@ -406,6 +406,20 @@ export function detectExistingInstallation(options = {}) {
             }
           }
         }
+        for (const rel of ["skills", path.join(".agents", "skills")]) {
+          for (const skill of SHIPPED_SKILLS) {
+            const linked = path.join(pluginDest, rel, skill);
+            try {
+              if (!fs.lstatSync(linked).isSymbolicLink()) continue;
+              details.plugin.isSymlink = true;
+              details.plugin.target ||= repoRoot;
+              if (isLocalCheckout && !pathsEqual(fs.realpathSync.native(linked), fs.realpathSync.native(path.join(repoRoot, ".agents", "skills", skill)))) {
+                details.plugin.pointsElsewhere = true;
+                details.plugin.target = path.resolve(fs.realpathSync.native(linked), "../../..");
+              }
+            } catch (error) { if (error.code !== "ENOENT") details.plugin.pointsElsewhere = true; }
+          }
+        }
         for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
           const filePath = path.join(pluginDest, rootFile);
           let fileLst = null;
@@ -661,34 +675,31 @@ export async function populateLinkedPluginDir(sourceRoot, targetPluginDir, optio
     }
   }
   const isWin = os.platform() === "win32";
-  const linkMappings = [
-    ["assets", path.join(sourceRoot, "assets")],
-    ["bin", path.join(sourceRoot, "bin")],
-    ["docs", path.join(sourceRoot, "docs")],
-    ["mcp", path.join(sourceRoot, "mcp")],
-    ["scripts", path.join(sourceRoot, "scripts")],
-    [".agents", path.join(sourceRoot, ".agents")],
-    ["skills", path.join(sourceRoot, ".agents", "skills")]
-  ];
-  for (const [name, srcTarget] of linkMappings) {
-    if (!fs.existsSync(srcTarget)) continue;
-    const destPath = path.join(targetPluginDir, name);
-    try {
-      const stat = fs.lstatSync(destPath);
-      if (stat.isSymbolicLink() || stat.isDirectory()) {
-        if (stat.isSymbolicLink()) await fsPromises.unlink(destPath);
-        else await fsPromises.rm(destPath, { recursive: true, force: true });
-      }
-    } catch {}
-    try {
-      symlinkSyncImpl(srcTarget, destPath, isWin ? "junction" : "dir");
-    } catch {
-      if (name === "skills") {
-        // ensurePluginSkillsAndMcpManifest wires pluginDest/skills from the already-filtered .agents/skills copy
-        continue;
-      }
-      await fsPromises.cp(srcTarget, destPath, { recursive: true, filter: copyFilter });
+  const linkEntry = async (src, dest) => {
+    if (!fs.existsSync(src)) return;
+    await fsPromises.mkdir(path.dirname(dest), { recursive: true });
+    await removeFsEntry(dest);
+    try { symlinkSyncImpl(src, dest, fs.statSync(src).isDirectory() ? (isWin ? "junction" : "dir") : "file"); }
+    catch (error) {
+      if (!["EPERM", "ENOSYS", "EACCES"].includes(error.code)) throw error;
+      await fsPromises.cp(src, dest, { recursive: true, filter: copyFilter });
     }
+  };
+  for (const name of ["assets", "bin", "mcp"]) await linkEntry(path.join(sourceRoot, name), path.join(targetPluginDir, name));
+  for (const name of ["docs", "scripts"]) {
+    const source = path.join(sourceRoot, name), dest = path.join(targetPluginDir, name);
+    if (!fs.existsSync(source)) continue;
+    await removeFsEntry(dest);
+    await fsPromises.mkdir(dest, { recursive: true });
+    for (const entry of fs.readdirSync(source)) {
+      const src = path.join(source, entry);
+      if (copyFilter(src)) await linkEntry(src, path.join(dest, entry));
+    }
+  }
+  for (const rel of [".agents", "skills"]) await removeFsEntry(path.join(targetPluginDir, rel));
+  for (const rel of [path.join(".agents", "skills"), "skills"]) {
+    await fsPromises.mkdir(path.join(targetPluginDir, rel), { recursive: true });
+    for (const skill of SHIPPED_SKILLS) await linkEntry(path.join(sourceRoot, ".agents", "skills", skill), path.join(targetPluginDir, rel, skill));
   }
   await ensurePluginSkillsAndMcpManifest(targetPluginDir, options);
 }

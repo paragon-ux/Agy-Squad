@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { scanShellCommand, shellCommandWrites, unwrapShellCommand } from "./shell.mjs";
 import os from "node:os";
 import path from "node:path";
 import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
@@ -337,7 +338,7 @@ function workspacePath(root, relative, verifiedDirs) {
   return file;
 }
 
-function readOpenedFileWithStat(file, relative = file) {
+function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity } = {}) {
   const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
   if (process.platform !== "linux" || !hasONofollow) {
     const linkStat = fs.lstatSync(file);
@@ -368,6 +369,7 @@ function readOpenedFileWithStat(file, relative = file) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
     }
+    if (stat.size > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
     const expectedSize = stat.size;
     let bytes;
     if (expectedSize >= 0 && expectedSize <= 64 * 1024 * 1024) {
@@ -381,12 +383,16 @@ function readOpenedFileWithStat(file, relative = file) {
       if (offset < buf.length) {
         bytes = buf.subarray(0, offset);
       } else {
+        if (offset > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
         const chunks = [buf];
+        let totalBytes = buf.length;
         const extra = Buffer.allocUnsafe(65536);
         while (true) {
           const n = fs.readSync(fd, extra, 0, extra.length, null);
           if (n <= 0) break;
+          if (totalBytes + n > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
           chunks.push(Buffer.from(extra.subarray(0, n)));
+          totalBytes += n;
         }
         bytes = Buffer.concat(chunks);
       }
@@ -1138,6 +1144,7 @@ function bundleReports(root, record, options = {}) {
         ...(allowPartial ? { allowPartial: true } : {}),
         synthesis,
         verifiedFiles,
+        assignments: record.assignments,
         ...(retainReports ? { retainReports: true } : {}),
         ...(integrityAudit ? { integrityAudit, integrityAudits } : {}),
         reports
@@ -1491,6 +1498,29 @@ function extractWorktreePathsFromHandoffs(handoffs) {
   return extracted;
 }
 
+function gitCommonDirectory(root) {
+  const result = spawnSync("git", ["-C", root, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) return null;
+  try { return fs.realpathSync.native(path.resolve(root, result.stdout.trim())); } catch { return null; }
+}
+
+function validateWorkerWorktreeRoot(root, candidate) {
+  const real = resolveCanonicalRoot(candidate);
+  const common = gitCommonDirectory(root);
+  const workerCommon = gitCommonDirectory(real);
+  if (!common || !workerCommon || !isExpectedRealPath(common, workerCommon)) {
+    throw new Error(`Untrusted worker worktree: ${candidate}. Authorize a source explicitly with --from <dir>.`);
+  }
+  return real;
+}
+
+function workerReceiptRoots(handoffs) {
+  return (Array.isArray(handoffs) ? handoffs : []).flatMap(h =>
+    h && typeof h.sender === "string"
+      ? extractWorktreePathsFromHandoffs([h]).map(root => ({ root, sender: h.sender }))
+      : []);
+}
+
 function collectReportSlots(root, options = {}) {
   root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -1512,15 +1542,9 @@ function collectReportSlots(root, options = {}) {
   if (!Array.isArray(sources)) {
     throw new Error("Provide at least one worktree directory via --from <dir>.");
   }
-  const inferredSources = sources.length > 0
-    ? sources
-    : extractWorktreePathsFromHandoffs([
-        ...(Array.isArray(handoffs) ? handoffs : []),
-        ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
-      ]);
-  if (inferredSources.length === 0) {
-    throw new Error("Provide at least one worktree directory via --from <dir> (or --handoffs containing wt=<dir>).");
-  }
+  const receiptRoots = workerReceiptRoots([...(Array.isArray(handoffs) ? handoffs : []), ...(Array.isArray(record?.handoffs) ? record.handoffs : [])]);
+  const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
+  if (inferredSources.length === 0) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
   if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
     throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
   }
@@ -1547,7 +1571,9 @@ function collectReportSlots(root, options = {}) {
     const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
-      resolvedSources.push({ raw: src, real: realSrc });
+      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(path.resolve(r.root), realSrc)).map(r => r.sender));
+      if (senders) validateWorkerWorktreeRoot(root, realSrc);
+      resolvedSources.push({ raw: src, real: realSrc, senders });
     }
   }
 
@@ -1565,6 +1591,8 @@ function collectReportSlots(root, options = {}) {
       optionalPlanInheritSlots.add(resolvedSlot);
     }
   };
+  const senderSlots = new Map();
+  const bindSender = (sender, slot) => { if (typeof sender === "string" && typeof slot === "string") senderSlots.set(sender, overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot); };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -1585,6 +1613,7 @@ function collectReportSlots(root, options = {}) {
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
           addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
+          if (s.swarmAdd?.workspace !== "inherit") bindSender(s.workerName, s.reportSlot);
         }
       }
     }
@@ -1621,7 +1650,7 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix), true);
     for (const a of record.assignments ?? []) {
-      if (a?.report !== undefined) addSlot(a.report);
+      if (a?.report !== undefined) { addSlot(a.report); bindSender(a.conversationId, a.report); bindSender(a.workerName, a.report); }
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
@@ -1675,7 +1704,7 @@ function collectReportSlots(root, options = {}) {
   const targetSlots = [...targetSlotSet];
   const foldSlotCase = process.platform === "win32" || process.platform === "darwin";
   const foundBySlot = new Map();
-  for (const { raw, real } of resolvedSources) {
+  for (const { raw, real, senders } of resolvedSources) {
     const verifiedSrcDirs = new Set([real]);
     const cohortEntriesCache = new Map();
     const cohortHasSlotDir = (slotRel) => {
@@ -1705,6 +1734,7 @@ function collectReportSlots(root, options = {}) {
       return entryNames === "probe" || (entryNames !== null && entryNames.has(foldSlotCase ? slotName.toLowerCase() : slotName));
     };
     for (const slotRel of targetSlots) {
+      if (senders && (inheritSlotSet.has(slotRel) || ![...senders].some(sender => senderSlots.get(sender) === slotRel))) continue;
       if (!cohortHasSlotDir(slotRel)) continue;
       const opened = readIfPresentWithStat(real, slotRel, verifiedSrcDirs);
       if (!opened) continue;
@@ -1969,7 +1999,9 @@ function captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot = defaultR
     dirtyPaths.push(relPath);
   }
   lines.sort();
-  return { lines, dirtyPaths };
+  const headResult = spawnSync("git", ["-C", canonicalRoot, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", timeout: 3000 });
+  if (headResult.error) throw headResult.error;
+  return { lines, dirtyPaths, head: headResult.status === 0 ? headResult.stdout.trim() : null };
 }
 
 function optionsRecordIgnorePaths(record, extraPaths = []) {
@@ -2083,6 +2115,10 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
     gitSnapshot = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot, ignoreSet) ?? null;
     if (cache && typeof cache === "object") cache.gitSnapshot = gitSnapshot;
   }
+  if (gitSnapshot && options.scoped === true) {
+    const inScope = rel => scopeEntries.some(e => e === "." || rel === e || rel.startsWith(`${e}/`));
+    gitSnapshot = { ...gitSnapshot, lines: gitSnapshot.lines.filter(line => inScope(line.slice(3))), dirtyPaths: gitSnapshot.dirtyPaths.filter(inScope) };
+  }
   let dirtyFiles;
   let unhashedDirtyMeta;
   if (gitSnapshot && gitSnapshot.dirtyPaths.length > 0) {
@@ -2137,7 +2173,8 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
     ...(!filesCapped && scopedDirs.length > 0 ? { scopedDirs } : {}),
     ...(!filesCapped && missingScopeEntries.length > 0 ? { missingScopeEntries } : {}),
     ...(nonScratchIgnore.length > 0 ? { baselineIgnorePaths: nonScratchIgnore } : {}),
-    ...(gitSnapshot ? { gitStatusPorcelain: gitSnapshot.lines } : {}),
+    ...(options.scoped === true ? { gitScopeEntries: scopeEntries } : {}),
+    ...(gitSnapshot ? { gitStatusPorcelain: gitSnapshot.lines, gitHead: gitSnapshot.head } : {}),
     ...(dirtyFiles ? { dirtyFiles } : {}),
     ...(unhashedDirtyMeta ? { unhashedDirtyMeta } : {})
   };
@@ -2275,7 +2312,16 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
   if (Array.isArray(baseline.gitStatusPorcelain)) {
     const currentGit = captureGitPorcelainForRoot(canonicalRoot, resolvedReportRoot, ignoreRelPaths);
     gitCheck = currentGit ? "ok" : "skipped";
+    if (!currentGit) throw new Error("Read-only containment violation: cannot inspect git state.");
     if (currentGit) {
+      if (Object.hasOwn(baseline, "gitHead") && currentGit.head !== baseline.gitHead) {
+        if (!Array.isArray(baseline.gitScopeEntries) || !baseline.gitHead || !currentGit.head) throw new Error("Read-only containment violation: git HEAD changed.");
+        const changed = spawnSync("git", ["--literal-pathspecs", "-C", canonicalRoot, "diff", "--name-only", baseline.gitHead, currentGit.head, "--", ...baseline.gitScopeEntries], { encoding: "utf8", timeout: 5000 });
+        if (changed.status !== 0 || changed.stdout.trim()) throw new Error("Read-only containment violation: git HEAD changed inside read-only scope.");
+      }
+      if (Array.isArray(baseline.gitScopeEntries)) {
+        currentGit.lines = currentGit.lines.filter(line => baseline.gitScopeEntries.some(e => e === "." || line.slice(3) === e || line.slice(3).startsWith(`${e}/`)));
+      }
       const baselineSet = new Set(baseline.gitStatusPorcelain);
       const currentSet = new Set(currentGit.lines);
       const added = currentGit.lines.filter(line => !baselineSet.has(line));
@@ -2551,13 +2597,22 @@ function expandScopeEntriesToFiles(
   return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+function validateCoordId(coordId) {
+  if (coordId !== undefined && (typeof coordId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(coordId))) throw new Error("Invalid --coord-id: use 1-128 letters, numbers, underscores, or hyphens.");
+}
+
+function shellQuote(value) {
+  return /^[A-Za-z0-9_./<>:-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
 function buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult, options = {}) {
   if (!isPlainObject(plan) || !Array.isArray(plan.integrityAuditPlan) || record?.requireIntegrityAudit === false) {
     return [];
   }
   const matching = plan.integrityAuditPlan.filter(a => a && a.targetSquad === record.squadId && isPlainObject(a.swarmAdd));
   if (matching.length === 0) return [];
-  const { coordId, handoffSeqs, idMap } = options;
+  const { coordId, handoffSeqs } = options;
+  validateCoordId(coordId);
   const effectiveRecordPath = outRel ?? record.recordPath ?? recordSlotPath(record.squadId, record.reportRoot);
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const mappedUuids = [];
@@ -2569,15 +2624,6 @@ function buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult
       mappedUuids.push(cid);
     }
   }
-  if (isPlainObject(idMap)) {
-    for (const val of Object.values(idMap)) {
-      const cid = typeof val === "string" ? val.trim() : "";
-      if (uuidRe.test(cid) && !seenUuids.has(cid)) {
-        seenUuids.add(cid);
-        mappedUuids.push(cid);
-      }
-    }
-  }
   const bindOne = (auditEntry, idx) => {
     const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[idx]
       ? record.integrityAuditSlots[idx]
@@ -2585,15 +2631,15 @@ function buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult
     let brief = String(auditEntry.swarmAdd.brief ?? "");
     const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
     if (effectiveRecordPath) {
-      brief = brief.replaceAll("<rel-record>", effectiveRecordPath);
+      brief = brief.replaceAll("<rel-record>", shellQuote(effectiveRecordPath));
       if (origRecordSlot && origRecordSlot !== effectiveRecordPath) {
-        brief = brief.replaceAll(origRecordSlot, effectiveRecordPath);
+        brief = brief.replaceAll(origRecordSlot, shellQuote(effectiveRecordPath));
       }
     }
     if (auditSlot) {
-      brief = brief.replaceAll("<rel-slot>", auditSlot);
+      brief = brief.replaceAll("<rel-slot>", shellQuote(auditSlot));
       if (auditEntry.reportSlot && auditEntry.reportSlot !== auditSlot) {
-        brief = brief.replaceAll(auditEntry.reportSlot, auditSlot);
+        brief = brief.replaceAll(auditEntry.reportSlot, shellQuote(auditSlot));
       }
     }
     if (digestResult?.evidenceDigest) {
@@ -2792,7 +2838,14 @@ function buildBundleRecordInit(root, options = {}) {
       ...(swarmRosterName && (explicitItemWorkerName || swarmRosterName !== nextId)
         ? { workerName: swarmRosterName }
         : {}),
-      report: slotPath
+      report: slotPath,
+      ...(() => {
+        const roots = workerReceiptRoots(handoffs).filter(h => h.sender === nextId || h.sender === swarmRosterName);
+        if (!roots.length) return {};
+        const verified = [...new Set(roots.map(h => validateWorkerWorktreeRoot(root, h.root)))];
+        if (verified.length !== 1) throw new Error(`Conflicting worktree roots for ${nextId}.`);
+        return { worktreeRoot: verified[0] };
+      })()
     };
   });
   for (const key of Object.keys(idMap ?? {})) {
@@ -3167,9 +3220,15 @@ function discoverBrainTranscriptForWorker(
     let opened;
     try {
       opened = openSafeTraceFd(filePath, canonicalWorkspaceRoot, brainBaseDir);
-      const headBuf = Buffer.allocUnsafe(16384);
-      const bytesRead = fs.readSync(opened.fd, headBuf, 0, headBuf.length, 0);
-      const headText = headBuf.subarray(0, bytesRead).toString("utf8");
+      const headBuf = Buffer.allocUnsafe(128 * 1024);
+      let total = 0, newlineCount = 0;
+      while (total < headBuf.length && newlineCount < 4) {
+        const n = fs.readSync(opened.fd, headBuf, total, Math.min(4096, headBuf.length - total), total);
+        if (!n) break;
+        for (let i = total; i < total + n; i++) if (headBuf[i] === 10) newlineCount++;
+        total += n;
+      }
+      const headText = headBuf.subarray(0, total).toString("utf8");
       return { firstLines: headText.split(/\r?\n/).slice(0, 4).join("\n"), mtimeMs: opened.stat.mtimeMs };
     } catch {
       return null;
@@ -3255,32 +3314,15 @@ const READ_TOOL_NAMES = new Set(["read_file", "view_file", "view_file_outline", 
 const SEARCH_TOOL_NAMES = new Set(["grep_search", "find_by_name", "list_dir"]);
 const COMMAND_TOOL_NAMES = new Set(["run_command", "execute_command", "bash"]);
 
-function decodeCompactToolArgValue(value) {
+function decodeCompactToolArgValue(value, key) {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
-  if (trimmed.length < 2) return value;
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if (
-    (first === "\"" && last === "\"") ||
-    (first === "{" && last === "}") ||
-    (first === "[" && last === "]")
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return value;
-    }
-  }
-  return value;
+  if (!trimmed.startsWith('"') && key !== "ArtifactMetadata") return value;
+  try { return JSON.parse(trimmed); } catch { return value; }
 }
 
-function normalizeToolCallArgs(rawArgs) {
-  const out = {};
-  for (const [k, v] of Object.entries(rawArgs)) {
-    out[k] = decodeCompactToolArgValue(v);
-  }
-  return out;
+function normalizeToolCallArgs(rawArgs, compact = true) {
+  return compact ? Object.fromEntries(Object.entries(rawArgs).map(([key, value]) => [key, decodeCompactToolArgValue(value, key)])) : rawArgs;
 }
 
 function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) {
@@ -3331,58 +3373,18 @@ function verifyWorkerTraces(root, record, options = {}) {
   const t0 = performance.now();
   const verifiedDirs = new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
-  if (!isPlainObject(record) || !Array.isArray(record.assignments)) {
+  if (!isPlainObject(record) || !Array.isArray(record.assignments) || record.assignments.length === 0) {
     throw new Error("Provide a valid bundle record with assignments for trace verification.");
   }
   const coordId = typeof options.coordId === "string" && options.coordId.trim() ? options.coordId.trim() : undefined;
+  validateCoordId(coordId);
   const traceMap = isPlainObject(options.traces) ? options.traces : {};
   const isReadOnly = Boolean(record.readOnly === true || isPlainObject(record.readOnlyBaseline) || options.readOnly === true);
   const anomalies = [];
   const warnings = [];
   const workerResults = [];
   const headCache = new Map();
-  const brainDirs = [];
-  {
-    const addBrain = (p) => { try { brainDirs.push(fs.realpathSync.native(p)); } catch {} };
-    if (typeof options.brainRoot === "string" && options.brainRoot.trim()) addBrain(options.brainRoot.trim());
-    else {
-      try {
-        const g = path.join(os.homedir(), ".gemini");
-        for (const e of fs.readdirSync(g, { withFileTypes: true })) {
-          if (e.isDirectory() && e.name.startsWith("antigravity")) addBrain(path.join(g, e.name, "brain"));
-        }
-      } catch {}
-    }
-  }
-  const isInBrainDir = (rawTarget) => {
-    let p = path.resolve(rawTarget.replace(/^file:\/\//i, ""));
-    try { p = path.join(fs.realpathSync.native(path.dirname(p)), path.basename(p)); } catch {}
-    return brainDirs.some(b => p.startsWith(b + path.sep));
-  };
-  const hasWritingCommand = (cmd) => {
-    const unquoted = cmd.replace(/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, "''");
-    const redirRe = /(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?!&\d)(\S+)/g;
-    for (let m; (m = redirRe.exec(unquoted)); ) {
-      const target = m[1];
-      if (target === "/dev/null") continue;
-      const rel = normalizeToolTargetToRel(target, canonicalRoot);
-      if (rel && !rel.startsWith("external:") && (isScratchOrReportRelPath(rel) || rel === reportSlotForCmd.value)) continue;
-      return true;
-    }
-    for (const seg of unquoted.split(/&&|\|\||\$\(|[;&|\n(]/)) {
-      const words = seg.trim().split(/\s+/).filter(Boolean);
-      while (words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || words[0] === "sudo")) words.shift();
-      const head = words[0];
-      if (!head) continue;
-      if (/^(?:rm|mv|cp|dd|tee|touch|truncate|mkdir|rmdir|unlink|chmod|chown|patch)$/.test(head)) return true;
-      if (/^(?:sed|perl)$/.test(head) && words.some(w => /^-[a-z]*i/.test(w))) return true;
-      if (head === "git" && /^git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|checkout\s+(?:--(?:\s|$)|\.(?:\s|$))|apply|am|cherry-pick|merge|rebase|restore|stash|commit)(?![\w-])/.test(words.join(" "))) return true;
-    }
-    return /\b(?:node|python3?|ruby|perl)\b/.test(unquoted) &&
-      /(?:\bfs\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|require\s*\([^)]*\)\s*\.\s*(?:write|append|unlink|rm|rename|cp|mkdir|copyFile)|open\s*\([^)]*,\s*['"][wa+]|Path\([^)]*\)\.write_)/.test(cmd);
-  };
-  const reportSlotForCmd = { value: "" };
-
+  const resolvedReportRoot = resolveReportRoot(record);
   for (const assignment of record.assignments) {
     const workerKey = String(assignment?.conversationId ?? "").trim();
     const explicitWorkerName =
@@ -3390,7 +3392,16 @@ function verifyWorkerTraces(root, record, options = {}) {
         ? assignment.workerName.trim()
         : undefined;
     const reportSlot = String(assignment?.report ?? "").trim();
-    reportSlotForCmd.value = reportSlot;
+    const workerRoot = assignment.worktreeRoot ? path.resolve(assignment.worktreeRoot) : canonicalRoot;
+    const normalizeTarget = (target, allowEqual = false) => {
+      const workerRel = normalizeToolTargetToRel(target, workerRoot, allowEqual);
+      if (workerRel && !workerRel.startsWith("external:")) return workerRel;
+      return normalizeToolTargetToRel(target, canonicalRoot, allowEqual);
+    };
+    const inspectTarget = target => {
+      const rel = normalizeTarget(target, true);
+      if (rel && !rel.startsWith("external:")) recordInspectedPath(rel, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+    };
     const explicitTrace = traceMap[workerKey] ?? (explicitWorkerName ? traceMap[explicitWorkerName] : undefined);
     const discovered = discoverBrainTranscriptForWorker(
       workerKey,
@@ -3402,7 +3413,7 @@ function verifyWorkerTraces(root, record, options = {}) {
       headCache
     );
     if (!discovered) {
-      anomalies.push(`${workerKey}: MISSING_TRACE`);
+      anomalies.push(`${workerKey}: ${!coordId && !explicitTrace && !/^[0-9a-f]{8}-/i.test(workerKey) ? "MISSING_COORD_ID: pass --coord-id <coordUuid> or --trace <worker=jsonlPath>" : "MISSING_TRACE"}`);
       workerResults.push({
         worker: workerKey,
         ...(explicitWorkerName ? { workerName: explicitWorkerName } : {}),
@@ -3414,6 +3425,20 @@ function verifyWorkerTraces(root, record, options = {}) {
       continue;
     }
     const { tracePath, brainBaseDir } = discovered;
+    const isInBrainDir = rawTarget => {
+      if (typeof rawTarget !== "string") return false;
+      if (path.basename(path.dirname(tracePath)) !== "logs" || path.basename(path.dirname(path.dirname(tracePath))) !== ".system_generated") return false;
+      const sessionRoot = path.dirname(path.dirname(path.dirname(tracePath)));
+      const target = path.resolve(rawTarget.replace(/^file:\/\//i, ""));
+      if (!isContainedPath(sessionRoot, target, false)) return false;
+      const rel = path.relative(sessionRoot, target).split(path.sep).join("/");
+      if (rel.split("/").includes(".system_generated")) return false;
+      try {
+        assertNoSymlinkedAncestors(sessionRoot, rel, new Set());
+        if (fs.lstatSync(target).isSymbolicLink()) return false;
+      } catch (error) { if (error.code !== "ENOENT") return false; }
+      return true;
+    };
     let rawJsonl;
     try {
       rawJsonl = readSafeJsonlFile(tracePath, canonicalRoot, brainBaseDir);
@@ -3444,10 +3469,10 @@ function verifyWorkerTraces(root, record, options = {}) {
     const inspectedFiles = new Set();
     const inspectedDirs = new Set();
     const inspectState = { inspectedRoot: false };
-    const commandLines = [];
     const unauthorizedWrites = new Set();
     let corruptLineSeen = false;
 
+    const fullSteps = new WeakSet();
     let fullTraceLoaded = false;
     let truncatedUnresolved = false;
     let fullByStepIndex = null;
@@ -3472,6 +3497,7 @@ function verifyWorkerTraces(root, record, options = {}) {
             for (let fIdx = 0; fIdx < fullLines.length; fIdx++) {
               try {
                 const parsedFull = JSON.parse(fullLines[fIdx]);
+                if (parsedFull && typeof parsedFull === "object") fullSteps.add(parsedFull);
                 fullByLineIndex.set(fIdx, parsedFull);
                 if (typeof parsedFull?.step_index === "number") {
                   fullByStepIndex.set(parsedFull.step_index, parsedFull);
@@ -3524,48 +3550,47 @@ function verifyWorkerTraces(root, record, options = {}) {
           try { args = JSON.parse(args); } catch { args = {}; }
         }
         if (!isPlainObject(args)) continue;
-        args = normalizeToolCallArgs(args);
+        args = normalizeToolCallArgs(args, path.basename(tracePath) !== "transcript_full.jsonl" && !fullSteps.has(step));
         const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
         if (READ_TOOL_NAMES.has(rawName)) {
-          recordInspectedPath(targetRaw, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+          inspectTarget(targetRaw);
         } else if (SEARCH_TOOL_NAMES.has(rawName)) {
           for (const searchField of [args.SearchPath, args.SearchDirectory, args.DirectoryPath, targetRaw]) {
             if (typeof searchField === "string" && searchField.trim()) {
-              recordInspectedPath(searchField, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
+              inspectTarget(searchField);
             }
           }
         } else if (COMMAND_TOOL_NAMES.has(rawName)) {
           const cmd = args.CommandLine ?? args.command;
           if (typeof cmd === "string" && cmd.trim()) {
-            const cmdForReads = cmd.replace(/(?:^|[^0-9>&])(?:>>?|[12&]>>?)\s*(?:&\d+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/g, " ");
-            commandLines.push(cmdForReads);
-            for (const tok of cmdForReads.split(/[\s"'`();|&<>]+/)) {
-              if (!tok || tok.startsWith("-")) continue;
-              const cleanedTok = tok.replace(/:[1-9]\d*$/, "").replace(/\/+$/, "");
-              if (cleanedTok === ".") {
-                inspectState.inspectedRoot = true;
-              } else if (cleanedTok.includes("/") || /\.[A-Za-z0-9]{1,8}$/.test(cleanedTok)) {
-                recordInspectedPath(cleanedTok, canonicalRoot, inspectedFiles, inspectedDirs, inspectState);
-              }
-            }
-            if (/\bgit\b[^\n;|&]*\bgrep\b/.test(cmdForReads)) {
-              const afterGrep = cmdForReads.slice(cmdForReads.indexOf("grep") + 4);
-              const nonFlagArgs = afterGrep
-                .replace(/(?:"[^"]*"|'[^']*')/g, " pat ")
-                .trim()
-                .split(/\s+/)
-                .filter(t => t && !t.startsWith("-"));
-              if (nonFlagArgs.length <= 1) inspectState.inspectedRoot = true;
-            }
-            if (isReadOnly) {
-              if (hasWritingCommand(cmd)) unauthorizedWrites.add("run_command");
+            const segments = scanShellCommand(cmd);
+            const cwdRaw = args.Cwd ?? args.cwd;
+            let commandCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
+            for (const segment of segments) {
+              const { head, args: words, cwd } = unwrapShellCommand(segment.words);
+              const effectiveCwd = cwd ? path.resolve(commandCwd, cwd) : commandCwd;
+              const allowRedirect = target => {
+                if (target === "/dev/null") return true;
+                const rel = normalizeTarget(path.resolve(effectiveCwd, target));
+                return rel && !rel.startsWith("external:") && (isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot);
+              };
+              if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
+              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && normalizeTarget(path.resolve(effectiveCwd, target))?.startsWith("external:"))) unauthorizedWrites.add("run_command");
+              if (head === "cd" && words[0]) { commandCwd = path.resolve(commandCwd, words[0]); continue; }
+              const gitRead = head === "git" && ["grep", "diff", "show", "log"].includes(words[0]);
+              if (!["cat", "head", "tail", "sed", "awk", "rg", "grep"].includes(head) && !(head === "rtk" && ["read", "cat", "head", "tail", "grep", "rg", "diff"].includes(words[0])) && !gitRead) continue;
+              const search = ["rg", "grep"].includes(head) || (head === "rtk" && words[0] === "grep") || (head === "git" && words[0] === "grep");
+              let positional = words.slice(head === "git" || head === "rtk" ? 1 : 0).filter(w => !w.startsWith("-"));
+              if (search) positional = positional.slice(1);
+              for (const token of positional) inspectTarget(path.resolve(effectiveCwd, token));
+              if ((search || gitRead) && positional.length === 0 && normalizeTarget(effectiveCwd, true) === ".") inspectState.inspectedRoot = true;
             }
           }
         } else if (WRITE_TOOL_NAMES.has(rawName)) {
-          if (args.ArtifactMetadata && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
+          if (isPlainObject(args.ArtifactMetadata) && typeof args.ArtifactMetadata.Summary === "string" && typeof args.ArtifactMetadata.UserFacing === "boolean" && typeof args.ArtifactMetadata.RequestFeedback === "boolean" && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
             continue;
           }
-          const rel = normalizeToolTargetToRel(targetRaw, canonicalRoot);
+          const rel = normalizeTarget(targetRaw);
           if (isReadOnly && rel !== reportSlot) {
             unauthorizedWrites.add(rel ?? String(targetRaw));
           } else if (!isReadOnly && rel && rel.startsWith("external:")) {
@@ -3592,10 +3617,6 @@ function verifyWorkerTraces(root, record, options = {}) {
       for (const dirRel of inspectedDirs) {
         if (relFile === dirRel || relFile.startsWith(`${dirRel}/`)) return true;
       }
-      const parentDir = path.posix.dirname(relFile);
-      for (const cmd of commandLines) {
-        if (cmd.includes(relFile) || (parentDir !== "." && cmd.includes(parentDir))) return true;
-      }
       return false;
     };
     try {
@@ -3608,7 +3629,7 @@ function verifyWorkerTraces(root, record, options = {}) {
           warnings.push(`${workerKey}: UNVERIFIED_CITATION (${uFile})`);
         }
       }
-    } catch {}
+    } catch (error) { anomalies.push(`${workerKey}: UNREADABLE_REPORT (${error.code ?? "ERR"})`); }
 
     workerResults.push({
       worker: workerKey,
@@ -3663,6 +3684,7 @@ export {
   messageLimit,
   normalizeContainedJsonOutPath,
   normalizeReportRoot,
+  normalizeToolCallArgs,
   pruneReports,
   publish,
   readFile,
@@ -3682,5 +3704,7 @@ export {
   verifyBundle,
   verifyReadOnlyBaseline,
   verifyWorkerTraces,
+  validateCoordId,
+  validateWorkerWorktreeRoot,
   workspacePath
 };

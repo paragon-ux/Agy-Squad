@@ -27,7 +27,7 @@ agy-squad status
   - **Linux / macOS (`bash` / `zsh`):** `export PATH="$HOME/.gemini/antigravity/bin:$PATH"`
   - **Windows (PowerShell):** `$env:PATH = "$HOME\.gemini\antigravity\bin;$env:PATH"`
   - **Zero-PATH fallback:** `npx --package=agy-squad agy-squad status` (works for any subcommand without modifying `PATH`).
-- **Standalone usage (default):** `Agy-Squad` works 100% standalone with native Antigravity, including live native JSONL Integrity Audits that inspect `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl` in one batch pass. `setup` and `status` perform zero companion probes or nags. `--no-integrity` and `--allow-unaudited` are explicit opt-outs if you intentionally want to skip auditing, never requirements for standalone runs. Pairing with optional `Agy-Context-Saver` (`2.1.2+` recommended) adds hook-enforced context, shell, and transcript governance.
+- **Standalone usage (default):** `Agy-Squad` works 100% standalone with native Antigravity, including live native JSONL Integrity Audits that inspect `~/.gemini/antigravity*/brain/<id>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl` in one batch pass. `setup` and `status` perform zero companion probes or nags. `--no-integrity` and `--allow-unaudited` are explicit opt-outs if you intentionally want to skip auditing, never requirements for standalone runs. Pairing with optional `Agy-Context-Saver` (`2.3.0+` recommended) adds hook-enforced context, shell, and transcript governance.
 - **Upgrade an existing install:** Run `npx --package=agy-squad@latest agy-squad setup` when updating to a newer release so npm does not reuse a cached `_npx` package version.
 
 ### Local repository checkout and development (optional)
@@ -110,9 +110,9 @@ agy-squad plan --mode swarm --read-only --scope src \
 #    containing a strict single line: "Content Verdict: PASS" (or FAIL / BLOCKED),
 #    then initialize the bundle record + Evidence Digest (checks Content Verdict + readOnlyBaseline):
 agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json \
-  --digest --out scratch/record.json --replace src/auth.js
+  --coord-id <coordId> --digest --out scratch/record.json --replace src/auth.js
 
-# 3. After audit-task_squad writes its CLEAN report, finalize (inspect -> bundle -> verify + prune) in one step:
+# 3. After audit-task writes its CLEAN report, finalize (inspect -> bundle -> verify + prune) in one step:
 agy-squad finalize scratch/record.json --replace --prune
 ```
 
@@ -121,11 +121,11 @@ agy-squad finalize scratch/record.json --replace --prune
 ```json
 [
   {
-    "sender": "task-squad-security",
+    "sender": "security",
     "message": "@coordinator READY scratch/agy-squad/squad-task_squad/specialist-1/report.md -- src/auth.js:42 token check verified"
   },
   {
-    "sender": "task-squad-test-audit",
+    "sender": "test-audit",
     "message": "@coordinator READY scratch/agy-squad/squad-task_squad/specialist-2/report.md -- auth unit tests cover expiry edge cases"
   }
 ]
@@ -171,7 +171,7 @@ agy-squad plan \
 | --- | --- | --- |
 | `Unknown command ...` or `'agy-squad run' was retired` | Retired `agy-squad run` PTY launcher was invoked | Run `agy-squad plan` with Antigravity native `/swarm`, or register `mcp/index.js` directly in `.agents/mcp_config.json` |
 | Desktop IDE fails to start `agy-squad` MCP (`spawn node ENOENT`, Node `< 22`, or tools missing after reload) | GUI app launched with a minimal non-login `PATH` lacking Homebrew/`nvm`/`fnm`/`volta` Node `>= 22`, or Node moved since `setup` ran | Re-run `npx --package=agy-squad@latest agy-squad setup` from a shell with Node `>= 22.0.0` (writes `~/.gemini/config/plugins/agy-squad/mcp-launch.sh` on POSIX or records `process.execPath` on Windows in `~/.gemini/config/plugins/agy-squad/mcp_config.json`), verify with `agy-squad status`, and reload Antigravity Desktop IDE |
-| Large `read_file` call denied by optional `Agy-Context-Saver` hook during live run | Optional `Agy-Context-Saver` (`2.1.2+`) allows `<= 300`-line / `<= 24 KiB` `read_file` calls without bounds, requires `<= 300`-line `StartLine`/`EndLine` slices on larger files (or explicit full-file audits `<= 800` lines & `<= 45 KiB`), and blocks direct reads inside `.system_generated/` | Locate symbols with native `grep_search`, `find_by_name`, `list_dir`, or `rg`/`grep` (all unblocked on workspaces in `v2.1.2+`), pass bounded `StartLine`/`EndLine` (`<= 300` lines) to `read_file` on large files, and use `rtk read` for `.system_generated/` spillovers and completed task logs |
+| Large `read_file` call denied by optional `Agy-Context-Saver` hook during live run | Optional `Agy-Context-Saver` (`2.3.0+`) allows `<= 300`-line / `<= 24 KiB` `read_file` calls without bounds, requires `<= 300`-line `StartLine`/`EndLine` slices on larger files (or explicit full-file audits `<= 800` lines & `<= 45 KiB`), and blocks direct reads inside `.system_generated/` | Locate symbols with native `grep_search`, `find_by_name`, `list_dir`, or `rg`/`grep` (all unblocked on workspaces in `v2.3.0+`), pass bounded `StartLine`/`EndLine` (`<= 300` lines) to `read_file` on large files, and inspect session transcripts natively in bounded slices or use `agy-context transcript health` for counts |
 | `Requested explicit model ... cannot be pinned under executionMode 'subagent'` | `invoke_subagent` accepts only `inherit|flash|flash_lite|pro` | Set `executionMode: "swarm"` (`--mode swarm`) in `squad_planner` to explicitly pin and verify exact model IDs via `swarm status` |
 | Swarm UI shows old posts, retired workers, or loads slowly across waves | Antigravity keeps one append-only board per conversation (`killed: true` entries stay in history) and does not expose user-configurable channels when `swarm` lacks `action: "channel"` | Start a fresh Antigravity conversation per major `/swarm` wave for a clean board, or run follow-up cohorts via `invoke_subagent` ([Shared swarm board and channel limits](concepts.md#shared-swarm-board-and-channel-limits)) |
 | Specialist silent past checkpoint | Waiting on permission prompt or stuck command | Run `swarm status`, `manage_subagents` (Desktop IDE), or `/agents` to inspect or stop the child, then verify underlying processes exited ([Stopping agents](stopping-agents.md)) |

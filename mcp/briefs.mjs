@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
-import { CONTROL_CHAR_RE, isContainedPath, isValidScopeEntry, messageLimit, reportPath, resolveCanonicalRoot } from "./handoffs.mjs";
+import { CONTROL_CHAR_RE, isContainedPath, isValidScopeEntry, messageLimit, reportPath, resolveCanonicalRoot, workspacePath, readOpenedFileWithStat } from "./handoffs.mjs";
 
 const DISALLOWED_BUILTINS = new Set(["research", "browser", "image-generator"]);
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
@@ -64,6 +64,7 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     candidates.add(relPosix);
     if (cache.has(relPosix)) return;
     try {
+      absPath = workspacePath(canonicalRoot, relPosix);
       const st = fs.lstatSync(absPath);
       if (st.isSymbolicLink() || !st.isFile()) {
         cache.set(relPosix, null);
@@ -75,7 +76,7 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
       }
       let lines = 0;
       if (st.size <= 4 * 1024 * 1024) {
-        const buf = fs.readFileSync(absPath);
+        const buf = readOpenedFileWithStat(absPath, relPosix, { maxBytes: 4 * 1024 * 1024 }).bytes;
         lines = countBufferLines(buf);
       } else {
         lines = Math.ceil(st.size / 80);
@@ -98,6 +99,8 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     if (candidates.size >= MAX_HINT_WALK_FILES) return;
     let dirents;
     try {
+      dirAbs = workspacePath(canonicalRoot, `${dirRel}/.hint-probe`);
+      dirAbs = path.dirname(dirAbs);
       dirents = fs.readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
         a.name < b.name ? -1 : a.name > b.name ? 1 : 0
       );
@@ -124,6 +127,7 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     if (!isContainedPath(canonicalRoot, abs, false)) continue;
     let st;
     try {
+      workspacePath(canonicalRoot, entry);
       st = fs.lstatSync(abs);
     } catch {
       continue;
@@ -355,7 +359,7 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   const isIsolatedSwarm = isSwarm && (workspaceIsolation === "share" || workspaceIsolation === "branch");
   const handoffInstructionLine = isSwarm
     ? isIsolatedSwarm
-      ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - wt=<abs-worktree-root> <obs> | PARTIAL <Report slot> - wt=<abs-worktree-root> <obs> | NO_REPORT - wt=<abs-worktree-root> <reason>. Then swarm_wait.`
+      ? `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - wt="<abs-worktree-root>" <obs> | PARTIAL <Report slot> - wt="<abs-worktree-root>" <obs> | NO_REPORT - wt="<abs-worktree-root>" <reason>. Then swarm_wait.`
       : `1 post_message <= ${messageLimit} UTF-8 bytes (${swarmRecipient}): READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>. Then swarm_wait.`
     : `1 send_message <= ${messageLimit} UTF-8 bytes: READY <Report slot> - <obs> | PARTIAL <Report slot> - <obs> | NO_REPORT - <reason>.`;
 
