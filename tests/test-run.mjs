@@ -382,7 +382,9 @@ try {
   const deepPlanner = path.join(deepRepo, "mcp/planner.mjs");
   const savedDeepPlanner = fs.readFileSync(deepPlanner, "utf8");
   try {
-    fs.writeFileSync(deepPlanner, savedDeepPlanner.replace("slots/traces only", `slots/traces only ${"padding ".repeat(100)}`));
+    const oversizedPlanner = savedDeepPlanner.replace("slots & spot-check", `slots & spot-check ${"padding ".repeat(100)}`);
+    assert.notEqual(oversizedPlanner, savedDeepPlanner, "The budget fixture must add genuine auditor brief content");
+    fs.writeFileSync(deepPlanner, oversizedPlanner);
     const oversizedRun = spawnSync(process.execPath, [deepDiag], { cwd: deepRepo, env: spacedEnv, encoding: "utf8" });
     assert.equal(oversizedRun.status, 1, oversizedRun.stderr || oversizedRun.stdout);
     assert.ok(JSON.parse(oversizedRun.stdout).findings.some(f => f.id === "RUN-BUDGET-SWARM-AUDIT"));
@@ -625,7 +627,11 @@ try {
   }
   assert.match(dayOneProtoText, /hermetic test scripts/i, "v0.2.1: day-one-protocol.md must note hermetic .system_generated consumer checks");
   assert.match(dayOneProtoText, /live symlinked plugin\/hook/i, "v0.2.1: day-one-protocol.md must serialize live symlinked plugin/hook edits");
-  assert.doesNotMatch(dayOneProtoText, /Step 0 `ask_question` for any unspecified settings|\bagy-squad verdict\b/, "FLOW-012: day-one-protocol.md must use zero-interview defaults and omit redundant verdict calls");
+  assert.doesNotMatch(dayOneProtoText, /Step 0 `ask_question` for any unspecified settings/, "FLOW-012: day-one-protocol.md must use zero-interview defaults");
+  const dayOneSwarmWorkflow = dayOneProtoText.slice(dayOneProtoText.indexOf("## 5. Explicit"))
+    .split("\n").filter(line => /^\d+\.\s/.test(line)).join("\n");
+  assert.match(dayOneSwarmWorkflow, /Strict role ordering/);
+  assert.doesNotMatch(dayOneSwarmWorkflow, /\bagy-squad verdict\b/, "FLOW-012: the swarm workflow must omit redundant verdict calls; troubleshooting may document the helper");
   const benchmarksDocText = fs.readFileSync(path.join(repoRoot, "docs/benchmarks.md"), "utf8");
   assert.doesNotMatch(benchmarksDocText, /[\u2013\u2014]/, "FIT-011: docs/benchmarks.md must have 0 prose em/en dashes");
   for (const svgName of ["skill-role-workflows.svg", "swarm-vs-agy-squad-roles.svg"]) {

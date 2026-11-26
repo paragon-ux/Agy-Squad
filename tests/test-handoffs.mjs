@@ -4346,7 +4346,8 @@ try {
       fs.mkdirSync(path.dirname(trace), { recursive: true });
       const rec = { squadId: 'evidence', readOnly: true, assignments: [{ conversationId: 'w1', report: slot }] };
       for (const rel of ['src/a.js', 'src/settings.json', 'src/UPPER.JS', 'src/nested/b.js', 'src/vendor/c.js', '[2026]/a.js', 'legacy/a.js']) put(rel, 'line1\nline2\n');
-      put('*.js', 'option-value\n');
+      put('decoy.js', 'option-value\n');
+      if (process.platform !== 'win32') put('*.js', 'option-value\n');
       fs.writeFileSync(path.join(outside, 'secret.txt'), 'private\n');
       const run = (calls, citation = 'src/a.js:1', record = rec) => {
         put(slot, `Read ${citation}\n`);
@@ -4361,7 +4362,8 @@ try {
       }
       for (const command of ["rg -g '*.js' line1 src", 'rg -t js line1 src', 'grep --include=*.js line1 src']) assert.deepEqual(uncovered(command, 'src/settings.json:1'), ['src/settings.json'], command);
       for (const command of ["rg -g '*.js' line1 src", 'rg --encoding src/a.js line1 missing', 'rg --max-depth src/a.js line1 missing', 'rg -e src/a.js missing', 'rg -f src/a.js missing']) {
-        assert.equal(run([shell(command)], '*.js:1').workers[0].openedFiles.some(entry => entry.path === '*.js'), false, command);
+        const opened = run([shell(command)], 'decoy.js:1').workers[0].openedFiles;
+        assert.equal(opened.some(entry => entry.path === 'decoy.js' || entry.path === '*.js'), false, command);
       }
       assert.deepEqual(uncovered("rg -g '!*.js' line1 src", 'src/a.js:1'), ['src/a.js']);
       assert.deepEqual(uncovered("rg --iglob '*.js' line1 src", 'src/UPPER.JS:1'), []);
