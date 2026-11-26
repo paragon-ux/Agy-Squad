@@ -2028,6 +2028,21 @@ try {
       const escapedHint = planSquadCohort({ task: "Safe hints", scopeFiles: ["hint-escape/secret.js"] }, root);
       assert.doesNotMatch(escapedHint.workers[0].specialists[0].swarmAdd.brief, /Large files|secret.js \(900L/);
     } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+    const hugeHintFile = path.join(root, "huge-hint.txt");
+    try {
+      fs.writeFileSync(hugeHintFile, Buffer.alloc(4 * 1024 * 1024 + 1024, 0x61));
+      const hugePlan = planSquadCohort({ task: "Huge hint", scopeFiles: ["huge-hint.txt"] }, root);
+      assert.match(hugePlan.workers[0].specialists[0].swarmAdd.brief, /Large files \(slice <=600L, <45KiB\): huge-hint\.txt \(4097KiB\)/);
+    } finally { fs.rmSync(hugeHintFile, { force: true }); }
+    fs.mkdirSync(path.join(root, "scratch/atomic-dir.wave1.json"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scratch/atomic-dir.json"), "OLD");
+    try {
+      assert.throws(() => planSquadCohort({ task: "Atomic replace", outPath: "scratch/atomic-dir.json", replace: true }, root), /Expected a regular file/);
+      assert.equal(fs.readFileSync(path.join(root, "scratch/atomic-dir.json"), "utf8"), "OLD");
+    } finally {
+      fs.rmSync(path.join(root, "scratch/atomic-dir.wave1.json"), { recursive: true, force: true });
+      fs.rmSync(path.join(root, "scratch/atomic-dir.json"), { force: true });
+    }
 
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {

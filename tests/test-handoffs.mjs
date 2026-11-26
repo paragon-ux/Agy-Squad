@@ -4038,9 +4038,80 @@ try {
       fs.symlinkSync(path.join(worktree, slot), path.join(tmp, slot));
       assert.equal(audit([read]).ok, false);
       for (const cmd of ["/bin/rm src/a.js", "C:\\bin\\rm.exe src/a.js", "eval 'rm src/a.js'", "exec rm src/a.js", "source mutating.sh", "node -p \"require('fs').writeFileSync('x','y')\"", "env rm src/a.js", "env -C /tmp rm src/a.js", "env --chdir /tmp rm src/a.js", "git -C . checkout -- src/a.js", "git rm src/a.js", "git mv src/a.js src/b.js", "sh -c 'echo hacked > src/a.js'", `node -e"require('fs').writeFileSync('x','y')"`]) assert.equal(shellCommandWrites(scanShellCommand(cmd), () => false), true, cmd);
-      for (const cmd of [`echo hi > "scratch/ok.txt"`, `echo hi > '/dev/null'`, `rg "x => y" src`, `awk '$1 > 0' src/a.js`]) assert.equal(shellCommandWrites(scanShellCommand(cmd), t => t === "/dev/null" || t.startsWith("scratch/")), false, cmd);
+      for (const cmd of [`node -p "require('fs')['write'+'FileSync']('x','y')"`, `node -p "require('fs').writeFileSync?.('x','y')"`, `node -p "require('fs').writeFileSync/*x*/('x','y')"`, `node -p "require('fs').\\u0077riteFileSync('x','y')"`, `node -p "Object.values(require('fs'))[0]('x')"`, `node -p "'x'.split(',').map(require('fs').unlinkSync)"`, `node -p 'JSON.parse("{\\"a\\":\\"x\\"}", require("fs").unlinkSync)'`, `node -p "require('child_process').execSync('id')"`, `node -p "eval('1')"`, `node -p "process.version" > src/a.js`, "find . -delete"]) assert.equal(shellCommandWrites(scanShellCommand(cmd), () => false), true, cmd);
+      for (const cmd of [`echo hi > "scratch/ok.txt"`, `echo hi > '/dev/null'`, `rg "x => y" src`, `awk '$1 > 0' src/a.js`, "node -p process.version", `node -p "process.platform + ' ' + process.arch"`, `node -p 'require("node:fs").readFileSync("src/write-helper.js", "utf8").includes("require(foo)")'`, "node -c src/a.js"]) assert.equal(shellCommandWrites(scanShellCommand(cmd), t => t === "/dev/null" || t.startsWith("scratch/")), false, cmd);
       fs.unlinkSync(path.join(tmp, slot));
       put(slot, "Read src/a.js:1\n");
+      const nodeProbeRes = audit([read, { name: "run_command", args: { CommandLine: "node -p process.version" } }]);
+      assert.equal(nodeProbeRes.ok, true);
+      assert.equal(nodeProbeRes.recommendedVerdict, "CLEAN");
+      const vfPrune = fingerprint(tmp, ["src/a.js"]);
+      for (const [idx, sc] of [
+        { flag: "--allow-unaudited", lead: "Content Verdict: PASS\n", recExtra: { workspace: tmp, verdict: "PASS" }, handoffPrefix: "READY" },
+        { flag: "--allow-non-passing", lead: "Content Verdict: FAIL\n", recExtra: { workspace: tmp, verdict: "FAIL", requireIntegrityAudit: false }, handoffPrefix: "READY" },
+        { flag: "--allow-non-passing", lead: "Content Verdict: BLOCKED\n", recExtra: { workspace: tmp, verdict: "BLOCKED", requireIntegrityAudit: false }, handoffPrefix: "READY" },
+        { flag: "--allow-partial", lead: "Content Verdict: PASS\n", recExtra: { workspace: tmp, verdict: "PASS", requireIntegrityAudit: false }, handoffPrefix: "PARTIAL" }
+      ].entries()) {
+        const sq = `ovr${idx}`;
+        const spSlot = `scratch/agy-squad/squad-${sq}/specialist-1/report.md`;
+        const ldSlot = `scratch/agy-squad/squad-${sq}/lead/report.md`;
+        put(spSlot, "Checked src/a.js:1\n");
+        put(ldSlot, sc.lead);
+        const recRel = `scratch/${sq}.record.json`;
+        put(recRel, JSON.stringify({
+          squadId: sq,
+          verifiedFiles: vfPrune,
+          assignments: [{ conversationId: "one", report: spSlot }],
+          handoffs: [{ sender: "one", message: `${sc.handoffPrefix} ${spSlot} - ok` }],
+          ...sc.recExtra
+        }));
+        const finOut = spawnSync(process.execPath, [agySquadCli, "finalize", recRel, sc.flag], { cwd: tmp, encoding: "utf8" });
+        assert.equal(finOut.status, 0, finOut.stderr);
+        const finJson = JSON.parse(finOut.stdout);
+        const prnOut = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recRel}=${finJson.bundled.sha256}`, "--clean-records"], { cwd: tmp, encoding: "utf8" });
+        assert.equal(prnOut.status, 0, prnOut.stderr);
+        assert.equal(fs.existsSync(path.join(tmp, recRel)), false);
+        assert.equal(fs.existsSync(path.join(tmp, spSlot)), false);
+      }
+      put("scratch/batch-manifest.json", JSON.stringify({
+        squads: {
+          sq1: { specialists: [{ role: "R1", objective: "Audit", scopeFiles: ["src"], readOnly: true }] },
+          sq2: { specialists: [{ role: "R2", objective: "Audit", scopeFiles: ["src"], readOnly: true }] }
+        }
+      }));
+      assert.equal(spawnSync(process.execPath, [agySquadCli, "plan", "--manifest", "scratch/batch-manifest.json", "--out", "scratch/batch-plan.json"], { cwd: tmp, encoding: "utf8" }).status, 0);
+      fs.mkdirSync(path.join(tmp, "scratch/out7/sq2.record.json"), { recursive: true });
+      put("scratch/out7/sq1.record.json", "OLD_CONTENT_SQ1");
+      const badBatch = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/batch-plan.json", "--all-squads", "--out-dir", "scratch/out7", "--replace", "src/a.js"], { cwd: tmp, encoding: "utf8" });
+      assert.notEqual(badBatch.status, 0);
+      assert.match(badBatch.stderr, /Expected a regular file/);
+      assert.equal(fs.readFileSync(path.join(tmp, "scratch/out7/sq1.record.json"), "utf8"), "OLD_CONTENT_SQ1");
+      const symParent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-symwt-")));
+      try {
+        const privBase = path.join(symParent, "private-base");
+        const varBase = path.join(symParent, "var-base");
+        fs.mkdirSync(path.join(privBase, "repo/src"), { recursive: true });
+        fs.symlinkSync(privBase, varBase, process.platform === "win32" ? "junction" : "dir");
+        fs.writeFileSync(path.join(privBase, "repo/src/a.js"), "export const a = 1;\n");
+        for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "init"], ["worktree", "add", "-q", "-b", "wt-b", path.join(privBase, "wt1")]]) {
+          assert.equal(spawnSync("git", ["-C", path.join(privBase, "repo"), ...args], { encoding: "utf8" }).status, 0);
+        }
+        const wtSlot = "scratch/agy-squad/squad-s1/specialist-1/report.md";
+        fs.mkdirSync(path.join(privBase, "wt1", path.dirname(wtSlot)), { recursive: true });
+        fs.writeFileSync(path.join(privBase, "wt1", wtSlot), "Checked src/a.js:1\n");
+        const symCollected = collectReportSlots(path.join(privBase, "repo"), {
+          plan: { executionMode: "swarm", workers: [{ squadId: "s1", specialists: [{ workerName: "s1-1", reportSlot: wtSlot, swarmAdd: { workspace: "share" } }] }] },
+          handoffs: [{ sender: "s1-1", message: `@coordinator READY ${wtSlot} -- ok wt="${path.join(varBase, "wt1")}"` }],
+          dryRun: true
+        });
+        assert.equal(symCollected.collected.length, 1);
+        assert.throws(
+          () => collectReportSlots(path.join(privBase, "repo"), { squadId: "s1", handoffs: [{ sender: "s1-1", message: `@coordinator READY ${wtSlot} -- ok wt="${path.join(varBase, "wt1")}"` }] }),
+          /requires --plan <plan\.json> or --record <record\.json>/
+        );
+      } finally {
+        fs.rmSync(symParent, { recursive: true, force: true });
+      }
       put(leadSlot, "Content Verdict: PASS\n");
       const retainedRecord = { ...record, workspace: tmp, requireIntegrityAudit: false, retainReports: true, verdict: "PASS", verifiedFiles: fingerprint(tmp, ["src/a.js"]), handoffs: [{ sender: "one", message: `READY ${slot} - checked` }] };
       const retainedBundle = bundleReports(tmp, retainedRecord);

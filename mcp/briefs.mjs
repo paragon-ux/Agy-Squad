@@ -65,6 +65,12 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     if (cache.has(relPosix)) return;
     try {
       absPath = workspacePath(canonicalRoot, relPosix);
+      const preStat = fs.lstatSync(absPath);
+      if (preStat.isSymbolicLink() || !preStat.isFile()) { cache.set(relPosix, null); return; }
+      if (preStat.size > 4 * 1024 * 1024) {
+        cache.set(relPosix, { relPath: relPosix, lines: null, bytes: preStat.size, kib: Math.max(1, Math.round(preStat.size / 1024)) });
+        return;
+      }
       const opened = readOpenedFileWithStat(absPath, relPosix, { maxBytes: 4 * 1024 * 1024 });
       const st = opened.stat;
       if (st.size < LARGE_FILE_LINE_THRESHOLD && st.size <= LARGE_FILE_BYTE_THRESHOLD) {
@@ -137,10 +143,10 @@ function collectLargeScopeFileHints(scope, workspaceRoot, fileMetricsCache) {
     if (metric) largeFiles.push(metric);
   }
   if (largeFiles.length === 0) return null;
-  largeFiles.sort((a, b) => b.bytes - a.bytes || b.lines - a.lines || (a.relPath < b.relPath ? -1 : 1));
+  largeFiles.sort((a, b) => b.bytes - a.bytes || (b.lines ?? 0) - (a.lines ?? 0) || (a.relPath < b.relPath ? -1 : 1));
   const shown = largeFiles.slice(0, MAX_LARGE_FILE_HINTS);
   const extra = largeFiles.length > MAX_LARGE_FILE_HINTS ? `, +${largeFiles.length - MAX_LARGE_FILE_HINTS} more` : "";
-  return `Large files (slice <=600L, <45KiB): ${shown.map(f => `${f.relPath} (${f.lines}L/${f.kib}KiB)`).join(", ")}${extra}`;
+  return `Large files (slice <=600L, <45KiB): ${shown.map(f => `${f.relPath} (${f.lines !== null ? `${f.lines}L/` : ""}${f.kib}KiB)`).join(", ")}${extra}`;
 }
 
 function normalizeModeObjective(rawObjective, executionMode, isLead, isIntegrityAuditor) {

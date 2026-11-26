@@ -180,9 +180,9 @@ const SUBCOMMAND_HELP = {
     "Options:",
     "  --plan <plan.json>               Planner JSON output defining expected report slots",
     "  --record <record.json>           Bundle record JSON defining expected report slots",
-    "  --squad <id>                     Collect slots for one squad ID",
+    "  --squad <id>                     Collect slots for one squad ID (with --from, or filter --plan/--record)",
     "  --from <worktree-dir>            Repeatable source worktree directory",
-    "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts automatically",
+    "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts (requires --plan or --record)",
     "  --handoff <receipt>              Repeatable inline handoff receipt containing wt=<dir>",
     "  --workspace <dir>                Target coordinator workspace root (default: cwd)",
     "  --report-root <path>             Custom workspace-relative report root",
@@ -1206,10 +1206,11 @@ async function main(args) {
         }
         const outRel = normalizeBundleOutCliPath(item.outRel, process.platform, targetRoot);
         handoffsMod.assertNoSymlinkedAncestors(targetRoot, outRel, new Set([targetRoot]));
-        if (!values.replace) {
-          try { fs.lstatSync(path.join(targetRoot, outRel)); throw new Error(`Target already exists: ${outRel}`); }
-          catch (error) { if (error.code !== "ENOENT") throw error; }
-        }
+        try {
+          const st = fs.lstatSync(path.join(targetRoot, outRel));
+          if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Expected a regular file at the recorded path: ${outRel}`);
+          if (!values.replace) throw new Error(`Target already exists: ${outRel}`);
+        } catch (error) { if (error.code !== "ENOENT") throw error; }
         const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, rec, outRel, digestResult, {
           coordId: values["coord-id"],
           handoffSeqs
@@ -1617,7 +1618,7 @@ async function main(args) {
         const bundleRel = handoffsMod.bundlePath(record.squadId, resolvedRootPrefix);
         handoffsMod.verifyBundle(effectiveRoot, bundleRel, acceptedSha, { verifiedDirs });
         const bundle = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs), bundleRel));
-        if (bundle.squadId !== record.squadId || (record.requireIntegrityAudit !== false && bundle.auditPolicy !== "required") || bundle.verdict !== (record.verdict ?? "PASS") || Boolean(bundle.allowNonPassing) !== Boolean(record.allowNonPassing) || Boolean(bundle.allowPartial) !== Boolean(record.allowPartial) || !isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles) || !isDeepStrictEqual(bundle.assignments, record.assignments)) throw new Error("Record does not match the accepted bundle.");
+        if (bundle.squadId !== record.squadId || (record.requireIntegrityAudit === false && bundle.auditPolicy !== "unaudited-explicit") || bundle.verdict !== (record.verdict ?? "PASS") || (Boolean(record.allowNonPassing) && !bundle.allowNonPassing) || (Boolean(record.allowPartial) && !bundle.allowPartial) || !isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles) || !isDeepStrictEqual(bundle.assignments, record.assignments)) throw new Error("Record does not match the accepted bundle.");
         const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, acceptedSha, {
           keepReports: values["keep-reports"],
           verifiedDirs

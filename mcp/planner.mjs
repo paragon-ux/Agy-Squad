@@ -1565,12 +1565,13 @@ function planSquadCohort(
     verificationPipeline
   };
 
-  if (!replace) {
-    const targets = [normalizedOutRel && path.join(root, normalizedOutRel), ...Object.values(waveFiles ?? {}).map(rel => path.join(root, rel)), swarmPaneTarget?.absPath ?? (swarmPaneTarget?.relPath ? path.join(root, swarmPaneTarget.relPath) : undefined)].filter(Boolean);
-    for (const target of targets) {
-      try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`Refusing symlink output path: ${target}`); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
-      throw new Error(`Target already exists: ${target} (pass --replace / replace: true to overwrite).`);
-    }
+  const targets = [normalizedOutRel && path.join(root, normalizedOutRel), ...Object.values(waveFiles ?? {}).map(rel => path.join(root, rel)), swarmPaneTarget?.absPath ?? (swarmPaneTarget?.relPath ? path.join(root, swarmPaneTarget.relPath) : undefined)].filter(Boolean);
+  for (const target of targets) {
+    let st;
+    try { st = fs.lstatSync(target); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    if (st.isSymbolicLink()) throw new Error(`Refusing symlink output path: ${target}`);
+    if (!st.isFile()) throw new Error(`Expected a regular file at output path: ${target}`);
+    if (!replace) throw new Error(`Target already exists: ${target} (pass --replace / replace: true to overwrite).`);
   }
   const verifiedOutDirs = new Set([root]);
   if (normalizedOutRel !== undefined) {

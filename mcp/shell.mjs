@@ -72,13 +72,75 @@ export function unwrapShellCommand(words) {
   return { head, args: words.slice(i), cwd };
 }
 
+const SAFE_NODE_READ_CALLS = new Set([
+  "require", "readFileSync", "statSync", "lstatSync", "readdirSync", "existsSync", "realpathSync",
+  "byteLength", "stringify", "parse", "keys", "values", "entries", "split", "slice", "trim", "join",
+  "match", "startsWith", "endsWith", "includes", "indexOf", "Number", "String", "Boolean", "isArray",
+  "toLowerCase", "toUpperCase", "cwd", "resolve", "relative", "basename", "dirname", "extname",
+  "homedir", "tmpdir", "platform", "arch", "max", "min", "round", "floor", "ceil"
+]);
+
+function stripJsStrings(expr) {
+  let out = "", q = "", start = 0;
+  const strings = [];
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) { strings.push(expr.slice(start + 1, i)); out += `__S${strings.length - 1}__`; q = ""; }
+      continue;
+    }
+    if (c === "'" || c === '"') { q = c; start = i; continue; }
+    out += c;
+  }
+  return q ? null : { code: out, strings };
+}
+
+function isSafeReadOnlyNodePrint(args) {
+  let expr;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-p" || a === "--print") {
+      if (expr !== undefined || i + 1 >= args.length) return false;
+      expr = args[++i];
+    } else if (a.startsWith("--print=")) {
+      if (expr !== undefined) return false;
+      expr = a.slice(8);
+    } else if (a === "--") {
+      if (i !== args.length - 1) return false;
+    } else {
+      return false;
+    }
+  }
+  if (typeof expr !== "string" || !expr.trim() || expr.length > 1024 || /__S\d+__/.test(expr)) return false;
+  const stripped = stripJsStrings(expr);
+  if (!stripped) return false;
+  const { code, strings } = stripped;
+  if (/[`]|[\)\]]\s*\(|\?\.\s*\(|\/\*|\/\/|\\u|=>|\[(?![0-9]+\])|(?<![=!<>])=(?!=)|\bparse\s*\([^()]*,|\b(?:new|function|eval|Function|import|globalThis|Reflect|Proxy|child_process|constructor|__proto__|prototype|class|with|promises|binding|_linkedBinding|dlopen|mainModule)\b/.test(code)) return false;
+  if (/\b(?:write|append|rm|unlink|mkdir|rmdir|rename|copy|cp|chmod|chown|truncate|open|close|link|symlink|utimes|lutimes|mkdtemp|watch|createWriteStream|fsync|fdatasync|exec|spawn|fork|kill|exit|abort|chdir|umask|setuid|setgid)\w*\b/i.test(code)) return false;
+  for (const m of code.matchAll(/\brequire\s*\(/g)) {
+    const req = /^require\s*\(\s*__S(\d+)__\s*\)/.exec(code.slice(m.index));
+    if (!req || !/^(?:node:)?(?:fs|path|os|url|util)$/.test(strings[Number(req[1])] ?? "")) return false;
+  }
+  for (const m of code.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)) {
+    if (!SAFE_NODE_READ_CALLS.has(m[1])) return false;
+  }
+  return true;
+}
+
 export function shellCommandWrites(segments, allowRedirection) {
   for (const segment of segments) {
     if (segment.dynamic || segment.incomplete || segment.redirections.some(target => !allowRedirection(target))) return true;
     const { head, args } = unwrapShellCommand(segment.words);
     if (["eval", "source", "."].includes(head)) return true;
     if (["rm", "mv", "cp", "dd", "tee", "touch", "truncate", "mkdir", "rmdir", "unlink", "chmod", "chown", "patch"].includes(head)) return true;
-    if (["sh", "bash", "zsh", "dash", "cmd", "powershell", "pwsh", "node", "python", "python3", "ruby", "perl"].includes(head) && args.some(a => /^(?:-[a-z]*[cep]|--eval(?:$|=)|--print(?:$|=)|--command(?:$|=)|\/c)/i.test(a))) return true;
+    if (["sh", "bash", "zsh", "dash"].includes(head) && args.some(a => /^(?:-[a-z]*c|--command(?:$|=))/i.test(a))) return true;
+    if (head === "cmd" && args.some(a => /^\/[ck]$/i.test(a))) return true;
+    if (["powershell", "pwsh"].includes(head) && args.some(a => /^(?:-c|-command)$/i.test(a))) return true;
+    if (["python", "python3"].includes(head) && args.some(a => /^-[a-z]*c/i.test(a))) return true;
+    if (["ruby", "perl"].includes(head) && args.some(a => /^-[a-z]*e/i.test(a))) return true;
+    if (head === "node" && args.some(a => /^(?:-[a-z]*[ep]|--eval(?:$|=)|--print(?:$|=))/i.test(a)) && !isSafeReadOnlyNodePrint(args)) return true;
+    if (head === "find" && args.includes("-delete")) return true;
     if (["sed", "perl"].includes(head) && args.some(a => /^-[a-z]*i/.test(a))) return true;
     if (head === "git" && ["reset", "clean", "checkout", "apply", "am", "cherry-pick", "merge", "rebase", "restore", "stash", "commit", "switch", "rm", "mv", "add", "update-index", "update-ref"].includes(args[0])) return true;
   }

@@ -1514,6 +1514,18 @@ function validateWorkerWorktreeRoot(root, candidate) {
   return real;
 }
 
+function tryRealPath(candidate) {
+  let cur = path.resolve(candidate);
+  const tail = [];
+  while (true) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch {}
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.resolve(candidate);
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
 function workerReceiptRoots(handoffs) {
   return (Array.isArray(handoffs) ? handoffs : []).flatMap(h =>
     h && typeof h.sender === "string"
@@ -1545,6 +1557,9 @@ function collectReportSlots(root, options = {}) {
   const receiptRoots = workerReceiptRoots([...(Array.isArray(handoffs) ? handoffs : []), ...(Array.isArray(record?.handoffs) ? record.handoffs : [])]);
   const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
   if (inferredSources.length === 0) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
+  if (sources.length === 0 && plan === undefined && record === undefined) {
+    throw new Error("Collecting from --handoffs receipts requires --plan <plan.json> or --record <record.json> to bind senders to assigned slots; pass --from <worktree-dir> explicitly with --squad.");
+  }
   if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
     throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
   }
@@ -1571,7 +1586,7 @@ function collectReportSlots(root, options = {}) {
     const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
-      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(path.resolve(r.root), realSrc)).map(r => r.sender));
+      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(tryRealPath(r.root), realSrc)).map(r => r.sender));
       if (senders) validateWorkerWorktreeRoot(root, realSrc);
       resolvedSources.push({ raw: src, real: realSrc, senders });
     }
