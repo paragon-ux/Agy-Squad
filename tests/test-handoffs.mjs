@@ -4012,7 +4012,7 @@ try {
       fs.unlinkSync(path.join(tmp, slot));
       fs.symlinkSync(path.join(worktree, slot), path.join(tmp, slot));
       assert.equal(audit([read]).ok, false);
-      for (const cmd of ["/bin/rm src/a.js", "env rm src/a.js", "env -C /tmp rm src/a.js", "env --chdir /tmp rm src/a.js", "git -C . checkout -- src/a.js", "git rm src/a.js", "git mv src/a.js src/b.js", "sh -c 'echo hacked > src/a.js'", `node -e"require('fs').writeFileSync('x','y')"`]) assert.equal(shellCommandWrites(scanShellCommand(cmd), () => false), true, cmd);
+      for (const cmd of ["/bin/rm src/a.js", "eval 'rm src/a.js'", "exec rm src/a.js", "source mutating.sh", "node -p \"require('fs').writeFileSync('x','y')\"", "env rm src/a.js", "env -C /tmp rm src/a.js", "env --chdir /tmp rm src/a.js", "git -C . checkout -- src/a.js", "git rm src/a.js", "git mv src/a.js src/b.js", "sh -c 'echo hacked > src/a.js'", `node -e"require('fs').writeFileSync('x','y')"`]) assert.equal(shellCommandWrites(scanShellCommand(cmd), () => false), true, cmd);
       for (const cmd of [`echo hi > "scratch/ok.txt"`, `echo hi > '/dev/null'`, `rg "x => y" src`, `awk '$1 > 0' src/a.js`]) assert.equal(shellCommandWrites(scanShellCommand(cmd), t => t === "/dev/null" || t.startsWith("scratch/")), false, cmd);
       fs.unlinkSync(path.join(tmp, slot));
       put(slot, "Read src/a.js:1\n");

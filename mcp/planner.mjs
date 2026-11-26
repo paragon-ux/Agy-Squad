@@ -662,14 +662,14 @@ function planSquadCohort(
 
   for (const [key, maxItems, maxLength] of [["scopeFiles", 256, 512], ["roles", 64, 160], ["knownModels", 128, 160], ["occupiedWorkerNames", 256, 64], ["boardSeqs", 256, null]]) {
     const value = args[key];
-    if (value !== undefined && (!Array.isArray(value) || value.length > maxItems || (key !== "occupiedWorkerNames" && value.length === 0) || (maxLength && value.some(v => typeof v !== "string" || v.length === 0 || v.length > maxLength)))) throw new Error(`${key} exceeds its schema bounds.`);
+    if (Array.isArray(value) && (value.length > maxItems || (maxLength && value.some(v => typeof v === "string" && v.length > maxLength)))) throw new Error(`${key} exceeds its schema bounds.`);
   }
   for (const [key, maxLength] of [["reportRoot", 256], ["outPath", 512], ["swarmPaneOutPath", 512]]) {
-    if (args[key] !== undefined && (typeof args[key] !== "string" || !args[key].length || args[key].length > maxLength)) throw new Error(`${key} exceeds its schema bounds.`);
+    if (typeof args[key] === "string" && args[key].length > maxLength) throw new Error(`${key} exceeds its schema bounds.`);
   }
   if (args.roleScopes !== undefined) {
     const value = args.roleScopes;
-    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length < 1 || Object.keys(value).length > 64 || Object.values(value).some(v => !Array.isArray(v) || !v.length || v.length > 256 || v.some(p => typeof p !== "string" || !p.length || p.length > 512))) throw new Error("roleScopes exceeds its schema bounds.");
+    if (value && typeof value === "object" && !Array.isArray(value) && (Object.keys(value).length > 64 || Object.values(value).some(v => Array.isArray(v) && (v.length > 256 || v.some(p => typeof p === "string" && p.length > 512))))) throw new Error("roleScopes exceeds its schema bounds.");
   }
 
   const {

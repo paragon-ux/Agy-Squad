@@ -49,12 +49,12 @@ export function unwrapShellCommand(words) {
   while (i < words.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue; }
     const head = basename(words[i]);
-    if (!["env", "command", "xargs", "nohup", "timeout", "nice", "sudo"].includes(head)) break;
+    if (!["env", "command", "xargs", "nohup", "timeout", "nice", "sudo", "exec"].includes(head)) break;
     i++;
     while (i < words.length && (words[i].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]))) {
       const flag = words[i++];
       if (flag.startsWith("--chdir=")) cwd = flag.slice(8);
-      if (["-u", "--unset", "-C", "--chdir", "-n", "--adjustment", "-k", "--kill-after", "-s", "--signal", "-I", "-L", "-P"].includes(flag)) { if (flag === "-C" || flag === "--chdir") cwd = words[i]; i++; }
+      if (["-u", "--unset", "--user", "-g", "--group", "-a", "-C", "--chdir", "-n", "--adjustment", "-k", "--kill-after", "-s", "--signal", "-I", "-L", "-P"].includes(flag)) { if (flag === "-C" || flag === "--chdir") cwd = words[i]; i++; }
     }
     if (head === "timeout" && i < words.length) i++;
   }
@@ -73,8 +73,9 @@ export function shellCommandWrites(segments, allowRedirection) {
   for (const segment of segments) {
     if (segment.dynamic || segment.incomplete || segment.redirections.some(target => !allowRedirection(target))) return true;
     const { head, args } = unwrapShellCommand(segment.words);
+    if (["eval", "source", "."].includes(head)) return true;
     if (["rm", "mv", "cp", "dd", "tee", "touch", "truncate", "mkdir", "rmdir", "unlink", "chmod", "chown", "patch"].includes(head)) return true;
-    if (["sh", "bash", "zsh", "dash", "cmd", "powershell", "pwsh", "node", "python", "python3", "ruby", "perl"].includes(head) && args.some(a => /^(?:-[a-z]*[ce]|--eval(?:$|=)|--command(?:$|=)|\/c)/i.test(a))) return true;
+    if (["sh", "bash", "zsh", "dash", "cmd", "powershell", "pwsh", "node", "python", "python3", "ruby", "perl"].includes(head) && args.some(a => /^(?:-[a-z]*[cep]|--eval(?:$|=)|--print(?:$|=)|--command(?:$|=)|\/c)/i.test(a))) return true;
     if (["sed", "perl"].includes(head) && args.some(a => /^-[a-z]*i/.test(a))) return true;
     if (head === "git" && ["reset", "clean", "checkout", "apply", "am", "cherry-pick", "merge", "rebase", "restore", "stash", "commit", "switch", "rm", "mv", "add", "update-index", "update-ref"].includes(args[0])) return true;
   }
