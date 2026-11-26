@@ -422,7 +422,14 @@ function stripJsStrings(expr) {
       start = i;
       continue;
     }
-    if (c === "/" || c === "`") return null;
+    if (
+      c === "/" ||
+      c === "`" ||
+      (c === "<" && expr[i + 1] === "!") ||
+      (c === "-" && expr[i + 1] === "-" && (expr[i + 2] === ">" || (expr[i + 2] === "!" && expr[i + 3] === ">")))
+    ) {
+      return null;
+    }
     out += c;
   }
   return q ? null : { code: out, strings };
@@ -442,7 +449,7 @@ function isSafeReadOnlyNodePrint(args) {
       return false;
     }
   }
-  if (typeof expr !== "string" || !expr.trim() || expr.length > 1024 || /__S\d+__|<!--|-->/.test(expr)) return false;
+  if (typeof expr !== "string" || !expr.trim() || expr.length > 1024 || /__S\d+__/.test(expr)) return false;
   const stripped = stripJsStrings(expr);
   if (!stripped) return false;
   const { code, strings } = stripped;
@@ -499,7 +506,11 @@ const INTERP_VER = {
   sh: ["--version", "--help"], bash: ["--version", "--help"], zsh: ["--version", "--help"],
   dash: ["--version", "--help"], ksh: ["--version", "--help"]
 };
-const SAFE_SED_SCRIPT_RE = /^\s*(?:\d+|\$)(?:\s*,\s*(?:\d+|\$))?\s*[pqd](?:\s*[;\n]\s*(?:\d+|\$)(?:\s*,\s*(?:\d+|\$))?\s*[pqd])*\s*$/;
+function isSafeSedScript(script) {
+  if (typeof script !== "string" || script.length > 256) return false;
+  const clauses = script.split(/[;\r\n]+/).map(c => c.trim()).filter(Boolean);
+  return clauses.length > 0 && clauses.every(c => /^(?:\d+|\$)(?:[ \t]*,[ \t]*(?:\d+|\$))?[ \t]*[pqd]$/.test(c));
+}
 
 // shortcut: non-trivial sed/awk/find or unknown commands return true (unverifiable), upgrade only for proven read-only forms
 function isSafeFind(args, allowRedir, depth) {
@@ -596,7 +607,7 @@ function isSafeSedOrAwk(head, args) {
     return false;
   }
   if (!explicit && pos.length) scripts.push(pos[0]);
-  return scripts.length > 0 && scripts.every(s => SAFE_SED_SCRIPT_RE.test(s));
+  return scripts.length > 0 && scripts.every(isSafeSedScript);
 }
 
 function isSafeGitSubcommand(args) {
