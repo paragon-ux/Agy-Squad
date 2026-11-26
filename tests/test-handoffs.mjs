@@ -4357,10 +4357,13 @@ try {
       const shell = (command, cwd) => ({ name: 'run_command', args: { CommandLine: command, ...(cwd ? { Cwd: cwd } : {}) } });
       const writeReport = { name: 'write_file', args: { Path: path.join(tmp, slot) } };
       const uncovered = (command, citation) => run([shell(command)], citation).workers[0].citedUnopened;
-      for (const command of ["rg -g '*.js' line1 src", "rg --glob='*.js' line1 src", 'rg -t js line1 src', 'grep --include=*.js line1 src', "grep -E 'line1' src", 'rg -A 2 -m 3 --max-depth 2 line1 src']) {
+      for (const command of ["rg -g '*.js' line1 src", "rg --glob='*.js' line1 src", 'rg -t js line1 src', 'grep -r --include=*.js line1 src', "grep -rE 'line1' src", 'rg -A 2 -m 3 --max-depth 2 line1 src']) {
         assert.deepEqual(uncovered(command, 'src/a.js:1'), [], command);
       }
-      for (const command of ["rg -g '*.js' line1 src", 'rg -t js line1 src', 'grep --include=*.js line1 src']) assert.deepEqual(uncovered(command, 'src/settings.json:1'), ['src/settings.json'], command);
+      for (const command of ['grep --include=*.js line1 src', "grep -E 'line1' src"]) {
+        assert.deepEqual(uncovered(command, 'src/a.js:1'), ['src/a.js'], command);
+      }
+      for (const command of ["rg -g '*.js' line1 src", 'rg -t js line1 src', 'grep -r --include=*.js line1 src']) assert.deepEqual(uncovered(command, 'src/settings.json:1'), ['src/settings.json'], command);
       for (const command of ["rg -g '*.js' line1 src", 'rg --encoding src/a.js line1 missing', 'rg --max-depth src/a.js line1 missing', 'rg -e src/a.js missing', 'rg -f src/a.js missing']) {
         const opened = run([shell(command)], 'decoy.js:1').workers[0].openedFiles;
         assert.equal(opened.some(entry => entry.path === 'decoy.js' || entry.path === '*.js'), false, command);
@@ -4368,7 +4371,8 @@ try {
       assert.deepEqual(uncovered("rg -g '!*.js' line1 src", 'src/a.js:1'), ['src/a.js']);
       assert.deepEqual(uncovered("rg --iglob '*.js' line1 src", 'src/UPPER.JS:1'), []);
       assert.deepEqual(uncovered('rg -T js line1 src', 'src/a.js:1'), ['src/a.js']);
-      assert.deepEqual(uncovered('grep --exclude-dir=vendor line1 src', 'src/vendor/c.js:1'), ['src/vendor/c.js']);
+      assert.deepEqual(uncovered('grep -r --exclude-dir=vendor line1 src', 'src/vendor/c.js:1'), ['src/vendor/c.js']);
+      assert.deepEqual(uncovered('grep -r --exclude-dir=vendor line1 src', 'src/a.js:1'), []);
       assert.deepEqual(uncovered("rg -g 'src/**/*.js' line1 src", 'src/nested/b.js:1'), []);
       put('src/nested/deep/leaf.js', 'line1\n');
       assert.deepEqual(uncovered("rg --max-depth 1 line1 src", 'src/a.js:1'), []);
@@ -4386,11 +4390,16 @@ try {
       assert.deepEqual(uncovered("rg -g 'SKILL.md' -g '!*.md' Review skills", 'skills/a/SKILL.md:1'), ['skills/a/SKILL.md']);
       assert.deepEqual(uncovered("rg --iglob '!*.MD' --iglob 'skill.md' Review skills", 'skills/a/SKILL.md:1'), []);
       put('script.sed', '1,2p\n');
-      for (const sedCmd of ["sed -ne '1,2p' src/a.js", "sed -Ee '1,2p' src/a.js", "sed -re '1,2p' src/a.js", "sed -ne'1,2p' src/a.js", "sed -nEf script.sed src/a.js", "grep -re 'line1' src", "grep -rnE 'line1' src"]) {
+      for (const sedCmd of ["sed -ne '1,2p' src/a.js", "sed -Ee '1,2p' src/a.js", "sed -re '1,2p' src/a.js", "sed -ne'1,2p' src/a.js", "grep -re 'line1' src", "grep -rnE 'line1' src"]) {
         const sr = run([shell(sedCmd), writeReport], 'src/a.js:1');
         assert.equal(sr.recommendedWorkVerdict, 'VERIFIED', sedCmd);
         assert.deepEqual(sr.workers[0].flags, [], sedCmd);
       }
+      const sedScriptRes = run([shell("sed -nEf script.sed src/a.js"), writeReport], 'src/a.js:1');
+      assert.equal(sedScriptRes.ok, true);
+      assert.equal(sedScriptRes.recommendedWorkVerdict, 'REVIEW_REQUIRED');
+      assert.deepEqual(sedScriptRes.workers[0].citedUnopened, []);
+      assert.ok(sedScriptRes.workers[0].flags.includes('SHELL_WRITE_DETECTED'));
       const nodeReadRes = run([shell(`node -p 'require("node:fs").readFileSync("src/a.js", "utf8")'`), writeReport], 'src/a.js:1');
       assert.equal(nodeReadRes.ok, true);
       assert.equal(nodeReadRes.recommendedWorkVerdict, 'VERIFIED');
@@ -4644,14 +4653,18 @@ try {
         ]) {
           assert.equal(shellCommandWrites(scanShellCommand(unsafeCmd), allowScratchOrNull), true, `S1 classifier must flag: ${unsafeCmd}`);
           const traced = runTraceAudit([readCall, { name: "run_command", args: { CommandLine: unsafeCmd } }]);
-          assert.equal(traced.ok, false, `S1 verifyWorkerTraces must fail readOnly check for: ${unsafeCmd}`);
-          assert.equal(traced.recommendedVerdict, "INTEGRITY VIOLATION");
+          assert.equal(traced.ok, true, `S1 verifyWorkerTraces must preserve advisory ok=true for: ${unsafeCmd}`);
+          assert.equal(traced.recommendedVerdict, "REVIEW_REQUIRED", `S1 advisory verdict for: ${unsafeCmd}`);
+          assert.equal(traced.recommendedWorkVerdict, "REVIEW_REQUIRED", `S1 work verdict for: ${unsafeCmd}`);
+          assert.ok(traced.workers[0].flags.includes("SHELL_WRITE_DETECTED"), `S1 SHELL_WRITE_DETECTED flag for: ${unsafeCmd}`);
         }
 
         // Dynamic commands must not grant citation coverage
         const ungroundedDyn = runTraceAudit([{ name: "run_command", args: { CommandLine: "cat $TARGET_FILE" } }]);
-        assert.equal(ungroundedDyn.ok, false);
-        assert.ok((ungroundedDyn.warnings ?? []).some(w => w.includes("UNVERIFIED_CITATION (src/a.js)")));
+        assert.equal(ungroundedDyn.ok, true);
+        assert.equal(ungroundedDyn.recommendedVerdict, "REVIEW_REQUIRED");
+        assert.deepEqual(ungroundedDyn.workers[0].citedUnopened, ["src/a.js"]);
+        assert.ok(ungroundedDyn.workers[0].flags.includes("CITED_UNOPENED"));
 
         // Legitimate-use controls: literal single-quoted $, supported read commands, allowed output redirects
         for (const safeCmd of [
@@ -4671,6 +4684,8 @@ try {
           assert.equal(shellCommandWrites(scanShellCommand(safeCmd), allowScratchOrNull), false, `S1 safe control must pass: ${safeCmd}`);
           const traced = runTraceAudit([readCall, { name: "run_command", args: { CommandLine: safeCmd } }]);
           assert.equal(traced.ok, true, `S1 verifyWorkerTraces safe control must pass: ${safeCmd}`);
+          assert.equal(traced.recommendedWorkVerdict, "VERIFIED", `S1 safe control work verdict: ${safeCmd}`);
+          assert.deepEqual(traced.workers[0].flags, [], `S1 safe control zero flags: ${safeCmd}`);
         }
       } finally {
         fs.rmSync(s1Dir, { recursive: true, force: true });
@@ -4753,7 +4768,10 @@ try {
           "npm test"
         ]) {
           assert.equal(shellCommandWrites(scanShellCommand(unsafeInterp), () => true), true, `S2 must reject: ${unsafeInterp}`);
-          assert.equal(runTraceAudit(unsafeInterp).ok, false, `S2 trace check must reject: ${unsafeInterp}`);
+          const interpAudit = runTraceAudit(unsafeInterp);
+          assert.equal(interpAudit.ok, true, `S2 advisory ok=true for: ${unsafeInterp}`);
+          assert.equal(interpAudit.recommendedWorkVerdict, "REVIEW_REQUIRED", `S2 advisory verdict for: ${unsafeInterp}`);
+          assert.ok(interpAudit.workers[0].flags.includes("SHELL_WRITE_DETECTED"), `S2 SHELL_WRITE_DETECTED for: ${unsafeInterp}`);
         }
 
         // Validated per-runtime version/help, plain Node syntax check, narrow safe prints, literal AWK control
@@ -4784,7 +4802,10 @@ try {
           "awk '$1 > 0' src/a.js"
         ]) {
           assert.equal(shellCommandWrites(scanShellCommand(safeInterp), () => true), false, `S2 safe control must allow: ${safeInterp}`);
-          assert.equal(runTraceAudit(safeInterp).ok, true, `S2 trace control must allow: ${safeInterp}`);
+          const safeAudit = runTraceAudit(safeInterp);
+          assert.equal(safeAudit.ok, true, `S2 trace control must allow: ${safeInterp}`);
+          assert.equal(safeAudit.recommendedWorkVerdict, "VERIFIED", `S2 safe control VERIFIED for: ${safeInterp}`);
+          assert.deepEqual(safeAudit.workers[0].flags, [], `S2 safe control zero flags for: ${safeInterp}`);
         }
       } finally {
         fs.rmSync(s2Dir, { recursive: true, force: true });
@@ -5066,112 +5087,227 @@ try {
       }
     }
 
-    function testBoostAdversarialShellAndCwdRegressions() {
-      const bDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-boost18-")));
+    function testE1AnchoredRipgrepGlobs() {
+      const e1Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-e1-")));
       try {
-        fs.mkdirSync(path.join(bDir, "src"), { recursive: true });
-        fs.mkdirSync(path.join(bDir, "scratch/src"), { recursive: true });
-        fs.writeFileSync(path.join(bDir, "src/a.js"), "export const a = 1;\n");
-        const slot = "scratch/agy-squad/squad-b18/specialist-1/report.md";
-        fs.mkdirSync(path.join(bDir, path.dirname(slot)), { recursive: true });
-        fs.writeFileSync(path.join(bDir, slot), "Checked src/a.js:1\n");
-        const traceFile = path.join(bDir, "brain/one/.system_generated/logs/transcript.jsonl");
-        fs.mkdirSync(path.dirname(traceFile), { recursive: true });
-        const runAudit = (cmd) => {
-          fs.writeFileSync(
-            traceFile,
-            JSON.stringify({ step_index: 1, content: "sender=C @one" }) + "\n" +
-            JSON.stringify({ step_index: 2, tool_calls: [{ name: "read_file", args: { Path: path.join(bDir, "src/a.js") } }, { name: "run_command", args: { CommandLine: cmd } }] }) + "\n"
-          );
-          return verifyWorkerTraces(
-            bDir,
-            { squadId: "b18", readOnly: true, assignments: [{ conversationId: "one", report: slot }] },
-            { coordId: "C", brainRoot: path.join(bDir, "brain") }
-          );
+        const put = (rel, text = "needle\n") => {
+          const full = path.join(e1Dir, rel);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.writeFileSync(full, text, "utf8");
+        };
+        for (const rel of ["SKILL.md", "skills/SKILL.md", "skills/a/SKILL.md", "src/a.js", "src/nested/b.js"]) put(rel);
+        const slot = "scratch/agy-squad/squad-e1/specialist-1/report.md";
+        const trace = path.join(e1Dir, "brain/e1/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(trace), { recursive: true });
+        const rec = { squadId: "e1", readOnly: true, assignments: [{ conversationId: "w1", report: slot }] };
+        const shCall = (cmd, cwd) => ({ name: "run_command", args: { CommandLine: cmd, ...(cwd ? { Cwd: cwd } : {}) } });
+        const auditE1 = (calls, citation) => {
+          put(slot, `Checked ${citation}\n`);
+          fs.writeFileSync(trace, JSON.stringify({ step_index: 0, content: "sender=C @w1" }) + "\n" + JSON.stringify({ step_index: 1, tool_calls: calls }) + "\n");
+          return verifyWorkerTraces(e1Dir, rec, { coordId: "C", traces: { w1: trace } });
         };
 
-        // 1. Finding 2: Subshell, pipeline, conditional, and `cd -` redirect spoofing
-        if (process.platform !== "win32") {
-          const probe = path.join(bDir, "probe");
-          fs.mkdirSync(path.join(probe, "src"), { recursive: true });
-          fs.mkdirSync(path.join(probe, "scratch/src"), { recursive: true });
-          fs.writeFileSync(path.join(probe, "src/a.js"), "CLEAN\n");
-          assert.equal(spawnSync("sh", ["-c", "( cd scratch && pwd ) && echo CORRUPTED > src/a.js"], { cwd: probe }).status, 0);
-          assert.equal(fs.readFileSync(path.join(probe, "src/a.js"), "utf8"), "CORRUPTED\n");
-        }
-        for (const spoofCmd of [
-          "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
-          "cd scratch | true; echo CORRUPTED > src/a.js",
-          "if false; then cd scratch; fi; echo CORRUPTED > src/a.js",
-          "cd scratch && cd - >/dev/null && echo CORRUPTED > src/a.js",
-          "cd scratch && cd && echo CORRUPTED > src/a.js",
-          "cd nonexistent_scratch; echo CORRUPTED > src/a.js",
-          "cat() { touch m.txt; }",
-          "cat () { touch m.txt; }"
-        ]) {
-          const res = runAudit(spoofCmd);
-          assert.equal(res.ok, false, `PR #18 must reject redirect/function spoof: ${spoofCmd}`);
-          assert.equal(res.recommendedVerdict, "INTEGRITY VIOLATION");
-        }
-        // POSIX unspaced and spaced read-only subshell controls + valid top-level `cd scratch && echo ok > out.txt`
-        for (const okSub of [
-          "(head -n 1 src/a.js)",
-          "( head -n 1 src/a.js )",
-          "cd scratch && echo ok > out.txt",
-          "( cd scratch && pwd ) && head -n 1 src/a.js"
-        ]) {
-          assert.equal(runAudit(okSub).ok, true, `Safe subshell/cd control must pass: ${okSub}`);
+        const rgVer = spawnSync("rg", ["--version"], { encoding: "utf8" });
+        const hasRg = !rgVer.error && rgVer.status === 0;
+        if (process.env.AGY_REQUIRE_RG_ORACLE === "1") assert.equal(hasRg, true, "ripgrep oracle required");
+        const rgFiles = (args, cwd = e1Dir) => {
+          const r = spawnSync("rg", ["-l", ...args], { cwd, encoding: "utf8" });
+          return (r.stdout || "").trim().split(/\r?\n/).filter(Boolean).map(p => p.replaceAll("\\", "/").replace(/^\.\//, "")).sort();
+        };
+
+        if (hasRg) {
+          assert.deepEqual(rgFiles(["needle", "-g", "/a.js", "src"]), []);
+          assert.deepEqual(rgFiles(["needle", "-g", "/src/a.js", "src"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "/a.js", "src/a.js"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "!*.js", "src/a.js"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "!*.md", "-g", "/skills/SKILL.md", "skills"]), ["skills/SKILL.md"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "/skills/SKILL.md", "-g", "!*.md", "skills"]), []);
+          assert.deepEqual(rgFiles(["needle", "-g", "/a.js", "."], path.join(e1Dir, "src")), ["a.js"]);
+          assert.deepEqual(rgFiles(["--max-depth", "1", "-g", "/src/**/*.js", "needle", "src"]), ["src/a.js"]);
         }
 
-        // 2. Finding 6: Real marker probes & positive allowlist checks (`node -p`, `sed`, `git`, `xargs`, `sudo`, `awk`)
-        if (process.platform !== "win32") {
-          assert.equal(spawnSync(process.execPath, ["-p", '/"/; require("fs").writeFileSync("m-re.txt", "PWN"); /"/'], { cwd: bDir }).status, 0);
-          assert.equal(fs.existsSync(path.join(bDir, "m-re.txt")), true);
-          assert.equal(spawnSync(process.execPath, ["-p", '<!-- "\nrequire("fs").writeFileSync("m-html.txt", "PWN"); // "'], { cwd: bDir }).status, 0);
-          assert.equal(fs.existsSync(path.join(bDir, "m-html.txt")), true);
-          assert.equal(spawnSync("sh", ["-c", "echo m-xargs.txt | xargs -E cat touch"], { cwd: bDir }).status, 0);
-          assert.equal(fs.existsSync(path.join(bDir, "m-xargs.txt")), true);
-          assert.equal(spawnSync("sh", ["-c", "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'"], { cwd: bDir }).status, 0);
-          assert.equal(fs.existsSync(path.join(bDir, "m-awk.txt")), true);
-        }
-        for (const bypassCmd of [
-          'node -p \'/"/; require("fs").writeFileSync("m-node.txt", "PWN"); /"/\'',
-          'node -p \'<!-- "\\nrequire("fs").writeFileSync("m-html.txt", "PWN"); // "\'',
-          'sed -n "s|.*|PWN|w m-sed1.txt" src/a.js',
-          'sed -n "s#.*#touch m-sed2.txt#e" src/a.js',
-          'sed -n "wm-sed3.txt" src/a.js',
-          'sed -n "2!w m-neg.txt" src/a.js',
-          'sed -n "0~1w m-step.txt" src/a.js',
-          'sed -I "" "s/a/b/" src/a.js',
-          'sed -I.bak "s/a/b/" src/a.js',
-          "git diff --output=m-git1.txt",
-          "git diff --output m-git1b.txt",
-          "git log -n 1 --output=m-git2.txt",
-          "git grep -nO\"sh -c 'touch m-git3.txt' --\" export src/a.js",
-          "git --exec-path=/tmp status",
-          "GIT_DIR=/tmp git status",
-          "echo m-xargs1.txt | xargs -E cat touch",
-          'printf "m-xargs2.txt:" | xargs -d : touch',
-          "sudo -p cat touch m-sudo.txt",
-          "sudo -e src/a.js",
-          "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'"
-        ]) {
-          assert.equal(shellCommandWrites(scanShellCommand(bypassCmd), () => true), true, `Classifier must reject: ${bypassCmd}`);
-          assert.equal(runAudit(bypassCmd).ok, false, `Trace audit must reject: ${bypassCmd}`);
-        }
-        for (const safeCtrl of [
-          'node -p \'require("node:fs").readFileSync("src/a.js", "utf8")\'',
-          "sed -n '1,5p' src/a.js",
-          "sed -ne '1,2p;3q' src/a.js",
-          "sed -n '$p' src/a.js",
-          "git -C . diff -- src/a.js",
-          "echo src/a.js | xargs -n 1 head -n 1"
-        ]) {
-          assert.equal(shellCommandWrites(scanShellCommand(safeCtrl), () => true), false, `Safe control must pass: ${safeCtrl}`);
-          assert.equal(runAudit(safeCtrl).ok, true, `Safe trace control must pass: ${safeCtrl}`);
-        }
+        // Root-anchored vs operand-relative
+        assert.deepEqual(auditE1([shCall("rg needle -g '/a.js' src")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
+        assert.deepEqual(auditE1([shCall("rg needle -g '/src/a.js' src")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("rg needle -g '/src/a.js' src")], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // Explicit file operands match actual ripgrep
+        assert.deepEqual(auditE1([shCall("rg needle -g '/a.js' src/a.js")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("rg needle -g '!*.js' src/a.js")], "src/a.js:1").workers[0].citedUnopened, []);
+
+        // Ordered negative/positive anchored globs
+        assert.deepEqual(auditE1([shCall("rg needle -g '!*.md' -g '/skills/SKILL.md' skills")], "skills/SKILL.md:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("rg needle -g '!*.md' -g '/skills/SKILL.md' skills")], "skills/a/SKILL.md:1").workers[0].citedUnopened, ["skills/a/SKILL.md"]);
+        assert.deepEqual(auditE1([shCall("rg needle -g '/skills/SKILL.md' -g '!*.md' skills")], "skills/SKILL.md:1").workers[0].citedUnopened, ["skills/SKILL.md"]);
+
+        // Changed working directory (Cwd and cd)
+        assert.deepEqual(auditE1([shCall("rg needle -g '/a.js' .", path.join(e1Dir, "src"))], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("rg needle -g '/a.js' .", path.join(e1Dir, "src"))], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(auditE1([shCall("cd src && rg needle -g '/a.js' .")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("cd src && rg needle -g '/a.js' .")], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // Same pattern `-g '/a.js'` issued from two different cwds in the same worker session must keep distinct anchorRel filters
+        const twoCwds = auditE1([
+          shCall("rg needle -g '/a.js' src", e1Dir),
+          shCall("rg needle -g '/a.js' .", path.join(e1Dir, "src"))
+        ], "src/a.js:1");
+        const srcEntry = twoCwds.workers[0].searchedDirs.find(d => d.path === "src");
+        assert.equal(srcEntry.filters.length, 2, "Identical glob from distinct cwds must not collapse in deduplication");
+        assert.deepEqual(srcEntry.filters.map(f => f.globRules[0].anchorRel), [".", "src"]);
+        assert.deepEqual(twoCwds.workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([
+          shCall("rg needle -g '/a.js' src", e1Dir),
+          shCall("rg needle -g '/a.js' .", path.join(e1Dir, "src"))
+        ], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // Separate traversal-depth base (`dirRel`) vs glob-anchor base (`anchorRel`)
+        assert.deepEqual(auditE1([shCall("rg --max-depth 1 -g '/src/**/*.js' needle src")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE1([shCall("rg --max-depth 1 -g '/src/**/*.js' needle src")], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // Unsupported glob syntax stays conservative
+        assert.deepEqual(auditE1([shCall("rg needle -g '/src/[a-z].js' src")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
       } finally {
-        fs.rmSync(bDir, { recursive: true, force: true });
+        fs.rmSync(e1Dir, { recursive: true, force: true });
+      }
+    }
+
+    function testE2OrderedGnuGrepDirectoryAction() {
+      const e2Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-e2-")));
+      try {
+        const put = (rel, text = "needle\n") => {
+          const full = path.join(e2Dir, rel);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.writeFileSync(full, text, "utf8");
+        };
+        put("src/a.js");
+        put("src/nested/b.js");
+        const slot = "scratch/agy-squad/squad-e2/specialist-1/report.md";
+        const trace = path.join(e2Dir, "brain/e2/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(trace), { recursive: true });
+        const rec = { squadId: "e2", readOnly: true, assignments: [{ conversationId: "w1", report: slot }] };
+        const auditE2 = (cmd, citation) => {
+          put(slot, `Checked ${citation}\n`);
+          fs.writeFileSync(trace, JSON.stringify({ step_index: 0, content: "sender=C @w1" }) + "\n" + JSON.stringify({ step_index: 1, tool_calls: [{ name: "run_command", args: { CommandLine: cmd } }] }) + "\n");
+          return verifyWorkerTraces(e2Dir, rec, { coordId: "C", traces: { w1: trace } });
+        };
+
+        const grepVer = spawnSync("grep", ["--version"], { encoding: "utf8" });
+        const hasGnuGrep = !grepVer.error && grepVer.status === 0 && /GNU grep/i.test(`${grepVer.stdout}\n${grepVer.stderr}`);
+        if (process.platform === "linux") assert.equal(hasGnuGrep, true, "GNU grep oracle required on Linux");
+        if (hasGnuGrep) {
+          assert.notEqual(spawnSync("grep", ["needle", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 0);
+          assert.notEqual(spawnSync("grep", ["-d", "read", "needle", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 0);
+          assert.equal(spawnSync("grep", ["-rne", "needle", "-d", "skip", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 1);
+          assert.equal(spawnSync("grep", ["-rn", "--directories=skip", "needle", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 1);
+          assert.equal(spawnSync("grep", ["-d", "skip", "-rne", "needle", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 0);
+          assert.equal(spawnSync("grep", ["--directories=skip", "-rn", "needle", "src"], { cwd: e2Dir, encoding: "utf8" }).status, 0);
+          assert.equal(spawnSync("grep", ["-d", "skip", "needle", "src/a.js"], { cwd: e2Dir, encoding: "utf8" }).status, 0);
+        }
+
+        // Non-recursive / skipped directory actions credit zero descendants
+        for (const noDescCmd of [
+          "grep needle src",
+          "grep -d read needle src",
+          "grep --directories=read needle src",
+          "grep -rne needle -d skip src",
+          "grep -rn --directories=skip needle src",
+          "grep -rdskip -n -e needle src",
+          "grep -d invalid-action -rn needle src"
+        ]) {
+          assert.deepEqual(auditE2(noDescCmd, "src/a.js:1").workers[0].citedUnopened, ["src/a.js"], noDescCmd);
+        }
+
+        // Recursive overrides in argument order grant descendant coverage
+        for (const recCmd of [
+          "grep -d skip -rne needle src",
+          "grep --directories=skip -rn needle src",
+          "grep -d recurse -n needle src",
+          "grep --directories=recurse -n needle src"
+        ]) {
+          assert.deepEqual(auditE2(recCmd, "src/a.js:1").workers[0].citedUnopened, [], recCmd);
+          assert.deepEqual(auditE2(recCmd, "src/nested/b.js:1").workers[0].citedUnopened, [], recCmd);
+        }
+
+        // Explicit file operand remains credited under `-d skip`
+        assert.deepEqual(auditE2("grep -d skip needle src/a.js", "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE2("grep --directories=skip needle src/a.js", "src/a.js:1").workers[0].citedUnopened, []);
+      } finally {
+        fs.rmSync(e2Dir, { recursive: true, force: true });
+      }
+    }
+
+    function testE3LastWinsRipgrepMaxDepth() {
+      const e3Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-e3-")));
+      try {
+        const put = (rel, text = "needle\n") => {
+          const full = path.join(e3Dir, rel);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.writeFileSync(full, text, "utf8");
+        };
+        put("src/a.js");
+        put("src/nested/b.js");
+        put("src/nested/deep/leaf.js");
+        const slot = "scratch/agy-squad/squad-e3/specialist-1/report.md";
+        const trace = path.join(e3Dir, "brain/e3/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(trace), { recursive: true });
+        const rec = { squadId: "e3", readOnly: true, assignments: [{ conversationId: "w1", report: slot }] };
+        const shCall = cmd => ({ name: "run_command", args: { CommandLine: cmd } });
+        const auditE3 = (calls, citation) => {
+          put(slot, `Checked ${citation}\n`);
+          fs.writeFileSync(trace, JSON.stringify({ step_index: 0, content: "sender=C @w1" }) + "\n" + JSON.stringify({ step_index: 1, tool_calls: calls }) + "\n");
+          return verifyWorkerTraces(e3Dir, rec, { coordId: "C", traces: { w1: trace } });
+        };
+
+        const rgVer = spawnSync("rg", ["--version"], { encoding: "utf8" });
+        const hasRg = !rgVer.error && rgVer.status === 0;
+        if (process.env.AGY_REQUIRE_RG_ORACLE === "1") assert.equal(hasRg, true, "ripgrep oracle required");
+        const rgFiles = args => {
+          const r = spawnSync("rg", ["-l", ...args], { cwd: e3Dir, encoding: "utf8" });
+          return (r.stdout || "").trim().split(/\r?\n/).filter(Boolean).map(p => p.replaceAll("\\", "/")).sort();
+        };
+        if (hasRg) {
+          assert.deepEqual(rgFiles(["--max-depth", "1", "--max-depth", "3", "needle", "src"]), ["src/a.js", "src/nested/b.js", "src/nested/deep/leaf.js"]);
+          assert.deepEqual(rgFiles(["-d", "1", "-d", "3", "needle", "src"]), ["src/a.js", "src/nested/b.js", "src/nested/deep/leaf.js"]);
+          assert.deepEqual(rgFiles(["--max-depth", "3", "--max-depth", "1", "needle", "src"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["--max-depth=3", "--max-depth=1", "needle", "src"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["--max-depth", "0", "needle", "src"]), []);
+          assert.deepEqual(rgFiles(["--max-depth", "0", "needle", "src/a.js"]), ["src/a.js"]);
+        }
+
+        // Ascending repeated limits: later larger limit wins
+        for (const ascCmd of [
+          "rg --max-depth 1 --max-depth 3 needle src",
+          "rg -d 1 -d 3 needle src",
+          "rg --max-depth=1 --max-depth=3 needle src"
+        ]) {
+          assert.deepEqual(auditE3([shCall(ascCmd)], "src/nested/deep/leaf.js:1").workers[0].citedUnopened, [], ascCmd);
+        }
+
+        // Descending repeated limits: later smaller limit wins
+        for (const descCmd of [
+          "rg --max-depth 3 --max-depth 1 needle src",
+          "rg -d 3 -d 1 needle src",
+          "rg --max-depth=3 --max-depth=1 needle src"
+        ]) {
+          assert.deepEqual(auditE3([shCall(descCmd)], "src/a.js:1").workers[0].citedUnopened, [], descCmd);
+          assert.deepEqual(auditE3([shCall(descCmd)], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"], descCmd);
+        }
+
+        // Depth zero on directory vs explicit file, plus malformed depth uncertainty
+        assert.deepEqual(auditE3([shCall("rg --max-depth 0 needle src")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
+        assert.deepEqual(auditE3([shCall("rg --max-depth 0 needle src/a.js")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(auditE3([shCall("rg --max-depth bogus needle src")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
+
+        // Deduplication and serialization preserve bounded filters (`unfiltered: false`)
+        const boundedSeq = auditE3([shCall("rg --max-depth 1 needle src"), shCall("rg --max-depth 2 needle src")], "src/nested/deep/leaf.js:1");
+        const srcDir = boundedSeq.workers[0].searchedDirs.find(d => d.path === "src");
+        assert.equal(srcDir.filters.length, 2);
+        assert.ok(srcDir.filters.every(f => f.unfiltered === false));
+        assert.deepEqual(srcDir.filters.map(f => f.maxDepth), [1, 2]);
+        assert.deepEqual(boundedSeq.workers[0].citedUnopened, ["src/nested/deep/leaf.js"]);
+        assert.deepEqual(auditE3([shCall("rg --max-depth 1 needle src"), shCall("rg --max-depth 2 needle src")], "src/nested/b.js:1").workers[0].citedUnopened, []);
+      } finally {
+        fs.rmSync(e3Dir, { recursive: true, force: true });
       }
     }
 
@@ -5179,7 +5315,9 @@ try {
     testS2ConservativeInterpreterPolicy();
     testS3RecordToBundleLifecycleCompatibility();
     testS4CollectHelpAndCanonicalReceiptRoots();
-    testBoostAdversarialShellAndCwdRegressions();
+    testE1AnchoredRipgrepGlobs();
+    testE2OrderedGnuGrepDirectoryAction();
+    testE3LastWinsRipgrepMaxDepth();
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

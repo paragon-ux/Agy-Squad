@@ -3511,11 +3511,11 @@ function addOpenedFile(openedFilesMap, relPath, kind, range = null) {
 }
 
 function newSearchFilter() {
-  return { includes: [], excludes: [], globRules: [], excludeDirs: [], types: [], typeNots: [], maxDepth: null, unknown: false };
+  return { includes: [], excludes: [], globRules: [], excludeDirs: [], types: [], typeNots: [], maxDepth: null, skipDirs: false, unknown: false };
 }
 
 function isUnfilteredSearch(filter) {
-  return !filter.unknown && filter.maxDepth === null && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0);
+  return !filter.unknown && !filter.skipDirs && filter.maxDepth === null && Object.values(filter).every(value => !Array.isArray(value) || value.length === 0);
 }
 
 function boundedGlobMatch(value, pattern) {
@@ -3548,7 +3548,7 @@ function boundedGlobMatch(value, pattern) {
   return p === parts.length;
 }
 
-function matchesSearchGlob(pattern, rel, dirRel) {
+function matchesSearchGlob(pattern, rel, dirRel, anchorRel = dirRel) {
   if (typeof pattern !== "string" || pattern.length > 512) return null;
   const open = pattern.indexOf("{");
   if (open !== -1) {
@@ -3556,14 +3556,21 @@ function matchesSearchGlob(pattern, rel, dirRel) {
     if (close === -1 || pattern.indexOf("{", open + 1) !== -1) return null;
     const alternatives = pattern.slice(open + 1, close).split(",");
     if (alternatives.length > 32 || alternatives.some(s => s.includes(".."))) return null;
-    const results = alternatives.map(s => matchesSearchGlob(pattern.slice(0, open) + s + pattern.slice(close + 1), rel, dirRel));
+    const results = alternatives.map(s => matchesSearchGlob(pattern.slice(0, open) + s + pattern.slice(close + 1), rel, dirRel, anchorRel));
     return results.includes(true) ? true : results.includes(null) ? null : false;
   }
-  const normalized = pattern.replace(/^\//, "");
-  const candidates = normalized.includes("/")
+  if (pattern.startsWith("/")) {
+    const sub = anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
+    if (!sub || sub === "." || sub === ".." || sub.startsWith("../")) return false;
+    const anchored = pattern.slice(1);
+    const patterns = anchored.startsWith("**/") ? [anchored, anchored.slice(3)] : [anchored];
+    const results = patterns.map(p => boundedGlobMatch(sub, p));
+    return results.includes(true) ? true : results.includes(null) ? null : false;
+  }
+  const candidates = pattern.includes("/")
     ? [rel, path.posix.relative(dirRel || ".", rel)]
     : [path.posix.basename(rel)];
-  const patterns = normalized.startsWith("**/") ? [normalized, normalized.slice(3)] : [normalized];
+  const patterns = pattern.startsWith("**/") ? [pattern, pattern.slice(3)] : [pattern];
   const results = candidates.flatMap(candidate => patterns.map(p => boundedGlobMatch(candidate, p)));
   return results.includes(true) ? true : results.includes(null) ? null : false;
 }
@@ -3576,7 +3583,7 @@ const SEARCH_TYPE_EXTENSIONS = {
 };
 
 function searchCoversFile(filter, rel, dirRel) {
-  if (filter.unknown) return false;
+  if (filter.unknown || filter.skipDirs) return false;
   if (filter.maxDepth !== null) {
     const sub = dirRel && dirRel !== "." ? path.posix.relative(dirRel, rel) : rel;
     if (!sub || sub.startsWith("..") || sub.split("/").length > filter.maxDepth) return false;
@@ -3587,9 +3594,10 @@ function searchCoversFile(filter, rel, dirRel) {
   if (filter.globRules.length) {
     let included = !filter.globRules.some(r => !r.negate);
     for (const r of filter.globRules) {
+      const anchor = r.anchorRel ?? dirRel;
       const m = r.insensitive
-        ? matchesSearchGlob(r.pattern.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase())
-        : matchesSearchGlob(r.pattern, rel, dirRel);
+        ? matchesSearchGlob(r.pattern.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase(), anchor.toLowerCase())
+        : matchesSearchGlob(r.pattern, rel, dirRel, anchor);
       if (m === null && r.negate) return false;
       if (m === true) included = !r.negate;
     }
@@ -3664,7 +3672,7 @@ function expandSimpleGlobInWorkspace(rawPattern, canonicalRoot, baseDir, openedF
     if (d.isSymbolicLink() || !d.isFile()) continue;
     if (!matchSimpleStarGlob(d.name, basePat)) continue;
     const rel = dirRel === "." ? d.name : `${dirRel}/${d.name}`;
-    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile({ ...filter, maxDepth: null }, rel, dirRel)) continue;
+    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile({ ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] }, rel, dirRel)) continue;
     addOpenedFile(openedFilesMap, rel, kind);
     matched = true;
     count += 1;
@@ -3688,7 +3696,7 @@ function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap
   if (!rel || rel.startsWith("external:")) return false;
   if (rel === ".") {
     if (mode === "list") addDirEntry(listedDirsMap, ".", "dir_list");
-    return mode === "search";
+    return mode === "search" && !filter.skipDirs;
   }
   const found = evidencePath(canonicalRoot, rel, fallbackRoot);
   const isDir = found?.stat.isDirectory() ?? false;
@@ -3699,14 +3707,14 @@ function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap
     return false;
   }
   if (isDir) {
-    if (mode === "search") {
+    if (mode === "search" && !filter.skipDirs) {
       addSearchEntry(searchedDirsMap, rel, "shell_search", filter);
       return true;
     }
     return false;
   }
-  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile({ ...filter, maxDepth: null }, rel, path.posix.relative(canonicalRoot, baseDir)))) {
-    addOpenedFile(openedFilesMap, rel, mode === "search" ? "shell_read" : "shell_read");
+  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile({ ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] }, rel, normalizeToolTargetToRel(".", canonicalRoot, true, baseDir) || "."))) {
+    addOpenedFile(openedFilesMap, rel, "shell_read");
     return true;
   }
   return false;
@@ -3730,10 +3738,12 @@ const SHELL_BOOLEAN_OPTIONS = new Set([
   '-w', '-x', '-v', '-a', '-P', '-U', '-l', '-L', '-c', '-H', '-h', '-q', '-o', '-u', '-z', '-0', '-b', '-I', '-R'
 ]);
 
-function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
+function shellOperands(args, { search = false, head = '', rawHead = head, gitSub = '', cwdRel = '.' } = {}) {
   const filter = newSearchFilter();
   const operands = [], programs = [];
   let hasPattern = false, positional = false, valid = true, listOnly = false, hasProgram = false;
+  const isGrep = !gitSub && ['grep', 'egrep', 'fgrep'].includes(rawHead);
+  let dirAction = isGrep ? 'read' : 'recurse';
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (positional || !token.startsWith('-') || token === '-') { operands.push(token); continue; }
@@ -3741,12 +3751,17 @@ function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
     let flag = token, value;
     const eq = token.indexOf('=');
     if (token.startsWith('--') && eq > 0) { flag = token.slice(0, eq); value = token.slice(eq + 1); }
-    else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (!['-E', '-r'].includes(token.slice(0, 2)) || head === 'rg')) { flag = token.slice(0, 2); value = token.slice(2); }
+    else if (search && head !== 'rg' && !token.startsWith('--') && token.length > 1) {
+      for (let k = 1; k < token.length; k++) {
+        const ch = token[k];
+        if (ch === 'r' || ch === 'R') dirAction = 'recurse';
+        else if ('efmdDABC'.includes(ch)) { flag = `-${ch}`; value = token.slice(k + 1) || undefined; break; }
+        else if (!'niIsSFwxlLcqovHhaPUz0bETZUGy'.includes(ch)) { valid = false; break; }
+      }
+      if (!valid) break;
+    } else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (!['-E', '-r'].includes(token.slice(0, 2)) || head === 'rg')) { flag = token.slice(0, 2); value = token.slice(2); }
     else if (head === 'sed' && !token.startsWith('--') && token.length > 2) {
       const m = /^-[nErsuz]+([ef])([\s\S]*)$/.exec(token);
-      if (m) { flag = `-${m[1]}`; value = m[2] || undefined; }
-    } else if (search && head !== 'rg' && !token.startsWith('--') && token.length > 2) {
-      const m = /^-[rRniIsSFwxlLcqovHhaE]+([ef])([\s\S]*)$/.exec(token);
       if (m) { flag = `-${m[1]}`; value = m[2] || undefined; }
     }
     const interpreter = ['node', 'python', 'python3', 'ruby', 'perl'].includes(head);
@@ -3761,7 +3776,7 @@ function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
       if (['sed', 'awk'].includes(head) && ['-e', '--expression', '-f', '--file'].includes(flag)) hasProgram = true;
       if (flag === '-g' || flag === '--glob' || flag === '--iglob') {
         const negate = value.startsWith('!');
-        filter.globRules.push({ pattern: negate ? value.slice(1) : value, negate, insensitive: flag === '--iglob' });
+        filter.globRules.push({ pattern: negate ? value.slice(1) : value, negate, insensitive: flag === '--iglob', anchorRel: cwdRel });
       } else if (flag === '--include') filter.includes.push(value);
       else if (flag === '--exclude') filter.excludes.push(value);
       else if (flag === '--exclude-dir') filter.excludeDirs.push(value);
@@ -3769,18 +3784,22 @@ function shellOperands(args, { search = false, head = '', gitSub = '' } = {}) {
       else if (flag === '-T' || flag === '--type-not') filter.typeNots.push(value);
       else if (flag === '--max-depth' || (head === 'rg' && flag === '-d')) {
         const depth = /^\d+$/.test(value) ? Number(value) : NaN;
-        if (Number.isSafeInteger(depth)) filter.maxDepth = filter.maxDepth === null ? depth : Math.min(filter.maxDepth, depth);
+        if (Number.isSafeInteger(depth)) filter.maxDepth = depth;
         else filter.unknown = true;
-      } else if (head !== 'rg' && (flag === '-d' || flag === '--directories') && value === 'skip') {
-        filter.maxDepth = filter.maxDepth === null ? 1 : Math.min(filter.maxDepth, 1);
+      } else if (head !== 'rg' && (flag === '-d' || flag === '--directories')) {
+        if (value === 'recurse' || value === 'skip' || value === 'read') dirAction = value;
+        else filter.unknown = true;
       } else if (['--type-add', '--type-clear'].includes(flag)) filter.unknown = true;
       if (['-e', '--regexp', '-f', '--file'].includes(flag) && search) hasPattern = true;
       continue;
     }
     if (flag === '--files') listOnly = true;
-    if (SHELL_BOOLEAN_OPTIONS.has(flag) || !flag.startsWith('--') && (head === 'rg' ? /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rniIsSFwxlLcqovHhaPRUz0bE]+$/).test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
+    if (flag === '--recursive' || flag === '--dereference-recursive') dirAction = 'recurse';
+    else if (gitSub === 'grep' && flag === '--no-recursive') dirAction = 'read';
+    if (SHELL_BOOLEAN_OPTIONS.has(flag) || flag === '--dereference-recursive' || flag === '--no-recursive' || !flag.startsWith('--') && (head === 'rg' ? /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rRniIsSFwxlLcqovHhaPRUz0bETZUGy]+$/).test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
     valid = false;
   }
+  if (search && head !== 'rg' && dirAction !== 'recurse') filter.skipDirs = true;
   if (search && !hasPattern && !listOnly) operands.shift();
   if (!search && ['awk', 'sed'].includes(head) && !hasProgram) operands.shift();
   for (const values of Object.values(filter)) if (Array.isArray(values) && (values.length > 64 || values.some(value => (typeof value === "string" ? value.length : value.pattern.length) > 512))) filter.unknown = true;
@@ -3809,7 +3828,7 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
     let args = command.args;
     const cmdCwd = canonicalCwd(command.cwd ? path.resolve(segmentCwd, command.cwd) : segmentCwd);
     onCommand(segment, cmdCwd || segmentCwd, order, Boolean(cmdCwd));
-    if (!cmdCwd) continue;
+    if (!cmdCwd || segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) continue;
     if (head === 'cd') {
       const next = args.find(a => a && !a.startsWith('-'));
       if (next && !next.includes('$')) segmentCwd = path.resolve(cmdCwd, next);
@@ -3829,7 +3848,8 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
       mode = ['grep', 'rg'].includes(commandHead) ? 'search' : ['read', 'diff', 'log', 'show'].includes(commandHead) ? 'read' : ['find', 'ls'].includes(commandHead) ? 'list' : null;
     } else mode = SHELL_SEARCH_CMDS.has(head) ? 'search' : SHELL_READ_CMDS.has(head) ? 'read' : SHELL_DIR_LIST_CMDS.has(head) ? 'list' : null;
     if (!mode) continue;
-    const parsed = shellOperands(args, { search: mode === 'search', head: commandHead, gitSub });
+    const cwdRel = normalize(cmdCwd) || '.';
+    const parsed = shellOperands(args, { search: mode === 'search', head: commandHead, rawHead: head, gitSub, cwdRel });
     if (!parsed.valid) continue;
     if (parsed.listOnly) mode = 'list';
     let recorded = false;
@@ -3845,9 +3865,8 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
       const fileRe = /["'`]([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8})["'`]/g;
       for (const match of program.matchAll(fileRe)) if (classifyAndRecordPath(match[1], effectiveRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, 'read', parsed.filter, fallbackRoot)) recorded = true;
     }
-    if (!parsed.operands.length && mode === 'search') {
-      const cwdRel = normalize(cmdCwd);
-      if (cwdRel && !cwdRel.startsWith('external:')) {
+    if (!parsed.operands.length && mode === 'search' && !parsed.filter.skipDirs) {
+      if (!cwdRel.startsWith('external:')) {
         if (cwdRel !== '.') addSearchEntry(searchedDirsMap, cwdRel, 'shell_search', parsed.filter);
         recorded = true;
       }
