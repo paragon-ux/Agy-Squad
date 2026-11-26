@@ -1958,6 +1958,11 @@ try {
       );
       assert.ok(fs.existsSync(realBrainPane), "RUN-02: canonical ~/.gemini realpath must write swarmPane");
 
+      const danglingPane = path.join(realDotfilesGemini, "antigravity/brain/33333333-3333-3333-3333-333333333333/.system_generated/swarm/plan.json");
+      fs.mkdirSync(path.dirname(danglingPane), { recursive: true });
+      fs.symlinkSync(path.join(path.dirname(danglingPane), "missing.json"), danglingPane);
+      assert.equal(handleSquadPlanner({ task: "Dangling pane", swarmPaneOutPath: danglingPane, replace: true }, root).isError, true);
+
       // Symlinked directory BENEATH ~/.gemini must still be rejected
       const evilTarget = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pane-evil-"));
       try {

@@ -3995,6 +3995,8 @@ try {
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, slot) } }]).ok, true);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }]).ok, false);
       assert.equal(audit([read, { name: "write_file", args: { Path: path.join(worktree, "src/a.js") } }], { ...record, readOnly: false }).ok, true);
+      assert.equal(audit([read, { name: "write_file", args: { Path: path.join(tmp, "src/a.js") } }], { ...record, readOnly: false }).ok, false);
+      assert.equal(audit([{ name: "run_command", args: { CommandLine: `echo hijack > "${path.join(worktree, sibling)}"` } }]).ok, false);
       const metadata = { Summary: "notes", UserFacing: false, RequestFeedback: false };
       const ownNote = path.join(tmp, "brain/session/note.md");
       assert.equal(audit([{ name: "write_file", args: { Path: ownNote, ArtifactMetadata: metadata } }]).ok, true);

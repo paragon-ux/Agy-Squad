@@ -1205,6 +1205,7 @@ async function main(args) {
           warnUncarriedCitations(digestResult.citations, `${item.squadId} synthesis report`);
         }
         const outRel = normalizeBundleOutCliPath(item.outRel, process.platform, targetRoot);
+        handoffsMod.assertNoSymlinkedAncestors(targetRoot, outRel, new Set([targetRoot]));
         if (!values.replace) {
           try { fs.lstatSync(path.join(targetRoot, outRel)); throw new Error(`Target already exists: ${outRel}`); }
           catch (error) { if (error.code !== "ENOENT") throw error; }

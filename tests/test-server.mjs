@@ -152,6 +152,9 @@ console.log("Agy-Squad MCP server tests\n");
   });
   assert.equal(badPlan.result.isError, true);
   assert.match(badPlan.result.content[0].text, /exactly one/);
+  const boundedPlan = await send("tools/call", { name: "squad_planner", arguments: { task: "Bounded planner options", roles: Array(65).fill("Reader") } });
+  assert.equal(boundedPlan.result.isError, true);
+  assert.match(boundedPlan.result.content[0].text, /roles exceeds its schema bounds/);
   const unknown = await send("tools/call", { name: "subagent_brief" });
   assert.equal(unknown.error.code, -32602);
   for (const invalid of [
@@ -291,7 +294,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.equal(splitCapMsgs[1].id, 13);
 
   // MCP-004: >500 KB response written while stdin closes immediately after sending the request (early EOF)
-  const manyRoles = Array.from({ length: 120 }, (_, i) => `Role ${i + 1} Large Objective Padding`);
+  const manyRoles = Array.from({ length: 64 }, (_, i) => `Role ${i + 1} Large Objective Padding`);
   const largeProc = spawn(process.execPath, [server], { stdio: ["pipe", "pipe", "inherit"] });
   const largeChunks = [];
   largeProc.stdout.on("data", (d) => largeChunks.push(d));
@@ -301,7 +304,7 @@ console.log("Agy-Squad MCP server tests\n");
       jsonrpc: "2.0",
       id: 404,
       method: "tools/call",
-      params: { name: "squad_planner", arguments: { task: "Large stdio frame drain test", roles: manyRoles, executionMode: "swarm" } }
+      params: { name: "squad_planner", arguments: { task: "Large stdio frame drain test " + "padding ".repeat(1000), roles: manyRoles, executionMode: "swarm" } }
     }) + "\n"
   );
   largeProc.stdin.end();

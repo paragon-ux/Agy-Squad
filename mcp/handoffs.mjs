@@ -3571,11 +3571,13 @@ function verifyWorkerTraces(root, record, options = {}) {
               const effectiveCwd = cwd ? path.resolve(commandCwd, cwd) : commandCwd;
               const allowRedirect = target => {
                 if (target === "/dev/null") return true;
-                const rel = normalizeTarget(path.resolve(effectiveCwd, target));
-                return rel && !rel.startsWith("external:") && (isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot);
+                const rel = normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot);
+                if (!rel || rel.startsWith("external:")) return false;
+                if (rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`)) return rel === reportSlot;
+                return isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot;
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
-              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && normalizeTarget(path.resolve(effectiveCwd, target))?.startsWith("external:"))) unauthorizedWrites.add("run_command");
+              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:"))) unauthorizedWrites.add("run_command");
               if (head === "cd" && words[0]) { commandCwd = path.resolve(commandCwd, words[0]); continue; }
               const gitRead = head === "git" && ["grep", "diff", "show", "log"].includes(words[0]);
               if (!["cat", "head", "tail", "sed", "awk", "rg", "grep"].includes(head) && !(head === "rtk" && ["read", "cat", "head", "tail", "grep", "rg", "diff"].includes(words[0])) && !gitRead) continue;
@@ -3590,7 +3592,7 @@ function verifyWorkerTraces(root, record, options = {}) {
           if (isPlainObject(args.ArtifactMetadata) && typeof args.ArtifactMetadata.Summary === "string" && typeof args.ArtifactMetadata.UserFacing === "boolean" && typeof args.ArtifactMetadata.RequestFeedback === "boolean" && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
             continue;
           }
-          const rel = normalizeTarget(targetRaw);
+          const rel = normalizeToolTargetToRel(targetRaw, workerRoot);
           if (isReadOnly && rel !== reportSlot) {
             unauthorizedWrites.add(rel ?? String(targetRaw));
           } else if (!isReadOnly && rel && rel.startsWith("external:")) {
@@ -3661,6 +3663,7 @@ function verifyWorkerTraces(root, record, options = {}) {
 
 export {
   CONTROL_CHAR_RE,
+  assertNoSymlinkedAncestors,
   buildBoundAuditSwarmAdd,
   buildBoundAuditSwarmAdds,
   buildBundleRecordInit,
