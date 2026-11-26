@@ -3548,7 +3548,7 @@ function boundedGlobMatch(value, pattern) {
   return p === parts.length;
 }
 
-function matchesSearchGlob(pattern, rel, dirRel, anchorRel = dirRel) {
+function matchesSearchGlob(pattern, rel, dirRel, anchorRel = dirRel, { isRipgrepGlob = false } = {}) {
   if (typeof pattern !== "string" || pattern.length > 512) return null;
   const open = pattern.indexOf("{");
   if (open !== -1) {
@@ -3556,21 +3556,35 @@ function matchesSearchGlob(pattern, rel, dirRel, anchorRel = dirRel) {
     if (close === -1 || pattern.indexOf("{", open + 1) !== -1) return null;
     const alternatives = pattern.slice(open + 1, close).split(",");
     if (alternatives.length > 32 || alternatives.some(s => s.includes(".."))) return null;
-    const results = alternatives.map(s => matchesSearchGlob(pattern.slice(0, open) + s + pattern.slice(close + 1), rel, dirRel, anchorRel));
-    return results.includes(true) ? true : results.includes(null) ? null : false;
+    const expanded = alternatives.map(s =>
+      matchesSearchGlob(pattern.slice(0, open) + s + pattern.slice(close + 1), rel, dirRel, anchorRel, { isRipgrepGlob })
+    );
+    return expanded.includes(true) ? true : expanded.includes(null) ? null : false;
   }
-  if (pattern.startsWith("/")) {
+  const hasTrailingSlash = pattern.length > 1 && pattern.endsWith("/");
+  const core = hasTrailingSlash ? pattern.slice(0, -1) : pattern;
+  if (!core) return null;
+  const isAnchored = core.startsWith("/") || (isRipgrepGlob && !core.startsWith("**/") && core.includes("/"));
+  if (isAnchored) {
     const sub = anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
     if (!sub || sub === "." || sub === ".." || sub.startsWith("../")) return false;
-    const anchored = pattern.slice(1);
+    const rawAnchored = core.startsWith("/") ? core.slice(1) : core;
+    const anchored = hasTrailingSlash ? `${rawAnchored}/**` : rawAnchored;
     const patterns = anchored.startsWith("**/") ? [anchored, anchored.slice(3)] : [anchored];
     const results = patterns.map(p => boundedGlobMatch(sub, p));
     return results.includes(true) ? true : results.includes(null) ? null : false;
   }
-  const candidates = pattern.includes("/")
+  if (hasTrailingSlash) {
+    const sub = isRipgrepGlob && anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
+    if (!sub || sub === "." || sub === ".." || sub.startsWith("../")) return false;
+    const unanchoredCore = core.startsWith("**/") ? core.slice(3) : core;
+    const results = [`**/${unanchoredCore}/**`, `${unanchoredCore}/**`].map(p => boundedGlobMatch(sub, p));
+    return results.includes(true) ? true : results.includes(null) ? null : false;
+  }
+  const candidates = core.includes("/")
     ? [rel, path.posix.relative(dirRel || ".", rel)]
     : [path.posix.basename(rel)];
-  const patterns = pattern.startsWith("**/") ? [pattern, pattern.slice(3)] : [pattern];
+  const patterns = core.startsWith("**/") ? [core, core.slice(3)] : [core];
   const results = candidates.flatMap(candidate => patterns.map(p => boundedGlobMatch(candidate, p)));
   return results.includes(true) ? true : results.includes(null) ? null : false;
 }
@@ -3596,8 +3610,8 @@ function searchCoversFile(filter, rel, dirRel) {
     for (const r of filter.globRules) {
       const anchor = r.anchorRel ?? dirRel;
       const m = r.insensitive
-        ? matchesSearchGlob(r.pattern.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase(), anchor.toLowerCase())
-        : matchesSearchGlob(r.pattern, rel, dirRel, anchor);
+        ? matchesSearchGlob(r.pattern.toLowerCase(), rel.toLowerCase(), dirRel.toLowerCase(), anchor.toLowerCase(), { isRipgrepGlob: true })
+        : matchesSearchGlob(r.pattern, rel, dirRel, anchor, { isRipgrepGlob: true });
       if (m === null && r.negate) return false;
       if (m === true) included = !r.negate;
     }
@@ -3735,7 +3749,7 @@ const SHELL_BOOLEAN_OPTIONS = new Set([
   '--count-matches', '--heading', '--no-heading', '--column', '--no-messages', '--quiet', '--recursive', '--line-buffered',
   '--crlf', '--no-config', '--trim', '--null', '--null-data', '--only-matching', '--oneline', '--stat', '--numstat',
   '--name-only', '--name-status', '--no-pager', '--no-ext-diff', '--no-textconv', '--', '-n', '-i', '-s', '-S', '-F',
-  '-w', '-x', '-v', '-a', '-P', '-U', '-l', '-L', '-c', '-H', '-h', '-q', '-o', '-u', '-z', '-0', '-b', '-I', '-R'
+  '-w', '-x', '-v', '-a', '-P', '-U', '-l', '-L', '-c', '-H', '-h', '-q', '-o', '-u', '-z', '-0', '-b', '-I'
 ]);
 
 function shellOperands(args, { search = false, head = '', rawHead = head, gitSub = '', cwdRel = '.' } = {}) {
@@ -3751,12 +3765,14 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
     let flag = token, value;
     const eq = token.indexOf('=');
     if (token.startsWith('--') && eq > 0) { flag = token.slice(0, eq); value = token.slice(eq + 1); }
-    else if (search && head !== 'rg' && !token.startsWith('--') && token.length > 1) {
+    else if (search && !token.startsWith('--') && token.length > 1) {
+      const valChars = head === 'rg' ? 'efmgdtTABCjMEr' : 'efmdDABC';
+      const boolChars = head === 'rg' ? 'niIsSFwxlLcqovHhaPUz0b' : 'niIsSFwxlLcqovHhaPUz0bETZUGy';
       for (let k = 1; k < token.length; k++) {
         const ch = token[k];
-        if (ch === 'r' || ch === 'R') dirAction = 'recurse';
-        else if ('efmdDABC'.includes(ch)) { flag = `-${ch}`; value = token.slice(k + 1) || undefined; break; }
-        else if (!'niIsSFwxlLcqovHhaPUz0bETZUGy'.includes(ch)) { valid = false; break; }
+        if (head !== 'rg' && (ch === 'r' || ch === 'R')) dirAction = 'recurse';
+        else if (valChars.includes(ch)) { flag = `-${ch}`; value = token.slice(k + 1) || undefined; break; }
+        else if (!boolChars.includes(ch)) { valid = false; break; }
       }
       if (!valid) break;
     } else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (!['-E', '-r'].includes(token.slice(0, 2)) || head === 'rg')) { flag = token.slice(0, 2); value = token.slice(2); }
@@ -3783,9 +3799,12 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
       else if (flag === '-t' || flag === '--type') filter.types.push(value);
       else if (flag === '-T' || flag === '--type-not') filter.typeNots.push(value);
       else if (flag === '--max-depth' || (head === 'rg' && flag === '-d')) {
-        const depth = /^\d+$/.test(value) ? Number(value) : NaN;
-        if (Number.isSafeInteger(depth)) filter.maxDepth = depth;
-        else filter.unknown = true;
+        if (gitSub === 'grep' && value === '-1') filter.maxDepth = null;
+        else {
+          const depth = /^\d+$/.test(value) ? Number(value) : NaN;
+          if (Number.isSafeInteger(depth)) filter.maxDepth = gitSub === 'grep' ? depth + 1 : depth;
+          else filter.unknown = true;
+        }
       } else if (head !== 'rg' && (flag === '-d' || flag === '--directories')) {
         if (value === 'recurse' || value === 'skip' || value === 'read') dirAction = value;
         else filter.unknown = true;
@@ -3796,7 +3815,10 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
     if (flag === '--files') listOnly = true;
     if (flag === '--recursive' || flag === '--dereference-recursive') dirAction = 'recurse';
     else if (gitSub === 'grep' && flag === '--no-recursive') dirAction = 'read';
-    if (SHELL_BOOLEAN_OPTIONS.has(flag) || flag === '--dereference-recursive' || flag === '--no-recursive' || !flag.startsWith('--') && (head === 'rg' ? /^-[niIsSFwxlLcqovHhaPRUz0bE]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rRniIsSFwxlLcqovHhaPRUz0bETZUGy]+$/).test(flag) || ['-E', '-r', '-p'].includes(flag) && head !== 'node') continue;
+    const shortBoolOk = !flag.startsWith('--') && (
+      head === 'rg' ? /^-[niIsSFwxlLcqovHhaPUz0b]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rRniIsSFwxlLcqovHhaPRUz0bETZUGy]+$/
+    ).test(flag);
+    if (SHELL_BOOLEAN_OPTIONS.has(flag) || (flag === '-R' && head !== 'rg') || flag === '--dereference-recursive' || flag === '--no-recursive' || shortBoolOk || (['-E', '-r', '-p'].includes(flag) && !['node', 'rg'].includes(head))) continue;
     valid = false;
   }
   if (search && head !== 'rg' && dirAction !== 'recurse') filter.skipDirs = true;
@@ -3809,13 +3831,14 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
 function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFilesMap, searchedDirsMap, listedDirsMap, options = {}) {
   const { fallbackRoot = effectiveRoot, onRead = () => {}, onCommand = () => {}, baseOrder = 0, orderScale = 1, depth = 0 } = options;
   let sawContentRead = false;
-  let segmentCwd = initialCwd || effectiveRoot;
-  const normalize = (target, allowEqual = true, cwd = segmentCwd) => {
+  const outer = { cwd: initialCwd || effectiveRoot, prev: null, valid: true };
+  let sub = null;
+  const normalize = (target, allowEqual = true, cwd = outer.cwd) => {
     const rel = normalizeToolTargetToRel(target, effectiveRoot, allowEqual, cwd);
     return rel?.startsWith('external:') ? normalizeToolTargetToRel(target, fallbackRoot, allowEqual, cwd) : rel;
   };
   const canonicalCwd = candidate => {
-    const rel = normalize(candidate);
+    const rel = normalize(candidate, true, candidate);
     if (!rel || rel.startsWith('external:')) return null;
     const found = evidencePath(effectiveRoot, rel, fallbackRoot);
     return found?.stat.isDirectory() ? found.abs : null;
@@ -3823,17 +3846,49 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
   const step = orderScale / (segments.length + 1);
   for (const [index, segment] of segments.entries()) {
     const order = baseOrder + (index + 1) * step;
+    if (segment.inSubshell) {
+      if (!sub) sub = { ...outer };
+      else if (segment.prevSep === '(') sub.valid = false;
+    } else {
+      sub = null;
+    }
+    const cur = sub ?? outer;
     const command = unwrapShellCommand(segment.words);
     const head = command.head;
     let args = command.args;
-    const cmdCwd = canonicalCwd(command.cwd ? path.resolve(segmentCwd, command.cwd) : segmentCwd);
-    onCommand(segment, cmdCwd || segmentCwd, order, Boolean(cmdCwd));
-    if (!cmdCwd || segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) continue;
-    if (head === 'cd') {
-      const next = args.find(a => a && !a.startsWith('-'));
-      if (next && !next.includes('$')) segmentCwd = path.resolve(cmdCwd, next);
+    const hasAbsOverride = Boolean(command.cwd && path.isAbsolute(command.cwd));
+    const resolvedBase = command.cwd ? path.resolve(cur.cwd, command.cwd) : cur.cwd;
+    const cmdCwd = (cur.valid || hasAbsOverride) ? canonicalCwd(resolvedBase) : null;
+    onCommand(segment, cmdCwd || resolvedBase, order, Boolean(cmdCwd && (cur.valid || hasAbsOverride)));
+    if (segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) {
+      if (head === 'cd' && !(segment.prevSep === '|' || segment.prevSep === '|&' || segment.nextSep === '|' || segment.nextSep === '|&')) cur.valid = false;
       continue;
     }
+    if (head === 'cd') {
+      const inPipe = segment.prevSep === '|' || segment.prevSep === '|&' || segment.nextSep === '|' || segment.nextSep === '|&';
+      if (inPipe) continue;
+      const cdArgs = args.filter((a, idx) => !(idx === 0 && (a === '-L' || a === '-P')));
+      if (!cur.valid || segment.inBranch || segment.prevSep === '||' || segment.nextSep === '||' || cdArgs.length !== 1) {
+        cur.valid = false;
+      } else if (cdArgs[0] === '-') {
+        if (cur.prev) [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
+        else cur.valid = false;
+      } else if (cdArgs[0].startsWith('-') || cdArgs[0].includes('$')) {
+        cur.valid = false;
+      } else {
+        const nextDir = path.resolve(resolvedBase, cdArgs[0]);
+        let existsDir = false;
+        try { existsDir = fs.statSync(nextDir).isDirectory(); } catch {}
+        if (existsDir) {
+          cur.prev = cur.cwd;
+          cur.cwd = nextDir;
+        } else {
+          cur.valid = false;
+        }
+      }
+      continue;
+    }
+    if (!cmdCwd) continue;
     if (['sh', 'bash', 'zsh', 'dash'].includes(head) && depth < 2) {
       const flag = args.findIndex(a => /^-[a-z]*c$/.test(a));
       if (flag !== -1 && args[flag + 1] && recordShellCommandReads(scanShellCommand(args[flag + 1]), effectiveRoot, cmdCwd, openedFilesMap, searchedDirsMap, listedDirsMap, { ...options, baseOrder: order, orderScale: step, depth: depth + 1 })) sawContentRead = true;

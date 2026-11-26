@@ -5311,6 +5311,111 @@ try {
       }
     }
 
+    function testBoostAdversarialPr19Regressions() {
+      const b19Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-boost19-")));
+      try {
+        const put = (rel, text = "needle\n") => {
+          const full = path.join(b19Dir, rel);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.writeFileSync(full, text, "utf8");
+        };
+        for (const rel of ["src/a.js", "src/nested/b.js", "src/nested/deep/leaf.js", "sub/deep/leaf.js"]) put(rel);
+        fs.mkdirSync(path.join(b19Dir, "scratch/src"), { recursive: true });
+        for (const gitArgs of [["init", "-q"], ["add", "src", "sub"], ["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "init"]]) {
+          assert.equal(spawnSync("git", ["-C", b19Dir, ...gitArgs], { encoding: "utf8" }).status, 0);
+        }
+        const slot = "scratch/agy-squad/squad-b19/specialist-1/report.md";
+        const trace = path.join(b19Dir, "brain/b19/.system_generated/logs/transcript.jsonl");
+        fs.mkdirSync(path.dirname(trace), { recursive: true });
+        const rec = { squadId: "b19", readOnly: true, assignments: [{ conversationId: "w1", report: slot }] };
+        const shCall = (cmd, cwd) => ({ name: "run_command", args: { CommandLine: cmd, ...(cwd ? { Cwd: cwd } : {}) } });
+        const writeRep = { name: "write_file", args: { Path: path.join(b19Dir, slot) } };
+        const audit19 = (calls, citation = "src/a.js:1") => {
+          put(slot, `Checked ${citation}\n`);
+          fs.writeFileSync(trace, JSON.stringify({ step_index: 0, content: "sender=C @w1" }) + "\n" + JSON.stringify({ step_index: 1, tool_calls: calls }) + "\n");
+          return verifyWorkerTraces(b19Dir, rec, { coordId: "C", traces: { w1: trace } });
+        };
+
+        const rgVer = spawnSync("rg", ["--version"], { encoding: "utf8" });
+        const hasRg = !rgVer.error && rgVer.status === 0;
+        if (process.env.AGY_REQUIRE_RG_ORACLE === "1") assert.equal(hasRg, true, "ripgrep oracle required");
+        const rgFiles = (args, cwd = b19Dir) => {
+          const r = spawnSync("rg", ["-l", ...args], { cwd, encoding: "utf8" });
+          return (r.stdout || "").trim().split(/\r?\n/).filter(Boolean).map(p => p.replaceAll("\\", "/").replace(/^\.\//, "")).sort();
+        };
+        if (hasRg) {
+          assert.deepEqual(rgFiles(["needle", "-g", "nested/b.js", "src"]), []);
+          assert.deepEqual(rgFiles(["needle", "-g", "deep/leaf.js", "deep"], path.join(b19Dir, "sub")), ["deep/leaf.js"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "!nested/", "src"]), ["src/a.js"]);
+          assert.notEqual(spawnSync("rg", ["-R", "needle", "src"], { cwd: b19Dir, encoding: "utf8" }).status, 0);
+          assert.deepEqual(rgFiles(["-nE", "utf-8", "src/a.js", "src/nested"]), []);
+          assert.deepEqual(rgFiles(["-ne", "needle", "src"]), ["src/a.js", "src/nested/b.js", "src/nested/deep/leaf.js"]);
+          assert.deepEqual(rgFiles(["-nd", "1", "needle", "src"]), ["src/a.js"]);
+        }
+        assert.equal(spawnSync("git", ["-C", b19Dir, "grep", "-l", "--max-depth", "0", "needle", "src"], { encoding: "utf8" }).stdout.trim(), "src/a.js");
+        assert.deepEqual(
+          spawnSync("git", ["-C", b19Dir, "grep", "-l", "--max-depth", "1", "needle", "src"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/).sort(),
+          ["src/a.js", "src/nested/b.js"]
+        );
+
+        // 1. Finding 2 (PR #19 advisory policy): subshell/pipeline/branch/cd- redirect spoofs & shell bypasses raise SHELL_WRITE_DETECTED (`REVIEW_REQUIRED`)
+        for (const spoofCmd of [
+          "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
+          "( cd scratch && echo CORRUPTED > ../src/a.js )",
+          "cd scratch | true; echo CORRUPTED > src/a.js",
+          "if false; then cd scratch; fi; echo CORRUPTED > src/a.js",
+          "cd scratch && cd - >/dev/null && echo CORRUPTED > src/a.js",
+          "cd - >/dev/null && echo CORRUPTED > src/a.js",
+          'node -p \'/"/; require("fs").writeFileSync("m.txt", "PWN"); /"/\'',
+          'node -p \'<!-- "\\nrequire("fs").writeFileSync("m2.txt", "PWN"); // "\'',
+          'sed -n "2!w m.txt" src/a.js',
+          'sed -n "0~1w m.txt" src/a.js',
+          "sed -I '' 's/needle/pwn/' src/a.js",
+          "git diff --output m.txt",
+          "git grep -nO\"sh -c 'touch m.txt' --\" needle src/a.js",
+          "git --exec-path=/tmp status",
+          "echo m.txt | xargs -E cat touch",
+          "awk 'BEGIN { print \"PWN\" \\\n > \"m.txt\" }'"
+        ]) {
+          const r = audit19([{ name: "read_file", args: { Path: path.join(b19Dir, "src/a.js") } }, shCall(spoofCmd), writeRep]);
+          assert.equal(r.ok, true, spoofCmd);
+          assert.equal(r.recommendedWorkVerdict, "REVIEW_REQUIRED", `PR #19 must flag advisory SHELL_WRITE_DETECTED for: ${spoofCmd}`);
+          assert.ok(r.workers[0].flags.includes("SHELL_WRITE_DETECTED"), spoofCmd);
+        }
+        // Unspaced `(head -n 1 src/a.js)` stays VERIFIED without SHELL_WRITE_DETECTED
+        const okParen = audit19([shCall("(head -n 1 src/a.js)"), writeRep]);
+        assert.equal(okParen.recommendedWorkVerdict, "VERIFIED");
+        assert.deepEqual(okParen.workers[0].flags, []);
+
+        // 2. Finding 7.1 & 7.2: Interior-slash (`anchorRel`) & trailing-slash directory globs (`!nested/`)
+        assert.deepEqual(audit19([shCall('rg needle -g "nested/b.js" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(audit19([shCall('cd sub && rg needle -g "deep/leaf.js" deep')], "sub/deep/leaf.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall('rg needle -g "!nested/" src')], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall('rg needle -g "!nested/" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(audit19([shCall('rg needle -g "!/src/nested/" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // 3. Finding 7.3 & 7.4: `rg -R` invalid, `rg -nE` consumes encoding, `rg -ne` / `rg -nd` short clusters supported
+        assert.deepEqual(audit19([shCall("rg -R needle src")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
+        assert.deepEqual(audit19([shCall("rg -nE utf-8 src/a.js src/nested")], "src/a.js:1").workers[0].citedUnopened, ["src/a.js"]);
+        assert.deepEqual(audit19([shCall("rg -ne needle src")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall("rg -nd 1 needle src")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall("rg -nd 1 needle src")], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+
+        // 4. Finding 7.5: `git grep --max-depth` 0-indexed depth (`0` covers `src/a.js`, `1` covers `src/nested/b.js`)
+        assert.deepEqual(audit19([shCall("git grep --max-depth 0 needle src")], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall("git grep --max-depth 0 needle src")], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(audit19([shCall("git grep --max-depth 1 needle src")], "src/nested/b.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall("git grep --max-depth 1 needle src")], "src/nested/deep/leaf.js:1").workers[0].citedUnopened, ["src/nested/deep/leaf.js"]);
+
+        // 5. Finding 7.6: Subshell `( cd ... )` isolation & `cd -` OLDPWD restoration for `cwdRel` / `anchorRel`
+        assert.deepEqual(audit19([shCall('( cd src && echo hi ) && rg needle -g "/nested/b.js" .')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(audit19([shCall('( cd sub && echo hi ) && rg needle -g "/src/a.js" src')], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall('cd sub && cd - >/dev/null && rg needle -g "/src/a.js" src')], "src/a.js:1").workers[0].citedUnopened, []);
+      } finally {
+        fs.rmSync(b19Dir, { recursive: true, force: true });
+      }
+    }
+
     testS1ShellGrammarAndExpansion();
     testS2ConservativeInterpreterPolicy();
     testS3RecordToBundleLifecycleCompatibility();
@@ -5318,6 +5423,7 @@ try {
     testE1AnchoredRipgrepGlobs();
     testE2OrderedGnuGrepDirectoryAction();
     testE3LastWinsRipgrepMaxDepth();
+    testBoostAdversarialPr19Regressions();
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");
