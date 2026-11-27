@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
-import { buildBundleRecordInit, bundleReports, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle, verifyWorkerTraces } from "../mcp/handoffs.mjs";
+import { buildBundleRecordInit, bundleReports, captureReadOnlyBaseline, collectReportSlots, computeEvidenceDigest, ensureDirectory, extractCitationUrls, fingerprint, inspectHandoffs, messageLimit, normalizeReportRoot, pruneReports, publish, readFile, readOpenedFileWithStat, readRegularFileSafe, reportPath, summarizeCitations, verifyAndPruneBundle, verifyBundle, verifyReadOnlyBaseline, verifyWorkerTraces } from "../mcp/handoffs.mjs";
 
 const handoffsCli = fileURLToPath(new URL("../mcp/handoffs.mjs", import.meta.url));
 const agySquadCli = fileURLToPath(new URL("../bin/agy-squad.mjs", import.meta.url));
@@ -4800,11 +4800,83 @@ try {
       }
     }
 
+    function testDevinReview4ContainmentRegressions() {
+      const d4Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-d4-18-")));
+      const outDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-d4-out-")));
+      try {
+        fs.mkdirSync(path.join(d4Dir, "src"), { recursive: true });
+        fs.writeFileSync(path.join(d4Dir, "src/a.js"), "export const a = 1;\n");
+        const slot = "scratch/agy-squad/squad-d4/specialist-1/report.md";
+        fs.mkdirSync(path.join(d4Dir, path.dirname(slot)), { recursive: true });
+        fs.writeFileSync(path.join(d4Dir, slot), "Checked src/a.js:1\n");
+        const traceFile = path.join(d4Dir, "trace.jsonl");
+        const runCalls = (toolCalls, readOnly = true) => {
+          fs.writeFileSync(
+            traceFile,
+            JSON.stringify({ step_index: 0, content: "sender=C @one" }) + "\n" +
+            JSON.stringify({ step_index: 1, tool_calls: toolCalls }) + "\n"
+          );
+          return verifyWorkerTraces(
+            d4Dir,
+            { squadId: "d4", readOnly, assignments: [{ conversationId: "one", report: slot }] },
+            { coordId: "C", traces: { one: traceFile } }
+          );
+        };
+
+        const wtfRes = runCalls([{ name: "write_to_file", args: { Path: path.join(d4Dir, "src/a.js") } }], true);
+        assert.equal(wtfRes.ok, false);
+        assert.ok(wtfRes.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (src/a.js)")));
+
+        const capDir = path.join(d4Dir, "many");
+        fs.mkdirSync(capDir, { recursive: true });
+        for (let i = 0; i < 513; i++) fs.writeFileSync(path.join(capDir, `f${String(i).padStart(3, "0")}.txt`), `v${i}\n`);
+        assert.throws(() => captureReadOnlyBaseline(d4Dir, ["many"]), /expands beyond 512 files/);
+        assert.throws(() => verifyReadOnlyBaseline(d4Dir, { files: {}, filesCapped: true }), /truncated by the file cap/);
+        assert.throws(() => verifyReadOnlyBaseline(d4Dir, { files: {}, unhashedDirtyMeta: { "src/a.js": "19:1" } }), /size\/mtime-only dirty-file/);
+        fs.rmSync(capDir, { recursive: true, force: true });
+
+        for (const gitArgs of [["init", "-q"], ["-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "--allow-empty", "-q", "-m", "init"]]) {
+          assert.equal(spawnSync("git", ["-C", d4Dir, ...gitArgs], { encoding: "utf8" }).status, 0);
+        }
+        const bigDirty = path.join(d4Dir, "big.bin");
+        fs.writeFileSync(bigDirty, Buffer.alloc(17 * 1024 * 1024, 65));
+        assert.equal(spawnSync("git", ["-C", d4Dir, "add", "big.bin"], { encoding: "utf8" }).status, 0);
+        assert.equal(spawnSync("git", ["-C", d4Dir, "-c", "user.name=T", "-c", "user.email=t@e.com", "commit", "-q", "-m", "big"], { encoding: "utf8" }).status, 0);
+        fs.writeFileSync(bigDirty, Buffer.alloc(17 * 1024 * 1024, 66));
+        const dirtyBaseline = captureReadOnlyBaseline(d4Dir, ["src/a.js"]);
+        const origStat = fs.statSync(bigDirty);
+        fs.writeFileSync(bigDirty, Buffer.alloc(17 * 1024 * 1024, 67));
+        fs.utimesSync(bigDirty, origStat.atime, origStat.mtime);
+        assert.throws(() => verifyReadOnlyBaseline(d4Dir, dirtyBaseline), /pre-existing dirty file 'big\.bin' was modified/);
+        fs.rmSync(bigDirty, { force: true });
+
+        const extTarget = path.join(outDir, "outside.txt");
+        fs.writeFileSync(extTarget, "orig\n");
+        const existingLink = path.join(d4Dir, "evil-existing.txt");
+        const danglingLink = path.join(d4Dir, "evil-dangling.txt");
+        fs.symlinkSync(extTarget, existingLink, "file");
+        fs.symlinkSync(path.join(outDir, "not-created-yet.txt"), danglingLink, "file");
+
+        for (const linkPath of [existingLink, danglingLink]) {
+          const toolWrite = runCalls([{ name: "write_to_file", args: { Path: linkPath } }], false);
+          assert.equal(toolWrite.ok, false);
+          assert.ok(toolWrite.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (external:")));
+          const shRedir = runCalls([{ name: "run_command", args: { CommandLine: `echo pwn > "${path.basename(linkPath)}"` } }], false);
+          assert.equal(shRedir.ok, false);
+          assert.ok(shRedir.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (run_command)")));
+        }
+      } finally {
+        fs.rmSync(d4Dir, { recursive: true, force: true });
+        fs.rmSync(outDir, { recursive: true, force: true });
+      }
+    }
+
     testS1ShellGrammarAndExpansion();
     testS2ConservativeInterpreterPolicy();
     testS3RecordToBundleLifecycleCompatibility();
     testS4CollectHelpAndCanonicalReceiptRoots();
     testBoostAdversarialShellAndCwdRegressions();
+    testDevinReview4ContainmentRegressions();
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

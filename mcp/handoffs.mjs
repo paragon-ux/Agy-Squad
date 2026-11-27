@@ -339,7 +339,9 @@ function workspacePath(root, relative, verifiedDirs) {
   return file;
 }
 
-function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity } = {}) {
+const STREAM_HASH_BUF = Buffer.allocUnsafe(65536);
+
+function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity, hashOnly = false } = {}) {
   const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
   if (process.platform !== "linux" || !hasONofollow) {
     const linkStat = fs.lstatSync(file);
@@ -369,6 +371,15 @@ function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity } =
       if (!isExpectedRealPath(file, realPath)) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
+    }
+    if (hashOnly) {
+      const hash = createHash("sha256");
+      while (true) {
+        const n = fs.readSync(fd, STREAM_HASH_BUF, 0, STREAM_HASH_BUF.length, null);
+        if (n <= 0) break;
+        hash.update(STREAM_HASH_BUF.subarray(0, n));
+      }
+      return { digest: hash.digest("hex"), stat, realPath };
     }
     if (stat.size > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
     const expectedSize = stat.size;
@@ -443,14 +454,16 @@ function readFile(root, relative, verifiedDirs) {
   return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
-function readIfPresentWithStat(root, relative, verifiedDirs) {
+function readIfPresentWithStat(root, relative, verifiedDirs, options) {
   try {
-    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative);
+    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative, options);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
 }
+
+const hashIfPresentWithStat = (root, relative, verifiedDirs) => readIfPresentWithStat(root, relative, verifiedDirs, { hashOnly: true });
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
@@ -1946,7 +1959,6 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
 
 const MAX_FROM_SCOPE_FILES = 256;
 const MAX_READONLY_BASELINE_FILES = 512;
-const MAX_DIRTY_BASELINE_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_TRACE_JSONL_BYTES = 64 * 1024 * 1024;
 const SKIPPED_SCOPE_WALK_DIRS = new Set([".git", "node_modules"]);
 
@@ -2067,7 +2079,9 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
   const shaCache = cache?.shaCache instanceof Map ? cache.shaCache : new Map();
   const hashCached = (relPosix) => {
     if (shaCache.has(relPosix)) return shaCache.get(relPosix);
-    const digest = sha256(readFile(canonicalRoot, relPosix, verifiedDirs)).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
+    const hashed = hashIfPresentWithStat(canonicalRoot, relPosix, verifiedDirs);
+    if (!hashed) throw new Error(`Read-only baseline file '${relPosix}' is missing.`);
+    const digest = hashed.digest.slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
     shaCache.set(relPosix, digest);
     return digest;
   };
@@ -2078,7 +2092,6 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
   const scopedDirs = [];
   const recordedSymlinks = Object.create(null);
   let expandedFiles = [];
-  let filesCapped = false;
   if (nonWildcardEntries.length > 0) {
     const existingEntries = [];
     for (const entry of nonWildcardEntries) {
@@ -2114,11 +2127,12 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
         );
       } catch (err) {
         if (err?.code === "EMAXFILES") {
-          filesCapped = true;
-          expandedFiles = Array.isArray(err.partialFiles) ? err.partialFiles : [];
-        } else {
-          throw err;
+          throw new Error(
+            `Read-only baseline scope expands beyond ${MAX_READONLY_BASELINE_FILES} files; ` +
+            "narrow the scope or add explicit ignore paths instead of auditing a partial baseline."
+          );
         }
+        throw err;
       }
     }
   }
@@ -2139,11 +2153,8 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
     gitSnapshot = { ...gitSnapshot, lines: gitSnapshot.lines.filter(line => inScope(line.slice(3))), dirtyPaths: gitSnapshot.dirtyPaths.filter(inScope) };
   }
   let dirtyFiles;
-  let unhashedDirtyMeta;
   if (gitSnapshot && gitSnapshot.dirtyPaths.length > 0) {
     const dirtyMap = {};
-    const metaMap = {};
-    let hashedDirtyCount = 0;
     for (const rel of gitSnapshot.dirtyPaths) {
       if (Object.hasOwn(files, rel) || Object.hasOwn(symlinks, rel) || ignoreSet?.has(rel)) continue;
       const absDirty = path.join(canonicalRoot, rel);
@@ -2160,47 +2171,40 @@ function captureReadOnlyBaseline(root, scopeEntries, resolvedReportRoot = defaul
         continue;
       }
       if (!st.isFile()) continue;
-      if (hashedDirtyCount < MAX_READONLY_BASELINE_FILES && st.size <= MAX_DIRTY_BASELINE_FILE_BYTES) {
-        try {
-          if (shaCache.has(rel)) {
-            dirtyMap[rel] = shaCache.get(rel);
-            hashedDirtyCount += 1;
-          } else {
-            const opened = readIfPresentWithStat(canonicalRoot, rel, verifiedDirs);
-            if (opened) {
-              const digest = sha256(opened.bytes).slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
-              shaCache.set(rel, digest);
-              dirtyMap[rel] = digest;
-              hashedDirtyCount += 1;
-            }
-          }
-        } catch {
-          metaMap[rel] = `${st.size}:${Math.trunc(st.mtimeMs)}`;
-        }
-      } else {
-        metaMap[rel] = `${st.size}:${Math.trunc(st.mtimeMs)}`;
+      if (shaCache.has(rel)) {
+        dirtyMap[rel] = shaCache.get(rel);
+        continue;
+      }
+      const hashed = hashIfPresentWithStat(canonicalRoot, rel, verifiedDirs);
+      if (hashed) {
+        const digest = hashed.digest.slice(0, READONLY_BASELINE_DIGEST_HEX_LEN);
+        shaCache.set(rel, digest);
+        dirtyMap[rel] = digest;
       }
     }
     if (Object.keys(dirtyMap).length > 0) dirtyFiles = dirtyMap;
-    if (Object.keys(metaMap).length > 0) unhashedDirtyMeta = metaMap;
   }
   const nonScratchIgnore = ignoreList.filter(p => !isScratchOrReportRelPath(p, resolvedReportRoot));
   return {
     files,
     ...(Object.keys(symlinks).length > 0 ? { symlinks } : {}),
-    ...(filesCapped ? { filesCapped: true } : {}),
-    ...(!filesCapped && scopedDirs.length > 0 ? { scopedDirs } : {}),
-    ...(!filesCapped && missingScopeEntries.length > 0 ? { missingScopeEntries } : {}),
+    ...(scopedDirs.length > 0 ? { scopedDirs } : {}),
+    ...(missingScopeEntries.length > 0 ? { missingScopeEntries } : {}),
     ...(nonScratchIgnore.length > 0 ? { baselineIgnorePaths: nonScratchIgnore } : {}),
     ...(options.scoped === true ? { gitScopeEntries: scopeEntries } : {}),
     ...(gitSnapshot ? { gitStatusPorcelain: gitSnapshot.lines, gitHead: gitSnapshot.head } : {}),
-    ...(dirtyFiles ? { dirtyFiles } : {}),
-    ...(unhashedDirtyMeta ? { unhashedDirtyMeta } : {})
+    ...(dirtyFiles ? { dirtyFiles } : {})
   };
 }
 
 function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultReportRoot(), options = {}) {
   if (!isPlainObject(baseline)) return;
+  if (baseline.filesCapped === true) {
+    throw new Error("Read-only containment violation: baseline was truncated by the file cap and cannot prove containment.");
+  }
+  if (baseline.unhashedDirtyMeta !== undefined) {
+    throw new Error("Read-only containment violation: baseline contains size/mtime-only dirty-file entries and cannot prove containment.");
+  }
   const verifiedDirs = new Set();
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
   const ignoreRelPaths = new Set([
@@ -2214,17 +2218,16 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
   const baselineFiles = isPlainObject(baseline.files) ? baseline.files : {};
   const baselineSymlinks = isPlainObject(baseline.symlinks) ? baseline.symlinks : {};
   for (const [relPath, expectedHash] of Object.entries(baselineFiles)) {
-    let opened;
+    let hashed;
     try {
-      opened = readIfPresentWithStat(canonicalRoot, relPath, verifiedDirs);
+      hashed = hashIfPresentWithStat(canonicalRoot, relPath, verifiedDirs);
     } catch (err) {
       throw new Error(`Read-only containment violation: baseline file '${relPath}' could not be verified (${err.message}).`);
     }
-    if (!opened) {
+    if (!hashed) {
       throw new Error(`Read-only containment violation: baseline file '${relPath}' was deleted during execution.`);
     }
-    const actualHash = sha256(opened.bytes);
-    if (!matchesBaselineDigest(actualHash, expectedHash)) {
+    if (!matchesBaselineDigest(hashed.digest, expectedHash)) {
       throw new Error(`Read-only containment violation: baseline file '${relPath}' was modified during execution.`);
     }
   }
@@ -2258,28 +2261,14 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
         }
         continue;
       }
-      let opened;
+      let hashed;
       try {
-        opened = readIfPresentWithStat(canonicalRoot, relPath, verifiedDirs);
+        hashed = hashIfPresentWithStat(canonicalRoot, relPath, verifiedDirs);
       } catch (err) {
         throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' changed (${err.message}).`);
       }
-      if (!opened || !matchesBaselineDigest(sha256(opened.bytes), expectedHash)) {
+      if (!hashed || !matchesBaselineDigest(hashed.digest, expectedHash)) {
         throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was modified or deleted during execution.`);
-      }
-    }
-  }
-  if (isPlainObject(baseline.unhashedDirtyMeta)) {
-    for (const [relPath, expectedMeta] of Object.entries(baseline.unhashedDirtyMeta)) {
-      if (ignoreRelPaths.has(relPath)) continue;
-      let st;
-      try {
-        st = fs.lstatSync(path.join(canonicalRoot, relPath));
-      } catch {
-        throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was deleted during execution.`);
-      }
-      if (!st.isFile() || `${st.size}:${Math.trunc(st.mtimeMs)}` !== expectedMeta) {
-        throw new Error(`Read-only containment violation: pre-existing dirty file '${relPath}' was modified during execution.`);
       }
     }
   }
@@ -2296,7 +2285,7 @@ function verifyReadOnlyBaseline(root, baseline, resolvedReportRoot = defaultRepo
       }
     }
   }
-  if (!baseline.filesCapped && Array.isArray(baseline.scopedDirs) && baseline.scopedDirs.length > 0) {
+  if (Array.isArray(baseline.scopedDirs) && baseline.scopedDirs.length > 0) {
     let currentScopedFiles = [];
     const currentSymlinks = Object.create(null);
     try {
@@ -3326,6 +3315,7 @@ function extractCitedWorkspaceFiles(markdown, canonicalRoot, selfSlot) {
 
 const WRITE_TOOL_NAMES = new Set([
   "write_file",
+  "write_to_file",
   "edit_file",
   "multi_edit",
   "replace_file_content",
@@ -3348,15 +3338,21 @@ function normalizeToolCallArgs(rawArgs, compact = true) {
   return compact ? Object.fromEntries(Object.entries(rawArgs).map(([key, value]) => [key, decodeCompactToolArgValue(value, key)])) : rawArgs;
 }
 
-function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false) {
+function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false, baseDir = canonicalRoot, { followLeafSymlink = false } = {}) {
   if (typeof rawTarget !== "string" || !rawTarget.trim()) return null;
   const trimmed = rawTarget.trim().replace(/^file:\/\//i, "");
-  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(canonicalRoot, trimmed);
+  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(baseDir, trimmed);
   let normalizedResolved = resolved;
   try {
     const st = fs.lstatSync(resolved);
     if (!st.isSymbolicLink()) {
       normalizedResolved = fs.realpathSync.native(resolved);
+    } else if (followLeafSymlink) {
+      const linkDest = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
+      const realDest = tryRealPath(linkDest);
+      normalizedResolved = realDest !== linkDest || fs.existsSync(linkDest)
+        ? realDest
+        : path.join(tryRealPath(path.dirname(linkDest)), path.basename(linkDest));
     } else {
       const parentReal = fs.realpathSync.native(path.dirname(resolved));
       normalizedResolved = path.join(parentReal, path.basename(resolved));
@@ -3636,14 +3632,15 @@ function verifyWorkerTraces(root, record, options = {}) {
               const allowRedirect = target => {
                 if (target === "/dev/null") return true;
                 if (!segCwdValid && !path.isAbsolute(target)) return false;
-                const rel = normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot);
+                const rel = normalizeToolTargetToRel(target, workerRoot, false, effectiveCwd, { followLeafSymlink: true });
                 if (!rel || rel.startsWith("external:")) return false;
                 if (rel === resolvedReportRoot || rel.startsWith(`${resolvedReportRoot}/`)) return rel === reportSlot;
                 return isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot;
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
+              const normExtRedir = t => normalizeToolTargetToRel(t, workerRoot, false, effectiveCwd, { followLeafSymlink: true });
               const hasExternalRedir = !isReadOnly && segment.redirections.some(
-                t => t !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, t), workerRoot)?.startsWith("external:"))
+                t => t !== "/dev/null" && (!segCwdValid || normExtRedir(t)?.startsWith("external:"))
               );
               if (hasExternalRedir) unauthorizedWrites.add("run_command");
               if (segment.dynamic || segment.incomplete || segment.unverifiable) {
@@ -3668,7 +3665,7 @@ function verifyWorkerTraces(root, record, options = {}) {
           if (isPlainObject(args.ArtifactMetadata) && typeof args.ArtifactMetadata.Summary === "string" && typeof args.ArtifactMetadata.UserFacing === "boolean" && typeof args.ArtifactMetadata.RequestFeedback === "boolean" && typeof targetRaw === "string" && isInBrainDir(targetRaw)) {
             continue;
           }
-          const rel = normalizeToolTargetToRel(targetRaw, workerRoot);
+          const rel = normalizeToolTargetToRel(targetRaw, workerRoot, false, workerRoot, { followLeafSymlink: true });
           if (isReadOnly && rel !== reportSlot) {
             unauthorizedWrites.add(rel ?? String(targetRaw));
           } else if (!isReadOnly && rel && rel.startsWith("external:")) {
