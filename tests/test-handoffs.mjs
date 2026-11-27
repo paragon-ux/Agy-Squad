@@ -5347,6 +5347,7 @@ try {
           assert.deepEqual(rgFiles(["needle", "-g", "nested/b.js", "src"]), []);
           assert.deepEqual(rgFiles(["needle", "-g", "deep/leaf.js", "deep"], path.join(b19Dir, "sub")), ["deep/leaf.js"]);
           assert.deepEqual(rgFiles(["needle", "-g", "!nested/", "src"]), ["src/a.js"]);
+          assert.deepEqual(rgFiles(["needle", "-g", "!nested/", "../src"], path.join(b19Dir, "sub")), ["../src/a.js"]);
           assert.notEqual(spawnSync("rg", ["-R", "needle", "src"], { cwd: b19Dir, encoding: "utf8" }).status, 0);
           assert.deepEqual(rgFiles(["-nE", "utf-8", "src/a.js", "src/nested"]), []);
           assert.deepEqual(rgFiles(["-ne", "needle", "src"]), ["src/a.js", "src/nested/b.js", "src/nested/deep/leaf.js"]);
@@ -5359,8 +5360,34 @@ try {
         );
 
         // 1. Finding 2 (PR #19 advisory policy): subshell/pipeline/branch/cd- redirect spoofs & shell bypasses raise SHELL_WRITE_DETECTED (`REVIEW_REQUIRED`)
+        if (process.platform !== "win32") {
+          const probe19 = fs.mkdtempSync(path.join(os.tmpdir(), "agy-pr19-redir-"));
+          fs.mkdirSync(path.join(probe19, "src"), { recursive: true });
+          fs.writeFileSync(path.join(probe19, "src/a.js"), "CLEAN\n");
+          assert.equal(spawnSync("/bin/sh", ["-c", "</dev/null echo CORRUPTED > src/a.js"], { cwd: probe19 }).status, 0);
+          assert.equal(fs.readFileSync(path.join(probe19, "src/a.js"), "utf8"), "CORRUPTED\n");
+          assert.equal(spawnSync("/bin/sh", ["-c", "< src/a.js cat > src/b.js"], { cwd: probe19 }).status, 0);
+          assert.equal(fs.readFileSync(path.join(probe19, "src/b.js"), "utf8"), "CORRUPTED\n");
+          if (fs.existsSync("/bin/bash")) {
+            fs.writeFileSync(path.join(probe19, "src/a.js"), "CLEAN\n");
+            assert.equal(spawnSync("/bin/bash", ["-c", "echo hi <<< foo > src/a.js"], { cwd: probe19 }).status, 0);
+            assert.equal(fs.readFileSync(path.join(probe19, "src/a.js"), "utf8"), "hi\n");
+          }
+          fs.rmSync(probe19, { recursive: true, force: true });
+        }
+        for (const redirShortCircuitCmd of [
+          "</dev/null echo CORRUPTED > src/a.js",
+          "< src/a.js cat > src/b.js",
+          "echo hi <<< foo > src/a.js"
+        ]) {
+          assert.equal(shellCommandWrites(scanShellCommand(redirShortCircuitCmd), () => false), true, redirShortCircuitCmd);
+        }
         for (const spoofCmd of [
+          "</dev/null echo CORRUPTED > src/a.js",
+          "< src/a.js cat > src/b.js",
+          "echo hi <<< foo > src/a.js",
           "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
+          "( ( cd scratch && pwd ) && echo CORRUPTED > src/a.js )",
           "( cd scratch && echo CORRUPTED > ../src/a.js )",
           "cd scratch | true; echo CORRUPTED > src/a.js",
           "if false; then cd scratch; fi; echo CORRUPTED > src/a.js",
@@ -5375,23 +5402,33 @@ try {
           "git grep -nO\"sh -c 'touch m.txt' --\" needle src/a.js",
           "git --exec-path=/tmp status",
           "echo m.txt | xargs -E cat touch",
-          "awk 'BEGIN { print \"PWN\" \\\n > \"m.txt\" }'"
+          "awk 'BEGIN { print \"PWN\" \\\n > \"m.txt\" }'",
+          "awk 'BEGIN { print \"a;b\" > \"m-awk-semi.txt\" }'"
         ]) {
           const r = audit19([{ name: "read_file", args: { Path: path.join(b19Dir, "src/a.js") } }, shCall(spoofCmd), writeRep]);
           assert.equal(r.ok, true, spoofCmd);
           assert.equal(r.recommendedWorkVerdict, "REVIEW_REQUIRED", `PR #19 must flag advisory SHELL_WRITE_DETECTED for: ${spoofCmd}`);
           assert.ok(r.workers[0].flags.includes("SHELL_WRITE_DETECTED"), spoofCmd);
         }
-        // Unspaced `(head -n 1 src/a.js)` stays VERIFIED without SHELL_WRITE_DETECTED
-        const okParen = audit19([shCall("(head -n 1 src/a.js)"), writeRep]);
-        assert.equal(okParen.recommendedWorkVerdict, "VERIFIED");
-        assert.deepEqual(okParen.workers[0].flags, []);
+        // Unspaced, sequential, and subshell-scoped scratch writes stay VERIFIED without SHELL_WRITE_DETECTED
+        for (const okSubCmd of [
+          "(head -n 1 src/a.js)",
+          "( head -n 1 src/a.js ) && ( echo ok > scratch/ok.txt )",
+          "( cd scratch && echo ok > sub-ok.txt ) && head -n 1 src/a.js"
+        ]) {
+          const okParen = audit19([shCall(okSubCmd), writeRep]);
+          assert.equal(okParen.recommendedWorkVerdict, "VERIFIED", okSubCmd);
+          assert.deepEqual(okParen.workers[0].flags, [], okSubCmd);
+          assert.deepEqual(okParen.workers[0].citedUnopened, [], okSubCmd);
+        }
 
-        // 2. Finding 7.1 & 7.2: Interior-slash (`anchorRel`) & trailing-slash directory globs (`!nested/`)
+        // 2. Finding 7.1 & 7.2: Interior-slash (`anchorRel`) & trailing-slash directory globs (`!nested/`, including `../src` from subdir)
         assert.deepEqual(audit19([shCall('rg needle -g "nested/b.js" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
         assert.deepEqual(audit19([shCall('cd sub && rg needle -g "deep/leaf.js" deep')], "sub/deep/leaf.js:1").workers[0].citedUnopened, []);
         assert.deepEqual(audit19([shCall('rg needle -g "!nested/" src')], "src/a.js:1").workers[0].citedUnopened, []);
         assert.deepEqual(audit19([shCall('rg needle -g "!nested/" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
+        assert.deepEqual(audit19([shCall('cd sub && rg needle -g "!nested/" ../src')], "src/a.js:1").workers[0].citedUnopened, []);
+        assert.deepEqual(audit19([shCall('cd sub && rg needle -g "!nested/" ../src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
         assert.deepEqual(audit19([shCall('rg needle -g "!/src/nested/" src')], "src/nested/b.js:1").workers[0].citedUnopened, ["src/nested/b.js"]);
 
         // 3. Finding 7.3 & 7.4: `rg -R` invalid, `rg -nE` consumes encoding, `rg -ne` / `rg -nd` short clusters supported

@@ -3565,26 +3565,21 @@ function matchesSearchGlob(pattern, rel, dirRel, anchorRel = dirRel, { isRipgrep
   const core = hasTrailingSlash ? pattern.slice(0, -1) : pattern;
   if (!core) return null;
   const isAnchored = core.startsWith("/") || (isRipgrepGlob && !core.startsWith("**/") && core.includes("/"));
+  const validSub = c => Boolean(c && c !== "." && c !== ".." && !c.startsWith("../"));
+  const anchorSub = anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
+  let candidates, patterns;
   if (isAnchored) {
-    const sub = anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
-    if (!sub || sub === "." || sub === ".." || sub.startsWith("../")) return false;
-    const rawAnchored = core.startsWith("/") ? core.slice(1) : core;
-    const anchored = hasTrailingSlash ? `${rawAnchored}/**` : rawAnchored;
-    const patterns = anchored.startsWith("**/") ? [anchored, anchored.slice(3)] : [anchored];
-    const results = patterns.map(p => boundedGlobMatch(sub, p));
-    return results.includes(true) ? true : results.includes(null) ? null : false;
-  }
-  if (hasTrailingSlash) {
-    const sub = isRipgrepGlob && anchorRel && anchorRel !== "." ? path.posix.relative(anchorRel, rel) : rel;
-    if (!sub || sub === "." || sub === ".." || sub.startsWith("../")) return false;
+    const anchored = hasTrailingSlash ? `${core.replace(/^\//, "")}/**` : core.replace(/^\//, "");
+    candidates = validSub(anchorSub) ? [anchorSub] : [];
+    patterns = anchored.startsWith("**/") ? [anchored, anchored.slice(3)] : [anchored];
+  } else if (hasTrailingSlash) {
     const unanchoredCore = core.startsWith("**/") ? core.slice(3) : core;
-    const results = [`**/${unanchoredCore}/**`, `${unanchoredCore}/**`].map(p => boundedGlobMatch(sub, p));
-    return results.includes(true) ? true : results.includes(null) ? null : false;
+    candidates = [rel, path.posix.relative(dirRel || ".", rel), anchorSub].filter(validSub);
+    patterns = [`**/${unanchoredCore}/**`, `${unanchoredCore}/**`];
+  } else {
+    candidates = core.includes("/") ? [rel, path.posix.relative(dirRel || ".", rel)] : [path.posix.basename(rel)];
+    patterns = core.startsWith("**/") ? [core, core.slice(3)] : [core];
   }
-  const candidates = core.includes("/")
-    ? [rel, path.posix.relative(dirRel || ".", rel)]
-    : [path.posix.basename(rel)];
-  const patterns = core.startsWith("**/") ? [core, core.slice(3)] : [core];
   const results = candidates.flatMap(candidate => patterns.map(p => boundedGlobMatch(candidate, p)));
   return results.includes(true) ? true : results.includes(null) ? null : false;
 }
@@ -3686,7 +3681,8 @@ function expandSimpleGlobInWorkspace(rawPattern, canonicalRoot, baseDir, openedF
     if (d.isSymbolicLink() || !d.isFile()) continue;
     if (!matchSimpleStarGlob(d.name, basePat)) continue;
     const rel = dirRel === "." ? d.name : `${dirRel}/${d.name}`;
-    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile({ ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] }, rel, dirRel)) continue;
+    const fileFilter = { ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] };
+    if (!evidencePath(canonicalRoot, rel, fallbackRoot)?.stat.isFile() || !searchCoversFile(fileFilter, rel, dirRel)) continue;
     addOpenedFile(openedFilesMap, rel, kind);
     matched = true;
     count += 1;
@@ -3727,7 +3723,9 @@ function classifyAndRecordPath(rawTarget, canonicalRoot, baseDir, openedFilesMap
     }
     return false;
   }
-  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile({ ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] }, rel, normalizeToolTargetToRel(".", canonicalRoot, true, baseDir) || "."))) {
+  const fileFilter = { ...filter, maxDepth: null, skipDirs: false, globRules: [], types: [], typeNots: [] };
+  const baseRel = normalizeToolTargetToRel(".", canonicalRoot, true, baseDir) || ".";
+  if (exists && found.stat.isFile() && (mode !== "search" || searchCoversFile(fileFilter, rel, baseRel))) {
     addOpenedFile(openedFilesMap, rel, "shell_read");
     return true;
   }
@@ -3771,14 +3769,20 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
       for (let k = 1; k < token.length; k++) {
         const ch = token[k];
         if (head !== 'rg' && (ch === 'r' || ch === 'R')) dirAction = 'recurse';
-        else if (valChars.includes(ch)) { flag = `-${ch}`; value = token.slice(k + 1) || undefined; break; }
-        else if (!boolChars.includes(ch)) { valid = false; break; }
+        else if (valChars.includes(ch)) {
+          [flag, value] = [`-${ch}`, token.slice(k + 1) || undefined];
+          break;
+        } else if (!boolChars.includes(ch)) {
+          valid = false;
+          break;
+        }
       }
       if (!valid) break;
-    } else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (!['-E', '-r'].includes(token.slice(0, 2)) || head === 'rg')) { flag = token.slice(0, 2); value = token.slice(2); }
-    else if (head === 'sed' && !token.startsWith('--') && token.length > 2) {
+    } else if (!token.startsWith('--') && token.length > 2 && SHELL_VALUE_OPTIONS.has(token.slice(0, 2)) && (head === 'rg' || !/^-[Er]/.test(token))) {
+      [flag, value] = [token.slice(0, 2), token.slice(2)];
+    } else if (head === 'sed' && !token.startsWith('--') && token.length > 2) {
       const m = /^-[nErsuz]+([ef])([\s\S]*)$/.exec(token);
-      if (m) { flag = `-${m[1]}`; value = m[2] || undefined; }
+      if (m) [flag, value] = [`-${m[1]}`, m[2] || undefined];
     }
     const interpreter = ['node', 'python', 'python3', 'ruby', 'perl'].includes(head);
     const programOption = interpreter && ['-e', '-c', '-p', '--eval', '--print'].includes(flag);
@@ -3787,38 +3791,35 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
     const valueOption = SHELL_VALUE_OPTIONS.has(flag) && (!['-E', '-r'].includes(flag) || head === 'rg') || programOption || countOption || separatorOption;
     if (valueOption) {
       if (value === undefined) value = args[++i];
-      if (typeof value !== 'string') { valid = false; break; }
+      if (value === undefined || typeof value !== 'string') {
+        valid = false;
+        break;
+      }
       if (programOption) programs.push(value);
       if (['sed', 'awk'].includes(head) && ['-e', '--expression', '-f', '--file'].includes(flag)) hasProgram = true;
+      const listKey = {
+        '--include': 'includes', '--exclude': 'excludes', '--exclude-dir': 'excludeDirs',
+        '-t': 'types', '--type': 'types', '-T': 'typeNots', '--type-not': 'typeNots'
+      }[flag];
       if (flag === '-g' || flag === '--glob' || flag === '--iglob') {
-        const negate = value.startsWith('!');
-        filter.globRules.push({ pattern: negate ? value.slice(1) : value, negate, insensitive: flag === '--iglob', anchorRel: cwdRel });
-      } else if (flag === '--include') filter.includes.push(value);
-      else if (flag === '--exclude') filter.excludes.push(value);
-      else if (flag === '--exclude-dir') filter.excludeDirs.push(value);
-      else if (flag === '-t' || flag === '--type') filter.types.push(value);
-      else if (flag === '-T' || flag === '--type-not') filter.typeNots.push(value);
+        filter.globRules.push({ pattern: value.replace(/^!/, ''), negate: value.startsWith('!'), insensitive: flag === '--iglob', anchorRel: cwdRel });
+      } else if (listKey) filter[listKey].push(value);
       else if (flag === '--max-depth' || (head === 'rg' && flag === '-d')) {
+        const d = /^\d+$/.test(value) ? Number(value) : NaN;
         if (gitSub === 'grep' && value === '-1') filter.maxDepth = null;
-        else {
-          const depth = /^\d+$/.test(value) ? Number(value) : NaN;
-          if (Number.isSafeInteger(depth)) filter.maxDepth = gitSub === 'grep' ? depth + 1 : depth;
-          else filter.unknown = true;
-        }
-      } else if (head !== 'rg' && (flag === '-d' || flag === '--directories')) {
-        if (value === 'recurse' || value === 'skip' || value === 'read') dirAction = value;
+        else if (Number.isSafeInteger(d)) filter.maxDepth = gitSub === 'grep' ? d + 1 : d;
         else filter.unknown = true;
-      } else if (['--type-add', '--type-clear'].includes(flag)) filter.unknown = true;
+      } else if (head !== 'rg' && (flag === '-d' || flag === '--directories') && /^(?:recurse|skip|read)$/.test(value)) dirAction = value;
+      else if ((head !== 'rg' && (flag === '-d' || flag === '--directories')) || flag === '--type-add' || flag === '--type-clear') filter.unknown = true;
       if (['-e', '--regexp', '-f', '--file'].includes(flag) && search) hasPattern = true;
       continue;
     }
     if (flag === '--files') listOnly = true;
     if (flag === '--recursive' || flag === '--dereference-recursive') dirAction = 'recurse';
     else if (gitSub === 'grep' && flag === '--no-recursive') dirAction = 'read';
-    const shortBoolOk = !flag.startsWith('--') && (
-      head === 'rg' ? /^-[niIsSFwxlLcqovHhaPUz0b]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rRniIsSFwxlLcqovHhaPRUz0bETZUGy]+$/
-    ).test(flag);
-    if (SHELL_BOOLEAN_OPTIONS.has(flag) || (flag === '-R' && head !== 'rg') || flag === '--dereference-recursive' || flag === '--no-recursive' || shortBoolOk || (['-E', '-r', '-p'].includes(flag) && !['node', 'rg'].includes(head))) continue;
+    const shortBoolRe = head === 'rg' ? /^-[niIsSFwxlLcqovHhaPUz0b]+$/ : head === 'sed' ? /^-[nErsuz]+$/ : /^-[rRniIsSFwxlLcqovHhaPRUz0bETZUGy]+$/;
+    if (SHELL_BOOLEAN_OPTIONS.has(flag) || (flag === '-R' && head !== 'rg') || flag === '--dereference-recursive' || flag === '--no-recursive') continue;
+    if ((['-E', '-r', '-p'].includes(flag) && !['node', 'rg'].includes(head)) || (!flag.startsWith('--') && shortBoolRe.test(flag))) continue;
     valid = false;
   }
   if (search && head !== 'rg' && dirAction !== 'recurse') filter.skipDirs = true;
@@ -3828,12 +3829,50 @@ function shellOperands(args, { search = false, head = '', rawHead = head, gitSub
   return { operands, programs, filter, valid, listOnly };
 }
 
+function createShellCwdTracker(initialCwd) {
+  const scopes = new Map([[0, { cwd: initialCwd, prev: null, valid: true }]]);
+  return {
+    resolve(segment) {
+      const missing = [];
+      for (let id = segment.scope ?? 0; id > 0 && !scopes.has(id); id = segment.scopeParents[id]) missing.push(id);
+      let cur = scopes.get(missing.length ? segment.scopeParents[missing[missing.length - 1]] : (segment.scope ?? 0));
+      for (let k = missing.length - 1; k >= 0; k--) {
+        cur = { ...cur };
+        scopes.set(missing[k], cur);
+      }
+      return cur;
+    },
+    stepCd(segment, cur, args, resolvedBase) {
+      if (["|", "|&"].includes(segment.prevSep) || ["|", "|&"].includes(segment.nextSep)) return;
+      if (segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) {
+        cur.valid = false;
+        return;
+      }
+      const cdArgs = args.filter((a, idx) => !(idx === 0 && (a === "-L" || a === "-P")));
+      const badFlag = cdArgs.length === 1 && cdArgs[0] !== "-" && (cdArgs[0].startsWith("-") || cdArgs[0].includes("$"));
+      if (!cur.valid || segment.inBranch || segment.prevSep === "||" || segment.nextSep === "||" || cdArgs.length !== 1 || badFlag) cur.valid = false;
+      else if (cdArgs[0] === "-") {
+        if (!cur.prev) cur.valid = false;
+        else [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
+      } else {
+        try {
+          const nextDir = path.resolve(resolvedBase, cdArgs[0]);
+          if (!fs.statSync(nextDir).isDirectory()) cur.valid = false;
+          else [cur.prev, cur.cwd] = [cur.cwd, nextDir];
+        } catch {
+          cur.valid = false;
+        }
+      }
+    }
+  };
+}
+
 function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFilesMap, searchedDirsMap, listedDirsMap, options = {}) {
   const { fallbackRoot = effectiveRoot, onRead = () => {}, onCommand = () => {}, baseOrder = 0, orderScale = 1, depth = 0 } = options;
   let sawContentRead = false;
-  const outer = { cwd: initialCwd || effectiveRoot, prev: null, valid: true };
-  let sub = null;
-  const normalize = (target, allowEqual = true, cwd = outer.cwd) => {
+  const baseStart = initialCwd || effectiveRoot;
+  const tracker = createShellCwdTracker(baseStart);
+  const normalize = (target, allowEqual = true, cwd = baseStart) => {
     const rel = normalizeToolTargetToRel(target, effectiveRoot, allowEqual, cwd);
     return rel?.startsWith('external:') ? normalizeToolTargetToRel(target, fallbackRoot, allowEqual, cwd) : rel;
   };
@@ -3846,13 +3885,7 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
   const step = orderScale / (segments.length + 1);
   for (const [index, segment] of segments.entries()) {
     const order = baseOrder + (index + 1) * step;
-    if (segment.inSubshell) {
-      if (!sub) sub = { ...outer };
-      else if (segment.prevSep === '(') sub.valid = false;
-    } else {
-      sub = null;
-    }
-    const cur = sub ?? outer;
+    const cur = tracker.resolve(segment);
     const command = unwrapShellCommand(segment.words);
     const head = command.head;
     let args = command.args;
@@ -3861,31 +3894,11 @@ function recordShellCommandReads(segments, effectiveRoot, initialCwd, openedFile
     const cmdCwd = (cur.valid || hasAbsOverride) ? canonicalCwd(resolvedBase) : null;
     onCommand(segment, cmdCwd || resolvedBase, order, Boolean(cmdCwd && (cur.valid || hasAbsOverride)));
     if (segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) {
-      if (head === 'cd' && !(segment.prevSep === '|' || segment.prevSep === '|&' || segment.nextSep === '|' || segment.nextSep === '|&')) cur.valid = false;
+      if (head === 'cd') tracker.stepCd(segment, cur, args, resolvedBase);
       continue;
     }
     if (head === 'cd') {
-      const inPipe = segment.prevSep === '|' || segment.prevSep === '|&' || segment.nextSep === '|' || segment.nextSep === '|&';
-      if (inPipe) continue;
-      const cdArgs = args.filter((a, idx) => !(idx === 0 && (a === '-L' || a === '-P')));
-      if (!cur.valid || segment.inBranch || segment.prevSep === '||' || segment.nextSep === '||' || cdArgs.length !== 1) {
-        cur.valid = false;
-      } else if (cdArgs[0] === '-') {
-        if (cur.prev) [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
-        else cur.valid = false;
-      } else if (cdArgs[0].startsWith('-') || cdArgs[0].includes('$')) {
-        cur.valid = false;
-      } else {
-        const nextDir = path.resolve(resolvedBase, cdArgs[0]);
-        let existsDir = false;
-        try { existsDir = fs.statSync(nextDir).isDirectory(); } catch {}
-        if (existsDir) {
-          cur.prev = cur.cwd;
-          cur.cwd = nextDir;
-        } else {
-          cur.valid = false;
-        }
-      }
+      tracker.stepCd(segment, cur, args, resolvedBase);
       continue;
     }
     if (!cmdCwd) continue;
