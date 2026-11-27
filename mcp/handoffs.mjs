@@ -3588,12 +3588,28 @@ function verifyWorkerTraces(root, record, options = {}) {
           if (typeof cmd === "string" && cmd.trim()) {
             const segments = scanShellCommand(cmd);
             const cwdRaw = args.Cwd ?? args.cwd;
-            let commandCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
-            let cwdValid = true;
+            const initialCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
+            const cwdScopes = new Map([[0, { cwd: initialCwd, prev: null, valid: true }]]);
+            const resolveScope = (seg) => {
+              const missing = [];
+              let node = seg.scope;
+              while (node && node.id && !cwdScopes.has(node.id)) {
+                missing.push(node.id);
+                node = node.parent;
+              }
+              let base = cwdScopes.get(node?.id ?? 0);
+              for (let k = missing.length - 1; k >= 0; k--) {
+                base = { cwd: base.cwd, prev: base.prev, valid: base.valid };
+                cwdScopes.set(missing[k], base);
+              }
+              return base;
+            };
             for (const segment of segments) {
+              const cur = resolveScope(segment);
               const { head, args: words, cwd } = unwrapShellCommand(segment.words);
-              const effectiveCwd = cwd ? path.resolve(commandCwd, cwd) : commandCwd;
-              const segCwdValid = Boolean(cwd || cwdValid);
+              const hasAbsOverride = Boolean(cwd && path.isAbsolute(cwd));
+              const effectiveCwd = cwd ? path.resolve(cur.cwd, cwd) : cur.cwd;
+              const segCwdValid = Boolean(cur.valid || hasAbsOverride);
               const allowRedirect = target => {
                 if (target === "/dev/null") return true;
                 if (!segCwdValid && !path.isAbsolute(target)) return false;
@@ -3604,18 +3620,27 @@ function verifyWorkerTraces(root, record, options = {}) {
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
               if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:")))) unauthorizedWrites.add("run_command");
-              if (segment.dynamic || segment.incomplete || segment.unverifiable) continue;
+              if (segment.dynamic || segment.incomplete || segment.unverifiable) {
+                if (head === "cd" && !(segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&")) cur.valid = false;
+                continue;
+              }
               if (head === "cd") {
                 const inPipe = segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&";
-                if (segment.inSubshell || inPipe) continue;
-                if (!segment.inBranch && segment.prevSep !== "||" && segment.nextSep !== "||" && words.length === 1 && words[0] !== "-" && !words[0].startsWith("-")) {
-                  const nextDir = path.resolve(effectiveCwd, words[0]);
+                if (inPipe) continue;
+                const cdArgs = words.filter((a, idx) => !(idx === 0 && (a === "-L" || a === "-P")));
+                if (!cur.valid || segment.inBranch || segment.prevSep === "||" || segment.nextSep === "||" || cdArgs.length !== 1) {
+                  cur.valid = false;
+                } else if (cdArgs[0] === "-") {
+                  if (cur.prev) [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
+                  else cur.valid = false;
+                } else if (cdArgs[0].startsWith("-")) {
+                  cur.valid = false;
+                } else {
+                  const nextDir = path.resolve(effectiveCwd, cdArgs[0]);
                   let isDir = false;
                   try { isDir = fs.statSync(nextDir).isDirectory(); } catch {}
-                  if (isDir) commandCwd = nextDir;
-                  else cwdValid = false;
-                } else {
-                  cwdValid = false;
+                  if (isDir) { cur.prev = cur.cwd; cur.cwd = nextDir; }
+                  else cur.valid = false;
                 }
                 continue;
               }

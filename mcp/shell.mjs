@@ -27,10 +27,7 @@ function normalizeCompoundSegments(rawSegments) {
     let c = 0, closing = false, forHdr = false;
     while (c < words.length && (c >= 30 || (qMask & (1 << c)) === 0)) {
       const kw = words[c];
-      if (kw === "!" || kw === "time") {
-        c++;
-        continue;
-      }
+      if (kw === "!" || kw === "time") { c++; continue; }
       if (kw === "{") {
         st.braceDepth++;
         if (++c >= words.length) seg.incomplete = true;
@@ -48,13 +45,8 @@ function normalizeCompoundSegments(rawSegments) {
         break;
       }
       if (kw === "if" || kw === "while" || kw === "until") {
-        if (kw === "if") {
-          st.ifDepth++;
-          st.awaitingThen = true;
-        } else {
-          st.loopDepth++;
-          st.awaitingDo = true;
-        }
+        if (kw === "if") { st.ifDepth++; st.awaitingThen = true; }
+        else { st.loopDepth++; st.awaitingDo = true; }
         if (++c >= words.length) seg.incomplete = true;
         continue;
       }
@@ -76,10 +68,7 @@ function normalizeCompoundSegments(rawSegments) {
         st.awaitingDo = true;
         const vQ = c + 1 < 30 && (qMask & (1 << (c + 1))) !== 0;
         const dQ = c + 2 < 30 && (qMask & (1 << (c + 2))) !== 0;
-        if (c + 1 >= words.length || vQ || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(words[c + 1])) {
-          seg.unverifiable = true;
-          break;
-        }
+        if (c + 1 >= words.length || vQ || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(words[c + 1])) { seg.unverifiable = true; break; }
         if (c + 2 < words.length && !dQ && words[c + 2] === "do") {
           st.awaitingDo = false;
           c += 3;
@@ -106,19 +95,15 @@ function normalizeCompoundSegments(rawSegments) {
 
 // Parse only shell word/quote boundaries; never evaluate shell input.
 export function scanShellCommand(command) {
-  const segments = [];
-  const isParam = ch => Boolean(ch && /[A-Za-z0-9_{(@*#?$!-]/.test(ch));
+  const segments = [], isParam = ch => Boolean(ch && /[A-Za-z0-9_{(@*#?$!-]/.test(ch));
+  let curScope = { id: 0, parent: null };
   let words = [], qMask = 0, redirs = null, hasInRedir = false, word = "", active = false, wordQuoted = false;
-  let quote = "", target = "", dynamic = false, unverifiable = false, parenDepth = 0, leadSep = "";
+  let quote = "", target = "", dynamic = false, unverifiable = false, parenDepth = 0, nextSubId = 1, leadSep = "";
   const finishWord = () => {
     if (!active) return;
-    if (target === "out") {
-      (redirs ||= []).push(word);
-      target = "";
-    } else if (target === "in") {
-      hasInRedir = true;
-      target = "";
-    } else {
+    if (target === "out") { (redirs ||= []).push(word); target = ""; }
+    else if (target === "in") { hasInRedir = true; target = ""; }
+    else {
       if (wordQuoted && words.length < 30) qMask |= (1 << words.length);
       words.push(word);
     }
@@ -126,13 +111,14 @@ export function scanShellCommand(command) {
     active = false;
     wordQuoted = false;
   };
-  const finishSegment = (nextSep = "", inSubshell = parenDepth > 0) => {
+  const finishSegment = (nextSep = "", scope = curScope) => {
     finishWord();
     const incomplete = Boolean(target);
     if (words.length || redirs || hasInRedir || incomplete || unverifiable) {
       segments.push({
         words, qMask, redirections: redirs ?? EMPTY, dynamic, incomplete, unverifiable,
-        closingKeyword: false, forHeader: false, inSubshell, inBranch: false, prevSep: leadSep, nextSep
+        closingKeyword: false, forHeader: false, inSubshell: scope.parent !== null, scope,
+        inBranch: false, prevSep: leadSep, nextSep
       });
       if (words.length) words = [];
       qMask = 0;
@@ -148,14 +134,8 @@ export function scanShellCommand(command) {
     const c = command[i];
     if (c === "%" && matchesCmdPercent(command, i)) dynamic = true;
     if (quote) {
-      if (c === quote) {
-        quote = "";
-        continue;
-      }
-      if (quote === '"' && c === "\\" && /["\\$`\n]/.test(command[i + 1] ?? "")) {
-        word += command[++i];
-        continue;
-      }
+      if (c === quote) { quote = ""; continue; }
+      if (quote === '"' && c === "\\" && /["\\$`\n]/.test(command[i + 1] ?? "")) { word += command[++i]; continue; }
       if (quote === '"' && (c === "`" || (c === "$" && isParam(command[i + 1])))) dynamic = true;
       word += c;
       continue;
@@ -177,12 +157,8 @@ export function scanShellCommand(command) {
     }
     if (c === "`" || (c === "$" && isParam(command[i + 1]))) dynamic = true;
     if (c === ">" || c === "<") {
-      if (!wordQuoted && /^\d+$/.test(word)) {
-        word = "";
-        active = false;
-      } else {
-        finishWord();
-      }
+      if (!wordQuoted && /^\d+$/.test(word)) { word = ""; active = false; }
+      else finishWord();
       if ((c === ">" && (command[i + 1] === ">" || command[i + 1] === "|")) || (c === "<" && command[i + 1] === ">")) {
         i++;
         target = "out";
@@ -191,18 +167,12 @@ export function scanShellCommand(command) {
       // shortcut: heredocs mark the command unverifiable instead of parsing delimiter bodies, upgrade if read-only heredocs are needed
       if (c === "<" && command[i + 1] === "<") {
         if (command[i + 2] === "<") i += 2;
-        else {
-          i += command[i + 2] === "-" ? 2 : 1;
-          unverifiable = true;
-        }
+        else { i += command[i + 2] === "-" ? 2 : 1; unverifiable = true; }
         target = "in";
         continue;
       }
       if (command[i + 1] === "&") {
-        if (command[i + 2] === "-") {
-          i += 2;
-          continue;
-        }
+        if (command[i + 2] === "-") { i += 2; continue; }
         let d = i + 2;
         while (/\d/.test(command[d] ?? "")) d++;
         if (d > i + 2 && (!command[d] || /[\s;|&<>()]/.test(command[d]))) {
@@ -214,26 +184,22 @@ export function scanShellCommand(command) {
       target = c === ">" ? "out" : "in";
       continue;
     }
-    if (c === "&" && command[i + 1] === ">") {
-      finishWord();
-      continue;
-    }
+    if (c === "&" && command[i + 1] === ">") { finishWord(); continue; }
     if (c === "(") {
       finishWord();
       if (words.length > 0) unverifiable = true;
       finishSegment("(");
       parenDepth++;
+      curScope = { id: nextSubId++, parent: curScope };
       continue;
     }
     if (c === ")") {
       finishWord();
-      const sub = parenDepth > 0;
+      const segScope = curScope;
       if (leadSep === "(" && !words.length && !redirs && !hasInRedir) unverifiable = true;
-      if (--parenDepth < 0) {
-        unverifiable = true;
-        parenDepth = 0;
-      }
-      finishSegment(")", sub);
+      if (--parenDepth < 0) { unverifiable = true; parenDepth = 0; }
+      else if (curScope.parent) curScope = curScope.parent;
+      finishSegment(")", segScope);
       continue;
     }
     if (c === ";" || c === "|" || c === "&" || c === "\n") {
@@ -241,17 +207,14 @@ export function scanShellCommand(command) {
       if ((c === "&" && command[i + 1] === "&") || (c === "|" && (command[i + 1] === "|" || command[i + 1] === "&"))) {
         sep = c + command[++i];
       } else if (c === ";" && command[i + 1] === ";") {
-        sep = ";;";
+        sep = c + c;
         i++;
         unverifiable = true;
       }
       finishSegment(sep);
       continue;
     }
-    if (c === " " || c === "\t" || c === "\r" || c === "\v" || c === "\f") {
-      finishWord();
-      continue;
-    }
+    if (c === " " || c === "\t" || c === "\r" || c === "\v" || c === "\f") { finishWord(); continue; }
     word += c;
     active = true;
   }
@@ -263,43 +226,31 @@ export function scanShellCommand(command) {
 const WRAPPER_SPECS = {
   env: { bool: new Set(["-i", "-", "--ignore-environment", "-0", "--null"]), val: new Set(["-u", "--unset", "-C", "--chdir"]), sc: "i0", sv: "uC" },
   sudo: {
-    bool: new Set(["-A", "-b", "-E", "-H", "-i", "-k", "-K", "-l", "-n", "-P", "-S", "-s", "-V", "-v"]),
-    val: new Set([
-      "-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-D",
-      "--user", "--group", "--close-from", "--host", "--prompt", "--role", "--type", "--other-user", "--chdir"
-    ]),
+    bool: new Set("-A -b -E -H -i -k -K -l -n -P -S -s -V -v".split(" ")),
+    val: new Set("-u -g -C -h -p -r -t -U -D --user --group --close-from --host --prompt --role --type --other-user --chdir".split(" ")),
     sc: "AbEHikKlnPSsVv", sv: "ugChprtUD"
   },
   xargs: {
-    bool: new Set(["-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "--interactive", "-x", "--exit"]),
-    val: new Set([
-      "-I", "-L", "-n", "-P", "-d", "-E", "-s",
-      "--max-args", "--max-procs", "--max-lines", "--replace", "--delimiter", "--eof", "--max-chars"
-    ]),
+    bool: new Set("-0 --null -r --no-run-if-empty -t --verbose -p --interactive -x --exit".split(" ")),
+    val: new Set("-I -L -n -P -d -E -s --max-args --max-procs --max-lines --replace --delimiter --eof --max-chars".split(" ")),
     sc: "0rtpx", sv: "ILnPdEs"
   },
-  timeout: {
-    bool: new Set(["--foreground", "--preserve-status", "-v", "--verbose"]),
-    val: new Set(["-k", "-s", "--kill-after", "--signal"]),
-    sc: "v", sv: "ks", dur: true
-  },
+  timeout: { bool: new Set(["--foreground", "--preserve-status", "-v", "--verbose"]), val: new Set(["-k", "-s", "--kill-after", "--signal"]), sc: "v", sv: "ks", dur: true },
   nice: { bool: new Set(), val: new Set(["-n", "--adjustment"]), sc: "", sv: "n", numFlag: true },
   nohup: { bool: new Set(), val: new Set(), sc: "", sv: "" },
   builtin: { bool: new Set(), val: new Set(), sc: "", sv: "" },
   exec: { bool: new Set(), val: new Set(), sc: "", sv: "" }
 };
-const GIT_SAFE_BOOL_GLOBALS = new Set([
-  "-p", "--paginate", "-P", "--no-pager", "--no-replace-objects", "--bare",
-  "--no-optional-locks", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"
-]);
+const GIT_SAFE_BOOL = new Set((
+  "-p --paginate -P --no-pager --no-replace-objects --bare --no-optional-locks " +
+  "--literal-pathspecs --glob-pathspecs --noglob-pathspecs --icase-pathspecs"
+).split(" "));
 
 export function unwrapShellCommand(words) {
   let i = 0, cwd, wrapperUncertain = false, hasGitConfigOverride = false;
   const envVars = [], wrappers = [];
   const base = v => path.posix.basename(v.replaceAll("\\", "/")).replace(/\.(?:exe|cmd|bat)$/i, "").toLowerCase();
-  const updateCwd = next => {
-    cwd = cwd && !path.isAbsolute(next) ? path.join(cwd, next) : next;
-  };
+  const setCwd = next => { cwd = cwd && !path.isAbsolute(next) ? path.join(cwd, next) : next; };
   while (i < words.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) {
       envVars.push(words[i].slice(0, words[i].indexOf("=")));
@@ -310,10 +261,7 @@ export function unwrapShellCommand(words) {
     if (h === "command") {
       let p = i + 1, query = false;
       for (; p < words.length && words[p].startsWith("-") && words[p] !== "-"; p++) {
-        if (words[p] === "--") {
-          p++;
-          break;
-        }
+        if (words[p] === "--") { p++; break; }
         if (/^-[pPvV]+$/.test(words[p]) && /[vV]/.test(words[p])) query = true;
         else if (words[p] !== "-p") wrapperUncertain = true;
       }
@@ -328,24 +276,18 @@ export function unwrapShellCommand(words) {
     i++;
     while (i < words.length && (words[i].startsWith("-") || (h === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])))) {
       const f = words[i++];
-      if (h === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(f)) {
-        envVars.push(f.slice(0, f.indexOf("=")));
-        continue;
-      }
+      if (h === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(f)) { envVars.push(f.slice(0, f.indexOf("="))); continue; }
       if (f === "--") break;
       if (spec.bool.has(f) || (spec.numFlag && /^-\d+$/.test(f))) continue;
       if (spec.val.has(f)) {
-        if (i >= words.length) {
-          wrapperUncertain = true;
-          break;
-        }
+        if (i >= words.length) { wrapperUncertain = true; break; }
         const v = words[i++];
-        if ((h === "env" && (f === "-C" || f === "--chdir")) || (h === "sudo" && (f === "-D" || f === "--chdir"))) updateCwd(v);
+        if ((h === "env" && (f === "-C" || f === "--chdir")) || (h === "sudo" && (f === "-D" || f === "--chdir"))) setCwd(v);
         continue;
       }
       const eq = f.startsWith("--") ? f.indexOf("=") : -1;
       if (eq > 2 && spec.val.has(f.slice(0, eq))) {
-        if (f.startsWith("--chdir=")) updateCwd(f.slice(8));
+        if (f.startsWith("--chdir=")) setCwd(f.slice(8));
         continue;
       }
       if (!f.startsWith("--") && f.length > 1) {
@@ -353,9 +295,9 @@ export function unwrapShellCommand(words) {
         for (let k = 1; k < f.length; k++) {
           if (spec.sc.includes(f[k])) continue;
           if (spec.sv.includes(f[k])) {
-            const attached = k + 1 < f.length ? f.slice(k + 1) : words[i++];
-            if (attached === undefined) ok = false;
-            else if ((h === "env" && f[k] === "C") || (h === "sudo" && f[k] === "D")) updateCwd(attached);
+            const val = k + 1 < f.length ? f.slice(k + 1) : words[i++];
+            if (val === undefined) ok = false;
+            else if ((h === "env" && f[k] === "C") || (h === "sudo" && f[k] === "D")) setCwd(val);
             break;
           }
           ok = false;
@@ -378,15 +320,13 @@ export function unwrapShellCommand(words) {
     if (f === "--") break;
     if (f === "-C") {
       if (i >= words.length) wrapperUncertain = true;
-      else updateCwd(words[i++]);
-    } else if (f.startsWith("-C") && f.length > 2 && !f.startsWith("--")) {
-      updateCwd(f.slice(2));
-    } else if (["--git-dir", "--work-tree", "--namespace"].includes(f)) {
+      else setCwd(words[i++]);
+    } else if (f.startsWith("-C") && f.length > 2 && !f.startsWith("--")) setCwd(f.slice(2));
+    else if (["--git-dir", "--work-tree", "--namespace"].includes(f)) {
       if (i >= words.length) wrapperUncertain = true;
       else i++;
-    } else if (/^--(?:git-dir|work-tree|namespace)=/.test(f) || GIT_SAFE_BOOL_GLOBALS.has(f)) {
-      continue;
-    } else {
+    } else if (/^--(?:git-dir|work-tree|namespace)=/.test(f) || GIT_SAFE_BOOL.has(f)) continue;
+    else {
       hasGitConfigOverride = true;
       wrapperUncertain = true;
       break;
@@ -395,15 +335,13 @@ export function unwrapShellCommand(words) {
   return { head, args: words.slice(i), cwd, envVars, wrappers, wrapperUncertain, hasGitConfigOverride };
 }
 
-const SAFE_NODE_READ_CALLS = new Set([
-  "require", "readFileSync", "statSync", "lstatSync", "readdirSync", "existsSync", "realpathSync", "byteLength",
-  "stringify", "parse", "keys", "values", "entries", "split", "slice", "trim", "join", "match", "startsWith",
-  "endsWith", "includes", "indexOf", "Number", "String", "Boolean", "isArray", "toLowerCase", "toUpperCase",
-  "cwd", "resolve", "relative", "basename", "dirname", "extname", "homedir", "tmpdir", "platform", "arch",
-  "max", "min", "round", "floor", "ceil"
-]);
+const SAFE_NODE_CALLS = new Set((
+  "require readFileSync statSync lstatSync readdirSync existsSync realpathSync byteLength stringify parse keys values entries " +
+  "split slice trim join match startsWith endsWith includes indexOf Number String Boolean isArray toLowerCase toUpperCase " +
+  "cwd resolve relative basename dirname extname homedir tmpdir platform arch max min round floor ceil"
+).split(" "));
 
-function stripJsStrings(expr) {
+function stripJsStrings(expr, allowSlash = false) {
   let out = "", q = "", start = 0;
   const strings = [];
   for (let i = 0; i < expr.length; i++) {
@@ -422,14 +360,8 @@ function stripJsStrings(expr) {
       start = i;
       continue;
     }
-    if (
-      c === "/" ||
-      c === "`" ||
-      (c === "<" && expr[i + 1] === "!") ||
-      (c === "-" && expr[i + 1] === "-" && (expr[i + 2] === ">" || (expr[i + 2] === "!" && expr[i + 3] === ">")))
-    ) {
-      return null;
-    }
+    const isHtmlCmt = (c === "<" && expr[i + 1] === "!") || (c === "-" && expr[i + 1] === "-" && (expr[i + 2] === ">" || (expr[i + 2] === "!" && expr[i + 3] === ">")));
+    if ((!allowSlash && (c === "/" || c === "`" || isHtmlCmt))) return null;
     out += c;
   }
   return q ? null : { code: out, strings };
@@ -445,9 +377,7 @@ function isSafeReadOnlyNodePrint(args) {
     } else if (a.startsWith("--print=")) {
       if (expr !== undefined) return false;
       expr = a.slice(8);
-    } else if (a !== "--" || i !== args.length - 1) {
-      return false;
-    }
+    } else if (a !== "--" || i !== args.length - 1) return false;
   }
   if (typeof expr !== "string" || !expr.trim() || expr.length > 1024 || /__S\d+__/.test(expr)) return false;
   const stripped = stripJsStrings(expr);
@@ -469,15 +399,14 @@ function isSafeReadOnlyNodePrint(args) {
     if (!req || !/^(?:node:)?(?:fs|path|os|url|util)$/.test(strings[Number(req[1])] ?? "")) return false;
   }
   for (const m of code.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)) {
-    if (!SAFE_NODE_READ_CALLS.has(m[1])) return false;
+    if (!SAFE_NODE_CALLS.has(m[1])) return false;
   }
   return true;
 }
 
 const UNSAFE_ENV_RE = new RegExp(
   "^(?:LD_|DYLD_|NODE_OPTIONS$|PERL5|PYTHON|RUBY|BASH_ENV$|ENV$|PROMPT_COMMAND$|" +
-  "GIT_(?:DIR$|WORK_TREE$|INDEX_FILE$|OBJECT_DIRECTORY$|CONFIG|EXEC_PATH$|EXTERNAL_DIFF$|SSH|PAGER$)|" +
-  "PAGER$|LESSOPEN$|IFS$|PATH$)",
+  "GIT_(?:DIR$|WORK_TREE$|INDEX_FILE$|OBJECT_DIRECTORY$|CONFIG|EXEC_PATH$|EXTERNAL_DIFF$|SSH|PAGER$)|PAGER$|LESSOPEN$|IFS$|PATH$)",
   "i"
 );
 const READ_CMDS = new Set((
@@ -486,18 +415,15 @@ const READ_CMDS = new Set((
 ).split(" "));
 const GIT_READ_SUBS = new Set((
   "status diff log show grep rev-parse rev-list ls-files ls-tree cat-file blame annotate shortlog " +
-  "describe name-rev for-each-ref show-ref merge-base diff-tree diff-files diff-index check-ignore " +
-  "check-attr var version --version -v help --help -h"
+  "describe name-rev for-each-ref show-ref merge-base diff-tree diff-files diff-index check-ignore check-attr var version --version -v help --help -h"
 ).split(" "));
 const FIND_VAL_PREDS = new Set((
-  "-name -iname -path -ipath -wholename -iwholename -lname -ilname -regex -iregex -regextype -type -xtype " +
-  "-perm -user -group -uid -gid -size -links -inum -mindepth -maxdepth -mtime -atime -ctime -mmin -amin " +
-  "-cmin -printf -newer -anewer -cnewer -samefile -files0-from -used -fstype -context"
+  "-name -iname -path -ipath -wholename -iwholename -lname -ilname -regex -iregex -regextype -type -xtype -perm -user -group " +
+  "-uid -gid -size -links -inum -mindepth -maxdepth -mtime -atime -ctime -mmin -amin -cmin -printf -newer -anewer -cnewer -samefile -files0-from -used -fstype -context"
 ).split(" "));
 const FIND_BOOL_PREDS = new Set((
   "-H -L -P -print -print0 -ls -prune -quit -empty -executable -readable -writable -true -false -depth -d " +
-  "-mount -xdev -daystart -follow -noleaf -warn -nowarn -ignore_readdir_race -noignore_readdir_race " +
-  "( ) ! -not -a -and -o -or ,"
+  "-mount -xdev -daystart -follow -noleaf -warn -nowarn -ignore_readdir_race -noignore_readdir_race ( ) ! -not -a -and -o -or ,"
 ).split(" "));
 const INTERP_VER = {
   perl: ["-v", "--version", "-V", "-h", "--help"], python: ["-V", "--version", "-h", "--help"],
@@ -506,11 +432,6 @@ const INTERP_VER = {
   sh: ["--version", "--help"], bash: ["--version", "--help"], zsh: ["--version", "--help"],
   dash: ["--version", "--help"], ksh: ["--version", "--help"]
 };
-function isSafeSedScript(script) {
-  if (typeof script !== "string" || script.length > 256) return false;
-  const clauses = script.split(/[;\r\n]+/).map(c => c.trim()).filter(Boolean);
-  return clauses.length > 0 && clauses.every(c => /^(?:\d+|\$)(?:[ \t]*,[ \t]*(?:\d+|\$))?[ \t]*[pqd]$/.test(c));
-}
 
 // shortcut: non-trivial sed/awk/find or unknown commands return true (unverifiable), upgrade only for proven read-only forms
 function isSafeFind(args, allowRedir, depth) {
@@ -519,10 +440,7 @@ function isSafeFind(args, allowRedir, depth) {
     const a = args[i];
     if (!inExpr) {
       if (a === "-H" || a === "-L" || a === "-P" || /^-O\d*$/.test(a)) continue;
-      if (a === "-D") {
-        if (++i >= args.length) return false;
-        continue;
-      }
+      if (a === "-D") { if (++i >= args.length) return false; continue; }
       if (a.startsWith("-") || a === "(" || a === "!" || a === ",") inExpr = true;
       else continue;
     }
@@ -530,16 +448,12 @@ function isSafeFind(args, allowRedir, depth) {
     if (["-exec", "-execdir", "-ok", "-okdir"].includes(a)) {
       let t = i + 1;
       while (t < args.length && !(args[t] === ";" || (args[t] === "+" && t > i + 1 && args[t - 1] === "{}"))) t++;
-      const subWords = args.slice(i + 1, t).map(w => (w === "{}" ? "__ITEM__" : w));
-      const subSeg = { words: subWords, redirections: EMPTY, dynamic: false, incomplete: false, unverifiable: false };
+      const subSeg = { words: args.slice(i + 1, t).map(w => (w === "{}" ? "__ITEM__" : w)), redirections: EMPTY, dynamic: false, incomplete: false, unverifiable: false };
       if (t >= args.length || t === i + 1 || writesInternal([subSeg], allowRedir, depth + 1)) return false;
       i = t;
       continue;
     }
-    if (FIND_VAL_PREDS.has(a) || /^-newer[aBcmMt]{2}$/.test(a)) {
-      if (++i >= args.length) return false;
-      continue;
-    }
+    if (FIND_VAL_PREDS.has(a) || /^-newer[aBcmMt]{2}$/.test(a)) { if (++i >= args.length) return false; continue; }
     if (!FIND_BOOL_PREDS.has(a) && !/^-O\d*$/.test(a) && a.startsWith("-")) return false;
   }
   return true;
@@ -551,39 +465,24 @@ function isSafeSedOrAwk(head, args) {
     let prog = null, dd = false;
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (!dd && a === "--") {
-        dd = true;
-        continue;
-      }
+      if (!dd && a === "--") { dd = true; continue; }
       if (!dd && a.startsWith("-") && a !== "-") {
-        if (a === "-F" || a === "-v" || a === "--field-separator" || a === "--assign") {
-          if (++i >= args.length) return false;
-          continue;
-        }
-        if (!(/^-[Fv].+/.test(a) || /^--(?:field-separator|assign)=/.test(a) || ["--posix", "--traditional", "--characters-as-bytes"].includes(a))) {
-          return false;
-        }
+        if (a === "-F" || a === "-v" || a === "--field-separator" || a === "--assign") { if (++i >= args.length) return false; continue; }
+        if (!(/^-[Fv].+/.test(a) || /^--(?:field-separator|assign)=/.test(a) || ["--posix", "--traditional", "--characters-as-bytes"].includes(a))) return false;
         continue;
       }
       if (prog === null) prog = a;
     }
-    if (prog === null) return false;
-    const flatProg = prog.replace(/\\\r?\n/g, " ");
-    return !/\bsystem\s*\(|\bgetline\b|\|\&|(?:^|[^|])\|(?:[^|]|$)|\b(?:print|printf)\b[^;}\n]*>/.test(flatProg);
+    const stripped = prog === null ? null : stripJsStrings(prog.replace(/\\\r?\n/g, " "), true);
+    return Boolean(stripped && !/\bsystem\s*\(|\bgetline\b|\|\&|(?:^|[^|])\|(?:[^|]|$)|\b(?:print|printf)\b[^;}\n]*>/.test(stripped.code));
   }
   if (args.length === 1 && (args[0] === "--version" || args[0] === "--help")) return true;
   const scripts = [], pos = [];
   let explicit = false, dd = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (!dd && a === "--") {
-      dd = true;
-      continue;
-    }
-    if (dd || !a.startsWith("-") || a === "-") {
-      pos.push(a);
-      continue;
-    }
+    if (!dd && a === "--") { dd = true; continue; }
+    if (dd || !a.startsWith("-") || a === "-") { pos.push(a); continue; }
     if (["--quiet", "--silent", "--regexp-extended"].includes(a) || /^-[nEru]+$/.test(a)) continue;
     if (a === "--expression") {
       if (++i >= args.length) return false;
@@ -597,17 +496,18 @@ function isSafeSedOrAwk(head, args) {
       continue;
     }
     const shortExpr = /^-[nEru]*e([\s\S]*)$/.exec(a);
-    if (shortExpr) {
-      explicit = true;
-      if (shortExpr[1]) scripts.push(shortExpr[1]);
-      else if (++i < args.length) scripts.push(args[i]);
-      else return false;
-      continue;
-    }
-    return false;
+    if (!shortExpr) return false;
+    explicit = true;
+    if (shortExpr[1]) scripts.push(shortExpr[1]);
+    else if (++i < args.length) scripts.push(args[i]);
+    else return false;
   }
   if (!explicit && pos.length) scripts.push(pos[0]);
-  return scripts.length > 0 && scripts.every(isSafeSedScript);
+  return scripts.length > 0 && scripts.every(s => {
+    if (typeof s !== "string" || s.length > 256) return false;
+    const clauses = s.split(/[;\r\n]+/).map(c => c.trim()).filter(Boolean);
+    return clauses.length > 0 && clauses.every(c => /^(?:\d+|\$)(?:[ \t]*,[ \t]*(?:\d+|\$))?[ \t]*[pqd]$/.test(c));
+  });
 }
 
 function isSafeGitSubcommand(args) {
@@ -615,12 +515,9 @@ function isSafeGitSubcommand(args) {
   const sub = args[0], rest = args.slice(1);
   if (rest.some(a => a === "--output" || a.startsWith("--output=") || a === "--ext-diff" || a === "--textconv")) return false;
   if (GIT_READ_SUBS.has(sub)) {
-    if (sub !== "grep") return true;
-    return !rest.some(a => a.startsWith("--open-files-in-pager") || (!a.startsWith("--") && /^-[A-Za-z0-9]*O/.test(a)));
+    return sub !== "grep" || !rest.some(a => a.startsWith("--open-files-in-pager") || (!a.startsWith("--") && /^-[A-Za-z0-9]*O/.test(a)));
   }
-  if (sub === "branch") {
-    return rest.every(a => ["--show-current", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "-l"].includes(a));
-  }
+  if (sub === "branch") return rest.every(a => ["--show-current", "-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "-l"].includes(a));
   if (sub === "tag") return !rest[0] || rest[0] === "-l" || rest[0] === "--list";
   if (sub === "remote") return !rest[0] || (rest.length === 1 && ["-v", "--verbose"].includes(rest[0]));
   return false;
@@ -657,7 +554,8 @@ function writesInternal(segments, allowRedirection, depth = 0) {
     if (head === "date" && !args.some(a => a === "-s" || a.startsWith("--set") || (!a.startsWith("--") && /^-[A-Za-z]*s/.test(a)))) continue;
     if ((head === "rg" || head === "ripgrep") && !args.some(a => /^(?:--pre|--hostname-bin)(?:=|$)/.test(a))) continue;
     if (head === "file" && !args.some(a => a === "--compile" || (!a.startsWith("--") && /^-[^-]*C/.test(a)))) continue;
-    if (head === "sort" && !args.some(a => a === "--output" || a.startsWith("--output=") || (!a.startsWith("--") && /^-[^-]*o/.test(a)) || a.startsWith("--compress-program"))) continue;
+    const isSortOut = a => a === "--output" || a.startsWith("--output=") || (!a.startsWith("--") && /^-[^-]*o/.test(a)) || a.startsWith("--compress-program");
+    if (head === "sort" && !args.some(isSortOut)) continue;
     if (head === "uniq") {
       let dd = false, n = 0;
       for (const a of args) {
@@ -672,9 +570,9 @@ function writesInternal(segments, allowRedirection, depth = 0) {
     if (head === "git" && !hasGitConfigOverride && isSafeGitSubcommand(args)) continue;
     if (head === "rtk") {
       const rtkVer = args.length === 1 && ["--version", "-V", "--help", "-h"].includes(args[0]);
-      const subArgSeg = { words: args, redirections: EMPTY, dynamic: false, incomplete: false, unverifiable: false };
+      const subSeg = { words: args, redirections: EMPTY, dynamic: false, incomplete: false, unverifiable: false };
       const rtkSub = ["cat", "head", "tail", "grep", "rg", "ls", "find", "diff", "git"].includes(args[0]) &&
-        !writesInternal([subArgSeg], allowRedirection, depth + 1);
+        !writesInternal([subSeg], allowRedirection, depth + 1);
       if (rtkVer || args[0] === "read" || rtkSub) continue;
     }
     return true;

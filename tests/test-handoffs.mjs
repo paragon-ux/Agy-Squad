@@ -4704,6 +4704,8 @@ try {
         }
         for (const spoofCmd of [
           "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
+          "( ( cd scratch && pwd ) && echo CORRUPTED > src/a.js )",
+          "( cd scratch && echo CORRUPTED > ../src/a.js )",
           "cd scratch | true; echo CORRUPTED > src/a.js",
           "if false; then cd scratch; fi; echo CORRUPTED > src/a.js",
           "cd scratch && cd - >/dev/null && echo CORRUPTED > src/a.js",
@@ -4716,10 +4718,12 @@ try {
           assert.equal(res.ok, false, `PR #18 must reject redirect/function spoof: ${spoofCmd}`);
           assert.equal(res.recommendedVerdict, "INTEGRITY VIOLATION");
         }
-        // POSIX unspaced and spaced read-only subshell controls + valid top-level `cd scratch && echo ok > out.txt`
+        // POSIX unspaced and spaced read-only subshell controls + valid top-level/subshell scratch writes
         for (const okSub of [
           "(head -n 1 src/a.js)",
           "( head -n 1 src/a.js )",
+          "( head -n 1 src/a.js ) && ( echo ok > scratch/ok.txt )",
+          "( cd scratch && echo ok > sub-ok.txt )",
           "cd scratch && echo ok > out.txt",
           "( cd scratch && pwd ) && head -n 1 src/a.js"
         ]) {
@@ -4757,7 +4761,8 @@ try {
           'printf "m-xargs2.txt:" | xargs -d : touch',
           "sudo -p cat touch m-sudo.txt",
           "sudo -e src/a.js",
-          "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'"
+          "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'",
+          "awk 'BEGIN { print \"a;b\" > \"m-awk-semi.txt\" }'"
         ]) {
           assert.equal(shellCommandWrites(scanShellCommand(bypassCmd), () => true), true, `Classifier must reject: ${bypassCmd}`);
           assert.equal(runAudit(bypassCmd).ok, false, `Trace audit must reject: ${bypassCmd}`);
