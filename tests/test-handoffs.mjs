@@ -4699,10 +4699,24 @@ try {
           fs.mkdirSync(path.join(probe, "src"), { recursive: true });
           fs.mkdirSync(path.join(probe, "scratch/src"), { recursive: true });
           fs.writeFileSync(path.join(probe, "src/a.js"), "CLEAN\n");
-          assert.equal(spawnSync("sh", ["-c", "( cd scratch && pwd ) && echo CORRUPTED > src/a.js"], { cwd: probe }).status, 0);
+          assert.equal(spawnSync("/bin/sh", ["-c", "( cd scratch && pwd ) && echo CORRUPTED > src/a.js"], { cwd: probe }).status, 0);
           assert.equal(fs.readFileSync(path.join(probe, "src/a.js"), "utf8"), "CORRUPTED\n");
+          fs.writeFileSync(path.join(probe, "src/a.js"), "CLEAN\n");
+          assert.equal(spawnSync("/bin/sh", ["-c", "</dev/null echo CORRUPTED > src/a.js"], { cwd: probe }).status, 0);
+          assert.equal(fs.readFileSync(path.join(probe, "src/a.js"), "utf8"), "CORRUPTED\n");
+          assert.equal(spawnSync("/bin/sh", ["-c", "< src/a.js cat > src/b.js"], { cwd: probe }).status, 0);
+          assert.equal(fs.readFileSync(path.join(probe, "src/b.js"), "utf8"), "CORRUPTED\n");
+          if (fs.existsSync("/bin/bash")) {
+            fs.writeFileSync(path.join(probe, "src/a.js"), "CLEAN\n");
+            assert.equal(spawnSync("/bin/bash", ["-c", "echo hi <<< foo > src/a.js"], { cwd: probe }).status, 0);
+            assert.equal(fs.readFileSync(path.join(probe, "src/a.js"), "utf8"), "hi\n");
+          }
+          fs.rmSync(probe, { recursive: true, force: true });
         }
         for (const spoofCmd of [
+          "</dev/null echo CORRUPTED > src/a.js",
+          "< src/a.js cat > src/b.js",
+          "echo hi <<< foo > src/a.js",
           "( cd scratch && pwd ) && echo CORRUPTED > src/a.js",
           "( ( cd scratch && pwd ) && echo CORRUPTED > src/a.js )",
           "( cd scratch && echo CORRUPTED > ../src/a.js )",
@@ -4742,6 +4756,9 @@ try {
           assert.equal(fs.existsSync(path.join(bDir, "m-awk.txt")), true);
         }
         for (const bypassCmd of [
+          "</dev/null echo CORRUPTED > src/a.js",
+          "< src/a.js cat > src/b.js",
+          "echo hi <<< foo > src/a.js",
           'node -p \'/"/; require("fs").writeFileSync("m-node.txt", "PWN"); /"/\'',
           'node -p \'<!-- "\\nrequire("fs").writeFileSync("m-html.txt", "PWN"); // "\'',
           'sed -n "s|.*|PWN|w m-sed1.txt" src/a.js',
@@ -4764,7 +4781,7 @@ try {
           "awk 'BEGIN { print \"PWN\" \\\n > \"m-awk.txt\" }'",
           "awk 'BEGIN { print \"a;b\" > \"m-awk-semi.txt\" }'"
         ]) {
-          assert.equal(shellCommandWrites(scanShellCommand(bypassCmd), () => true), true, `Classifier must reject: ${bypassCmd}`);
+          assert.equal(shellCommandWrites(scanShellCommand(bypassCmd), () => false), true, `Classifier must reject: ${bypassCmd}`);
           assert.equal(runAudit(bypassCmd).ok, false, `Trace audit must reject: ${bypassCmd}`);
         }
         for (const safeCtrl of [

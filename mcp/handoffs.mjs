@@ -3392,6 +3392,44 @@ function recordInspectedPath(rawTarget, canonicalRoot, inspectedFiles, inspected
   inspectedFiles.add(rel);
 }
 
+function createShellCwdTracker(initialCwd) {
+  const scopes = new Map([[0, { cwd: initialCwd, prev: null, valid: true }]]);
+  return {
+    resolve(segment) {
+      const missing = [];
+      for (let id = segment.scope ?? 0; id > 0 && !scopes.has(id); id = segment.scopeParents[id]) missing.push(id);
+      let cur = scopes.get(missing.length ? segment.scopeParents[missing[missing.length - 1]] : (segment.scope ?? 0));
+      for (let k = missing.length - 1; k >= 0; k--) {
+        cur = { ...cur };
+        scopes.set(missing[k], cur);
+      }
+      return cur;
+    },
+    stepCd(segment, cur, args, resolvedBase) {
+      if (["|", "|&"].includes(segment.prevSep) || ["|", "|&"].includes(segment.nextSep)) return;
+      if (segment.dynamic || segment.incomplete || segment.unverifiable || segment.closingKeyword || segment.forHeader) {
+        cur.valid = false;
+        return;
+      }
+      const cdArgs = args.filter((a, idx) => !(idx === 0 && (a === "-L" || a === "-P")));
+      const badFlag = cdArgs.length === 1 && cdArgs[0] !== "-" && (cdArgs[0].startsWith("-") || cdArgs[0].includes("$"));
+      if (!cur.valid || segment.inBranch || segment.prevSep === "||" || segment.nextSep === "||" || cdArgs.length !== 1 || badFlag) cur.valid = false;
+      else if (cdArgs[0] === "-") {
+        if (!cur.prev) cur.valid = false;
+        else [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
+      } else {
+        try {
+          const nextDir = path.resolve(resolvedBase, cdArgs[0]);
+          if (!fs.statSync(nextDir).isDirectory()) cur.valid = false;
+          else [cur.prev, cur.cwd] = [cur.cwd, nextDir];
+        } catch {
+          cur.valid = false;
+        }
+      }
+    }
+  };
+}
+
 function verifyWorkerTraces(root, record, options = {}) {
   const t0 = performance.now();
   const verifiedDirs = new Set();
@@ -3588,24 +3626,9 @@ function verifyWorkerTraces(root, record, options = {}) {
           if (typeof cmd === "string" && cmd.trim()) {
             const segments = scanShellCommand(cmd);
             const cwdRaw = args.Cwd ?? args.cwd;
-            const initialCwd = typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot;
-            const cwdScopes = new Map([[0, { cwd: initialCwd, prev: null, valid: true }]]);
-            const resolveScope = (seg) => {
-              const missing = [];
-              let node = seg.scope;
-              while (node && node.id && !cwdScopes.has(node.id)) {
-                missing.push(node.id);
-                node = node.parent;
-              }
-              let base = cwdScopes.get(node?.id ?? 0);
-              for (let k = missing.length - 1; k >= 0; k--) {
-                base = { cwd: base.cwd, prev: base.prev, valid: base.valid };
-                cwdScopes.set(missing[k], base);
-              }
-              return base;
-            };
+            const tracker = createShellCwdTracker(typeof cwdRaw === "string" ? path.resolve(workerRoot, cwdRaw) : workerRoot);
             for (const segment of segments) {
-              const cur = resolveScope(segment);
+              const cur = tracker.resolve(segment);
               const { head, args: words, cwd } = unwrapShellCommand(segment.words);
               const hasAbsOverride = Boolean(cwd && path.isAbsolute(cwd));
               const effectiveCwd = cwd ? path.resolve(cur.cwd, cwd) : cur.cwd;
@@ -3619,29 +3642,16 @@ function verifyWorkerTraces(root, record, options = {}) {
                 return isScratchOrReportRelPath(rel, resolvedReportRoot) || rel === reportSlot;
               };
               if (isReadOnly && shellCommandWrites([segment], allowRedirect)) unauthorizedWrites.add("run_command");
-              if (!isReadOnly && segment.redirections.some(target => target !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, target), workerRoot)?.startsWith("external:")))) unauthorizedWrites.add("run_command");
+              const hasExternalRedir = !isReadOnly && segment.redirections.some(
+                t => t !== "/dev/null" && (!segCwdValid || normalizeToolTargetToRel(path.resolve(effectiveCwd, t), workerRoot)?.startsWith("external:"))
+              );
+              if (hasExternalRedir) unauthorizedWrites.add("run_command");
               if (segment.dynamic || segment.incomplete || segment.unverifiable) {
-                if (head === "cd" && !(segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&")) cur.valid = false;
+                if (head === "cd") tracker.stepCd(segment, cur, words, effectiveCwd);
                 continue;
               }
               if (head === "cd") {
-                const inPipe = segment.prevSep === "|" || segment.prevSep === "|&" || segment.nextSep === "|" || segment.nextSep === "|&";
-                if (inPipe) continue;
-                const cdArgs = words.filter((a, idx) => !(idx === 0 && (a === "-L" || a === "-P")));
-                if (!cur.valid || segment.inBranch || segment.prevSep === "||" || segment.nextSep === "||" || cdArgs.length !== 1) {
-                  cur.valid = false;
-                } else if (cdArgs[0] === "-") {
-                  if (cur.prev) [cur.prev, cur.cwd] = [cur.cwd, cur.prev];
-                  else cur.valid = false;
-                } else if (cdArgs[0].startsWith("-")) {
-                  cur.valid = false;
-                } else {
-                  const nextDir = path.resolve(effectiveCwd, cdArgs[0]);
-                  let isDir = false;
-                  try { isDir = fs.statSync(nextDir).isDirectory(); } catch {}
-                  if (isDir) { cur.prev = cur.cwd; cur.cwd = nextDir; }
-                  else cur.valid = false;
-                }
+                tracker.stepCd(segment, cur, words, effectiveCwd);
                 continue;
               }
               if (!segCwdValid) continue;
