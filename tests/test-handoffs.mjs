@@ -4856,6 +4856,16 @@ try {
         const danglingLink = path.join(d4Dir, "evil-dangling.txt");
         fs.symlinkSync(extTarget, existingLink, "file");
         fs.symlinkSync(path.join(outDir, "not-created-yet.txt"), danglingLink, "file");
+        const dirLinkType = process.platform === "win32" ? "junction" : "dir";
+        fs.symlinkSync("evil-hop2.txt", path.join(d4Dir, "evil-hop1.txt"), "file");
+        fs.symlinkSync(path.join(outDir, "hop-out.txt"), path.join(d4Dir, "evil-hop2.txt"), "file");
+        fs.symlinkSync(outDir, path.join(d4Dir, "escape-dir"), dirLinkType);
+        fs.symlinkSync("cycle-b.txt", path.join(d4Dir, "cycle-a.txt"), "file");
+        fs.symlinkSync("cycle-a.txt", path.join(d4Dir, "cycle-b.txt"), "file");
+        fs.mkdirSync(path.join(d4Dir, "sub"), { recursive: true });
+        fs.mkdirSync(path.join(outDir, "nested"), { recursive: true });
+        fs.symlinkSync(path.join(outDir, "nested"), path.join(d4Dir, "sub/dir-link"), dirLinkType);
+        fs.symlinkSync("../secret-outside.txt", path.join(outDir, "nested/back-link.txt"), "file");
 
         for (const linkPath of [existingLink, danglingLink]) {
           const toolWrite = runCalls([{ name: "write_to_file", args: { Path: linkPath } }], false);
@@ -4865,6 +4875,19 @@ try {
           assert.equal(shRedir.ok, false);
           assert.ok(shRedir.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (run_command)")));
         }
+        for (const linkPath of [
+          path.join(d4Dir, "evil-hop1.txt"),
+          path.join(d4Dir, "escape-dir/new-sub/file.txt"),
+          path.join(d4Dir, "cycle-a.txt"),
+          path.join(d4Dir, "sub/dir-link/back-link.txt")
+        ]) {
+          const write = runCalls([{ name: "write_to_file", args: { Path: linkPath } }], false);
+          assert.equal(write.ok, false);
+          assert.ok(write.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (external:")));
+        }
+        const aliasWrite = runCalls([{ name: "write_to_file", args: { absolutePath: extTarget } }], false);
+        assert.equal(aliasWrite.ok, false);
+        assert.ok(aliasWrite.anomalies.some(a => a.includes("UNAUTHORIZED_WRITE (external:")));
       } finally {
         fs.rmSync(d4Dir, { recursive: true, force: true });
         fs.rmSync(outDir, { recursive: true, force: true });

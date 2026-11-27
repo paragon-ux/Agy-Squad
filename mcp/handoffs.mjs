@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { scanShellCommand, shellCommandWrites, unwrapShellCommand } from "./shell.mjs";
+import { resolveWriteTargetPath, tryRealPath } from "./write-targets.mjs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -1526,18 +1527,6 @@ function validateWorkerWorktreeRoot(root, candidate) {
     throw new Error(`Untrusted worker worktree: ${candidate}. Authorize a source explicitly with --from <dir>.`);
   }
   return real;
-}
-
-function tryRealPath(candidate) {
-  let cur = path.resolve(candidate);
-  const tail = [];
-  while (true) {
-    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch {}
-    const parent = path.dirname(cur);
-    if (parent === cur) return path.resolve(candidate);
-    tail.unshift(path.basename(cur));
-    cur = parent;
-  }
 }
 
 function workerReceiptRoots(handoffs) {
@@ -3343,16 +3332,13 @@ function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false, 
   const trimmed = rawTarget.trim().replace(/^file:\/\//i, "");
   const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(baseDir, trimmed);
   let normalizedResolved = resolved;
-  try {
+  if (followLeafSymlink) {
+    normalizedResolved = resolveWriteTargetPath(resolved);
+    if (!normalizedResolved) return `external:${trimmed}`;
+  } else try {
     const st = fs.lstatSync(resolved);
     if (!st.isSymbolicLink()) {
       normalizedResolved = fs.realpathSync.native(resolved);
-    } else if (followLeafSymlink) {
-      const linkDest = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
-      const realDest = tryRealPath(linkDest);
-      normalizedResolved = realDest !== linkDest || fs.existsSync(linkDest)
-        ? realDest
-        : path.join(tryRealPath(path.dirname(linkDest)), path.basename(linkDest));
     } else {
       const parentReal = fs.realpathSync.native(path.dirname(resolved));
       normalizedResolved = path.join(parentReal, path.basename(resolved));
@@ -3608,7 +3594,8 @@ function verifyWorkerTraces(root, record, options = {}) {
         }
         if (!isPlainObject(args)) continue;
         args = normalizeToolCallArgs(args, path.basename(tracePath) !== "transcript_full.jsonl" && !fullSteps.has(step));
-        const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
+        const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.target_file ??
+          args.FilePath ?? args.filePath ?? args.file_path ?? args.AbsolutePath ?? args.absolutePath ?? args.absolute_path;
         if (READ_TOOL_NAMES.has(rawName)) {
           inspectTarget(targetRaw);
         } else if (SEARCH_TOOL_NAMES.has(rawName)) {
