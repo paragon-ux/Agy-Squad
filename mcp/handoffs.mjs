@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { scanShellCommand, shellCommandWrites, unwrapShellCommand } from "./shell.mjs";
+import { resolveWriteTargetPath, tryRealPath } from "./write-targets.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1527,18 +1528,6 @@ function validateWorkerWorktreeRoot(root, candidate) {
     throw new Error(`Untrusted worker worktree: ${candidate}. Authorize a source explicitly with --from <dir>.`);
   }
   return real;
-}
-
-function tryRealPath(candidate) {
-  let cur = path.resolve(candidate);
-  const tail = [];
-  while (true) {
-    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch {}
-    const parent = path.dirname(cur);
-    if (parent === cur) return path.resolve(candidate);
-    tail.unshift(path.basename(cur));
-    cur = parent;
-  }
 }
 
 function workerReceiptRoots(handoffs) {
@@ -3467,16 +3456,13 @@ function normalizeToolTargetToRel(rawTarget, canonicalRoot, allowEqual = false, 
   }
   const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(baseDir, trimmed);
   let normalizedResolved = resolved;
-  try {
+  if (followLeafSymlink) {
+    normalizedResolved = resolveWriteTargetPath(resolved);
+    if (!normalizedResolved) return `external:${trimmed}`;
+  } else try {
     const st = fs.lstatSync(resolved);
     if (!st.isSymbolicLink()) {
       normalizedResolved = fs.realpathSync.native(resolved);
-    } else if (followLeafSymlink) {
-      const linkDest = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
-      const realDest = tryRealPath(linkDest);
-      normalizedResolved = realDest !== linkDest || fs.existsSync(linkDest)
-        ? realDest
-        : path.join(tryRealPath(path.dirname(linkDest)), path.basename(linkDest));
     } else {
       normalizedResolved = path.join(tryRealPath(path.dirname(resolved)), path.basename(resolved));
     }
@@ -4242,7 +4228,8 @@ function verifyWorkerTraces(root, record, options = {}) {
         }
         if (!isPlainObject(args)) continue;
         args = normalizeToolCallArgs(args, path.basename(tracePath) !== "transcript_full.jsonl" && !fullSteps.has(step));
-        const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.file_path;
+        const targetRaw = args.Path ?? args.path ?? args.TargetFile ?? args.target_file ??
+          args.FilePath ?? args.filePath ?? args.file_path ?? args.AbsolutePath ?? args.absolutePath ?? args.absolute_path;
 
         if (DELEGATION_TOOL_NAMES.has(rawName)) {
           if (rawName === "invoke_subagent" || args.action === "add") {
@@ -4313,6 +4300,16 @@ function verifyWorkerTraces(root, record, options = {}) {
                   shellWriteCount++;
                   addWorkerFlag('SHELL_WRITE_DETECTED', 'run_command');
                   warnings.push(`${workerKey}: SHELL_WRITE_DETECTED (run_command)`);
+                } else if (!isReadOnly) {
+                  for (const target of segment.redirections) {
+                    if (target === '/dev/null' || (!validCwd && !path.isAbsolute(target))) continue;
+                    const rel = normRedir(target);
+                    if (rel?.startsWith('external:')) {
+                      externalWrites.add(rel);
+                      addWorkerFlag('EXTERNAL_WRITE', rel);
+                      warnings.push(`${workerKey}: EXTERNAL_WRITE (${rel})`);
+                    }
+                  }
                 }
               }
             });

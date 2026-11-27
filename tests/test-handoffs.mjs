@@ -5510,12 +5510,39 @@ try {
         const scratchToSrcLink = path.join(d4Dir, "scratch/sneaky-src-link.js");
         fs.symlinkSync(extTarget, existingLink, "file");
         fs.symlinkSync(path.join(outDir, "not-created-yet.txt"), danglingLink, "file");
+        const dirLinkType = process.platform === "win32" ? "junction" : "dir";
         fs.symlinkSync(path.join(d4Dir, "src/a.js"), scratchToSrcLink, "file");
+        fs.symlinkSync("evil-hop2.txt", path.join(d4Dir, "evil-hop1.txt"), "file");
+        fs.symlinkSync(path.join(outDir, "hop-out.txt"), path.join(d4Dir, "evil-hop2.txt"), "file");
+        fs.symlinkSync(outDir, path.join(d4Dir, "escape-dir"), dirLinkType);
+        fs.symlinkSync("cycle-b.txt", path.join(d4Dir, "cycle-a.txt"), "file");
+        fs.symlinkSync("cycle-a.txt", path.join(d4Dir, "cycle-b.txt"), "file");
+        fs.mkdirSync(path.join(d4Dir, "sub"), { recursive: true });
+        fs.mkdirSync(path.join(outDir, "nested"), { recursive: true });
+        fs.symlinkSync(path.join(outDir, "nested"), path.join(d4Dir, "sub/dir-link"), dirLinkType);
+        fs.symlinkSync("../secret-outside.txt", path.join(outDir, "nested/back-link.txt"), "file");
 
         for (const linkPath of [existingLink, danglingLink]) {
           const wTool = runCalls([{ name: "read_file", args: { Path: path.join(d4Dir, "src/a.js") } }, { name: "write_to_file", args: { Path: linkPath } }], false);
           assert.ok(wTool.workers[0].flags.includes("EXTERNAL_WRITE"));
         }
+        for (const linkPath of [
+          path.join(d4Dir, "evil-hop1.txt"),
+          path.join(d4Dir, "escape-dir/new-sub/file.txt"),
+          path.join(d4Dir, "cycle-a.txt"),
+          path.join(d4Dir, "sub/dir-link/back-link.txt")
+        ]) {
+          const write = runCalls([{ name: "write_to_file", args: { Path: linkPath } }], false);
+          assert.ok(write.workers[0].flags.includes("EXTERNAL_WRITE"));
+        }
+        const aliasWrite = runCalls([{ name: "write_to_file", args: { absolutePath: extTarget } }], false);
+        assert.ok(aliasWrite.workers[0].flags.includes("EXTERNAL_WRITE"));
+        const shellExternal = runCalls([{ name: "run_command", args: { CommandLine: `echo hi > "${extTarget}"` } }], false);
+        assert.ok(shellExternal.workers[0].flags.includes("EXTERNAL_WRITE"));
+        const shellSymExternal = runCalls([{ name: "run_command", args: { CommandLine: "echo hi > evil-hop1.txt" } }], false);
+        assert.ok(shellSymExternal.workers[0].flags.includes("EXTERNAL_WRITE"));
+        const shellUncertainAbs = runCalls([{ name: "run_command", args: { CommandLine: `cd "$UNKNOWN_DIR" && echo hi > "${extTarget}"` } }], false);
+        assert.ok(shellUncertainAbs.workers[0].flags.includes("EXTERNAL_WRITE"));
 
         const roScratchSym = runCalls([{ name: "read_file", args: { Path: path.join(d4Dir, "src/a.js") } }, { name: "run_command", args: { CommandLine: "cd scratch && echo pwn > sneaky-src-link.js" } }], true);
         assert.ok(roScratchSym.workers[0].flags.includes("SHELL_WRITE_DETECTED"));
