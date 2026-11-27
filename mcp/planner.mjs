@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import util from "node:util";
-import { AGENT_ALIAS_PAIRS, CONTROL_CHAR_RE, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
   loadSquads,
@@ -12,7 +13,19 @@ import {
   resolveWorkspaceRoots,
   specialistAssignments
 } from "./dispatch.mjs";
-import { normalizeReportRoot, reportPath, trimTrailingSlashes } from "./handoffs.mjs";
+import {
+  CONTROL_CHAR_RE,
+  bundlePath,
+  ensureDirectory,
+  expandScopeEntriesToFiles,
+  normalizeContainedJsonOutPath,
+  normalizeReportRoot,
+  publish,
+  recordSlotPath,
+  relativizeContainedCliPath,
+  reportPath,
+  trimTrailingSlashes
+} from "./handoffs.mjs";
 
 const ALLOWED_PLANNER_KEYS = new Set([
   "manifestPath",
@@ -33,7 +46,12 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "occupiedWorkerNames",
   "topology",
   "boardSince",
-  "boardSeqs"
+  "boardSeqs",
+  "outPath",
+  "swarmPaneOutPath",
+  "emitWave",
+  "replace",
+  "compact"
 ]);
 
 const WORKSPACE_ISOLATIONS = new Set(["inherit", "share", "branch"]);
@@ -55,6 +73,14 @@ function trimTrailingDashes(value) {
   return value.slice(0, end);
 }
 
+function unclippedSlugLength(value) {
+  return trimEdgeDashes(
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+  ).length;
+}
+
 function slugifyName(value, fallback) {
   const slug = trimTrailingDashes(
     trimEdgeDashes(
@@ -74,16 +100,45 @@ function slugifyName(value, fallback) {
   return fallbackSlug || "worker";
 }
 
-function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracker) {
+function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracker, roleOpts = {}) {
+  const { rolePrefix = "", roleSuffix = "" } = roleOpts;
   const cleanRawSlug = trimEdgeDashes(
     String(rawValue ?? "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
   );
-  const rawBase = slugifyName(rawValue, fallback);
-  const base = isReservedSwarmName(rawBase)
-    ? trimTrailingDashes(`w-${rawBase}`.slice(0, MAX_SWARM_NAME_LENGTH))
-    : rawBase;
+  const stripRoleAffixes = (slug) => {
+    let s = slug;
+    if (rolePrefix && s.startsWith(rolePrefix)) s = s.slice(rolePrefix.length);
+    if (roleSuffix && s.endsWith(roleSuffix)) s = s.slice(0, s.length - roleSuffix.length);
+    return trimEdgeDashes(s);
+  };
+  let rawBase;
+  if (
+    cleanRawSlug &&
+    cleanRawSlug.length <= MAX_SWARM_NAME_LENGTH &&
+    (!rolePrefix || cleanRawSlug.startsWith(rolePrefix)) &&
+    (!roleSuffix || cleanRawSlug.endsWith(roleSuffix))
+  ) {
+    rawBase = cleanRawSlug;
+  } else if (rolePrefix || roleSuffix) {
+    const core = stripRoleAffixes(cleanRawSlug) || stripRoleAffixes(slugifyName(fallback, "w")) || "w";
+    const maxCoreLen = Math.max(1, MAX_SWARM_NAME_LENGTH - rolePrefix.length - roleSuffix.length);
+    const slicedCore = trimEdgeDashes(core.slice(0, maxCoreLen)) || "w";
+    rawBase = trimEdgeDashes(`${rolePrefix}${slicedCore}${roleSuffix}`);
+  } else {
+    rawBase = slugifyName(rawValue, fallback);
+  }
+  let base = rawBase;
+  if (isReservedSwarmName(base)) {
+    if (roleSuffix) {
+      const maxCore = Math.max(1, MAX_SWARM_NAME_LENGTH - 2 - roleSuffix.length);
+      const core = trimEdgeDashes(stripRoleAffixes(base).slice(0, maxCore)) || "w";
+      base = `w-${core}${roleSuffix}`;
+    } else {
+      base = trimTrailingDashes(`w-${base}`.slice(0, MAX_SWARM_NAME_LENGTH));
+    }
+  }
   const recordIfTruncated = (candidate) => {
     if (
       Array.isArray(truncatedTracker) &&
@@ -99,13 +154,22 @@ function allocateWorkerName(usedWorkerNames, rawValue, fallback, truncatedTracke
   }
   const safeFallback = slugifyName(fallback, "worker");
   for (let counter = 2; ; counter++) {
-    const suffix = `-${counter}`;
-    const maxPrefixLen = Math.max(1, MAX_SWARM_NAME_LENGTH - suffix.length);
-    const prefix =
-      trimTrailingDashes(base.slice(0, maxPrefixLen)) ||
-      trimTrailingDashes(safeFallback.slice(0, maxPrefixLen)) ||
-      "w";
-    const candidate = `${prefix}${suffix}`;
+    const counterSuffix = `-${counter}`;
+    let candidate;
+    if (rolePrefix || roleSuffix) {
+      const combinedSuffix = `${roleSuffix}${counterSuffix}`;
+      const maxCoreLen = Math.max(1, MAX_SWARM_NAME_LENGTH - rolePrefix.length - combinedSuffix.length);
+      const baseCore = stripRoleAffixes(base) || stripRoleAffixes(safeFallback) || "w";
+      const prefixCore = trimEdgeDashes(baseCore.slice(0, maxCoreLen)) || "w";
+      candidate = `${rolePrefix}${prefixCore}${combinedSuffix}`;
+    } else {
+      const maxPrefixLen = Math.max(1, MAX_SWARM_NAME_LENGTH - counterSuffix.length);
+      const prefix =
+        trimTrailingDashes(base.slice(0, maxPrefixLen)) ||
+        trimTrailingDashes(safeFallback.slice(0, maxPrefixLen)) ||
+        "w";
+      candidate = `${prefix}${counterSuffix}`;
+    }
     if (!usedWorkerNames.has(candidate) && !isReservedSwarmName(candidate)) {
       usedWorkerNames.add(candidate);
       return recordIfTruncated(candidate);
@@ -595,6 +659,18 @@ function planSquadCohort(
     }
   }
 
+  for (const [key, maxItems, maxLength] of [["scopeFiles", 256, 512], ["roles", 64, 160], ["knownModels", 128, 160], ["occupiedWorkerNames", 256, 64], ["boardSeqs", 256, null]]) {
+    const value = args[key];
+    if (Array.isArray(value) && (value.length > maxItems || (maxLength && value.some(v => typeof v === "string" && v.length > maxLength)))) throw new Error(`${key} exceeds its schema bounds.`);
+  }
+  for (const [key, maxLength] of [["reportRoot", 256], ["outPath", 512], ["swarmPaneOutPath", 512]]) {
+    if (typeof args[key] === "string" && args[key].length > maxLength) throw new Error(`${key} exceeds its schema bounds.`);
+  }
+  if (args.roleScopes !== undefined) {
+    const value = args.roleScopes;
+    if (value && typeof value === "object" && !Array.isArray(value) && (Object.keys(value).length > 64 || Object.values(value).some(v => Array.isArray(v) && (v.length > 256 || v.some(p => typeof p === "string" && p.length > 512))))) throw new Error("roleScopes exceeds its schema bounds.");
+  }
+
   const {
     manifestPath,
     manifest,
@@ -614,11 +690,42 @@ function planSquadCohort(
     occupiedWorkerNames,
     topology,
     boardSince,
-    boardSeqs
+    boardSeqs,
+    outPath,
+    swarmPaneOutPath,
+    emitWave,
+    replace,
+    compact
   } = args;
 
   if (topology !== undefined && topology !== "flat" && topology !== "layered") {
     throw new Error("topology must be 'flat' or 'layered'.");
+  }
+  if (replace !== undefined && typeof replace !== "boolean") {
+    throw new Error("replace must be a boolean.");
+  }
+  if (compact !== undefined && typeof compact !== "boolean") {
+    throw new Error("compact must be a boolean.");
+  }
+  if (replace === true && outPath === undefined && swarmPaneOutPath === undefined) {
+    throw new Error("replace requires outPath or swarmPaneOutPath.");
+  }
+  if (outPath !== undefined && (typeof outPath !== "string" || !outPath.trim() || CONTROL_CHAR_RE.test(outPath))) {
+    throw new Error("outPath must be a non-empty workspace-relative .json path.");
+  }
+  if (
+    swarmPaneOutPath !== undefined &&
+    (typeof swarmPaneOutPath !== "string" || !swarmPaneOutPath.trim() || CONTROL_CHAR_RE.test(swarmPaneOutPath))
+  ) {
+    throw new Error("swarmPaneOutPath must be a non-empty .json path.");
+  }
+  if (emitWave !== undefined) {
+    if (typeof emitWave !== "number" || !Number.isInteger(emitWave) || emitWave < 1 || emitWave > 3) {
+      throw new Error("emitWave must be 1, 2, or 3.");
+    }
+    if (compact === true) {
+      throw new Error("emitWave cannot be combined with compact: true.");
+    }
   }
 
   if (knownModels !== undefined) {
@@ -643,6 +750,12 @@ function planSquadCohort(
   }
   if (executionMode !== "swarm" && executionMode !== "subagent") {
     throw new Error("executionMode must be 'swarm' or 'subagent'.");
+  }
+  if (swarmPaneOutPath !== undefined && executionMode !== "swarm") {
+    throw new Error("swarmPaneOutPath is only supported with executionMode 'swarm'.");
+  }
+  if (emitWave !== undefined && executionMode !== "swarm") {
+    throw new Error("emitWave is only supported with executionMode 'swarm'.");
   }
   if (!WORKSPACE_ISOLATIONS.has(workspaceIsolation)) {
     throw new Error("workspaceIsolation must be 'inherit', 'share', or 'branch'.");
@@ -681,6 +794,20 @@ function planSquadCohort(
   const normalizedReportRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
 
   const { root, logicalRoot } = resolveWorkspaceRoots(argWorkspace, workspace);
+  let normalizedOutRel;
+  let waveFiles;
+  if (outPath !== undefined) {
+    normalizedOutRel = normalizePlanOutPath(outPath, root);
+    if (executionMode === "swarm") {
+      const outBase = normalizedOutRel.slice(0, -5);
+      waveFiles = {
+        wave1: `${outBase}.wave1.json`,
+        wave2: `${outBase}.wave2.json`
+      };
+    }
+  }
+  const swarmPaneTarget =
+    swarmPaneOutPath !== undefined ? resolveSwarmPaneOutTarget(swarmPaneOutPath, root) : undefined;
   let loadedSquads;
   let selectedManifest;
   if (task !== undefined) {
@@ -765,6 +892,7 @@ function planSquadCohort(
       ? undefined
       : selectedManifest;
   const writableScopeEntries = [];
+  const readerScopeEntries = [];
   const workers = [];
   const usedWorkerNames = new Set(RESERVED_SWARM_NAMES);
   for (const occupied of occupiedWorkerNames ?? []) {
@@ -786,10 +914,27 @@ function planSquadCohort(
   };
   const strippedFlatLeads = [];
   const truncatedWorkerNames = [];
+  const fileMetricsCache = new Map();
+  const isSingleSquadInlineTask = selectedManifest === "inline-task" && targetWorkingIds.length === 1;
   let totalSpecialists = 0;
 
   for (const id of targetWorkingIds) {
     const squad = loadedSquads[id];
+    let customWorkerPrefix;
+    if (squad.workerPrefix !== undefined) {
+      if (
+        typeof squad.workerPrefix !== "string" ||
+        !squad.workerPrefix.trim() ||
+        CONTROL_CHAR_RE.test(squad.workerPrefix) ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/.test(squad.workerPrefix.trim())
+      ) {
+        throw new Error(
+          `Squad '${id}' workerPrefix must be a 1..16 char alphanumeric/dash/underscore string starting with a letter or digit.`
+        );
+      }
+      customWorkerPrefix = slugifyName(squad.workerPrefix.trim(), id);
+    }
+    const namingPrefix = customWorkerPrefix ?? (isSingleSquadInlineTask ? "" : id);
     const resolvedLeadSpec = resolveSquadLead(squad, id, topology === "layered");
     if (topology === "flat" && resolvedLeadSpec) {
       const { canonical: canonicalStrippedLead } = canonicalizeAgentSpec(resolvedLeadSpec, `${id}-lead`);
@@ -806,13 +951,23 @@ function planSquadCohort(
     totalSpecialists += specs.length;
 
     const leadSlot = reportPath(id, undefined, normalizedReportRoot);
+    const recordSlot = recordSlotPath(id, normalizedReportRoot);
+    const specialistReportSlots = specs.map(({ number }) => reportPath(id, number, normalizedReportRoot));
     let compiledLead;
     let leadModel;
     let leadWorkerName;
+    let leadScope;
+    let leadReadOnlyVal;
+    let leadRoleTitle;
     if (leadSpec) {
-      leadWorkerName = allocateWorkerName(usedWorkerNames, `${id}-lead`, `${id}-lead`, truncatedWorkerNames);
+      const leadRawBase = namingPrefix ? `${namingPrefix}-lead` : `${id}-lead`;
+      leadWorkerName = allocateWorkerName(usedWorkerNames, leadRawBase, `${id}-lead`, truncatedWorkerNames, {
+        roleSuffix: "-lead"
+      });
       const { canonical: rawLead, readOnly: leadReadOnly } = canonicalizeAgentSpec(leadSpec, `${id}-lead`);
-      const leadScope = validateScopeFiles(rawLead.scopeFiles, rawLead.role);
+      leadReadOnlyVal = leadReadOnly;
+      leadRoleTitle = rawLead.role ?? "Squad Lead";
+      leadScope = validateScopeFiles(rawLead.scopeFiles, rawLead.role);
       if (leadReadOnly !== true) {
         writableScopeEntries.push({
           label: `${id}-lead (${rawLead.role ?? "Lead"})`,
@@ -843,7 +998,10 @@ function planSquadCohort(
           workspaceIsolation: "inherit",
           isIntegrityAuditor: false,
           precompiledSpecialists: true,
-          leadWorkerName,
+          workspaceRoot: root,
+          fileMetricsCache,
+          readOnly: leadReadOnly,
+          specialistReportSlots,
           boardSince,
           isCanonicalSpec: true,
           prevalidatedScope: leadScope,
@@ -856,9 +1014,17 @@ function planSquadCohort(
     for (const { spec, number } of specs) {
       const { canonical: rawSpec, readOnly: specReadOnly } = canonicalizeAgentSpec(spec, `${id}#${number}`);
       const specScope = validateScopeFiles(rawSpec.scopeFiles, rawSpec.role);
+      const workerLabel = `${id}#${number} (${rawSpec.role ?? `Specialist ${number}`})`;
       if (specReadOnly !== true) {
         writableScopeEntries.push({
-          label: `${id}#${number} (${rawSpec.role ?? `Specialist ${number}`})`,
+          label: workerLabel,
+          scopeFiles: specScope,
+          squadId: id,
+          roleType: "specialist"
+        });
+      } else {
+        readerScopeEntries.push({
+          label: workerLabel,
           scopeFiles: specScope,
           squadId: id,
           roleType: "specialist"
@@ -875,7 +1041,7 @@ function planSquadCohort(
         ...rawSpec,
         model: specModel.compiledModel
       };
-      const slot = reportPath(id, number, normalizedReportRoot);
+      const slot = specialistReportSlots[number - 1];
       const compiled = buildSubagentSpec(
         subSpec,
         id,
@@ -886,29 +1052,56 @@ function planSquadCohort(
           executionMode,
           workspaceIsolation,
           isIntegrityAuditor: false,
-          leadWorkerName,
+          workspaceRoot: root,
+          fileMetricsCache,
+          readOnly: specReadOnly,
           boardSince,
           isCanonicalSpec: true,
           prevalidatedScope: specScope,
           precomputedArtifact: slot
         }
       );
+      const rawRolePart = rawSpec.role ?? String(number);
+      const rawSpecName = namingPrefix ? `${namingPrefix}-${rawRolePart}` : String(rawRolePart);
+      const specFallback = namingPrefix ? `${namingPrefix}-s${number}` : `s${number}`;
       const workerName = allocateWorkerName(
         usedWorkerNames,
-        `${id}-${rawSpec.role ?? number}`,
-        `${id}-worker-${number}`,
-        truncatedWorkerNames
+        rawSpecName,
+        specFallback,
+        truncatedWorkerNames,
+        { roleSuffix: unclippedSlugLength(rawSpecName) > MAX_SWARM_NAME_LENGTH ? `-s${number}` : "" }
       );
-      compiledSpecialists.push({ slot, workerName, specModel, compiled });
+      compiledSpecialists.push({
+        slot,
+        workerName,
+        specModel,
+        compiled,
+        scopeFiles: specScope,
+        readOnly: specReadOnly,
+        roleTitle: rawSpec.role ?? `Specialist ${number}`
+      });
     }
+
+    const squadIsReadOnly =
+      options?.readOnly === true ||
+      readOnly === true ||
+      (compiledSpecialists.length > 0 &&
+        compiledSpecialists.every(s => s.readOnly === true) &&
+        (!compiledLead || leadReadOnlyVal === true));
 
     workers.push({
       squadId: id,
+      ...(customWorkerPrefix ? { workerPrefix: customWorkerPrefix } : {}),
       synthesisSlot: leadSlot,
+      recordSlot,
+      ...(squadIsReadOnly ? { readOnly: true } : {}),
       lead: compiledLead
         ? {
             workerName: leadWorkerName,
+            wave: 2,
             reportSlot: leadSlot,
+            scopeFiles: leadScope,
+            ...(typeof leadReadOnlyVal === "boolean" ? { readOnly: leadReadOnlyVal } : {}),
             ...(executionMode === "swarm"
               ? {
                   swarmAdd: {
@@ -922,9 +1115,12 @@ function planSquadCohort(
               : { Subagent: compiledLead })
           }
         : null,
-      specialists: compiledSpecialists.map(({ slot, workerName, specModel, compiled }) => ({
+      specialists: compiledSpecialists.map(({ slot, workerName, specModel, compiled, scopeFiles: specScope, readOnly: sRo }) => ({
         workerName,
+        wave: 1,
         reportSlot: slot,
+        scopeFiles: specScope,
+        ...(typeof sRo === "boolean" ? { readOnly: sRo } : {}),
         ...(executionMode === "swarm"
           ? {
               swarmAdd: {
@@ -936,14 +1132,27 @@ function planSquadCohort(
               }
             }
           : { Subagent: compiled })
-      }))
+      })),
+      _paneMeta: {
+        leadRoleTitle,
+        specialistRoles: compiledSpecialists.map(s => ({ workerName: s.workerName, roleTitle: s.roleTitle }))
+      }
     });
   }
 
+  const wsCliArg = /[\s"'`$\\]/.test(root) ? JSON.stringify(root) : root;
   const auditWarnings = [];
   const validatedAuditKeys = new Set();
   const integrityAuditPlan = includeIntegrityAuditor
     ? targetWorkingIds.flatMap(id => {
+        const squadObj = loadedSquads[id];
+        const auditPrefixBase =
+          squadObj?.workerPrefix !== undefined
+            ? slugifyName(squadObj.workerPrefix.trim(), id)
+            : isSingleSquadInlineTask
+              ? "task"
+              : id;
+        const squadRecordSlot = recordSlotPath(id, normalizedReportRoot);
         const hasTargetOverride = Object.hasOwn(loadedSquads, `integrity_auditor-${id}`);
         const auditTargetArg =
           allWorkingIds.length > 1 || targetWorkingIds.length > 1 || hasTargetOverride ? id : undefined;
@@ -963,8 +1172,8 @@ function planSquadCohort(
           );
           recordSubagentWorkerModel(auditModel);
           const targetScopeNote = executionMode === "swarm"
-            ? `Verify '${id}' verifiedFiles + Evidence Digest.`
-            : `Verify '${id}' verifiedFiles, Evidence Digest & conversationIds.`;
+            ? `Run 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots/traces only (no unrelated repo source reads).`
+            : `Run 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -983,6 +1192,8 @@ function planSquadCohort(
               workspaceIsolation: "inherit",
               isIntegrityAuditor: true,
               precompiledSpecialists: true,
+              workspaceRoot: root,
+              fileMetricsCache,
               boardSeqs,
               isCanonicalSpec: true,
               precomputedArtifact: auditSlot
@@ -990,13 +1201,25 @@ function planSquadCohort(
           );
           const rawAuditName =
             auditSpecs.length > 1
-              ? `audit-${id}-${rawAudit.role ?? auditItem.number}`
-              : `audit-${id}`;
-          const auditWorkerName = allocateWorkerName(usedWorkerNames, rawAuditName, "audit", truncatedWorkerNames);
+              ? `audit-${auditPrefixBase}-${rawAudit.role ?? auditItem.number}`
+              : `audit-${auditPrefixBase}`;
+          const auditRoleSuffix =
+            auditSpecs.length > 1 && unclippedSlugLength(rawAuditName) > MAX_SWARM_NAME_LENGTH
+              ? `-s${auditItem.number}`
+              : "";
+          const auditWorkerName = allocateWorkerName(
+            usedWorkerNames,
+            rawAuditName,
+            "audit",
+            truncatedWorkerNames,
+            { rolePrefix: "audit-", roleSuffix: auditRoleSuffix }
+          );
           return {
             targetSquad: id,
+            wave: 3,
             dispatchSquadId: allWorkingIds.length > 1 || hasTargetOverride ? `integrity_auditor:${id}` : "integrity_auditor",
             reportSlot: auditSlot,
+            recordSlot: squadRecordSlot,
             workerName: auditWorkerName,
             ...(executionMode === "swarm"
               ? {
@@ -1034,6 +1257,72 @@ function planSquadCohort(
   });
   const siblingOverlaps = scopeOverlaps.filter(item => item.kind !== "lead-specialist");
   const leadSpecialistOverlaps = scopeOverlaps.filter(item => item.kind === "lead-specialist");
+
+  const rawReaderOverlaps = findScopeOverlaps(readerScopeEntries, root, {
+    ...(options && typeof options === "object" ? options : {})
+  }).filter(item => item.kind === "sibling");
+  let readerSiblingOverlaps = [];
+  if (rawReaderOverlaps.length > 0) {
+    const readerEntryByLabel = new Map(readerScopeEntries.map(e => [e.label, e]));
+    const expandedReaderCache = new Map();
+    const getExpandedReaderFiles = (entry) => {
+      if (expandedReaderCache.has(entry.label)) return expandedReaderCache.get(entry.label);
+      const nonWildcard = entry.scopeFiles.filter(s => s !== ".");
+      if (nonWildcard.length === 0) {
+        expandedReaderCache.set(entry.label, null);
+        return null;
+      }
+      const existing = nonWildcard.filter(s => {
+        try {
+          const st = fs.lstatSync(path.join(root, s));
+          return !st.isSymbolicLink() && (st.isFile() || st.isDirectory());
+        } catch {
+          return false;
+        }
+      });
+      if (existing.length === 0) {
+        expandedReaderCache.set(entry.label, new Set());
+        return expandedReaderCache.get(entry.label);
+      }
+      try {
+        const files = expandScopeEntriesToFiles(
+          root,
+          existing,
+          entry.squadId ?? "reader",
+          new Set([root]),
+          normalizedReportRoot ?? "scratch/agy-squad",
+          { maxFiles: 512, allowEmptyResult: true }
+        );
+        const set = new Set(files);
+        expandedReaderCache.set(entry.label, set);
+        return set;
+      } catch {
+        expandedReaderCache.set(entry.label, null);
+        return null;
+      }
+    };
+    for (const ov of rawReaderOverlaps) {
+      const entryA = readerEntryByLabel.get(ov.workerA);
+      const entryB = readerEntryByLabel.get(ov.workerB);
+      if (!entryA || !entryB) continue;
+      const normSetA = new Set(entryA.scopeFiles.map(s => normalizeScopePath(s, root)));
+      const hasDuplicateEntry = entryB.scopeFiles.some(s => normSetA.has(normalizeScopePath(s, root)));
+      const filesA = getExpandedReaderFiles(entryA);
+      const filesB = getExpandedReaderFiles(entryB);
+      let overlapRatio = hasDuplicateEntry ? 1 : 0;
+      if (filesA && filesB && filesA.size > 0 && filesB.size > 0) {
+        let shared = 0;
+        for (const f of filesA) if (filesB.has(f)) shared++;
+        overlapRatio = Number((shared / Math.min(filesA.size, filesB.size)).toFixed(2));
+      } else if (filesA === null || filesB === null) {
+        overlapRatio = 1;
+      }
+      if (hasDuplicateEntry || overlapRatio > 0.25) {
+        readerSiblingOverlaps.push({ ...ov, overlapRatio });
+      }
+    }
+  }
+
   const warnings = [
     ...new Set(auditWarnings),
     ...new Set(scopeEscapeWarnings),
@@ -1044,6 +1333,14 @@ function planSquadCohort(
   if (siblingOverlaps.length > 0 && workspaceIsolation === "inherit") {
     warnings.push(
       `Detected ${siblingOverlaps.length} writable sibling scopeFiles overlap(s) with workspaceIsolation='inherit'; split scopeFiles across workers or use executionMode='swarm' with workspaceIsolation='share'.`
+    );
+  }
+  if (
+    readerSiblingOverlaps.length > 0 &&
+    !(selectedManifest === "inline-task" && roleScopes === undefined)
+  ) {
+    warnings.push(
+      `Detected ${readerSiblingOverlaps.length} read-only sibling reader overlap(s) (>25% shared files or duplicate paths); partition reader scopes to avoid duplicate context reads.`
     );
   }
   if (executionMode === "swarm" && truncatedWorkerNames.length > 0) {
@@ -1096,29 +1393,144 @@ function planSquadCohort(
     }
   }
 
+  const paneTasks = Object.create(null);
+  const rawThreads = [];
+  const usedThreadIds = new Set(["t-additional-squads"]);
+  for (const w of workers) {
+    const meta = w._paneMeta;
+    delete w._paneMeta;
+    const threadWorkers = [];
+    for (const sr of meta?.specialistRoles ?? []) {
+      paneTasks[sr.workerName] = String(sr.roleTitle).slice(0, 64);
+      threadWorkers.push(sr.workerName);
+    }
+      if (w.lead) {
+        paneTasks[w.lead.workerName] = `Synthesize ${w.squadId}`.slice(0, 64);
+        threadWorkers.push(w.lead.workerName);
+      }
+      for (const a of integrityAuditPlan.filter(item => item.targetSquad === w.squadId)) {
+        paneTasks[a.workerName] = `Audit ${w.squadId} traces`.slice(0, 64);
+        threadWorkers.push(a.workerName);
+      }
+      const threadBase = `t-${slugifyName(w.squadId, "squad")}`;
+      let threadId = threadBase;
+      for (let suffix = 2; usedThreadIds.has(threadId); suffix++) threadId = `${threadBase}-${suffix}`;
+      usedThreadIds.add(threadId);
+      rawThreads.push({
+        id: threadId,
+        title: w.squadId.replace(/[_-]+/g, " ").slice(0, 48),
+        goal: `Verify & bundle ${w.squadId}.`,
+        tasks: threadWorkers
+      });
+    }
+    const threads =
+      rawThreads.length <= 6
+        ? rawThreads
+        : [
+            ...rawThreads.slice(0, 5),
+            {
+              id: "t-additional-squads",
+              title: "Additional squads",
+              goal: "Verify & bundle remaining squads.",
+              tasks: rawThreads.slice(5).flatMap(t => t.tasks)
+            }
+          ];
+    const rawGoalWords = (typeof task === "string" && task.trim()
+      ? task.trim()
+      : `Governed multi-squad review across ${path.basename(root) || "workspace"}`
+    ).split(/\s+/).filter(Boolean);
+    const goalTitle = (rawGoalWords.length >= 4
+      ? rawGoalWords.slice(0, 8).join(" ")
+      : [...rawGoalWords, "governed", "squad", "verification", "pass"].slice(0, 6).join(" ")
+    ).slice(0, 80);
+    const swarmPane =
+      executionMode === "swarm"
+        ? {
+            goal: {
+              title: goalTitle,
+              line: includeIntegrityAuditor
+                ? "Run specialists, synthesize evidence, audit traces, and seal bundles."
+                : "Run specialists, synthesize evidence, and seal SHA-256 bundles."
+            },
+            tasks: paneTasks,
+            threads
+          }
+        : undefined;
+
+  const waves = {
+    wave1: workers.flatMap(w => w.specialists.map(s => s.workerName)),
+    wave2: workers.filter(w => Boolean(w.lead)).map(w => w.lead.workerName),
+    wave3: integrityAuditPlan.map(a => a.workerName)
+  };
+
   const hasLead = workers.some(w => Boolean(w.lead));
   const hasFlat = workers.some(w => !w.lead);
   const flatSynthesisSlots = workers.filter(w => !w.lead).map(w => w.synthesisSlot);
   const compiledPattern = hasLead && hasFlat ? "mixed" : hasLead ? "layered" : "flat";
+  const allSquadsReadOnly = workers.length > 0 && workers.every(w => w.readOnly === true);
+  const hasWildcardScope = workers.some(w =>
+    w.specialists.some(s => Array.isArray(s.scopeFiles) && s.scopeFiles.includes(".")) ||
+    (Array.isArray(w.lead?.scopeFiles) && w.lead.scopeFiles.includes("."))
+  );
 
-  return {
+  const planCliRef = normalizedOutRel ?? "<plan.json>";
+  const fileSpecArg = hasWildcardScope ? "<verified-files...>" : "--from-scope";
+  const singleWorker = workers.length === 1 ? workers[0] : null;
+  const singleRecordSlot = singleWorker ? singleWorker.recordSlot : null;
+  const singleBundleSlot = singleWorker ? bundlePath(singleWorker.squadId, normalizedReportRoot) : null;
+  const multiRecordSlots = workers.map(w => w.recordSlot).join(" ");
+  const multiRecordPins = workers.map(w => `${w.recordSlot}=<accepted-sha256>`).join(" ");
+
+  const verificationPipeline = [
+    ...(workspaceIsolation !== "inherit"
+      ? [`agy-squad collect --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>`]
+      : []),
+    ...(flatSynthesisSlots.length > 0
+      ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
+      : []),
+    singleRecordSlot
+      ? `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} --out ${singleRecordSlot} ${fileSpecArg}`
+      : `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --all-squads --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} ${fileSpecArg}`,
+    singleRecordSlot
+      ? `agy-squad finalize --workspace ${wsCliArg} ${singleRecordSlot}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`
+      : `agy-squad finalize --workspace ${wsCliArg} ${multiRecordSlots}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`,
+    singleBundleSlot
+      ? `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} ${singleBundleSlot} <sha256>`
+      : `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} --records ${multiRecordPins} [--clean-records]`
+  ];
+
+  const recordedSwarmPanePath = swarmPaneTarget
+    ? swarmPaneTarget.kind === "workspace"
+      ? swarmPaneTarget.relPath
+      : swarmPaneTarget.absPath
+    : undefined;
+
+  const plan = {
     plannerVersion: "2.0.0",
     source: selectedManifest,
     workspace: root,
     ...(normalizedReportRoot ? { reportRoot: normalizedReportRoot } : {}),
+    ...(normalizedOutRel ? { path: normalizedOutRel } : {}),
+    ...(waveFiles ? { waveFiles } : {}),
+    ...(recordedSwarmPanePath ? { swarmPanePath: recordedSwarmPanePath } : {}),
     executionMode,
     workspaceIsolation,
+    ...(allSquadsReadOnly ? { readOnly: true } : {}),
     ...(includeIntegrityAuditor === false ? { includeIntegrityAuditor: false } : {}),
     topology: {
       compiledPattern,
-      defaultBias: "flat for inline task; manifest-defined otherwise (Step 0 asks for any unspecified swarm setting)",
+      defaultBias:
+        "flat for inline task; wave-gated otherwise (zero-interview defaults; ask_question only on writable inherit siblingOverlaps or explicit ambiguity)",
       workingSquads: targetWorkingIds.length,
       totalSpecialists,
       scopeOverlaps,
       siblingOverlaps,
       leadSpecialistOverlaps,
+      readerSiblingOverlaps,
       scopeOverlapComparison: "canonical-when-present-else-lexical"
     },
+    waves,
+    ...(swarmPane ? { swarmPane } : {}),
     modelProvenance,
     ...(modelValidation ? { modelValidation } : {}),
     warnings,
@@ -1127,29 +1539,263 @@ function planSquadCohort(
       : {}),
     workers,
     integrityAuditPlan,
-    verificationPipeline: [
-      ...(workspaceIsolation !== "inherit"
-        ? ["agy-squad collect --plan <plan.json> --from <worktree-dir>..."]
-        : []),
-      ...(flatSynthesisSlots.length > 0
-        ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
-        : []),
-      "agy-squad bundle-init --plan <plan.json> --handoffs <handoffs.json> --digest --out <bundle-record.json> <verified-files...>",
-      ...(includeIntegrityAuditor
-        ? ["agy-squad verdict --integrity <integrity-report.md>"]
-        : []),
-      includeIntegrityAuditor
-        ? "agy-squad finalize <bundle-record.json> [--prune [--keep-reports]]"
-        : "agy-squad finalize <bundle-record.json> --allow-unaudited [--prune [--keep-reports]]"
-    ]
+    verificationPipeline
+  };
+
+  const targets = [normalizedOutRel && path.join(root, normalizedOutRel), ...Object.values(waveFiles ?? {}).map(rel => path.join(root, rel)), swarmPaneTarget?.absPath ?? (swarmPaneTarget?.relPath ? path.join(root, swarmPaneTarget.relPath) : undefined)].filter(Boolean);
+  for (const target of targets) {
+    let st;
+    try { st = fs.lstatSync(target); } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    if (st.isSymbolicLink()) throw new Error(`Refusing symlink output path: ${target}`);
+    if (!st.isFile()) throw new Error(`Expected a regular file at output path: ${target}`);
+    if (!replace) throw new Error(`Target already exists: ${target} (pass --replace / replace: true to overwrite).`);
+  }
+  const verifiedOutDirs = new Set([root]);
+  if (normalizedOutRel !== undefined) {
+    const parentDir = path.posix.dirname(normalizedOutRel);
+    if (parentDir && parentDir !== ".") {
+      ensureDirectory(root, parentDir, [], verifiedOutDirs);
+    }
+    const planBytes = Buffer.from(serializePlanJson(plan), "utf8");
+    publish(root, normalizedOutRel, planBytes, Boolean(replace), verifiedOutDirs, undefined, { sync: false });
+    if (waveFiles) {
+      for (const [waveNum, sidecarRel] of [
+        [1, waveFiles.wave1],
+        [2, waveFiles.wave2]
+      ]) {
+        const waveSlice = buildWaveSlice(plan, waveNum);
+        const waveBytes = Buffer.from(serializeWaveSliceJson(waveSlice), "utf8");
+        publish(root, sidecarRel, waveBytes, Boolean(replace), verifiedOutDirs, undefined, { sync: false });
+      }
+    }
+  }
+  if (swarmPaneTarget && swarmPane) {
+    const paneBytes = Buffer.from(JSON.stringify(swarmPane, null, 2) + "\n", "utf8");
+    if (swarmPaneTarget.kind === "workspace") {
+      const paneParent = path.posix.dirname(swarmPaneTarget.relPath);
+      if (paneParent && paneParent !== ".") {
+        ensureDirectory(root, paneParent, [], verifiedOutDirs);
+      }
+      publish(root, swarmPaneTarget.relPath, paneBytes, Boolean(replace), verifiedOutDirs, undefined, { sync: false });
+    } else {
+      writeBrainSwarmPaneFile(swarmPaneTarget.baseDir, swarmPaneTarget.absPath, paneBytes, Boolean(replace));
+    }
+  }
+
+  return plan;
+}
+
+const PLAN_EXPANDED_ARRAY_KEYS = new Set(["workers", "integrityAuditPlan", "verificationPipeline"]);
+const WAVE_SLICE_EXPANDED_ARRAY_KEYS = new Set(["swarmAdd"]);
+
+function serializeCompactJsonWithExpandedArrays(obj, expandedKeys) {
+  const entries = Object.entries(obj);
+  const lines = ["{"];
+  for (let i = 0; i < entries.length; i++) {
+    const [key, val] = entries[i];
+    const comma = i < entries.length - 1 ? "," : "";
+    const kJson = JSON.stringify(key);
+    if (expandedKeys.has(key) && Array.isArray(val)) {
+      if (val.length === 0) {
+        lines.push(`  ${kJson}: []${comma}`);
+      } else {
+        lines.push(`  ${kJson}: [`);
+        for (let j = 0; j < val.length; j++) {
+          const itemComma = j < val.length - 1 ? "," : "";
+          lines.push(`    ${JSON.stringify(val[j])}${itemComma}`);
+        }
+        lines.push(`  ]${comma}`);
+      }
+    } else {
+      lines.push(`  ${kJson}: ${JSON.stringify(val)}${comma}`);
+    }
+  }
+  lines.push("}\n");
+  return lines.join("\n");
+}
+
+const serializePlanJson = (plan) => serializeCompactJsonWithExpandedArrays(plan, PLAN_EXPANDED_ARRAY_KEYS);
+const serializeWaveSliceJson = (slice) => serializeCompactJsonWithExpandedArrays(slice, WAVE_SLICE_EXPANDED_ARRAY_KEYS);
+
+function resolveSwarmPaneOutTarget(rawPath, canonicalRoot, platform = process.platform) {
+  const trimmed = typeof rawPath === "string" ? rawPath.trim() : "";
+  if (trimmed && path.isAbsolute(trimmed)) {
+    const relativized = relativizeContainedCliPath(trimmed, canonicalRoot, { platform, allowEqual: false });
+    if (relativized) {
+      return { kind: "workspace", relPath: normalizePlanOutPath(relativized, canonicalRoot, platform) };
+    }
+    const resolvedAbs = path.resolve(trimmed);
+    const home = process.env.AGY_TEST_HOME_DIR || os.homedir();
+    const geminiBase = path.resolve(path.join(home, ".gemini"));
+    let canonicalGemini = geminiBase;
+    if (fs.existsSync(geminiBase)) {
+      const geminiStat = fs.lstatSync(geminiBase);
+      if (geminiStat.isSymbolicLink() || geminiStat.isDirectory()) {
+        canonicalGemini = fs.realpathSync.native(geminiBase);
+      } else {
+        throw new Error(`Invalid ~/.gemini directory along swarmPaneOutPath: ${geminiBase}`);
+      }
+    }
+    const brainPattern = /^antigravity[^/]*\/brain\/[A-Za-z0-9_-]+\/\.system_generated\/swarm\/plan\.json$/;
+    for (const candidateBase of [geminiBase, canonicalGemini]) {
+      const rel = path.relative(candidateBase, resolvedAbs).split(path.sep).join("/");
+      if (brainPattern.test(rel)) {
+        const relParts = rel.split("/");
+        if (relParts.every(p => p && p !== "." && p !== "..")) {
+          return { kind: "brain", baseDir: canonicalGemini, absPath: path.join(canonicalGemini, ...relParts) };
+        }
+      }
+    }
+    throw new Error(
+      `swarmPaneOutPath must be a workspace-relative .json path inside workspace or ~/.gemini/antigravity*/brain/<id>/.system_generated/swarm/plan.json: ${rawPath}`
+    );
+  }
+  return { kind: "workspace", relPath: normalizePlanOutPath(trimmed, canonicalRoot, platform) };
+}
+
+function writeBrainSwarmPaneFile(baseDir, absPath, bytes, allowReplace) {
+  if (fs.existsSync(baseDir)) {
+    const baseStat = fs.lstatSync(baseDir);
+    if (baseStat.isSymbolicLink() || !baseStat.isDirectory()) {
+      throw new Error(`Invalid or symlinked base directory along swarmPaneOutPath: ${baseDir}`);
+    }
+  } else {
+    fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
+  }
+  const relParts = path.relative(baseDir, absPath).split(path.sep);
+  if (relParts.length === 0 || relParts.some(p => !p || p === "." || p === "..")) {
+    throw new Error(`Invalid swarmPaneOutPath outside canonical ~/.gemini root: ${absPath}`);
+  }
+  let cur = baseDir;
+  for (let i = 0; i < relParts.length - 1; i++) {
+    cur = path.join(cur, relParts[i]);
+    let st;
+    try { st = fs.lstatSync(cur); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (st) {
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        throw new Error(`Invalid or symlinked directory along swarmPaneOutPath: ${cur}`);
+      }
+    } else {
+      fs.mkdirSync(cur, { mode: 0o700 });
+    }
+  }
+  let outputStat;
+  try { outputStat = fs.lstatSync(absPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (outputStat) {
+    const st = outputStat;
+    if (st.isSymbolicLink() || !st.isFile()) {
+      throw new Error(`Refusing to write non-regular file at swarmPaneOutPath: ${absPath}`);
+    }
+    if (!allowReplace) {
+      throw new Error(`Target already exists: ${absPath} (pass --replace / replace: true to overwrite).`);
+    }
+  }
+  const tmpPath = `${absPath}.tmp-${process.pid}-${randomUUID()}`;
+  fs.writeFileSync(tmpPath, bytes, { mode: 0o600, flag: "wx" });
+  try {
+    if (allowReplace) fs.renameSync(tmpPath, absPath);
+    else fs.linkSync(tmpPath, absPath); // exclusive create: fails with EEXIST if a file appeared since the check
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+  if (!allowReplace) fs.unlinkSync(tmpPath);
+}
+
+function buildWaveSlice(plan, waveNumber) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    throw new Error("Provide a valid squad_planner JSON object.");
+  }
+  if (plan.executionMode !== "swarm") {
+    throw new Error("Wave slice extraction requires executionMode 'swarm'.");
+  }
+  if (waveNumber !== 1 && waveNumber !== 2 && waveNumber !== 3) {
+    throw new Error(`Unsupported wave '${waveNumber}'; expected 1, 2, or 3.`);
+  }
+  const workers = Array.isArray(plan.workers) ? plan.workers : [];
+  const audits = Array.isArray(plan.integrityAuditPlan) ? plan.integrityAuditPlan : [];
+  let entries;
+  let workerNames;
+  if (waveNumber === 1) {
+    entries = workers.flatMap(w =>
+      (w.specialists ?? [])
+        .filter(s => Boolean(s?.swarmAdd))
+        .map(s => ({ squadId: w.squadId, ...s.swarmAdd }))
+    );
+    workerNames = plan.waves?.wave1 ?? entries.map(e => e.name);
+  } else if (waveNumber === 2) {
+    entries = workers
+      .filter(w => Boolean(w.lead?.swarmAdd))
+      .map(w => ({ squadId: w.squadId, ...w.lead.swarmAdd }));
+    workerNames = plan.waves?.wave2 ?? entries.map(e => e.name);
+  } else {
+    entries = audits
+      .filter(a => Boolean(a?.swarmAdd))
+      .map(a => ({ targetSquad: a.targetSquad, recordSlot: a.recordSlot, ...a.swarmAdd }));
+    workerNames = plan.waves?.wave3 ?? entries.map(e => e.name);
+  }
+  return {
+    ok: true,
+    wave: waveNumber,
+    ...(plan.path ? { planPath: plan.path } : {}),
+    workspace: plan.workspace,
+    workerNames,
+    swarmAdd: entries
+  };
+}
+
+function normalizePlanOutPath(rawOutPath, canonicalRoot, platform = process.platform) {
+  return normalizeContainedJsonOutPath(rawOutPath, canonicalRoot, "outPath", platform);
+}
+
+function buildCompactPlanSummary(plan, explicitPath) {
+  const resolvedPath = explicitPath ?? plan?.path;
+  return {
+    ok: true,
+    ...(resolvedPath !== undefined ? { path: resolvedPath } : {}),
+    ...(plan.waveFiles ? { waveFiles: plan.waveFiles } : {}),
+    ...(plan.swarmPanePath ? { swarmPanePath: plan.swarmPanePath } : {}),
+    workspace: plan.workspace,
+    ...(plan.reportRoot ? { reportRoot: plan.reportRoot } : {}),
+    executionMode: plan.executionMode,
+    workspaceIsolation: plan.workspaceIsolation,
+    ...(plan.readOnly ? { readOnly: true } : {}),
+    topology: {
+      compiledPattern: plan.topology.compiledPattern,
+      workingSquads: plan.topology.workingSquads,
+      totalSpecialists: plan.topology.totalSpecialists,
+      siblingOverlapsCount: plan.topology.siblingOverlaps.length,
+      readerSiblingOverlapsCount: (plan.topology.readerSiblingOverlaps ?? []).length
+    },
+    squadIds: plan.workers.map(w => w.squadId),
+    waves: plan.waves,
+    ...(plan.swarmPane ? { swarmPane: plan.swarmPane } : {}),
+    workersSummary: plan.workers.map(w => ({
+      squadId: w.squadId,
+      synthesisSlot: w.synthesisSlot,
+      recordSlot: w.recordSlot,
+      lead: w.lead ? { workerName: w.lead.workerName, reportSlot: w.lead.reportSlot, wave: w.lead.wave } : null,
+      specialists: w.specialists.map(s => ({ workerName: s.workerName, reportSlot: s.reportSlot, wave: s.wave })),
+      auditors: (plan.integrityAuditPlan ?? [])
+        .filter(a => a.targetSquad === w.squadId)
+        .map(a => ({ workerName: a.workerName, reportSlot: a.reportSlot, wave: a.wave }))
+    })),
+    warnings: plan.warnings
   };
 }
 
 function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPACE?.trim() || process.cwd()) {
   try {
     const plan = planSquadCohort(args, workspace);
+    let payload;
+    if (args?.emitWave !== undefined) {
+      payload = buildWaveSlice(plan, args.emitWave);
+    } else {
+      const emitCompact = args?.outPath !== undefined ? args.compact !== false : args?.compact === true;
+      payload = emitCompact ? buildCompactPlanSummary(plan, plan.path) : plan;
+    }
     return {
-      content: [{ type: "text", text: JSON.stringify(plan) }]
+      content: [{ type: "text", text: JSON.stringify(payload) }]
     };
   } catch (error) {
     const message = error.code === "ENOENT" ? formatNotFoundError(args, workspace) : error.message;
@@ -1157,4 +1803,4 @@ function handleSquadPlanner(args = {}, workspace = process.env.AGY_SQUAD_WORKSPA
   }
 }
 
-export { findScopeOverlaps, handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap };
+export { buildCompactPlanSummary, buildWaveSlice, findScopeOverlaps, handleSquadPlanner, normalizeScopePath, planSquadCohort, scopesOverlap };

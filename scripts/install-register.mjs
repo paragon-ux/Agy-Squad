@@ -23,9 +23,9 @@ const repoRoot = path.resolve(__dirname, "..");
 
 export const PACKAGE_VERSION = (() => {
   try {
-    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.2";
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version || "0.2.3";
   } catch {
-    return "0.2.2";
+    return "0.2.3";
   }
 })();
 
@@ -33,9 +33,23 @@ const PLUGIN_KEY = "agy-squad";
 export const MIN_NODE_MAJOR = 22;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.0.0`;
 export const SHIPPED_SKILLS = Object.freeze(["pr-review", "full-review", "day-one-review", "swarm-governance"]);
+export const MAINTAINER_SKILLS = Object.freeze(["self-diagnosis", "platform-fit"]);
+export const REQUIRED_RUNTIME_FILES = Object.freeze([
+  "package.json",
+  "plugin.json",
+  "README.md",
+  "bin/agy-squad.mjs",
+  "mcp/index.js",
+  "mcp/briefs.mjs",
+  "mcp/dispatch.mjs",
+  "mcp/handoffs.mjs",
+  "mcp/planner.mjs",
+  "mcp/verdicts.mjs"
+]);
+export const REQUIRED_DOC_FILES = Object.freeze(["docs/index.md", "docs/tools.md"]);
 const COPY_EXCLUDED_TOP_DIRS = new Set([".git", ".github", "node_modules", ".venv", ".cache", "scratch", "site", "benchmarks", "tests"]);
 const COPY_EXCLUDED_PATHS = Object.freeze([
-  ".agents/skills/self-diagnosis",
+  ...MAINTAINER_SKILLS.map((skill) => `.agents/skills/${skill}`),
   "scripts/release-preflight.mjs",
   "docs/plans",
   "docs/reviews"
@@ -405,6 +419,46 @@ export function detectExistingInstallation(options = {}) {
             }
           }
         }
+        for (const rel of ["skills", path.join(".agents", "skills")]) {
+          for (const skill of SHIPPED_SKILLS) {
+            const linked = path.join(pluginDest, rel, skill);
+            try {
+              if (!fs.lstatSync(linked).isSymbolicLink()) continue;
+              details.plugin.isSymlink = true;
+              details.plugin.target ||= repoRoot;
+              if (isLocalCheckout && !pathsEqual(fs.realpathSync.native(linked), fs.realpathSync.native(path.join(repoRoot, ".agents", "skills", skill)))) {
+                details.plugin.pointsElsewhere = true;
+                details.plugin.target = path.resolve(fs.realpathSync.native(linked), "../../..");
+              }
+            } catch (error) { if (error.code !== "ENOENT") details.plugin.pointsElsewhere = true; }
+          }
+        }
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          const filePath = path.join(pluginDest, rootFile);
+          let fileLst = null;
+          try {
+            fileLst = fs.lstatSync(filePath);
+          } catch {}
+          if (fileLst && fileLst.isSymbolicLink()) {
+            details.plugin.isSymlink = true;
+            if (isLocalCheckout) {
+              try {
+                if (!pathsEqual(fs.realpathSync.native(filePath), fs.realpathSync.native(path.join(repoRoot, rootFile)))) {
+                  details.plugin.pointsElsewhere = true;
+                }
+              } catch {
+                details.plugin.pointsElsewhere = true;
+              }
+            }
+            if (!details.plugin.target) {
+              try {
+                details.plugin.target = path.dirname(fs.readlinkSync(filePath));
+              } catch {
+                details.plugin.target = "symlink";
+              }
+            }
+          }
+        }
         if (!details.plugin.isSymlink) {
           details.plugin.target = "direct folder or junction";
         }
@@ -417,33 +471,46 @@ export function detectExistingInstallation(options = {}) {
           details.plugin.version = installedPkg.version.trim();
         }
       } catch {}
-      details.plugin.versionMismatch = Boolean(
-        details.plugin.version && details.plugin.version !== PACKAGE_VERSION
-      );
-
-      const skillsPath = path.join(pluginDest, "skills");
-      details.plugin.skillsReady = SHIPPED_SKILLS.every((skillName) =>
-        fs.existsSync(path.join(skillsPath, skillName, "SKILL.md"))
-      );
-      details.plugin.docsReady = fs.existsSync(path.join(pluginDest, "docs", "tools.md"));
+      let installedPluginVersion = null;
       let logoTarget = "assets/logo.svg";
       try {
         const installedPlugin = JSON.parse(fs.readFileSync(path.join(pluginDest, "plugin.json"), "utf8"));
+        if (typeof installedPlugin?.version === "string" && installedPlugin.version.trim()) {
+          installedPluginVersion = installedPlugin.version.trim();
+        }
         if (typeof installedPlugin?.logo === "string" && installedPlugin.logo.trim()) {
           logoTarget = installedPlugin.logo.trim();
         }
       } catch {}
+      details.plugin.versionMismatch = Boolean(
+        (details.plugin.version && details.plugin.version !== PACKAGE_VERSION) ||
+          (installedPluginVersion && installedPluginVersion !== PACKAGE_VERSION)
+      );
+
+      const skillsPath = path.join(pluginDest, "skills");
+      const dotAgentsSkillsPath = path.join(pluginDest, ".agents", "skills");
+      const hasMaintainerSkillLeak =
+        details.plugin.isCopyFallback &&
+        MAINTAINER_SKILLS.some(
+          (skillName) =>
+            fs.existsSync(path.join(skillsPath, skillName)) ||
+            fs.existsSync(path.join(dotAgentsSkillsPath, skillName))
+        );
+      details.plugin.skillsReady =
+        !hasMaintainerSkillLeak &&
+        SHIPPED_SKILLS.every((skillName) => fs.existsSync(path.join(skillsPath, skillName, "SKILL.md")));
+      details.plugin.docsReady = REQUIRED_DOC_FILES.every((rel) =>
+        fs.existsSync(path.join(pluginDest, rel))
+      );
       const resolvedLogoPath = path.resolve(pluginDest, logoTarget);
       const logoInsidePlugin =
         resolvedLogoPath === pluginDest || resolvedLogoPath.startsWith(pluginDest + path.sep);
       details.plugin.runtimeReady =
-        fs.existsSync(path.join(pluginDest, "package.json")) &&
-        fs.existsSync(path.join(pluginDest, "plugin.json")) &&
+        REQUIRED_RUNTIME_FILES.every((rel) => fs.existsSync(path.join(pluginDest, rel))) &&
         Boolean(details.plugin.version) &&
+        Boolean(installedPluginVersion) &&
         logoInsidePlugin &&
-        fs.existsSync(resolvedLogoPath) &&
-        fs.existsSync(path.join(pluginDest, "bin", "agy-squad.mjs")) &&
-        fs.existsSync(path.join(pluginDest, "mcp", "index.js"));
+        fs.existsSync(resolvedLogoPath);
     } else if (pluginLst && pluginLst.isSymbolicLink()) {
       details.plugin.isSymlink = true;
       details.plugin.pointsElsewhere = true;
@@ -599,41 +666,68 @@ export function detectExistingInstallation(options = {}) {
   return { isInstalled, isComplete, details };
 }
 
-async function populateLinkedPluginDir(sourceRoot, targetPluginDir) {
+export function createCopyFilter(sourceRoot = repoRoot) {
+  return (src) => {
+    const rel = normalizeSlash(path.relative(sourceRoot, src));
+    if (!rel) return true;
+    if (COPY_EXCLUDED_TOP_DIRS.has(rel.split("/")[0])) return false;
+    return !COPY_EXCLUDED_PATHS.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
+  };
+}
+
+export async function populateLinkedPluginDir(sourceRoot, targetPluginDir, options = {}) {
+  const symlinkSyncImpl = options.symlinkSync || fs.symlinkSync;
+  const copyFilter = createCopyFilter(sourceRoot);
   await fsPromises.mkdir(targetPluginDir, { recursive: true });
   for (const file of ["package.json", "plugin.json", "README.md"]) {
     const src = path.join(sourceRoot, file);
     if (fs.existsSync(src)) {
-      await fsPromises.copyFile(src, path.join(targetPluginDir, file));
+      const destFile = path.join(targetPluginDir, file);
+      try {
+        const stat = fs.lstatSync(destFile);
+        if (stat.isSymbolicLink()) await fsPromises.unlink(destFile);
+        else if (stat.isDirectory()) await fsPromises.rm(destFile, { recursive: true, force: true });
+        else await fsPromises.unlink(destFile);
+      } catch {}
+      try {
+        symlinkSyncImpl(src, destFile, "file");
+      } catch (err) {
+        if (err?.code === "EPERM" || err?.code === "ENOSYS" || err?.code === "EACCES") {
+          await fsPromises.copyFile(src, destFile);
+        } else {
+          throw err;
+        }
+      }
     }
   }
   const isWin = os.platform() === "win32";
-  const linkMappings = [
-    ["assets", path.join(sourceRoot, "assets")],
-    ["bin", path.join(sourceRoot, "bin")],
-    ["docs", path.join(sourceRoot, "docs")],
-    ["mcp", path.join(sourceRoot, "mcp")],
-    ["scripts", path.join(sourceRoot, "scripts")],
-    [".agents", path.join(sourceRoot, ".agents")],
-    ["skills", path.join(sourceRoot, ".agents", "skills")]
-  ];
-  for (const [name, srcTarget] of linkMappings) {
-    if (!fs.existsSync(srcTarget)) continue;
-    const destPath = path.join(targetPluginDir, name);
-    try {
-      const stat = fs.lstatSync(destPath);
-      if (stat.isSymbolicLink() || stat.isDirectory()) {
-        if (stat.isSymbolicLink()) await fsPromises.unlink(destPath);
-        else await fsPromises.rm(destPath, { recursive: true, force: true });
-      }
-    } catch {}
-    try {
-      fs.symlinkSync(srcTarget, destPath, isWin ? "junction" : "dir");
-    } catch {
-      await fsPromises.cp(srcTarget, destPath, { recursive: true });
+  const linkEntry = async (src, dest) => {
+    if (!fs.existsSync(src)) return;
+    await fsPromises.mkdir(path.dirname(dest), { recursive: true });
+    await removeFsEntry(dest);
+    try { symlinkSyncImpl(src, dest, fs.statSync(src).isDirectory() ? (isWin ? "junction" : "dir") : "file"); }
+    catch (error) {
+      if (!["EPERM", "ENOSYS", "EACCES"].includes(error.code)) throw error;
+      await fsPromises.cp(src, dest, { recursive: true, filter: copyFilter });
+    }
+  };
+  for (const name of ["assets", "bin", "mcp"]) await linkEntry(path.join(sourceRoot, name), path.join(targetPluginDir, name));
+  for (const name of ["docs", "scripts"]) {
+    const source = path.join(sourceRoot, name), dest = path.join(targetPluginDir, name);
+    if (!fs.existsSync(source)) continue;
+    await removeFsEntry(dest);
+    await fsPromises.mkdir(dest, { recursive: true });
+    for (const entry of fs.readdirSync(source)) {
+      const src = path.join(source, entry);
+      if (copyFilter(src)) await linkEntry(src, path.join(dest, entry));
     }
   }
-  await ensurePluginSkillsAndMcpManifest(targetPluginDir);
+  for (const rel of [".agents", "skills"]) await removeFsEntry(path.join(targetPluginDir, rel));
+  for (const rel of [path.join(".agents", "skills"), "skills"]) {
+    await fsPromises.mkdir(path.join(targetPluginDir, rel), { recursive: true });
+    for (const skill of SHIPPED_SKILLS) await linkEntry(path.join(sourceRoot, ".agents", "skills", skill), path.join(targetPluginDir, rel, skill));
+  }
+  await ensurePluginSkillsAndMcpManifest(targetPluginDir, options);
 }
 function validateAndEscapePosixPath(value, label) {
   if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) {
@@ -669,6 +763,7 @@ export function formatPosixMcpLauncher(execPath = process.execPath) {
 }
 
 async function ensurePluginSkillsAndMcpManifest(targetPluginDir, options = {}) {
+  const symlinkSyncImpl = options.symlinkSync || fs.symlinkSync;
   const isWin = os.platform() === "win32";
   const dotAgentsSkills = path.join(targetPluginDir, ".agents", "skills");
   const skillsDest = path.join(targetPluginDir, "skills");
@@ -680,7 +775,7 @@ async function ensurePluginSkillsAndMcpManifest(targetPluginDir, options = {}) {
       }
     } catch {}
     try {
-      fs.symlinkSync(
+      symlinkSyncImpl(
         isWin ? dotAgentsSkills : path.join(".agents", "skills"),
         skillsDest,
         isWin ? "junction" : "dir"
@@ -840,10 +935,8 @@ export async function runCheckOnly(options = {}) {
   log("Running Agy-Squad read-only preflight check (--check)...");
 
   for (const requiredRel of [
-    "package.json",
-    "plugin.json",
-    "bin/agy-squad.mjs",
-    "mcp/index.js",
+    ...REQUIRED_RUNTIME_FILES,
+    ...REQUIRED_DOC_FILES,
     ...SHIPPED_SKILLS.map((skillName) => `.agents/skills/${skillName}/SKILL.md`)
   ]) {
     const abs = path.join(repoRoot, requiredRel);
@@ -861,6 +954,23 @@ export async function runCheckOnly(options = {}) {
   }
   if (status.details.config.corrupt) {
     throw new Error(`Corrupt config.json detected: ${status.details.config.error}`);
+  }
+  if (status.isInstalled && !status.isComplete) {
+    const reasons = [];
+    const d = status.details;
+    if (!d.runtime.supported) reasons.push(`unsupported Node.js ${d.runtime.nodeVersion}`);
+    if (!d.plugin.exists) reasons.push("missing plugin directory");
+    if (d.plugin.pointsElsewhere) reasons.push("plugin link points elsewhere");
+    if (d.plugin.versionMismatch) reasons.push(`stale plugin version ${d.plugin.version} != ${PACKAGE_VERSION}`);
+    if (!d.plugin.runtimeReady) reasons.push("incomplete plugin runtime files");
+    if (!d.plugin.skillsReady) reasons.push("missing governance skills");
+    if (!d.plugin.docsReady) reasons.push("missing plugin docs");
+    if (!d.mcp.registered) reasons.push(d.mcp.globalDuplicate ? "duplicate global MCP entry" : "unregistered MCP server");
+    if (!d.cliShim.exists) reasons.push("missing agy-squad CLI shim");
+    if (!d.config.enabled) reasons.push("plugin disabled in config.json");
+    throw new Error(
+      `Installed Agy-Squad profile is incomplete or out of sync (${reasons.join(", ") || "partial installation"}); run 'agy-squad setup' to repair.`
+    );
   }
   log(`[OK] Read-only check passed (currently installed: ${status.isInstalled ? "YES" : "NO"}).`);
   return status;
@@ -922,12 +1032,7 @@ export async function runInstall(options = {}) {
 
   await fsPromises.mkdir(pluginsDir, { recursive: true });
   const isTempOrNpx = !isLocalGitCheckout();
-  const copyFilter = (src) => {
-    const rel = normalizeSlash(path.relative(repoRoot, src));
-    if (!rel) return true;
-    if (COPY_EXCLUDED_TOP_DIRS.has(rel.split("/")[0])) return false;
-    return !COPY_EXCLUDED_PATHS.some((excluded) => rel === excluded || rel.startsWith(`${excluded}/`));
-  };
+  const copyFilter = createCopyFilter(repoRoot);
 
   let pluginLst = null;
   try {
@@ -1368,7 +1473,11 @@ export function printStatus(options = {}) {
   if (!status.details.runtime.supported) {
     log(`Next step: upgrade Node.js to >= ${rt.minNodeVersion} (found ${foundNode}), then run 'npx --package=agy-squad@latest agy-squad setup'.`);
   } else if (overallLabel === "NOT INSTALLED" || overallLabel === "PARTIAL INSTALLATION") {
-    log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
+    if (plug.isSymlink || isLocalGitCheckout()) {
+      log("Next step: run 'agy-squad setup' (or 'npx --package=agy-squad agy-squad setup') to install/repair.");
+    } else {
+      log("Next step: run 'npx --package=agy-squad agy-squad setup' (or 'agy-squad setup') to install/repair.");
+    }
   }
   return status;
 }

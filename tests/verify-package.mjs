@@ -5,6 +5,8 @@ import path from "node:path";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { stripCode } from "../mcp/verdicts.mjs";
+import { MAINTAINER_SKILLS } from "../scripts/install-register.mjs";
+import { extractMarkdownLinks, stripHtmlComments } from "../.agents/skills/self-diagnosis/scripts/diagnose.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -65,65 +67,6 @@ const RETIRED_DENYLIST = [
   "mcp/subagent-brief.mjs"
 ];
 
-function stripHtmlComments(markdown) {
-  let out = "";
-  for (let pos = 0; pos < markdown.length; ) {
-    const start = markdown.indexOf("<!--", pos);
-    if (start === -1) return out + markdown.slice(pos);
-    out += markdown.slice(pos, start);
-    const end = markdown.indexOf("-->", start + 4);
-    if (end === -1) return out;
-    pos = end + 3;
-  }
-  return out;
-}
-
-function extractMarkdownLinks(text) {
-  const links = [];
-  let pos = 0;
-  while (pos < text.length) {
-    const openBracket = text.indexOf("[", pos);
-    if (openBracket === -1) break;
-    const closeBracket = text.indexOf("]", openBracket + 1);
-    if (closeBracket === -1) break;
-    if (closeBracket === openBracket + 1 || text[closeBracket + 1] !== "(") {
-      pos = closeBracket + 1;
-      continue;
-    }
-    let i = closeBracket + 2;
-    const destStart = i;
-    while (i < text.length && text[i] !== ")" && text[i] !== "\n" && text[i] !== "\r" && !/\s/.test(text[i])) {
-      i++;
-    }
-    const rawDest = text.slice(destStart, i);
-    if (i < text.length && text[i] === ")") {
-      pos = i + 1;
-    } else if (i < text.length && (text[i] === " " || text[i] === "\t")) {
-      while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
-      const quote = text[i];
-      if (quote !== '"' && quote !== "'") {
-        pos = i;
-        continue;
-      }
-      const closeQuote = text.indexOf(quote, i + 1);
-      if (closeQuote === -1 || text[closeQuote + 1] !== ")") {
-        pos = i + 1;
-        continue;
-      }
-      pos = closeQuote + 2;
-    } else {
-      pos = i;
-      continue;
-    }
-    if (!rawDest) continue;
-    const hashIdx = rawDest.indexOf("#");
-    const target = hashIdx === -1 ? rawDest : rawDest.slice(0, hashIdx);
-    const fragment = hashIdx === -1 ? "" : rawDest.slice(hashIdx + 1);
-    links.push({ target, fragment });
-  }
-  return links;
-}
-
 function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
   assert.ok(Array.isArray(packages) && packages.length === 1 && packages[0] && typeof packages[0] === "object",
     "Expected one npm pack JSON package record");
@@ -157,8 +100,10 @@ function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
       lower.startsWith("docs/reviews/") ||
       lower === "scripts/release-preflight.mjs" ||
       lower === "scripts/diagnose.mjs" ||
-      lower === ".agents/skills/self-diagnosis" ||
-      lower.startsWith(".agents/skills/self-diagnosis/")
+      MAINTAINER_SKILLS.some((skill) => {
+        const prefix = `.agents/skills/${skill.toLowerCase()}`;
+        return lower === prefix || lower.startsWith(`${prefix}/`);
+      })
     );
   };
   const allowed = names.filter(name =>
@@ -244,7 +189,10 @@ function selfTest() {
     "scripts/diagnose.mjs",
     ".agents/skills/self-diagnosis",
     ".agents/skills/self-diagnosis/SKILL.md",
-    ".agents/skills/self-diagnosis/scripts/diagnose.mjs"
+    ".agents/skills/self-diagnosis/scripts/diagnose.mjs",
+    ".agents/skills/platform-fit",
+    ".agents/skills/platform-fit/SKILL.md",
+    ".agents/skills/platform-fit/references/platform-fit-protocol.md"
   ];
   for (const bad of badCases) {
     assert.throws(() => validate(fixture([bad])),
@@ -264,6 +212,15 @@ function selfTest() {
     }),
     /Broken or unpackaged relative skill links:.*\.agents\/skills\/self-diagnosis\/SKILL\.md/,
     "SKILL-002: relative link to unpackaged ../self-diagnosis/SKILL.md must be rejected"
+  );
+  assert.throws(
+    () => validate(fixture([]), {
+      fileContents: {
+        ".agents/skills/swarm-governance/SKILL.md": "See [platform-fit](../platform-fit/SKILL.md).\n"
+      }
+    }),
+    /Broken or unpackaged relative skill links:.*\.agents\/skills\/platform-fit\/SKILL\.md/,
+    "SKILL-002: relative link to unpackaged ../platform-fit/SKILL.md must be rejected"
   );
   assert.throws(
     () => validate(fixture([]), {
@@ -308,7 +265,7 @@ function selfTest() {
   const linksMs = performance.now() - tLinks;
   assert.ok(linksMs < 500, `R1-SEC-004: verify-package link scanner took ${linksMs.toFixed(1)} ms (>= 500 ms)`);
 
-  console.log(`Package verifier self-test passed (positive + ${badCases.length + 4} negatives)`);
+  console.log(`Package verifier self-test passed (positive + ${badCases.length + 5} negatives)`);
 }
 
 if (process.argv[2] === "--self-test") {

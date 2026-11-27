@@ -6,7 +6,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHIPPED_SKILLS, isDirectEntryPoint } from "./install-register.mjs";
+import {
+  MAINTAINER_SKILLS,
+  REQUIRED_DOC_FILES,
+  REQUIRED_RUNTIME_FILES,
+  SHIPPED_SKILLS,
+  isDirectEntryPoint
+} from "./install-register.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -191,23 +197,23 @@ if (pkg) {
 
   const requiredPackageFiles = [
     "assets/logo.svg",
-    "bin/agy-squad.mjs",
-    "mcp/index.js",
+    ...REQUIRED_RUNTIME_FILES,
     "scripts/install-register.mjs",
-    "docs/index.md",
-    "docs/tools.md",
-    "plugin.json",
+    ...REQUIRED_DOC_FILES,
     "install.sh",
     "install.ps1",
-    "README.md",
     "CHANGELOG.md",
     "LICENSE",
     ...SHIPPED_SKILLS.map((skill) => `.agents/skills/${skill}/SKILL.md`)
   ];
-  if (exists("mcp")) {
-    for (const entry of fs.readdirSync(path.join(root, "mcp"), { withFileTypes: true })) {
+  for (const runtimeDir of ["bin", "mcp"]) {
+    if (!exists(runtimeDir)) continue;
+    for (const entry of fs.readdirSync(path.join(root, runtimeDir), { withFileTypes: true })) {
       if (entry.isFile() && /\.(?:m?js)$/.test(entry.name)) {
-        const rel = `mcp/${entry.name}`;
+        const rel = `${runtimeDir}/${entry.name}`;
+        if (!REQUIRED_RUNTIME_FILES.includes(rel)) {
+          errors.push(`Runtime file ${rel} must be listed in REQUIRED_RUNTIME_FILES in scripts/install-register.mjs.`);
+        }
         if (!requiredPackageFiles.includes(rel)) {
           requiredPackageFiles.push(rel);
         }
@@ -244,8 +250,12 @@ if (pkg) {
   }
 
   for (const excludedPath of [
-    ".agents/skills/self-diagnosis",
-    ".agents/skills/self-diagnosis/SKILL.md",
+    ...MAINTAINER_SKILLS.flatMap((skill) => [
+      `.agents/skills/${skill}`,
+      `.agents/skills/${skill}/SKILL.md`,
+      `.agents/skills/${skill}/references/example.md`,
+      `.agents/skills/${skill}/scripts/example.mjs`
+    ]),
     "scripts/release-preflight.mjs",
     "docs/plans",
     "docs/plans/example.md",
@@ -254,6 +264,15 @@ if (pkg) {
   ]) {
     if (isCoveredByFiles(excludedPath)) {
       errors.push(`package.json "files" must exclude ${excludedPath}.`);
+    }
+  }
+  const skillsEntryIdx = fileEntries.findIndex((entry) => !entry.negated && entry.normalized === ".agents/skills");
+  for (const skill of MAINTAINER_SKILLS) {
+    const recursiveExclusionIdx = fileEntries.findIndex(
+      (entry) => entry.negated && entry.normalized === `.agents/skills/${skill}/**`
+    );
+    if (recursiveExclusionIdx === -1 || (skillsEntryIdx !== -1 && recursiveExclusionIdx < skillsEntryIdx)) {
+      errors.push(`package.json "files" must include "!.agents/skills/${skill}/**" after ".agents/skills".`);
     }
   }
 

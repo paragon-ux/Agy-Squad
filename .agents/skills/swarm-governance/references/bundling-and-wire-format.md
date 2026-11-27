@@ -5,12 +5,12 @@ Reference for [`SKILL.md`](../SKILL.md).
 ## Pointer-Over-Wire Convention
 
 1. **Report slots:** Write reports to `scratch/agy-squad/squad-<id>/specialist-N/report.md` (or inside `share`/`branch` before `collect`; undeclared `tasks`/`n` shards fail `bundle`).
-2. **Single-line receipt (`<= 500` B):** No newlines; address `@coordinator` (flat) or `@<leadWorkerName>` (layered). Accepts spaced `-`, `--`, or `—`:
-   - `@<target> READY <slot> - <note>` (also `--` or `—`)
-   - `@<target> PARTIAL <slot> -- <note and blocker>`
-   - `@<target> NO_REPORT - <reason>`
-3. **Verbatim & scoped:** Copy raw posts verbatim into `handoffs[].message` for `inspect` (verified post-hoc). Always scope `read_board{since|seqs}`.
-4. **Sources & citation carry-forward:** Any specialist or lead report citing external URLs or repository code should include a `## Sources` section with descriptive `[Title](url)` or `path:line` entries (never generic `reference 1` labels). Carry every cited source forward into synthesis (or drop prose claims that depended on omitted sources), synthesize **before** `finalize --prune` (or pass `--keep-reports`), and reconcile any `citations.uncarriedUrls` reported by `bundle-init --digest`, `digest`, `bundle`, or `finalize` (pass `--strict-citations` to fail closed before bundling/pruning when any specialist URL is missing from `lead/report.md`).
+2. **Single-line receipt (`<= 500` B):** No newlines; address `@coordinator` (both flat and wave-gated layered; append `wt="<abs-worktree-root>"` in `<note>` under `share`/`branch`). Accepts spaced `-`, `--`, or `—`:
+   - `@coordinator READY <slot> - <note>` (also `--` or `—`)
+   - `@coordinator PARTIAL <slot> -- <note and blocker>`
+   - `@coordinator NO_REPORT - <reason>`
+3. **Verbatim & scoped:** Copy raw posts verbatim into `handoffs[].message` for `inspect` (verified post-hoc). Skip Turn-1 `read_board` (Step 1 holds the brief); scope post-wakeup `read_board{since|seqs}` strictly to receipt sequence IDs.
+4. **Sources & citation carry-forward:** Any specialist or lead report citing external URLs or repository code should include a `## Sources` section with descriptive `[Title](url)` or `path:line` entries (never generic `reference 1` labels). Carry every cited source forward into synthesis (or drop prose claims that depended on omitted sources), run `finalize [--strict-citations]` without `--prune` before synthesis (or synthesize before `finalize --prune` / pass `--keep-reports`), and reconcile any `citations.uncarriedUrls` reported by `bundle-init --digest`, `digest`, `bundle`, `verify`, or `finalize` (pass `--strict-citations` on `bundle`/`finalize` to fail closed before bundling/pruning when any specialist URL is missing from `lead/report.md`).
 
 ## Canonical Auditor Slots and Verdicts
 
@@ -34,24 +34,24 @@ Reference for [`SKILL.md`](../SKILL.md).
 Verified bundles (`lead/report.sources.json`) prove SHA-256 **file integrity** for a coordinator-assembled record (not host authorship attestation):
 
 ```bash
-agy-squad collect --plan <plan.json> --from <worktree-dir>...   # only if isolated
-agy-squad verdict scratch/agy-squad/squad-<id>/lead/report.md
-agy-squad bundle-init --plan <plan.json> [--squad <id>] (--handoff '<worker>=READY <slot> - <note>' | --handoffs <file.json>) \
-  [--id-map <worker=id>] <verified-file...> --out <record.json> --digest
-agy-squad verdict --integrity scratch/agy-squad/squad-integrity_auditor[-<id>]/specialist-1/report.md
-agy-squad finalize <record.json> [--replace] [--prune [--keep-reports]]
-agy-squad verify scratch/agy-squad/squad-<id>/lead/report.sources.json --prune --expected-sha256 <sha256> [--keep-reports]
+agy-squad collect --plan <plan.json> --handoffs <handoffs.json>                  # auto-extracts wt=<dir> if isolated
+agy-squad bundle-init --plan <plan.json> --all-squads --handoffs <handoffs.json> \
+  --from-scope --digest --out-dir scratch/records                                # enforces Content Verdict + emits auditSwarmAdd
+# Run Wave-3 audit-<id> (using emitted auditSwarmAdd), then finalize all squads without --prune:
+agy-squad finalize scratch/records/*.json [--strict-citations] [--replace]
+# Synthesize final deliverable / ledger once with verified bundle SHA-256 hashes, then prune & clean records:
+agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records [--keep-reports]
 ```
 
-*(Passing `--digest` requires `--handoff` or `--handoffs` and at least one `<verified-file>`. Granular `fingerprint`, `inspect`, `digest`, `bundle`, and `prune <bundle> <sha256>` remain available; standalone `verify --prune` requires `--expected-sha256 <sha256>`.)*
+*(Note: `bundle-init --digest` and `finalize` already enforce strict `Content Verdict` and `Integrity Verdict` parsing internally; standalone `agy-squad verdict [--integrity] <report.md>` remains available as a standalone helper.)*
 
 ```json
 {
   "squadId": "storage", "workspace": "/path/to/repo", "verdict": "PASS", "requireIntegrityAudit": true,
   "verifiedFiles": { "src/storage.js": "<64-hex-sha256>" },
   "assignments": [{ "conversationId": "storage-wal-reviewer", "report": "scratch/agy-squad/squad-storage/specialist-1/report.md" }],
-  "handoffs": [{ "sender": "storage-wal-reviewer", "message": "@storage-lead READY scratch/agy-squad/squad-storage/specialist-1/report.md - fsync guard verified" }]
+  "handoffs": [{ "sender": "storage-wal-reviewer", "message": "@coordinator READY scratch/agy-squad/squad-storage/specialist-1/report.md - fsync guard verified" }]
 }
 ```
 
-Flags: `--allow-unaudited` (`auditPolicy: "unaudited-explicit"`), `--replace` / `--predecessor <sha256>`, `--keep-reports`.
+Flags: `--allow-unaudited` (`auditPolicy: "unaudited-explicit"`), `--from-scope`, `--strict-citations`, `--replace` / `--predecessor <sha256>`, `--keep-reports`.

@@ -39,7 +39,7 @@ try {
   try {
     fs.cpSync(repoRoot, negRoot, {
       recursive: true,
-      filter: (src) => !src.includes(`${path.sep}scratch`) && !src.includes(`${path.sep}.git`)
+      filter: (src) => src !== path.join(repoRoot, "scratch") && !src.startsWith(path.join(repoRoot, "scratch") + path.sep) && !src.includes(`${path.sep}.git`)
     });
     const negPkgPath = path.join(negRoot, "package.json");
     const negPkg = JSON.parse(fs.readFileSync(negPkgPath, "utf8"));
@@ -1065,7 +1065,7 @@ try {
       const preStatusHuman = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(preStatusHuman.status, 1);
       assert.match(preStatusHuman.stdout, /Overall Status: NOT INSTALLED/);
-      assert.match(preStatusHuman.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+      assert.match(preStatusHuman.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/);
 
       const preStatusJson = spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(preStatusJson.status, 1);
@@ -1111,7 +1111,7 @@ try {
       const partialStatus = spawnSync(process.execPath, [cli, "status"], { cwd: repoRoot, env: uxBaseEnv, encoding: "utf8" });
       assert.equal(partialStatus.status, 1);
       assert.match(partialStatus.stdout, /Overall Status: PARTIAL INSTALLATION/);
-      assert.match(partialStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/);
+      assert.match(partialStatus.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/);
 
       // UX-SQ-004: forceCopyFallback installed skills contain zero ../../../docs/ or ../../../../docs/ links
       process.env.AGY_TEST_PROFILE_DIR = uxProfile;
@@ -1389,6 +1389,8 @@ try {
       for (const excludedRel of [
         ".agents/skills/self-diagnosis",
         "skills/self-diagnosis",
+        ".agents/skills/platform-fit",
+        "skills/platform-fit",
         "scripts/release-preflight.mjs",
         "docs/plans",
         "docs/reviews",
@@ -1409,6 +1411,46 @@ try {
       assert.equal(fourSkillStatus.isComplete, true);
       fs.rmSync(path.join(pluginDest, "skills", "pr-review", "SKILL.md"));
       assert.equal(installerMod.detectExistingInstallation().details.plugin.skillsReady, false, "A1: missing shipped skill must flip skillsReady to false");
+
+      // P1-PKG-01: populateLinkedPluginDir symlinkSync-failure fallback must apply copyFilter and exclude maintainer-only paths
+      const fallbackPluginDir = path.join(asqProfile, "linked-fallback-plugin");
+      await installerMod.populateLinkedPluginDir(repoRoot, fallbackPluginDir, {
+        symlinkSync: () => {
+          const err = new Error("EPERM: simulated symlink denial");
+          err.code = "EPERM";
+          throw err;
+        }
+      });
+      for (const excludedRel of [
+        ".agents/skills/self-diagnosis",
+        "skills/self-diagnosis",
+        ".agents/skills/platform-fit",
+        "skills/platform-fit",
+        "scripts/release-preflight.mjs",
+        "docs/plans",
+        "docs/reviews"
+      ]) {
+        assert.equal(
+          fs.existsSync(path.join(fallbackPluginDir, excludedRel)),
+          false,
+          `P1-PKG-01: populateLinkedPluginDir symlink-failure fallback must not copy '${excludedRel}'`
+        );
+      }
+      assert.deepEqual(
+        fs.readdirSync(path.join(fallbackPluginDir, "skills")).sort(),
+        ["day-one-review", "full-review", "pr-review", "swarm-governance"]
+      );
+      fs.rmSync(fallbackPluginDir, { recursive: true, force: true });
+
+      const linkedPluginDir = path.join(asqProfile, "linked-normal-plugin");
+      try {
+        await installerMod.populateLinkedPluginDir(repoRoot, linkedPluginDir);
+        assert.equal(fs.lstatSync(path.join(linkedPluginDir, "skills")).isDirectory(), true);
+        assert.equal(fs.lstatSync(path.join(linkedPluginDir, ".agents/skills")).isDirectory(), true);
+        for (const rel of ["skills/platform-fit", "skills/self-diagnosis", ".agents/skills/platform-fit", ".agents/skills/self-diagnosis", "docs/plans", "docs/reviews", "scripts/release-preflight.mjs"]) assert.equal(fs.existsSync(path.join(linkedPluginDir, rel)), false, rel);
+        assert.deepEqual(fs.readdirSync(path.join(linkedPluginDir, "skills")).sort(), [...installerMod.SHIPPED_SKILLS].sort());
+        for (const name of installerMod.SHIPPED_SKILLS) assert.equal(fs.realpathSync.native(path.join(linkedPluginDir, "skills", name)), fs.realpathSync.native(path.join(repoRoot, ".agents", "skills", name)));
+      } finally { fs.rmSync(linkedPluginDir, { recursive: true, force: true }); }
 
       // ASQ-SCRIPT-002: Windows off-PATH persistence guidance preserves REG_EXPAND_SZ via DoNotExpandEnvironmentNames + ExpandString
       const winGuidance = installerMod.formatPathGuidanceLines("C:\\Users\\Dev\\.gemini\\antigravity\\bin", "win32").join("\n");
@@ -1654,7 +1696,7 @@ try {
         assert.equal(rfStatus.status, 1, "RF-SCRIPT-001: stale global MCP-only profile must exit 1");
         assert.match(rfStatus.stdout, /Overall Status: PARTIAL INSTALLATION/, "RF-SCRIPT-001: stale global MCP-only profile must report PARTIAL INSTALLATION");
         assert.doesNotMatch(rfStatus.stdout, /Overall Status: DISABLED/, "RF-SCRIPT-001: stale global MCP-only profile must not report DISABLED");
-        assert.match(rfStatus.stdout, /Next step: run 'npx --package=agy-squad agy-squad setup'/, "RF-SCRIPT-001: Next step setup hint must print");
+        assert.match(rfStatus.stdout, /Next step: run 'agy-squad setup' \(or 'npx --package=agy-squad agy-squad setup'\)/, "RF-SCRIPT-001: Next step setup hint must print");
       } finally {
         fs.rmSync(rfProfile, { recursive: true, force: true });
       }
@@ -1854,6 +1896,149 @@ try {
     } finally {
       process.env.AGY_TEST_PROFILE_DIR = tmpProfile;
       fs.rmSync(asqProfile, { recursive: true, force: true });
+    }
+  }
+
+  // FLOW-001: populateLinkedPluginDir symlinks root manifests (package.json, plugin.json, README.md) and setup --check fails on drifted/partial install
+  {
+    const flowProfile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-flow001-")));
+    const flowEnv = { ...process.env, AGY_TEST_PROFILE_DIR: flowProfile };
+    try {
+      const freshCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(freshCheck.status, 0, `FLOW-001: uninstalled setup --check must exit 0: ${freshCheck.stderr}`);
+      assert.match(freshCheck.stdout, /currently installed: NO/);
+
+      const flowInstall = spawnSync(process.execPath, [cli, "setup"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(flowInstall.status, 0, flowInstall.stderr || flowInstall.stdout);
+
+      const flowPluginDir = path.join(flowProfile, ".gemini", "config", "plugins", "agy-squad");
+      const flowStatusJson = JSON.parse(
+        spawnSync(process.execPath, [cli, "status", "--json"], { cwd: repoRoot, env: flowEnv, encoding: "utf8" }).stdout
+      );
+      if (flowStatusJson.details.plugin.isSymlink) {
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          const linkedFile = path.join(flowPluginDir, rootFile);
+          assert.equal(
+            fs.lstatSync(linkedFile).isSymbolicLink(),
+            true,
+            `FLOW-001: expected ${rootFile} in linked plugin dir to be a symlink`
+          );
+          assert.equal(
+            fs.realpathSync.native(linkedFile),
+            fs.realpathSync.native(path.join(repoRoot, rootFile))
+          );
+        }
+      }
+
+      const healthyCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(healthyCheck.status, 0, healthyCheck.stderr);
+
+      // Simulate stale version drift on package.json: both status AND setup --check must exit 1
+      const pkgDest = path.join(flowPluginDir, "package.json");
+      fs.rmSync(pkgDest, { force: true });
+      fs.writeFileSync(pkgDest, JSON.stringify({ name: "agy-squad", version: "0.0.1" }, null, 2) + "\n", "utf8");
+      const driftedStatus = spawnSync(process.execPath, [cli, "status"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(driftedStatus.status, 1, "FLOW-001: drifted version status must exit 1");
+      const driftedCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+        cwd: repoRoot,
+        env: flowEnv,
+        encoding: "utf8"
+      });
+      assert.equal(driftedCheck.status, 1, "FLOW-001: setup --check must fail closed on stale/incomplete installed profile");
+      assert.match(driftedCheck.stderr, /incomplete or out of sync.*stale plugin version 0\.0\.1/);
+
+      // A3: Copied 0.2.2 install and missing mcp/*.mjs runtime file both fail setup --check with explicit diagnostics
+      const copyCheckProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-a3-copycheck-"));
+      const prevA3Profile = process.env.AGY_TEST_PROFILE_DIR;
+      try {
+        process.env.AGY_TEST_PROFILE_DIR = copyCheckProfile;
+        await installerMod.runInstall({ silent: true, forceCopyFallback: true });
+        const copyEnv = { ...process.env, AGY_TEST_PROFILE_DIR: copyCheckProfile };
+        const copyPluginDir = path.join(copyCheckProfile, ".gemini", "config", "plugins", "agy-squad");
+        const cleanCopyCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: copyEnv,
+          encoding: "utf8"
+        });
+        assert.equal(cleanCopyCheck.status, 0, cleanCopyCheck.stderr);
+
+        // 1. Stale 0.2.2 copied install
+        const copyPkgPath = path.join(copyPluginDir, "package.json");
+        const origCopyPkg = fs.readFileSync(copyPkgPath, "utf8");
+        fs.writeFileSync(copyPkgPath, origCopyPkg.replace('"version": "0.2.3"', '"version": "0.2.2"'), "utf8");
+        const stale022Check = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: copyEnv,
+          encoding: "utf8"
+        });
+        assert.equal(stale022Check.status, 1, "A3: copied 0.2.2 install must fail 0.2.3 setup --check");
+        assert.match(stale022Check.stderr, /stale plugin version 0\.2\.2 != 0\.2\.3/);
+        fs.writeFileSync(copyPkgPath, origCopyPkg, "utf8");
+
+        // 2. Missing mcp/handoffs.mjs runtime module inside copied install
+        const handoffsCopyPath = path.join(copyPluginDir, "mcp", "handoffs.mjs");
+        const origHandoffsBytes = fs.readFileSync(handoffsCopyPath);
+        fs.unlinkSync(handoffsCopyPath);
+        const missingRuntimeCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: copyEnv,
+          encoding: "utf8"
+        });
+        assert.equal(missingRuntimeCheck.status, 1, "A3: missing mcp/*.mjs runtime file must fail setup --check");
+        assert.match(missingRuntimeCheck.stderr, /incomplete plugin runtime files/);
+        fs.writeFileSync(handoffsCopyPath, origHandoffsBytes);
+
+        // 3. Leaked maintainer skill inside copied install
+        fs.mkdirSync(path.join(copyPluginDir, "skills", "platform-fit"), { recursive: true });
+        fs.writeFileSync(path.join(copyPluginDir, "skills", "platform-fit", "SKILL.md"), "# leaked\n", "utf8");
+        const leakedSkillCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: copyEnv,
+          encoding: "utf8"
+        });
+        assert.equal(leakedSkillCheck.status, 1, "A3: leaked maintainer skill in copied install must fail setup --check");
+        assert.match(leakedSkillCheck.stderr, /missing governance skills/);
+      } finally {
+        process.env.AGY_TEST_PROFILE_DIR = prevA3Profile;
+        fs.rmSync(copyCheckProfile, { recursive: true, force: true });
+      }
+
+      // EPERM symlink fallback copies root manifests cleanly
+      const cleanProf = fs.mkdtempSync(path.join(os.tmpdir(), "agy-squad-cleanprof-"));
+      try {
+        const epermDir = path.join(cleanProf, "linked");
+        await installerMod.populateLinkedPluginDir(repoRoot, epermDir, {
+          symlinkSync: () => {
+            const err = new Error("Operation not permitted");
+            err.code = "EPERM";
+            throw err;
+          }
+        });
+        for (const rootFile of ["package.json", "plugin.json", "README.md"]) {
+          assert.equal(fs.lstatSync(path.join(epermDir, rootFile)).isFile(), true);
+          assert.equal(fs.lstatSync(path.join(epermDir, rootFile)).isSymbolicLink(), false);
+        }
+      } finally {
+        fs.rmSync(cleanProf, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(flowProfile, { recursive: true, force: true });
     }
   }
 

@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -19,6 +21,14 @@ function isValidRelativePrefix(prefix) {
     !path.isAbsolute(prefix) &&
     !prefix.split("/").some(part => !part || part === "." || part === "..")
   );
+}
+
+function isValidScopeEntry(file) {
+  if (typeof file !== "string") return false;
+  const trimmed = file.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) return false;
+  if (trimmed.startsWith("/") || trimmed.includes("\\") || WINDOWS_DRIVE_RE.test(trimmed)) return false;
+  return trimmed === "." || !trimmed.split("/").some(part => !part || part === "." || part === "..");
 }
 
 function trimTrailingSlashes(value) {
@@ -64,6 +74,16 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
     throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including PARTIAL, /swarm @mention, and observation headroom): ${relative}`);
   }
   return relative;
+}
+
+function recordSlotPath(squadId, reportRoot = defaultReportRoot()) {
+  validateSquadId(squadId);
+  const normalizedRoot = normalizeReportRoot(reportRoot);
+  const directory = `squad-${encodeURIComponent(squadId)}`;
+  if (Buffer.byteLength(directory) > 255) {
+    throw new Error("Squad ID must fit in one workspace directory name.");
+  }
+  return `${normalizedRoot}/${directory}/record.json`;
 }
 
 const REPORT_TAIL_RE = /^squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/;
@@ -317,7 +337,9 @@ function workspacePath(root, relative, verifiedDirs) {
   return file;
 }
 
-function readOpenedFileWithStat(file, relative = file) {
+const STREAM_HASH_BUF = Buffer.allocUnsafe(65536);
+
+function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity, hashOnly = false } = {}) {
   const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
   if (process.platform !== "linux" || !hasONofollow) {
     const linkStat = fs.lstatSync(file);
@@ -348,6 +370,16 @@ function readOpenedFileWithStat(file, relative = file) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
     }
+    if (hashOnly) {
+      const hash = createHash("sha256");
+      while (true) {
+        const n = fs.readSync(fd, STREAM_HASH_BUF, 0, STREAM_HASH_BUF.length, null);
+        if (n <= 0) break;
+        hash.update(STREAM_HASH_BUF.subarray(0, n));
+      }
+      return { digest: hash.digest("hex"), stat, realPath };
+    }
+    if (stat.size > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
     const expectedSize = stat.size;
     let bytes;
     if (expectedSize >= 0 && expectedSize <= 64 * 1024 * 1024) {
@@ -361,12 +393,16 @@ function readOpenedFileWithStat(file, relative = file) {
       if (offset < buf.length) {
         bytes = buf.subarray(0, offset);
       } else {
+        if (offset > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
         const chunks = [buf];
+        let totalBytes = buf.length;
         const extra = Buffer.allocUnsafe(65536);
         while (true) {
           const n = fs.readSync(fd, extra, 0, extra.length, null);
           if (n <= 0) break;
+          if (totalBytes + n > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
           chunks.push(Buffer.from(extra.subarray(0, n)));
+          totalBytes += n;
         }
         bytes = Buffer.concat(chunks);
       }
@@ -416,14 +452,16 @@ function readFile(root, relative, verifiedDirs) {
   return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
-function readIfPresentWithStat(root, relative, verifiedDirs) {
+function readIfPresentWithStat(root, relative, verifiedDirs, options) {
   try {
-    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative);
+    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative, options);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
 }
+
+const hashIfPresentWithStat = (root, relative, verifiedDirs) => readIfPresentWithStat(root, relative, verifiedDirs, { hashOnly: true });
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
@@ -1028,7 +1066,7 @@ function bundleReports(root, record, options = {}) {
     throw new Error("integrityAuditSlots must be an array of nonempty workspace-relative paths.");
   }
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
-  if (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS") {
+  if (verdict !== undefined && (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS")) {
     throw new Error("Only independently passing cohorts are eligible for bundling.");
   }
   const {
@@ -1108,6 +1146,7 @@ function bundleReports(root, record, options = {}) {
         ...(allowPartial ? { allowPartial: true } : {}),
         synthesis,
         verifiedFiles,
+        assignments: record.assignments,
         ...(retainReports ? { retainReports: true } : {}),
         ...(integrityAudit ? { integrityAudit, integrityAudits } : {}),
         reports
@@ -1433,6 +1472,69 @@ function discoverSingleSquadAuditSlotsIfMatching(sources, squadId, rootPrefix) {
   return matching;
 }
 
+function extractWorktreePathsFromHandoffs(handoffs) {
+  if (!Array.isArray(handoffs) || handoffs.length === 0) return [];
+  const extracted = [];
+  const seen = new Set();
+  const pushWt = (val) => {
+    const trimmed = typeof val === "string" ? val.trim() : "";
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      extracted.push(trimmed);
+    }
+  };
+  const wtRe = /(?:^|[\s;,(])wt=(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;,)"'\r\n]+))/g;
+  for (const item of handoffs) {
+    if (typeof item === "string") {
+      wtRe.lastIndex = 0;
+      for (let m; (m = wtRe.exec(item)); ) pushWt(m[1] ?? m[2] ?? m[3]);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    if (typeof item.worktree === "string") pushWt(item.worktree);
+    if (typeof item.message === "string") {
+      wtRe.lastIndex = 0;
+      for (let m; (m = wtRe.exec(item.message)); ) pushWt(m[1] ?? m[2] ?? m[3]);
+    }
+  }
+  return extracted;
+}
+
+function gitCommonDirectory(root) {
+  const result = spawnSync("git", ["-C", root, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) return null;
+  try { return fs.realpathSync.native(path.resolve(root, result.stdout.trim())); } catch { return null; }
+}
+
+function validateWorkerWorktreeRoot(root, candidate) {
+  const real = resolveCanonicalRoot(candidate);
+  const common = gitCommonDirectory(root);
+  const workerCommon = gitCommonDirectory(real);
+  if (!common || !workerCommon || !isExpectedRealPath(common, workerCommon)) {
+    throw new Error(`Untrusted worker worktree: ${candidate}. Authorize a source explicitly with --from <dir>.`);
+  }
+  return real;
+}
+
+function workerReceiptRoots(handoffs) {
+  return (Array.isArray(handoffs) ? handoffs : []).flatMap(h =>
+    h && typeof h.sender === "string"
+      ? extractWorktreePathsFromHandoffs([h]).map(root => ({ root, sender: h.sender }))
+      : []);
+}
+
+function tryRealPath(candidate) {
+  let cur = path.resolve(candidate);
+  const tail = [];
+  while (true) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch {}
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.resolve(candidate);
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
 function collectReportSlots(root, options = {}) {
   root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -1440,6 +1542,7 @@ function collectReportSlots(root, options = {}) {
   }
   const {
     sources = [],
+    handoffs,
     plan,
     record,
     squadId,
@@ -1450,8 +1553,17 @@ function collectReportSlots(root, options = {}) {
     strict = false
   } = options;
 
-  if (!Array.isArray(sources) || sources.length === 0) {
+  if (!Array.isArray(sources)) {
     throw new Error("Provide at least one worktree directory via --from <dir>.");
+  }
+  const receiptRoots = workerReceiptRoots([
+    ...(Array.isArray(handoffs) ? handoffs : []),
+    ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
+  ]).map(r => ({ ...r, realRoot: tryRealPath(r.root) }));
+  const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
+  if (inferredSources.length === 0) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
+  if (sources.length === 0 && plan === undefined && record === undefined) {
+    throw new Error("Collecting from --handoffs receipts requires --plan <plan.json> or --record <record.json> to bind senders to assigned slots; pass --from <worktree-dir> explicitly with --squad.");
   }
   if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
     throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
@@ -1460,7 +1572,7 @@ function collectReportSlots(root, options = {}) {
 
   const resolvedSources = [];
   const seenRealSources = new Set();
-  for (const src of sources) {
+  for (const src of inferredSources) {
     if (typeof src !== "string" || !src.trim()) {
       throw new Error("Worktree --from path must be a nonempty directory path.");
     }
@@ -1479,20 +1591,28 @@ function collectReportSlots(root, options = {}) {
     const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
-      resolvedSources.push({ raw: src, real: realSrc });
+      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(r.realRoot, realSrc)).map(r => r.sender));
+      if (senders) validateWorkerWorktreeRoot(root, realSrc);
+      resolvedSources.push({ raw: src, real: realSrc, senders });
     }
   }
 
   const targetSlotSet = new Set();
   const inheritSlotSet = new Set();
-  const addSlot = (slot, isInherit = false) => {
+  const optionalPlanInheritSlots = new Set();
+  const addSlot = (slot, isInherit = false, optionalInPlan = false) => {
     validateReportSlotPath(slot);
     const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot;
     targetSlotSet.add(resolvedSlot);
     if (isInherit) {
       inheritSlotSet.add(resolvedSlot);
     }
+    if (optionalInPlan) {
+      optionalPlanInheritSlots.add(resolvedSlot);
+    }
   };
+  const senderSlots = new Map();
+  const bindSender = (sender, slot) => { if (typeof sender === "string" && typeof slot === "string") senderSlots.set(sender, overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot); };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -1507,11 +1627,13 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (w?.lead?.reportSlot !== undefined) {
-        addSlot(w.lead.reportSlot, w.lead.swarmAdd?.workspace === "inherit");
+        const leadIsInherit = w.lead.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(w.lead.reportSlot, leadIsInherit, leadIsInherit);
       }
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
           addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
+          if (s.swarmAdd?.workspace !== "inherit") bindSender(s.workerName, s.reportSlot);
         }
       }
     }
@@ -1519,16 +1641,15 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (entry?.reportSlot !== undefined) {
-        addSlot(
-          entry.reportSlot,
-          plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit")
-        );
+        const entryIsInherit = plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit");
+        addSlot(entry.reportSlot, entryIsInherit, entryIsInherit);
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
       if (audit?.reportSlot !== undefined) {
-        addSlot(audit.reportSlot, audit.swarmAdd?.workspace === "inherit");
+        const auditIsInherit = audit.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(audit.reportSlot, auditIsInherit, auditIsInherit);
       }
     }
     if (squadId !== undefined && !matchedPlanSquad) {
@@ -1549,7 +1670,7 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix), true);
     for (const a of record.assignments ?? []) {
-      if (a?.report !== undefined) addSlot(a.report);
+      if (a?.report !== undefined) { addSlot(a.report); bindSender(a.conversationId, a.report); bindSender(a.workerName, a.report); }
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
@@ -1603,7 +1724,7 @@ function collectReportSlots(root, options = {}) {
   const targetSlots = [...targetSlotSet];
   const foldSlotCase = process.platform === "win32" || process.platform === "darwin";
   const foundBySlot = new Map();
-  for (const { raw, real } of resolvedSources) {
+  for (const { raw, real, senders } of resolvedSources) {
     const verifiedSrcDirs = new Set([real]);
     const cohortEntriesCache = new Map();
     const cohortHasSlotDir = (slotRel) => {
@@ -1633,6 +1754,7 @@ function collectReportSlots(root, options = {}) {
       return entryNames === "probe" || (entryNames !== null && entryNames.has(foldSlotCase ? slotName.toLowerCase() : slotName));
     };
     for (const slotRel of targetSlots) {
+      if (senders && (inheritSlotSet.has(slotRel) || ![...senders].some(sender => senderSlots.get(sender) === slotRel))) continue;
       if (!cohortHasSlotDir(slotRel)) continue;
       const opened = readIfPresentWithStat(real, slotRel, verifiedSrcDirs);
       if (!opened) continue;
@@ -1655,6 +1777,7 @@ function collectReportSlots(root, options = {}) {
   const verifiedInheritDirs = new Set([root]);
   const missing = targetSlots.filter(slotRel => {
     if (foundBySlot.has(slotRel)) return false;
+    if (optionalPlanInheritSlots.has(slotRel)) return false;
     if (inheritSlotSet.has(slotRel)) {
       const rootExisting = readIfPresentWithStat(root, slotRel, verifiedInheritDirs);
       if (rootExisting && decodeUtf8(rootExisting.bytes, slotRel).trim().length > 0) {
@@ -1801,6 +1924,7 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
       squadId: id,
       workspace: typeof plan.workspace === "string" && plan.workspace ? plan.workspace : fallbackRoot,
       ...(plan.reportRoot !== undefined ? { reportRoot: plan.reportRoot } : {}),
+      ...(w.readOnly === true || plan.readOnly === true ? { readOnly: true } : {}),
       verdict: "PASS",
       verifiedFiles: {},
       assignments,
@@ -1816,6 +1940,316 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
   };
 }
 
+const MAX_FROM_SCOPE_FILES = 256;
+const SKIPPED_SCOPE_WALK_DIRS = new Set([".git", "node_modules"]);
+
+function relativizeContainedCliPath(inputPath, targetRoot, { platform = process.platform, allowEqual = false } = {}) {
+  if (typeof inputPath !== "string" || typeof targetRoot !== "string" || !targetRoot.trim()) {
+    return null;
+  }
+  const trimmed = inputPath.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed) || platform !== process.platform || !path.isAbsolute(trimmed)) {
+    return null;
+  }
+  let canonicalRoot;
+  try {
+    canonicalRoot = resolveCanonicalRoot(targetRoot);
+  } catch {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  let cur = resolved;
+  const tail = [];
+  while (true) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink() && tail.length === 0) {
+        // Leaf itself is a symlink: only relativize if its lexical parent directory is inside canonicalRoot,
+        // so downstream O_NOFOLLOW rejects in-workspace symlinks with ELOOP while external inbound symlinks stay rejected as outside-workspace.
+        const realLexParent = fs.realpathSync.native(path.dirname(cur));
+        if (!isContainedPath(canonicalRoot, realLexParent, true, platform)) return null;
+        const candidateInside = path.join(realLexParent, path.basename(cur));
+        if (!isContainedPath(canonicalRoot, candidateInside, allowEqual, platform)) return null;
+        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
+        return rel || (allowEqual ? "." : null);
+      }
+      if (st.isSymbolicLink() && tail.length > 0) {
+        // Ancestor symlink: only allow if the symlink's lexical parent is canonicalRoot's parent (aliased workspace root itself),
+        // never an in-workspace symlinked subdirectory.
+        const realSym = fs.realpathSync.native(cur);
+        if (!isExpectedRealPath(canonicalRoot, realSym)) return null;
+        const candidateInside = path.join(realSym, ...tail);
+        if (!isContainedPath(canonicalRoot, candidateInside, allowEqual, platform)) return null;
+        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
+        return rel || (allowEqual ? "." : null);
+      }
+      const realExisting = fs.realpathSync.native(cur);
+      if (!isContainedPath(canonicalRoot, realExisting, true, platform)) {
+        return null;
+      }
+      const candidateTarget = tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
+      if (!isContainedPath(canonicalRoot, candidateTarget, allowEqual, platform)) {
+        return null;
+      }
+      const rel = path.relative(canonicalRoot, candidateTarget).split(path.sep).join("/");
+      return rel || (allowEqual ? "." : null);
+    } catch (err) {
+      if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") return null;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
+function normalizeContainedJsonOutPath(rawPath, targetRoot, label = "outPath", platform = process.platform) {
+  let candidate = typeof rawPath === "string" ? rawPath.trim() : "";
+  if (candidate && targetRoot && path.isAbsolute(candidate)) {
+    const relativized = relativizeContainedCliPath(candidate, targetRoot, { platform, allowEqual: false });
+    if (relativized !== null) candidate = relativized;
+  }
+  const errSuffix = label === "outPath" ? " inside workspace" : "";
+  if (
+    !candidate ||
+    CONTROL_CHAR_RE.test(candidate) ||
+    candidate.startsWith("/") ||
+    candidate.startsWith("\\") ||
+    path.isAbsolute(candidate) ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    (platform !== "win32" && candidate.includes("\\"))
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  const posixOut = (platform === "win32" ? candidate.replace(/\\/g, "/") : candidate).replace(/^(?:\.\/)+/, "");
+  if (
+    !posixOut ||
+    posixOut.split("/").some(p => !p || p === "." || p === "..") ||
+    !posixOut.toLowerCase().endsWith(".json") ||
+    path.posix.basename(posixOut).toLowerCase() === ".json"
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  return posixOut;
+}
+
+function extractScopeLinesFromBrief(text) {
+  if (typeof text !== "string" || !text) return [];
+  const lines = text.split(/\r?\n/);
+  const scopes = [];
+  let inScope = false;
+  for (const line of lines) {
+    if (!inScope) {
+      if (line === "Scope:" || line.startsWith("Spot-check scope (")) {
+        inScope = true;
+      }
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const entry = line.slice(2).trim();
+      if (entry) scopes.push(entry);
+    } else {
+      break;
+    }
+  }
+  return scopes;
+}
+
+function collectPlanSquadScopeEntries(rawPlan, selectedSquadId) {
+  if (!Array.isArray(rawPlan?.workers)) {
+    throw new Error(`--from-scope requires plan.workers['${selectedSquadId}'] with scopeFiles.`);
+  }
+  const squadWorker = rawPlan.workers.find(w => w && typeof w === "object" && w.squadId === selectedSquadId);
+  if (!squadWorker) {
+    throw new Error(`--from-scope could not find squad '${selectedSquadId}' in plan.workers.`);
+  }
+  const collected = [];
+  const addWorkerScopes = (entry) => {
+    if (!entry || typeof entry !== "object") return;
+    if (Array.isArray(entry.scopeFiles)) {
+      for (const item of entry.scopeFiles) collected.push(item);
+      return;
+    }
+    const briefText = entry.swarmAdd?.brief ?? entry.Subagent?.Prompt;
+    for (const item of extractScopeLinesFromBrief(briefText)) {
+      collected.push(item);
+    }
+  };
+  for (const specialist of Array.isArray(squadWorker.specialists) ? squadWorker.specialists : []) {
+    addWorkerScopes(specialist);
+  }
+  if (squadWorker.lead) {
+    addWorkerScopes(squadWorker.lead);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const raw of collected) {
+    if (typeof raw !== "string") {
+      throw new Error(`--from-scope found invalid scopeFiles entry for squad '${selectedSquadId}'.`);
+    }
+    if (!isValidScopeEntry(raw)) {
+      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
+    }
+    const trimmed = raw.trim();
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      deduped.push(trimmed);
+    }
+  }
+  if (deduped.length === 0) {
+    throw new Error(`--from-scope found no scopeFiles for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return deduped;
+}
+
+function expandScopeEntriesToFiles(
+  canonicalRoot,
+  entries,
+  selectedSquadId,
+  verifiedDirs,
+  resolvedReportRoot,
+  options = {}
+) {
+  const maxFiles = Number.isInteger(options?.maxFiles) && options.maxFiles > 0 ? options.maxFiles : MAX_FROM_SCOPE_FILES;
+  const allowEmptyResult = Boolean(options?.allowEmptyResult);
+  const expanded = new Set();
+  const reportRootPrefix = `${resolvedReportRoot}/`;
+  const throwCapExceeded = (originEntry) => {
+    const detail = originEntry ? ` while expanding '${originEntry}'` : "";
+    const err = new Error(
+      `--from-scope exceeded the ${maxFiles}-file safety cap${detail}; pass explicit --file <path> arguments instead.`
+    );
+    err.code = "EMAXFILES";
+    err.partialFiles = [...expanded].slice(0, maxFiles).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw err;
+  };
+  const walkDirectory = (dirAbs, dirRel, originEntry) => {
+    const dirents = fs.readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    );
+    for (const dirent of dirents) {
+      const childRel = `${dirRel}/${dirent.name}`;
+      if (dirent.isSymbolicLink()) {
+        throw new Error(`Refusing to follow symlink '${childRel}' while expanding --from-scope directory '${originEntry}'.`);
+      }
+      if (dirent.isDirectory()) {
+        if (
+          SKIPPED_SCOPE_WALK_DIRS.has(dirent.name) ||
+          childRel === resolvedReportRoot ||
+          childRel.startsWith(reportRootPrefix)
+        ) {
+          continue;
+        }
+        walkDirectory(path.join(dirAbs, dirent.name), childRel, originEntry);
+      } else if (dirent.isFile()) {
+        expanded.add(childRel);
+        if (expanded.size > maxFiles) {
+          throwCapExceeded(originEntry);
+        }
+      } else {
+        throw new Error(`Unsupported non-regular file '${childRel}' encountered while expanding --from-scope directory '${originEntry}'.`);
+      }
+    }
+  };
+
+  for (const entry of entries) {
+    if (entry === ".") {
+      throw new Error(
+        "--from-scope cannot expand repo-wide wildcard '.'; narrow scopeFiles in the plan or pass explicit --file <path> arguments."
+      );
+    }
+    const targetAbs = workspacePath(canonicalRoot, entry, verifiedDirs);
+    let stat;
+    try {
+      stat = fs.lstatSync(targetAbs);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        throw new Error(`--from-scope path '${entry}' does not exist in workspace.`);
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      const symErr = new Error(`Refusing to follow symlink '${entry}' in --from-scope.`);
+      symErr.code = "ELOOP";
+      throw symErr;
+    }
+    if (stat.isFile()) {
+      expanded.add(entry);
+      if (expanded.size > maxFiles) {
+        throwCapExceeded(null);
+      }
+    } else if (stat.isDirectory()) {
+      if (entry === resolvedReportRoot || entry.startsWith(reportRootPrefix)) {
+        continue;
+      }
+      walkDirectory(targetAbs, entry, entry);
+    } else {
+      throw new Error(`Unsupported non-regular file '${entry}' in --from-scope.`);
+    }
+  }
+  if (expanded.size === 0 && !allowEmptyResult) {
+    throw new Error(`--from-scope resolved 0 regular files for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function shellQuote(value) {
+  return /^[A-Za-z0-9_./<>:-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
+  if (!isPlainObject(plan) || !Array.isArray(plan.integrityAuditPlan) || record?.requireIntegrityAudit === false) {
+    return [];
+  }
+  const matching = plan.integrityAuditPlan.filter(a => a && a.targetSquad === record.squadId && isPlainObject(a.swarmAdd));
+  if (matching.length === 0) return [];
+  const effectiveRecordPath = outRel ?? record.recordPath ?? recordSlotPath(record.squadId, record.reportRoot);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const mappedUuids = [];
+  const seenUuids = new Set();
+  for (const a of record.assignments ?? []) {
+    const cid = typeof a?.conversationId === "string" ? a.conversationId.trim() : "";
+    if (uuidRe.test(cid) && !seenUuids.has(cid)) {
+      seenUuids.add(cid);
+      mappedUuids.push(cid);
+    }
+  }
+  const bindOne = (auditEntry, idx) => {
+    const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[idx]
+      ? record.integrityAuditSlots[idx]
+      : auditEntry.reportSlot;
+    let brief = String(auditEntry.swarmAdd.brief ?? "");
+    const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
+    if (effectiveRecordPath) {
+      brief = brief.replaceAll("<rel-record>", shellQuote(effectiveRecordPath));
+      if (origRecordSlot && origRecordSlot !== effectiveRecordPath) {
+        brief = brief.replaceAll(origRecordSlot, shellQuote(effectiveRecordPath));
+      }
+    }
+    if (auditSlot) {
+      brief = brief.replaceAll("<rel-slot>", shellQuote(auditSlot));
+      if (auditEntry.reportSlot && auditEntry.reportSlot !== auditSlot) {
+        brief = brief.replaceAll(auditEntry.reportSlot, shellQuote(auditSlot));
+      }
+    }
+    if (digestResult?.evidenceDigest) {
+      brief = brief.replace(/Evidence Digest:\s*<sha256>/g, `Evidence Digest: ${digestResult.evidenceDigest}`);
+    }
+    if (mappedUuids.length > 0) {
+      brief = brief.replaceAll("u1,u2", mappedUuids.join(","));
+    }
+    return {
+      ...auditEntry.swarmAdd,
+      brief
+    };
+  };
+  return matching.map(bindOne);
+}
+
+function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult) {
+  return buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult)[0];
+}
+
 function buildBundleRecordInit(root, options = {}) {
   if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
@@ -1827,6 +2261,7 @@ function buildBundleRecordInit(root, options = {}) {
     provenance,
     squadId,
     files = [],
+    fromScope = false,
     reportRoot,
     verdict,
     idMap = {},
@@ -1834,9 +2269,13 @@ function buildBundleRecordInit(root, options = {}) {
     allowUnaudited = false,
     allowNonPassing = false,
     allowPartial = false,
+    recordPath: explicitRecordPath,
     onLeadRead
   } = options;
 
+  if (typeof fromScope !== "boolean") {
+    throw new Error("fromScope must be a boolean.");
+  }
   if (typeof allowUnaudited !== "boolean") {
     throw new Error("allowUnaudited must be a boolean.");
   }
@@ -1868,7 +2307,7 @@ function buildBundleRecordInit(root, options = {}) {
     selectedSquadId = templateKeys[0];
   } else {
     throw new Error(
-      `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id>.`
+      `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id> (or --all-squads).`
     );
   }
   validateSquadId(selectedSquadId);
@@ -1883,6 +2322,8 @@ function buildBundleRecordInit(root, options = {}) {
       : template.reportRoot !== undefined
         ? normalizeReportRoot(template.reportRoot)
         : defaultReportRoot();
+
+  const isReadOnlySquad = Boolean(template.readOnly === true);
 
   const mergedEntries = [
     ...(Array.isArray(plan.provenanceScaffold?.entries) ? plan.provenanceScaffold.entries : []),
@@ -1933,9 +2374,30 @@ function buildBundleRecordInit(root, options = {}) {
     } else if (plan.executionMode !== "swarm" && hasRealConversationId(entry)) {
       nextId = entry.conversationId.trim();
     }
+    const explicitItemWorkerName =
+      typeof item.workerName === "string" && item.workerName.trim() ? item.workerName.trim() : undefined;
+    const swarmRosterName =
+      plan.executionMode === "swarm"
+        ? explicitItemWorkerName ??
+          (typeof (slotEntry?.workerName ?? workerEntry?.workerName) === "string"
+            ? (slotEntry?.workerName ?? workerEntry?.workerName).trim()
+            : typeof item.conversationId === "string" && !/^<.*>$/.test(item.conversationId.trim())
+              ? item.conversationId.trim()
+              : undefined)
+        : explicitItemWorkerName;
     return {
       conversationId: nextId,
-      report: slotPath
+      ...(swarmRosterName && (explicitItemWorkerName || swarmRosterName !== nextId)
+        ? { workerName: swarmRosterName }
+        : {}),
+      report: slotPath,
+      ...(() => {
+        const roots = workerReceiptRoots(handoffs).filter(h => h.sender === nextId || h.sender === swarmRosterName);
+        if (!roots.length) return {};
+        const verified = [...new Set(roots.map(h => validateWorkerWorktreeRoot(root, h.root)))];
+        if (verified.length !== 1) throw new Error(`Conflicting worktree roots for ${nextId}.`);
+        return { worktreeRoot: verified[0] };
+      })()
     };
   });
   for (const key of Object.keys(idMap ?? {})) {
@@ -1948,7 +2410,12 @@ function buildBundleRecordInit(root, options = {}) {
     throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
   }
   let verifiedFiles = {};
-  if (files.length > 0) {
+  if (fromScope) {
+    const scopeEntries = collectPlanSquadScopeEntries(rawPlan, selectedSquadId);
+    const expandedFiles = expandScopeEntriesToFiles(root, scopeEntries, selectedSquadId, verifiedDirs, resolvedReportRoot);
+    const combinedFiles = [...new Set([...expandedFiles, ...files])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    verifiedFiles = fingerprint(root, combinedFiles, verifiedDirs);
+  } else if (files.length > 0) {
     verifiedFiles = fingerprint(root, files, verifiedDirs);
   } else if (
     template.verifiedFiles &&
@@ -2017,6 +2484,8 @@ function buildBundleRecordInit(root, options = {}) {
     squadId: selectedSquadId,
     workspace: root,
     reportRoot: resolvedReportRoot,
+    ...(typeof explicitRecordPath === "string" && explicitRecordPath ? { recordPath: explicitRecordPath } : {}),
+    ...(isReadOnlySquad ? { readOnly: true } : {}),
     verdict: resolvedVerdict,
     ...(allowNonPassing ? { allowNonPassing: true } : {}),
     ...(allowPartial ? { allowPartial: true } : {}),
@@ -2028,30 +2497,210 @@ function buildBundleRecordInit(root, options = {}) {
   };
 }
 
+function buildBundleRecordsForAllSquads(root, options = {}) {
+  if (!isPlainObject(options) || !isPlainObject(options.plan) || !Array.isArray(options.plan.workers)) {
+    throw new Error("--all-squads requires a valid squad_planner JSON object with a workers array.");
+  }
+  const verifiedDirs = options.verifiedDirs ?? new Set();
+  root = resolveCanonicalRoot(root, verifiedDirs);
+  const rawPlan = options.plan;
+  const workerSquads = rawPlan.workers.filter(w => isPlainObject(w) && typeof w.squadId === "string");
+  if (workerSquads.length === 0) {
+    throw new Error("--all-squads found 0 working squads in plan.workers.");
+  }
+  const allHandoffs = Array.isArray(options.handoffs) ? options.handoffs : undefined;
+  const fullIdMap = isPlainObject(options.idMap) ? options.idMap : {};
+  const provEntries = [
+    ...(Array.isArray(rawPlan.provenanceScaffold?.entries) ? rawPlan.provenanceScaffold.entries : []),
+    ...(Array.isArray(options.provenance?.entries) ? options.provenance.entries : [])
+  ];
+
+  // Map every specialist/lead/auditor sender key across the plan so shared handoffs.json & idMap route deterministically.
+  const specialistSquadByKey = new Map();
+  const nonSpecialistKeys = new Set();
+  const squadIdMapKeys = new Map();
+  for (const w of workerSquads) {
+    const sqId = w.squadId;
+    const idKeys = new Set();
+    squadIdMapKeys.set(sqId, idKeys);
+    for (const s of Array.isArray(w.specialists) ? w.specialists : []) {
+      if (!isPlainObject(s)) continue;
+      if (typeof s.workerName === "string") {
+        specialistSquadByKey.set(s.workerName, sqId);
+        idKeys.add(s.workerName);
+        const placeholder = `<invoke_subagent:${s.workerName}:conversationId>`;
+        idKeys.add(placeholder);
+        if (Object.hasOwn(fullIdMap, s.workerName)) {
+          specialistSquadByKey.set(String(fullIdMap[s.workerName]).trim(), sqId);
+        }
+        if (Object.hasOwn(fullIdMap, placeholder)) {
+          specialistSquadByKey.set(String(fullIdMap[placeholder]).trim(), sqId);
+        }
+      }
+    }
+    if (isPlainObject(w.lead) && typeof w.lead.workerName === "string") {
+      nonSpecialistKeys.add(w.lead.workerName);
+    }
+  }
+  for (const p of provEntries) {
+    if (!p || typeof p !== "object" || typeof p.squadId !== "string") continue;
+    const idKeys = squadIdMapKeys.get(p.squadId);
+    if (typeof p.workerName === "string" && idKeys) idKeys.add(p.workerName);
+    if (p.slotType === "lead" || p.slotType === "audit") {
+      if (typeof p.conversationId === "string") nonSpecialistKeys.add(p.conversationId.trim());
+    } else if (typeof p.conversationId === "string" && p.conversationId.trim()) {
+      specialistSquadByKey.set(p.conversationId.trim(), p.squadId);
+    }
+  }
+  for (const a of Array.isArray(rawPlan.integrityAuditPlan) ? rawPlan.integrityAuditPlan : []) {
+    if (a && typeof a.workerName === "string") nonSpecialistKeys.add(a.workerName);
+  }
+
+  for (const key of Object.keys(fullIdMap)) {
+    const matchedAny = [...squadIdMapKeys.values()].some(set => set.has(key));
+    if (!matchedAny) {
+      throw new Error(`--id-map key '${key}' did not match any worker in plan.workers.`);
+    }
+  }
+
+  const handoffsBySquad = new Map(workerSquads.map(w => [w.squadId, []]));
+  if (allHandoffs !== undefined) {
+    for (const h of allHandoffs) {
+      if (!h || typeof h !== "object" || typeof h.sender !== "string" || !h.sender.trim() || typeof h.message !== "string" || !h.message.trim()) {
+        throw new Error("Each handoff must include nonempty 'sender' and 'message' strings.");
+      }
+      const sender = h.sender.trim();
+      const targetSq = specialistSquadByKey.get(sender);
+      if (targetSq) {
+        handoffsBySquad.get(targetSq).push({ sender, message: h.message });
+      } else if (!nonSpecialistKeys.has(sender)) {
+        throw new Error(`Handoff sender '${sender}' does not match any worker in plan.`);
+      }
+    }
+  }
+
+  const resolvedOutRels = workerSquads.map(w =>
+    typeof options.resolveOutPath === "function" ? options.resolveOutPath(w.squadId) : undefined
+  );
+
+  return workerSquads.map((w, idx) => {
+    const sqId = w.squadId;
+    const idKeys = squadIdMapKeys.get(sqId);
+    const scopedIdMap = Object.create(null);
+    for (const [k, v] of Object.entries(fullIdMap)) {
+      if (idKeys.has(k)) scopedIdMap[k] = v;
+    }
+    const outRel = resolvedOutRels[idx];
+    let preReadSynthesis;
+    const record = buildBundleRecordInit(root, {
+      ...options,
+      squadId: sqId,
+      idMap: scopedIdMap,
+      handoffs: allHandoffs !== undefined ? handoffsBySquad.get(sqId) : undefined,
+      recordPath: outRel,
+      verifiedDirs,
+      onLeadRead: info => { preReadSynthesis = info; }
+    });
+    return { squadId: sqId, outRel, record, preReadSynthesis };
+  });
+}
+
+function doesRecordMatchAcceptedBundle(record, bundle) {
+  if (!isPlainObject(record) || !isPlainObject(bundle)) return false;
+  if (bundle.squadId !== record.squadId) return false;
+  if (!isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles)) return false;
+  if (!isDeepStrictEqual(bundle.assignments, record.assignments)) return false;
+
+  if (Boolean(record.allowNonPassing) && bundle.allowNonPassing !== true) return false;
+  if (Boolean(record.allowPartial) && bundle.allowPartial !== true) return false;
+  if (record.retainReports === true && bundle.retainReports !== true) return false;
+
+  if (record.verdict !== undefined) {
+    if (bundle.verdict !== record.verdict) return false;
+    if (bundle.verdict !== "PASS" && bundle.allowNonPassing !== true) return false;
+  } else if (bundle.verdict !== "PASS") {
+    if (bundle.allowNonPassing !== true || (bundle.verdict !== "FAIL" && bundle.verdict !== "BLOCKED")) {
+      return false;
+    }
+  }
+
+  const isAuditCohort =
+    record.squadId === "integrity_auditor" ||
+    (typeof record.squadId === "string" && record.squadId.startsWith("integrity_auditor-"));
+  if (isAuditCohort) {
+    return bundle.auditPolicy === "unaudited-explicit" && !bundle.integrityAudit && !bundle.integrityAudits;
+  }
+
+  const explicitAuditSet = new Set();
+  if (typeof record.integrityReport === "string" && record.integrityReport.trim()) {
+    explicitAuditSet.add(record.integrityReport);
+  }
+  if (Array.isArray(record.integrityAuditSlots)) {
+    for (const slot of record.integrityAuditSlots) {
+      if (typeof slot === "string" && slot.trim()) explicitAuditSet.add(slot);
+    }
+  }
+  const hasExplicitRecordAudit = explicitAuditSet.size > 0;
+
+  if (record.requireIntegrityAudit === false) {
+    if (!hasExplicitRecordAudit) return bundle.auditPolicy === "unaudited-explicit";
+    if (bundle.auditPolicy === "unaudited-explicit") return true;
+    if (bundle.auditPolicy !== "required") return false;
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+
+  if (bundle.auditPolicy === "unaudited-explicit") return true;
+  if (bundle.auditPolicy !== "required") return false;
+  if (hasExplicitRecordAudit) {
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+  return true;
+}
+
 export {
+  CONTROL_CHAR_RE,
+  assertNoSymlinkedAncestors,
+  buildBoundAuditSwarmAdd,
+  buildBoundAuditSwarmAdds,
   buildBundleRecordInit,
+  buildBundleRecordsForAllSquads,
+  bundlePath,
   bundleReports,
+  collectPlanSquadScopeEntries,
   collectReportSlots,
   computeEvidenceDigest,
   decodeUtf8,
+  doesRecordMatchAcceptedBundle,
   ensureDirectory,
+  expandScopeEntriesToFiles,
   extractCitationUrls,
+  extractWorktreePathsFromHandoffs,
   fingerprint,
   inspectHandoffs,
   isContainedPath,
   isExpectedRealPath,
+  isValidScopeEntry,
   messageLimit,
+  normalizeContainedJsonOutPath,
   normalizeReportRoot,
   pruneReports,
   publish,
   readFile,
   readOpenedFileWithStat,
   readRegularFileSafe,
+  recordSlotPath,
+  relativizeContainedCliPath,
   reportPath,
   resolveCanonicalRoot,
+  resolveReportRoot,
+  sha256,
   stripReceiptPrefix,
   summarizeCitations,
   trimTrailingSlashes,
   verifyAndPruneBundle,
-  verifyBundle
+  verifyBundle,
+  validateWorkerWorktreeRoot,
+  workspacePath
 };

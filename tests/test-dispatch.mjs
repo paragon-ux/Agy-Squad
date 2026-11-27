@@ -489,13 +489,13 @@ try {
   );
   assert.match(
     uxAuditBrief,
-    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION' \(plain text, no backticks\)/,
-    "Integrity Auditor brief must explicitly disallow backticks on verdict lines"
+    /Emit standalone lines \(plain text, no backticks, never ';'-joined\):\nTarget Squad: <id>\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN \| INTEGRITY VIOLATION/,
+    "Integrity Auditor brief must explicitly disallow backticks and ';'-joining on standalone verdict lines"
   );
   assert.match(
     scopedAuditor[0].Prompt,
-    /Integrity Verdict: CLEAN \| INTEGRITY VIOLATION \(plain text, no backticks\)\./,
-    "Default integrity_auditor deliverable must explicitly disallow backticks on verdict lines"
+    /Standalone lines \(plain text, no backticks\):\nTarget Squad: alpha\nEvidence Digest: <sha256>\nIntegrity Verdict: CLEAN \| INTEGRITY VIOLATION/,
+    "Default integrity_auditor deliverable must emit standalone lines and disallow backticks"
   );
   const standaloneDispatch = handleDispatchSquad(
     { squadId: "alpha", manifestPath: "swarm-manifest.json" },
@@ -605,6 +605,44 @@ try {
   } finally {
     fs.rmSync(caseBase, { recursive: true, force: true });
   }
+
+  // Stage 3 Regressions: FIT-002 subagent swarm_wait guard & ROI-005 slot-only Integrity Auditor scopeFiles
+  const repoSelfDiagAllL1 = handleDispatchSquad(
+    {
+      squadId: "all_l1",
+      manifestPath: ".agents/skills/self-diagnosis/resources/self-diagnosis-manifest.json"
+    },
+    process.cwd()
+  );
+  assert.equal(repoSelfDiagAllL1.isError, undefined);
+  const allL1Subagents = JSON.parse(repoSelfDiagAllL1.content[0].text).Subagents;
+  assert.equal(allL1Subagents.length, 3);
+  for (const sub of allL1Subagents) {
+    assert.doesNotMatch(
+      sub.Prompt,
+      /swarm_wait/,
+      `FIT-002: subagent dispatch_squad(all_l1) must never leak /swarm-only swarm_wait into invoke_subagent prompt:\n${sub.Prompt}`
+    );
+    assert.match(sub.Prompt, /yield via Reactive Wakeup/);
+  }
+  const legacySwarmWaitLead = buildSubagentSpec(
+    {
+      role: "Legacy Swarm Lead",
+      objective: "Park on swarm_wait for your 2 specialists' reports, then synthesize.",
+      scopeFiles: ["mcp/index.js"]
+    },
+    "legacy",
+    "inline-manifest",
+    undefined
+  );
+  assert.doesNotMatch(legacySwarmWaitLead.Prompt, /swarm_wait/);
+  assert.match(legacySwarmWaitLead.Prompt, /Wait via Reactive Wakeup/);
+  const scopedAuditorPrompt = scopedAuditor[0].Prompt;
+  assert.match(
+    scopedAuditorPrompt,
+    /Scope:\n- scratch\/agy-squad\/squad-alpha\/specialist-1\/report\.md\n- scratch\/agy-squad\/squad-alpha\/lead\/report\.md\n- scratch\/agy-squad\/squad-alpha\/record\.json/
+  );
+  assert.doesNotMatch(scopedAuditorPrompt, /Scope:\n- \.\n/, "ROI-005: targeted Integrity Auditor must narrow Scope to squad slots instead of '.'");
 
   console.log("✓ Rejects direct dispatch, malformed manifests, and workspace escapes");
 } finally {
