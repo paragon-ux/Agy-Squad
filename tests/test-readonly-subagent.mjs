@@ -510,6 +510,88 @@ try {
       assert.equal(result.status, 0, result.stderr);
       result = run(["finalize", "scratch/record.json", "--allow-unaudited"]);
       assert.equal(result.status, 0, result.stderr);
+
+      // ASQ-R2-B2: Record-only collection on unbound bundle-init subagent record resolves compiled workerName & full placeholder while enforcing conflicts/auth
+      fs.rmSync(path.join(root, specialist.reportSlot), { force: true });
+      const unboundInit = run(["bundle-init", "--plan", "scratch/plan.json", "--allow-partial", "--out", "scratch/unbound-record.json", "--replace", "src/a.js"]);
+      assert.equal(unboundInit.status, 0, unboundInit.stderr);
+      // Missing coordinator binding on unbound --record must still fail closed even with valid UUID receipt sender
+      const unauthRecCollect = run(["collect", "--record", "scratch/unbound-record.json", "--from-transcript", "--handoffs", "scratch/handoffs.json"]);
+      assert.notEqual(unauthRecCollect.status, 0, "Unbound --record without --id-map/--provenance must fail closed");
+      assert.match(unauthRecCollect.stderr, /coordinator-bound conversation UUID/);
+
+      // Compiled workerName via --id-map succeeds on unbound --record
+      const recByWorker = run(["collect", "--record", "scratch/unbound-record.json", "--from-transcript", "--handoffs", "scratch/handoffs.json", "--id-map", `${specialist.workerName}=${uuid}`, "--strict"]);
+      assert.equal(recByWorker.status, 0, `ASQ-R2-B2 --record + --id-map <workerName>=<uuid> failed: ${recByWorker.stderr}`);
+      assert.equal(fs.readFileSync(path.join(root, specialist.reportSlot), "utf8"), reportBody);
+
+      // Full placeholder key via --id-map also succeeds
+      fs.rmSync(path.join(root, specialist.reportSlot), { force: true });
+      const placeholderKey = `<invoke_subagent:${specialist.workerName}:conversationId>`;
+      const recByPlaceholder = run(["collect", "--record", "scratch/unbound-record.json", "--from-transcript", "--handoffs", "scratch/handoffs.json", "--id-map", `${placeholderKey}=${uuid}`, "--strict"]);
+      assert.equal(recByPlaceholder.status, 0, recByPlaceholder.stderr);
+      assert.equal(fs.readFileSync(path.join(root, specialist.reportSlot), "utf8"), reportBody);
+
+      // Provenance workerName lookup on unbound --record also succeeds
+      fs.rmSync(path.join(root, specialist.reportSlot), { force: true });
+      const activeSquadId = plan.workers[0].squadId;
+      write("scratch/prov.json", JSON.stringify({ entries: [{ squadId: activeSquadId, workerName: specialist.workerName, conversationId: uuid }] }));
+      const recByProv = run(["collect", "--record", "scratch/unbound-record.json", "--from-transcript", "--handoffs", "scratch/handoffs.json", "--provenance", "scratch/prov.json", "--strict"]);
+      assert.equal(recByProv.status, 0, recByProv.stderr);
+
+      // Restrictive ACS transcript policy still blocks --record direct transcript extraction
+      fs.rmSync(path.join(root, specialist.reportSlot), { force: true });
+      const acsStateDir = path.join(home, ".gemini", "antigravity", "context-saver");
+      fs.mkdirSync(acsStateDir, { recursive: true });
+      fs.writeFileSync(path.join(acsStateDir, "transcript-access.json"), JSON.stringify({
+        activeOwnerId: "coord-1",
+        policies: { "coord-1": { ownerId: "coord-1", mode: "deny", updatedAt: Date.now(), ttlMs: 3600000 } }
+      }));
+      const blockedByPolicy = run(["collect", "--record", "scratch/unbound-record.json", "--from-transcript", "--handoffs", "scratch/handoffs.json", "--id-map", `${specialist.workerName}=${uuid}`]);
+      assert.notEqual(blockedByPolicy.status, 0);
+      assert.match(blockedByPolicy.stderr, /restrictive Agy-Context-Saver transcript policy/i);
+      fs.rmSync(acsStateDir, { recursive: true, force: true });
+
+      // Conflicting explicit workerName vs placeholder, duplicate worker aliases across slots, invalid placeholders, and reserved keys must fail closed
+      const unboundObj = JSON.parse(fs.readFileSync(path.join(root, "scratch/unbound-record.json"), "utf8"));
+      assert.throws(() => collectReportSlots(root, {
+        record: { ...unboundObj, assignments: [{ ...unboundObj.assignments[0], workerName: "mismatch-worker" }] },
+        fromTranscript: true,
+        idMap: { "mismatch-worker": uuid },
+        handoffs: [{ sender: uuid, message: `READY ${specialist.reportSlot} - ok` }],
+        transcriptHomeDir: home
+      }), /Conflicting workerName/);
+      assert.throws(() => collectReportSlots(root, {
+        record: {
+          ...unboundObj,
+          assignments: [
+            unboundObj.assignments[0],
+            { conversationId: placeholderKey, report: reportPath(activeSquadId, 2) }
+          ]
+        },
+        fromTranscript: true,
+        idMap: { [specialist.workerName]: uuid },
+        handoffs: [{ sender: uuid, message: `READY ${specialist.reportSlot} - ok` }],
+        transcriptHomeDir: home
+      }), /Ambiguous worker key/);
+      for (const badPlaceholder of [
+        "<invoke_subagent:__proto__:conversationId>",
+        "<invoke_subagent:constructor:conversationId>",
+        "<invoke_subagent:prototype:conversationId>",
+        "<invoke_subagent:.:conversationId>",
+        "<invoke_subagent:..:conversationId>",
+        "<invoke_subagent::conversationId>",
+        "<invoke_subagent:a:b:conversationId>",
+        "<invoke_subagent:bad space:conversationId>"
+      ]) {
+        assert.throws(() => collectReportSlots(root, {
+          record: { ...unboundObj, assignments: [{ conversationId: badPlaceholder, report: specialist.reportSlot }] },
+          fromTranscript: true,
+          idMap: { a: uuid },
+          handoffs: [{ sender: uuid, message: `READY ${specialist.reportSlot} - ok` }],
+          transcriptHomeDir: home
+        }), /did not match|Invalid|reserved/i);
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(home, { recursive: true, force: true });

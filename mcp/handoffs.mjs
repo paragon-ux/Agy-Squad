@@ -1538,6 +1538,15 @@ function tryRealPath(candidate) {
 }
 
 const READONLY_SUBAGENT_TYPE = "agy-squad-readonly";
+const SUBAGENT_PLACEHOLDER_RE = /^<invoke_subagent:([A-Za-z0-9_.-]+):conversationId>$/;
+const RESERVED_WORKER_KEYS = new Set(["__proto__", "constructor", "prototype", ".", ".."]);
+
+function extractPlaceholderWorkerName(rawId) {
+  if (typeof rawId !== "string") return undefined;
+  const match = SUBAGENT_PLACEHOLDER_RE.exec(rawId.trim());
+  if (!match || RESERVED_WORKER_KEYS.has(match[1]) || match[1].endsWith(".")) return undefined;
+  return match[1];
+}
 const TRANSCRIPT_REPORT_LIMIT_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_STREAM_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_JSON_BYTES = 2 * 1024 * 1024;
@@ -1901,13 +1910,24 @@ function collectReportSlots(root, options = {}) {
   const slotToUuid = new Map();
   const uuidToSlot = new Map();
   const rebaseIfNeeded = (slot) => (overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  const registerWorkerKey = (key, resolvedSlot) => {
+    if (typeof key !== "string" || !key || RESERVED_WORKER_KEYS.has(key)) return;
+    const prevSlot = workerKeyToSlot.get(key);
+    if (prevSlot !== undefined && prevSlot !== resolvedSlot) {
+      throw new Error(`Ambiguous worker key '${key}' mapped to multiple report slots ('${prevSlot}' and '${resolvedSlot}').`);
+    }
+    workerKeyToSlot.set(key, resolvedSlot);
+  };
   const registerSlotWorker = (workerName, rawSlot) => {
     if (typeof workerName !== "string" || !workerName.trim() || typeof rawSlot !== "string") return;
     const wn = workerName.trim();
+    if (RESERVED_WORKER_KEYS.has(wn)) {
+      throw new Error(`Invalid reserved worker name '${wn}'.`);
+    }
     const resolvedSlot = rebaseIfNeeded(rawSlot);
     if (!slotWorkerNames.has(resolvedSlot)) slotWorkerNames.set(resolvedSlot, wn);
-    workerKeyToSlot.set(wn, resolvedSlot);
-    workerKeyToSlot.set(`<invoke_subagent:${wn}:conversationId>`, resolvedSlot);
+    registerWorkerKey(wn, resolvedSlot);
+    registerWorkerKey(`<invoke_subagent:${wn}:conversationId>`, resolvedSlot);
   };
   const bindSlotConversationId = (slotRel, rawId, requireUuid = false, sourceLabel = "binding") => {
     if (typeof rawId !== "string") {
@@ -2003,13 +2023,27 @@ function collectReportSlots(root, options = {}) {
     for (const a of record.assignments ?? []) {
       if (a?.report !== undefined) {
         addSlot(a.report);
-        bindSender(a.conversationId, a.report);
-        bindSender(a.workerName, a.report);
-        registerSlotWorker(a.workerName, a.report);
-        if (typeof a.conversationId === "string" && a.conversationId.trim()) {
-          workerKeyToSlot.set(a.conversationId.trim(), rebaseIfNeeded(a.report));
+        const resolvedSlot = rebaseIfNeeded(a.report);
+        const trimmedCid = typeof a.conversationId === "string" ? a.conversationId.trim() : "";
+        const explicitWn = typeof a.workerName === "string" && a.workerName.trim() ? a.workerName.trim() : undefined;
+        let placeholderWn;
+        if (trimmedCid.startsWith("<invoke_subagent:")) {
+          placeholderWn = extractPlaceholderWorkerName(trimmedCid);
+          if (!placeholderWn) {
+            throw new Error(`Invalid subagent placeholder '${trimmedCid}' for '${resolvedSlot}'.`);
+          }
         }
-        bindSlotConversationId(rebaseIfNeeded(a.report), a.conversationId, false, "record");
+        if (explicitWn && placeholderWn && explicitWn !== placeholderWn) {
+          throw new Error(`Conflicting workerName '${explicitWn}' and placeholder '${trimmedCid}' for '${resolvedSlot}'.`);
+        }
+        const effectiveWn = explicitWn ?? placeholderWn;
+        bindSender(a.conversationId, a.report);
+        bindSender(effectiveWn, a.report);
+        registerSlotWorker(effectiveWn, a.report);
+        if (trimmedCid) {
+          registerWorkerKey(trimmedCid, resolvedSlot);
+        }
+        bindSlotConversationId(resolvedSlot, a.conversationId, false, "record");
       }
     }
     for (const entry of provenance?.entries ?? []) {
@@ -2070,7 +2104,11 @@ function collectReportSlots(root, options = {}) {
     throw new Error("Provide --plan <plan.json>, --record <record.json>, or --squad <id> to collect report slots.");
   }
 
-  for (const [key, val] of Object.entries(idMap ?? {})) {
+  for (const key of Object.getOwnPropertyNames(idMap ?? {})) {
+    if (RESERVED_WORKER_KEYS.has(key)) {
+      throw new Error(`Invalid reserved --id-map key '${key}'.`);
+    }
+    const val = idMap[key];
     const mappedSlot = workerKeyToSlot.get(key) ?? (targetSlotSet.has(key) ? key : undefined);
     if (!mappedSlot) {
       throw new Error(`--id-map key '${key}' did not match any worker or assignment in the supplied plan or record.`);
