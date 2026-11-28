@@ -3838,6 +3838,50 @@ try {
 
     testS3RecordToBundleLifecycleCompatibility();
     testS4CollectHelpAndCanonicalReceiptRoots();
+
+    // ASQ-DEV-B1: bundle-init --from-scope excludes generated record outputs and rejects explicit --file collisions
+    {
+      const b1Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-b1-scope-")));
+      try {
+        fs.mkdirSync(path.join(b1Dir, "src"), { recursive: true });
+        fs.mkdirSync(path.join(b1Dir, "records"), { recursive: true });
+        fs.writeFileSync(path.join(b1Dir, "src/app.js"), "export const x = 1;\n");
+        const planRes = spawnSync(process.execPath, [agySquadCli, "plan", "--scope", "src", "--scope", "records", "--no-integrity", "--out", "scratch/plan.json", "Audit app"], { cwd: b1Dir, encoding: "utf8" });
+        assert.equal(planRes.status, 0, planRes.stderr);
+        const planObj = JSON.parse(fs.readFileSync(path.join(b1Dir, "scratch/plan.json"), "utf8"));
+        const sqId = planObj.workers[0].squadId;
+        const spec = planObj.workers[0].specialists[0];
+        const synSlot = planObj.workers[0].synthesisSlot;
+        fs.mkdirSync(path.join(b1Dir, path.dirname(spec.reportSlot)), { recursive: true });
+        fs.mkdirSync(path.join(b1Dir, path.dirname(synSlot)), { recursive: true });
+        fs.writeFileSync(path.join(b1Dir, spec.reportSlot), "Checked src/app.js:1.\n");
+        fs.writeFileSync(path.join(b1Dir, synSlot), "Content Verdict: PASS\nVerified.\n");
+        fs.writeFileSync(path.join(b1Dir, "scratch/handoffs.json"), JSON.stringify([{ sender: spec.workerName, message: `READY ${spec.reportSlot} - ok` }]));
+
+        for (const outArg of ["records/task.record.json", "./records/task.record.json"]) {
+          const init1 = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--from-scope", "--allow-unaudited", "--out", outArg, "--replace"], { cwd: b1Dir, encoding: "utf8" });
+          assert.equal(init1.status, 0, init1.stderr);
+          const init2 = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--from-scope", "--allow-unaudited", "--out", outArg, "--replace"], { cwd: b1Dir, encoding: "utf8" });
+          assert.equal(init2.status, 0, init2.stderr);
+          const fin = spawnSync(process.execPath, [agySquadCli, "finalize", "records/task.record.json", "--allow-unaudited", "--replace"], { cwd: b1Dir, encoding: "utf8" });
+          assert.equal(fin.status, 0, `bundle-init --from-scope --replace must not self-invalidate verifiedFiles: ${fin.stderr}`);
+        }
+        const explicitCollide = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--allow-unaudited", "--out", "records/task.record.json", "--file", "./records/task.record.json", "--replace"], { cwd: b1Dir, encoding: "utf8" });
+        assert.notEqual(explicitCollide.status, 0, "Explicit --file colliding with --out must fail closed");
+        assert.match(explicitCollide.stderr, /collides with generated record output/);
+
+        const allInit1 = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--all-squads", "--out-dir", "records", "--handoffs", "scratch/handoffs.json", "--from-scope", "--allow-unaudited", "--replace"], { cwd: b1Dir, encoding: "utf8" });
+        assert.equal(allInit1.status, 0, allInit1.stderr);
+        const allInit2 = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--all-squads", "--out-dir", "records", "--handoffs", "scratch/handoffs.json", "--from-scope", "--allow-unaudited", "--replace"], { cwd: b1Dir, encoding: "utf8" });
+        assert.equal(allInit2.status, 0, allInit2.stderr);
+        const allFin = spawnSync(process.execPath, [agySquadCli, "finalize", `records/${encodeURIComponent(sqId)}.record.json`, "--allow-unaudited", "--replace"], { cwd: b1Dir, encoding: "utf8" });
+        assert.equal(allFin.status, 0, allFin.stderr);
+      } finally {
+        fs.rmSync(b1Dir, { recursive: true, force: true });
+      }
+    }
+
+
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

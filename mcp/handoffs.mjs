@@ -2548,6 +2548,56 @@ function collectPlanSquadScopeEntries(rawPlan, selectedSquadId) {
   return deduped;
 }
 
+function buildOutputTargetMatcher(canonicalRoot, candidateOutRels) {
+  const targets = [];
+  const seen = new Set();
+  for (const raw of candidateOutRels) {
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    let rel;
+    try {
+      rel = normalizeContainedJsonOutPath(raw, canonicalRoot, "recordPath");
+    } catch {
+      continue;
+    }
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = path.join(canonicalRoot, rel);
+    targets.push({
+      rel,
+      lowerRel: rel.toLowerCase(),
+      baseLower: path.posix.basename(rel).toLowerCase(),
+      abs,
+      dirAbs: path.dirname(abs)
+    });
+  }
+  if (targets.length === 0) return () => null;
+  return (candidateInput) => {
+    if (typeof candidateInput !== "string" || !candidateInput.trim()) return null;
+    let candNorm = candidateInput.trim();
+    if (path.isAbsolute(candNorm)) {
+      const rel = relativizeContainedCliPath(candNorm, canonicalRoot, { allowEqual: false });
+      if (!rel) return null;
+      candNorm = rel;
+    } else {
+      if (process.platform === "win32") candNorm = candNorm.replace(/\\/g, "/");
+      candNorm = candNorm.replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "");
+    }
+    const candLower = candNorm.toLowerCase();
+    const candAbs = path.join(canonicalRoot, candNorm);
+    const candDirAbs = path.dirname(candAbs);
+    const candBaseLower = path.posix.basename(candNorm).toLowerCase();
+    for (const t of targets) {
+      if (candNorm === t.rel) return t.rel;
+      if (process.platform === "win32" && candLower === t.lowerRel) return t.rel;
+      if (isSameFsObject(candAbs, t.abs)) return t.rel;
+      if (process.platform === "darwin" && candBaseLower === t.baseLower && isSameFsObject(candDirAbs, t.dirAbs)) {
+        return t.rel;
+      }
+    }
+    return null;
+  };
+}
+
 function expandScopeEntriesToFiles(
   canonicalRoot,
   entries,
@@ -2558,6 +2608,7 @@ function expandScopeEntriesToFiles(
 ) {
   const maxFiles = Number.isInteger(options?.maxFiles) && options.maxFiles > 0 ? options.maxFiles : MAX_FROM_SCOPE_FILES;
   const allowEmptyResult = Boolean(options?.allowEmptyResult);
+  const excludeFilePredicate = typeof options?.excludeFilePredicate === "function" ? options.excludeFilePredicate : null;
   const expanded = new Set();
   const reportRootPrefix = `${resolvedReportRoot}/`;
   const throwCapExceeded = (originEntry) => {
@@ -2588,6 +2639,7 @@ function expandScopeEntriesToFiles(
         }
         walkDirectory(path.join(dirAbs, dirent.name), childRel, originEntry);
       } else if (dirent.isFile()) {
+        if (excludeFilePredicate?.(childRel)) continue;
         expanded.add(childRel);
         if (expanded.size > maxFiles) {
           throwCapExceeded(originEntry);
@@ -2620,6 +2672,12 @@ function expandScopeEntriesToFiles(
       throw symErr;
     }
     if (stat.isFile()) {
+      const hit = excludeFilePredicate?.(entry);
+      if (hit) {
+        throw new Error(
+          `--from-scope file entry '${entry}' collides with generated record output '${hit}'; write the record outside scoped files.`
+        );
+      }
       expanded.add(entry);
       if (expanded.size > maxFiles) {
         throwCapExceeded(null);
@@ -2858,10 +2916,27 @@ function buildBundleRecordInit(root, options = {}) {
   if (!Array.isArray(files) || files.some(f => typeof f !== "string" || !f.trim())) {
     throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
   }
+  const candidateRecordOutputs = Array.isArray(options.excludedRecordOutputs)
+    ? options.excludedRecordOutputs
+    : (explicitRecordPath ? [explicitRecordPath] : [recordSlotPath(selectedSquadId, resolvedReportRoot)]);
+  const matchOutputTarget = buildOutputTargetMatcher(root, candidateRecordOutputs);
+  const rejectOutputCollision = (fileList) => {
+    for (const file of fileList) {
+      const hit = matchOutputTarget(file);
+      if (hit) {
+        throw new Error(
+          `Verified input '${file}' collides with generated record output '${hit}'; write the record outside verified inputs or omit it from --file.`
+        );
+      }
+    }
+  };
+  rejectOutputCollision(files);
   let verifiedFiles = {};
   if (fromScope) {
     const scopeEntries = collectPlanSquadScopeEntries(rawPlan, selectedSquadId);
-    const expandedFiles = expandScopeEntriesToFiles(root, scopeEntries, selectedSquadId, verifiedDirs, resolvedReportRoot);
+    const expandedFiles = expandScopeEntriesToFiles(root, scopeEntries, selectedSquadId, verifiedDirs, resolvedReportRoot, {
+      excludeFilePredicate: matchOutputTarget
+    });
     const combinedFiles = [...new Set([...expandedFiles, ...files])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     verifiedFiles = fingerprint(root, combinedFiles, verifiedDirs);
   } else if (files.length > 0) {
@@ -2872,7 +2947,9 @@ function buildBundleRecordInit(root, options = {}) {
     !Array.isArray(template.verifiedFiles) &&
     Object.keys(template.verifiedFiles).length > 0
   ) {
-    verifiedFiles = fingerprint(root, Object.keys(template.verifiedFiles), verifiedDirs);
+    const templateFiles = Object.keys(template.verifiedFiles);
+    rejectOutputCollision(templateFiles);
+    verifiedFiles = fingerprint(root, templateFiles, verifiedDirs);
   }
 
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
@@ -3047,6 +3124,7 @@ function buildBundleRecordsForAllSquads(root, options = {}) {
       idMap: scopedIdMap,
       handoffs: allHandoffs !== undefined ? handoffsBySquad.get(sqId) : undefined,
       recordPath: outRel,
+      excludedRecordOutputs: resolvedOutRels,
       verifiedDirs,
       onLeadRead: info => { preReadSynthesis = info; }
     });
@@ -3131,6 +3209,7 @@ export {
   inspectHandoffs,
   isContainedPath,
   isExpectedRealPath,
+  isSameFsObject,
   isValidScopeEntry,
   messageLimit,
   normalizeContainedJsonOutPath,
