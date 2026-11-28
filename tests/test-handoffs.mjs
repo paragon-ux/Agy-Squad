@@ -3881,7 +3881,72 @@ try {
       }
     }
 
+    // ASQ-DEV-B2 & ASQ-ADJ-B1: Two-phase batch finalize --prune and batch prune --records / bundle=sha
+    {
+      const b2Dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-b2-batch-")));
+      try {
+        fs.mkdirSync(path.join(b2Dir, "src"), { recursive: true });
+        fs.writeFileSync(path.join(b2Dir, "src/a.js"), "export const a = 1;\n");
+        fs.writeFileSync(path.join(b2Dir, "src/b.js"), "export const b = 2;\n");
+        fs.writeFileSync(path.join(b2Dir, "manifest.json"), JSON.stringify({
+          squads: {
+            alpha: { specialists: [{ role: "A", objective: "Check a", scopeFiles: ["src/a.js"], readOnly: true }] },
+            beta: { specialists: [{ role: "B", objective: "Check b", scopeFiles: ["src/b.js"], readOnly: true }] }
+          }
+        }));
+        assert.equal(spawnSync(process.execPath, [agySquadCli, "plan", "--manifest", "manifest.json", "--topology", "flat", "--out", "scratch/plan.json"], { cwd: b2Dir, encoding: "utf8" }).status, 0);
+        const planObj = JSON.parse(fs.readFileSync(path.join(b2Dir, "scratch/plan.json"), "utf8"));
+        const handoffsList = [];
+        for (const w of planObj.workers) {
+          const sp = w.specialists[0];
+          fs.mkdirSync(path.join(b2Dir, path.dirname(sp.reportSlot)), { recursive: true });
+          fs.mkdirSync(path.join(b2Dir, path.dirname(w.synthesisSlot)), { recursive: true });
+          fs.writeFileSync(path.join(b2Dir, sp.reportSlot), `Verified ${w.squadId}.\n`);
+          fs.writeFileSync(path.join(b2Dir, w.synthesisSlot), "Content Verdict: PASS\nSynthesized.\n");
+          handoffsList.push({ sender: sp.workerName, message: `READY ${sp.reportSlot} - ok` });
+        }
+        fs.writeFileSync(path.join(b2Dir, "scratch/handoffs.json"), JSON.stringify(handoffsList));
+        const initRes = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--plan", "scratch/plan.json", "--all-squads", "--handoffs", "scratch/handoffs.json", "--from-scope", "--digest"], { cwd: b2Dir, encoding: "utf8" });
+        assert.equal(initRes.status, 0, initRes.stderr);
+        const initOut = JSON.parse(initRes.stdout);
+        const [recAlpha, recBeta] = initOut.records;
+        const [audAlpha, audBeta] = planObj.integrityAuditPlan;
+        fs.mkdirSync(path.join(b2Dir, path.dirname(audAlpha.reportSlot)), { recursive: true });
+        fs.mkdirSync(path.join(b2Dir, path.dirname(audBeta.reportSlot)), { recursive: true });
+        fs.writeFileSync(path.join(b2Dir, audAlpha.reportSlot), `Target Squad: alpha\nEvidence Digest: ${recAlpha.evidenceDigest}\nIntegrity Verdict: CLEAN\n`);
+        fs.writeFileSync(path.join(b2Dir, audBeta.reportSlot), `Target Squad: beta\nEvidence Digest: ${recBeta.evidenceDigest}\nIntegrity Verdict: INTEGRITY VIOLATION\n`);
 
+        const alphaSpecPath = path.join(b2Dir, planObj.workers[0].specialists[0].reportSlot);
+        const betaSpecPath = path.join(b2Dir, planObj.workers[1].specialists[0].reportSlot);
+        const failedBatchFin = spawnSync(process.execPath, [agySquadCli, "finalize", recAlpha.path, recBeta.path, "--prune"], { cwd: b2Dir, encoding: "utf8" });
+        assert.notEqual(failedBatchFin.status, 0, "Batch finalize --prune must fail when beta audit violates integrity");
+        assert.equal(fs.existsSync(alphaSpecPath), true, "ASQ-DEV-B2: alpha specialist report must NOT be pruned when beta fails validation");
+
+        // Fix beta audit and retry the exact same finalize --prune command without --replace
+        fs.writeFileSync(path.join(b2Dir, audBeta.reportSlot), `Target Squad: beta\nEvidence Digest: ${recBeta.evidenceDigest}\nIntegrity Verdict: CLEAN\n`);
+        const retryWithoutPrune = spawnSync(process.execPath, [agySquadCli, "finalize", recAlpha.path, recBeta.path], { cwd: b2Dir, encoding: "utf8" });
+        assert.equal(retryWithoutPrune.status, 0, retryWithoutPrune.stderr);
+        const finResults = JSON.parse(retryWithoutPrune.stdout).results;
+
+        // ASQ-ADJ-B1: Batch prune --records and bundle=sha must verify ALL entries before unlinking any report or record
+        const badBatchRecordsPrune = spawnSync(process.execPath, [agySquadCli, "prune", "--records", `${recAlpha.path}=${finResults[0].sha256}`, `${recBeta.path}=${"0".repeat(64)}`, "--clean-records"], { cwd: b2Dir, encoding: "utf8" });
+        assert.notEqual(badBatchRecordsPrune.status, 0);
+        assert.equal(fs.existsSync(alphaSpecPath), true, "ASQ-ADJ-B1: alpha loose report must remain when later --records entry fails");
+        assert.equal(fs.existsSync(path.join(b2Dir, recAlpha.path)), true, "ASQ-ADJ-B1: alpha record file must remain when later --records entry fails");
+
+        const badBatchBundlePrune = spawnSync(process.execPath, [agySquadCli, "prune", `${finResults[0].bundlePath}=${finResults[0].sha256}`, `${finResults[1].bundlePath}=${"0".repeat(64)}`], { cwd: b2Dir, encoding: "utf8" });
+        assert.notEqual(badBatchBundlePrune.status, 0);
+        assert.equal(fs.existsSync(alphaSpecPath), true, "ASQ-ADJ-B1: alpha loose report must remain when later bundle=sha entry fails");
+
+        // Now run batch finalize --prune end-to-end and verify clean completion
+        const okBatchFin = spawnSync(process.execPath, [agySquadCli, "finalize", recAlpha.path, recBeta.path, "--prune"], { cwd: b2Dir, encoding: "utf8" });
+        assert.equal(okBatchFin.status, 0, okBatchFin.stderr);
+        assert.equal(fs.existsSync(alphaSpecPath), false);
+        assert.equal(fs.existsSync(betaSpecPath), false);
+      } finally {
+        fs.rmSync(b2Dir, { recursive: true, force: true });
+      }
+    }
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

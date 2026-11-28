@@ -1380,6 +1380,7 @@ async function main(args) {
     const loadedPositionals = positionals.map(rawRecPos =>
       readRecordWithWorkspaceInference(baseRoot, explicit, rawRecPos, handoffsMod)
     );
+    // Phase 1: bundle and verify every requested record before unlinking any loose report.
     const finalizedResults = [];
     for (const { record, effectiveRoot, recRel } of loadedPositionals) {
       const verifiedDirs = new Set([effectiveRoot]);
@@ -1411,20 +1412,34 @@ async function main(args) {
         report,
         status: statusBySender.get(conversationId) ?? "PENDING"
       }));
-      let verified;
-      let pruned = null;
-      if (values.prune) {
-        const vp = handoffsMod.verifyAndPruneBundle(effectiveRoot, bundled.path, {
-          expectedSha256: bundled.sha256,
-          keepReports: values["keep-reports"],
-          verifiedDirs
-        });
-        pruned = vp.pruned;
-        verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports, citations: vp.citations };
-      } else {
-        verified = handoffsMod.verifyBundle(effectiveRoot, bundled.path, bundled.sha256, { verifiedDirs });
+      const verified = handoffsMod.verifyBundle(effectiveRoot, bundled.path, bundled.sha256, { verifiedDirs });
+      finalizedResults.push({ record, effectiveRoot, verifiedDirs, recRel, inspected, bundled, verified, pruned: null });
+    }
+    // Phase 2: prune loose specialist reports only after all records sealed and verified cleanly.
+    if (values.prune) {
+      const prunedSquads = [];
+      for (let idx = 0; idx < finalizedResults.length; idx++) {
+        const item = finalizedResults[idx];
+        try {
+          item.pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundled.path, item.bundled.sha256, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          prunedSquads.push(item.record.squadId);
+        } catch (error) {
+          if (prunedSquads.length > 0) {
+            const remaining = finalizedResults
+              .slice(idx)
+              .map(rem => handoffsMod.shellQuote(`${rem.recRel}=${rem.bundled.sha256}`))
+              .join(" ");
+            throw new Error(
+              `Prune failed on squad '${item.record.squadId}' after pruning [${prunedSquads.join(", ")}]: ${error.message}\n` +
+              `All bundles were verified in Phase 1. Recover remaining prunes with: agy-squad prune --records ${remaining}`
+            );
+          }
+          throw error;
+        }
       }
-      finalizedResults.push({ record, recRel, inspected, bundled, verified, pruned });
     }
     if (finalizedResults.length === 1 && !values.compact) {
       const single = finalizedResults[0];
@@ -1476,9 +1491,8 @@ async function main(args) {
     if (values.records !== undefined) {
       const recordArgs = [...new Set([...values.records, ...positionals])];
       if (!recordArgs.length) throw new Error(usageLine);
-      const results = [];
-      const removed = [];
-      const cleanedRecords = [];
+      // Phase 1: validate every record=sha256 entry and bundle parity before unlinking any report or record.
+      const prepared = [];
       for (const rawRecArg of recordArgs) {
         const pinIndex = rawRecArg.lastIndexOf("=");
         if (pinIndex < 1 || !/^[a-f0-9]{64}$/.test(rawRecArg.slice(pinIndex + 1))) throw new Error("prune --records requires <record.json>=<accepted-sha256>.");
@@ -1490,28 +1504,59 @@ async function main(args) {
         handoffsMod.verifyBundle(effectiveRoot, bundleRel, acceptedSha, { verifiedDirs });
         const bundle = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs), bundleRel));
         if (!handoffsMod.doesRecordMatchAcceptedBundle(record, bundle)) throw new Error("Record does not match the accepted bundle.");
-        const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, acceptedSha, {
-          keepReports: values["keep-reports"],
-          verifiedDirs
-        });
-        removed.push(...(pruned.removed ?? []));
-        if (values["clean-records"] && !values["keep-reports"] && !pruned.retained && !path.isAbsolute(recRel)) {
-          const recFull = handoffsMod.workspacePath(effectiveRoot, recRel, verifiedDirs);
+        const recFull = values["clean-records"] && !values["keep-reports"] && !path.isAbsolute(recRel)
+          ? handoffsMod.workspacePath(effectiveRoot, recRel, verifiedDirs)
+          : null;
+        if (recFull) {
           try {
             handoffsMod.readOpenedFileWithStat(recFull, recRel);
-            fs.unlinkSync(recFull);
-            cleanedRecords.push(recRel);
           } catch (err) {
             if (err?.code !== "ENOENT") throw err;
           }
         }
-        results.push({
-          squadId: record.squadId,
-          bundlePath: bundleRel,
-          acceptedSha256: acceptedSha,
-          removed: pruned.removed ?? [],
-          ...(pruned.retained ? { retained: pruned.retained } : {})
-        });
+        prepared.push({ record, effectiveRoot, recRel, recFull, verifiedDirs, bundleRel, acceptedSha });
+      }
+      // Phase 2: prune loose reports and clean records after all entries verified cleanly.
+      const results = [];
+      const removed = [];
+      const cleanedRecords = [];
+      for (let idx = 0; idx < prepared.length; idx++) {
+        const item = prepared[idx];
+        try {
+          const pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundleRel, item.acceptedSha, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          removed.push(...(pruned.removed ?? []));
+          if (item.recFull && !pruned.retained) {
+            try {
+              handoffsMod.readOpenedFileWithStat(item.recFull, item.recRel);
+              fs.unlinkSync(item.recFull);
+              cleanedRecords.push(item.recRel);
+            } catch (err) {
+              if (err?.code !== "ENOENT") throw err;
+            }
+          }
+          results.push({
+            squadId: item.record.squadId,
+            bundlePath: item.bundleRel,
+            acceptedSha256: item.acceptedSha,
+            removed: pruned.removed ?? [],
+            ...(pruned.retained ? { retained: pruned.retained } : {})
+          });
+        } catch (error) {
+          if (results.length > 0) {
+            const remaining = prepared
+              .slice(idx)
+              .map(rem => handoffsMod.shellQuote(`${rem.recRel}=${rem.acceptedSha}`))
+              .join(" ");
+            throw new Error(
+              `Prune failed on squad '${item.record.squadId}' after pruning [${results.map(r => r.squadId).join(", ")}]: ${error.message}\n` +
+              `Retry remaining entries with: agy-squad prune --records ${remaining}${values["clean-records"] ? " --clean-records" : ""}`
+            );
+          }
+          throw error;
+        }
       }
       console.log(
         JSON.stringify(
@@ -1529,24 +1574,50 @@ async function main(args) {
       return 0;
     }
     if (positionals.length >= 1 && positionals.every(p => p.includes("="))) {
-      const results = [];
-      const removed = [];
+      // Phase 1: validate and verify every bundle=sha256 entry before unlinking any loose report.
+      const preparedBundles = [];
       for (const pair of positionals) {
         const eqIdx = pair.lastIndexOf("=");
         const rawBundle = pair.slice(0, eqIdx).trim();
         const sha = pair.slice(eqIdx + 1).trim();
-        if (!rawBundle || !sha) {
+        if (!rawBundle || !/^[0-9a-f]{64}$/.test(sha)) {
           throw new Error(`Invalid bundle=sha256 pair '${pair}'.\n${usageLine}`);
         }
         const { effectiveRoot, bundleRel } = resolveBundleWithWorkspaceInference(baseRoot, explicit, rawBundle, handoffsMod);
-        const pruned = handoffsMod.pruneReports(effectiveRoot, bundleRel, sha, { keepReports: values["keep-reports"] });
-        removed.push(...(pruned.removed ?? []));
-        results.push({
-          bundlePath: bundleRel,
-          acceptedSha256: sha,
-          removed: pruned.removed ?? [],
-          ...(pruned.retained ? { retained: pruned.retained } : {})
-        });
+        const verifiedDirs = new Set([effectiveRoot]);
+        handoffsMod.verifyBundle(effectiveRoot, bundleRel, sha, { verifiedDirs });
+        preparedBundles.push({ effectiveRoot, bundleRel, sha, verifiedDirs });
+      }
+      // Phase 2: prune verified loose reports.
+      const results = [];
+      const removed = [];
+      for (let idx = 0; idx < preparedBundles.length; idx++) {
+        const item = preparedBundles[idx];
+        try {
+          const pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundleRel, item.sha, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          removed.push(...(pruned.removed ?? []));
+          results.push({
+            bundlePath: item.bundleRel,
+            acceptedSha256: item.sha,
+            removed: pruned.removed ?? [],
+            ...(pruned.retained ? { retained: pruned.retained } : {})
+          });
+        } catch (error) {
+          if (results.length > 0) {
+            const remaining = preparedBundles
+              .slice(idx)
+              .map(rem => handoffsMod.shellQuote(`${rem.bundleRel}=${rem.sha}`))
+              .join(" ");
+            throw new Error(
+              `Prune failed at '${item.bundleRel}' after pruning ${results.length} bundle(s): ${error.message}\n` +
+              `Retry remaining entries with: agy-squad prune ${remaining}`
+            );
+          }
+          throw error;
+        }
       }
       console.log(JSON.stringify({ ok: true, count: results.length, results, removed }, null, 2));
       return 0;
