@@ -2744,7 +2744,7 @@ function shellQuote(value) {
 
 function replaceLineTokensOnce(line, rules) {
   if (rules.length === 0) return line;
-  let out = "";
+  let out = "", inCmd = false;
   for (let i = 0; i < line.length;) {
     let matched = null;
     for (const rule of rules) {
@@ -2752,7 +2752,8 @@ function replaceLineTokensOnce(line, rules) {
       const end = i + rule.from.length;
       if (rule.boundary) {
         const leadOk = i === 0 || (rule.boundary === "quoted" ? " \t`([=:".includes(line[i - 1]) : " \t`".includes(line[i - 1]));
-        const trailOk = end >= line.length || (rule.boundary === "quoted" ? " \t`;.,:)]".includes(line[end]) : " \t`;".includes(line[end]));
+        const trailOk = end >= line.length || " \t`;".includes(line[end]) ||
+          (!inCmd && rule.boundary === "quoted" && ".,:)]".includes(line[end]) && (end + 1 >= line.length || " \t".includes(line[end + 1])));
         if (!leadOk || !trailOk) continue;
       }
       matched = rule;
@@ -2762,6 +2763,7 @@ function replaceLineTokensOnce(line, rules) {
       out += matched.to;
       i += matched.from.length;
     } else {
+      if (line[i] === "`") inCmd = !inCmd;
       out += line[i++];
     }
   }
@@ -2770,7 +2772,7 @@ function replaceLineTokensOnce(line, rules) {
 
 function addOrigPathBindRules(cmdRules, origPath, quotedReplacement) {
   const sq = "'" + origPath.replaceAll("'", "'\\''") + "'";
-  const dq = '"' + origPath.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"';
+  const dq = '"' + origPath.replace(/[\\"$`]/g, ch => "\\" + ch) + '"';
   const sh = shellQuote(origPath);
   cmdRules.push({ from: sq, to: quotedReplacement, boundary: "quoted" }, { from: dq, to: quotedReplacement, boundary: "quoted" });
   if (sh !== sq && sh !== dq) cmdRules.push({ from: sh, to: quotedReplacement, boundary: true });

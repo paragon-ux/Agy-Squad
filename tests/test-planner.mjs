@@ -2217,10 +2217,10 @@ try {
           }
         }
 
-        // ASQ-9: Custom manifest integrity_auditor instructions with single-quoted, double-quoted, and unquoted shell-safe original paths
+        // ASQ-9: Custom manifest integrity_auditor instructions with single-quoted, double-quoted, backup/suffix, and $-escaped original paths
         const defaultRecSlot = "scratch/agy-squad/squad-main/record.json", defaultAuditSlot = "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md";
         const customManifestPath = path.join(spacedRoot, "custom-audit-manifest.json");
-        const instr = `Read '${defaultRecSlot}' and "${defaultAuditSlot}" first. Verify "${defaultRecSlot}" alongside '${defaultAuditSlot}', then check \`agy-squad digest '${defaultRecSlot}'\` ; \`agy-squad verdict --integrity "${defaultAuditSlot}"\` ; \`agy-squad inspect ${defaultRecSlot}\`.`;
+        const instr = `Read '${defaultRecSlot}', then verify "${defaultAuditSlot}". Check \`cp '${defaultRecSlot}'.bak '${defaultRecSlot}'\` ; \`cp "${defaultAuditSlot}". "${defaultAuditSlot}"\` ; \`agy-squad inspect ${defaultRecSlot}\`.`;
         fs.writeFileSync(customManifestPath, JSON.stringify({ squads: {
           main: { specialists: [{ role: "Reviewer", objective: "Review index", scopeFiles: ["src/index.js"], readOnly: true }] },
           integrity_auditor: { specialists: [{ role: "Custom Auditor", objective: "Audit main squad", scopeFiles: ["src/index.js"], instructions: instr }] }
@@ -2235,15 +2235,35 @@ try {
             const recCustom = buildBundleRecordInit(spacedRoot, { plan: customPlan, files: ["src/index.js"], recordPath: effRec, handoffs: [{ sender: customPlan.workers[0].specialists[0].workerName, message: `READY ${mainSpec} - ok` }] });
             recCustom.integrityAuditSlots = [effAudit];
             const boundBrief = buildBoundAuditSwarmAdds(spacedRoot, customPlan, recCustom, effRec, { evidenceDigest: "c".repeat(64) })[0].brief;
-            assert.ok(!boundBrief.includes(defaultRecSlot) && !boundBrief.includes(defaultAuditSlot) && !boundBrief.includes("''") && boundBrief.split("\n").includes(`Report slot: ${effAudit}`), boundBrief);
-            const cmds = [...boundBrief.matchAll(/`(agy-squad (?:digest|verdict|inspect)[^`]+)`/g)].map(m => m[1]);
+            assert.ok(boundBrief.includes(`Instructions: Read ${shellQuote(effRec)}, then verify ${shellQuote(effAudit)}.`) && !boundBrief.includes("''") && boundBrief.split("\n").includes(`Report slot: ${effAudit}`), boundBrief);
+            const cmds = [...boundBrief.matchAll(/`((?:cp|agy-squad (?:digest|verdict|inspect))[^`]+)`/g)].map(m => m[1]);
             assert.equal(cmds.length, 5);
             if (process.platform !== "win32") {
-              for (const [cmdStr, expectedArgs] of [[cmds[0], ["digest", effRec]], [cmds[1], ["verdict", "--integrity", effAudit]], [cmds[2], ["inspect", effRec]], [cmds[3], ["digest", "--workspace", customPlan.workspace, effRec]], [cmds[4], ["verdict", "--workspace", customPlan.workspace, "--integrity", effAudit]]]) {
-                const echoRes = spawnSync("sh", ["-c", cmdStr.replace(/^agy-squad\b/, `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(2)))' -- argv0`)], { encoding: "utf8" });
+              for (const [cmdStr, expectedArgs] of [[cmds[0], ["cp", `${defaultRecSlot}.bak`, effRec]], [cmds[1], ["cp", `${defaultAuditSlot}.`, effAudit]], [cmds[2], ["agy-squad", "inspect", effRec]], [cmds[3], ["agy-squad", "digest", "--workspace", customPlan.workspace, effRec]], [cmds[4], ["agy-squad", "verdict", "--workspace", customPlan.workspace, "--integrity", effAudit]]]) {
+                const echoRes = spawnSync("sh", ["-c", `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(2)))' -- argv0 ${cmdStr}`], { encoding: "utf8" });
                 assert.equal(echoRes.status, 0, echoRes.stderr);
                 assert.deepEqual(JSON.parse(echoRes.stdout), expectedArgs);
               }
+            }
+          }
+          const escRec = "scratch/\\$run/squad-main/record.json", escAudit = "scratch/\\$run/squad-integrity_auditor/specialist-1/report.md";
+          fs.writeFileSync(customManifestPath, JSON.stringify({ squads: {
+            main: { specialists: [{ role: "Reviewer", objective: "Review index", scopeFiles: ["src/index.js"], readOnly: true }] },
+            integrity_auditor: { specialists: [{ role: "Custom Auditor", objective: "Audit main squad", scopeFiles: ["src/index.js"], instructions: `Read "${escRec}", then "${escAudit}". Check \`agy-squad digest "${escRec}"\` ; \`agy-squad verdict --integrity "${escAudit}"\`.` }] }
+          } }));
+          const dollarPlan = planSquadCohort({ manifestPath: "custom-audit-manifest.json", executionMode: "swarm", reportRoot: "scratch/$run" }, spacedRoot);
+          const dollarSpec = dollarPlan.workers[0].specialists[0].reportSlot;
+          fs.mkdirSync(path.join(spacedRoot, path.dirname(dollarSpec)), { recursive: true });
+          fs.writeFileSync(path.join(spacedRoot, dollarSpec), "src/index.js:1 ok\n");
+          const recDollar = buildBundleRecordInit(spacedRoot, { plan: dollarPlan, files: ["src/index.js"], recordPath: "scratch/out-dollar.json", handoffs: [{ sender: dollarPlan.workers[0].specialists[0].workerName, message: `READY ${dollarSpec} - ok` }] });
+          recDollar.integrityAuditSlots = ["scratch/out-audit/report.md"];
+          const dollarBrief = buildBoundAuditSwarmAdds(spacedRoot, dollarPlan, recDollar, "scratch/out-dollar.json", { evidenceDigest: "d".repeat(64) })[0].brief;
+          assert.ok(dollarBrief.includes("Instructions: Read scratch/out-dollar.json, then scratch/out-audit/report.md.") && !dollarBrief.includes("$run"), dollarBrief);
+          if (process.platform !== "win32") {
+            const dCmds = [...dollarBrief.matchAll(/`(agy-squad (?:digest|verdict)[^`]+)`/g)].map(m => m[1]);
+            for (const [cmdStr, expectedArgs] of [[dCmds[0], ["agy-squad", "digest", "scratch/out-dollar.json"]], [dCmds[1], ["agy-squad", "verdict", "--integrity", "scratch/out-audit/report.md"]]]) {
+              const echoRes = spawnSync("sh", ["-c", `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(2)))' -- argv0 ${cmdStr}`], { encoding: "utf8" });
+              assert.deepEqual([echoRes.status, JSON.parse(echoRes.stdout)], [0, expectedArgs]);
             }
           }
         } finally {
