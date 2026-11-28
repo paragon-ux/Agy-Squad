@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
-import { normalizeReportRoot, trimTrailingSlashes } from "../../../../mcp/handoffs.mjs";
+import { normalizeReportRoot, shellQuote, trimTrailingSlashes } from "../../../../mcp/handoffs.mjs";
 import { TOOLS } from "../../../../mcp/index.js";
 import { planSquadCohort } from "../../../../mcp/planner.mjs";
 import { stripCode, stripFencedCodeBlocks } from "../../../../mcp/verdicts.mjs";
@@ -490,8 +490,8 @@ function runDiagnostics() {
   const swarmLeadBrief = minSwarm.workers[0].lead.swarmAdd.brief;
   const swarmAuditBrief = minSwarm.integrityAuditPlan[0].swarmAdd.brief;
   // Measure template overhead independently of the host's checkout path.
-  const workspaceArgument = /[\s"'`$\\]/.test(minSwarm.workspace) ? JSON.stringify(minSwarm.workspace) : minSwarm.workspace;
-  const templateBytes = text => Buffer.byteLength(text.replaceAll(workspaceArgument, '"<workspace>"'), "utf8");
+  const workspaceArgument = shellQuote(minSwarm.workspace);
+  const templateBytes = text => Buffer.byteLength(text.replaceAll(workspaceArgument, "'<workspace>'"), "utf8");
   const mcpToolsListResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } }), "utf8");
 
   for (const [label, text] of [

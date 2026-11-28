@@ -2037,6 +2037,125 @@ try {
       fs.rmSync(path.join(root, "scratch/atomic-dir.json"), { force: true });
     }
 
+    // ASQ-DEV-F2: swarmPaneOutPath must reject collisions with outPath and wave1/wave2 sidecars even when replace: true
+    {
+      fs.mkdirSync(path.join(root, "scratch"), { recursive: true });
+      for (const rel of ["scratch/collide.json", "scratch/collide.wave1.json", "scratch/collide.wave2.json"]) {
+        fs.writeFileSync(path.join(root, rel), "SENTINEL\n");
+      }
+      try {
+        for (const collidingPane of ["scratch/collide.json", "./scratch/collide.json", "scratch/collide.wave1.json", "scratch/collide.wave2.json"]) {
+          assert.throws(
+            () => planSquadCohort({ task: "Pane collision", outPath: "scratch/collide.json", swarmPaneOutPath: collidingPane, replace: true }, root),
+            /collides with|cannot equal/i,
+            `swarmPaneOutPath '${collidingPane}' must fail preflight collision check`
+          );
+          assert.equal(fs.readFileSync(path.join(root, "scratch/collide.json"), "utf8"), "SENTINEL\n");
+          assert.equal(fs.readFileSync(path.join(root, "scratch/collide.wave1.json"), "utf8"), "SENTINEL\n");
+          assert.equal(fs.readFileSync(path.join(root, "scratch/collide.wave2.json"), "utf8"), "SENTINEL\n");
+        }
+      } finally {
+        for (const rel of ["scratch/collide.json", "scratch/collide.wave1.json", "scratch/collide.wave2.json"]) {
+          fs.rmSync(path.join(root, rel), { force: true });
+        }
+      }
+    }
+
+    // ASQ-DEV-F4 & ASQ-ADJ-F1: POSIX & Windows PowerShell argument quoting and placeholder safety
+    {
+      const spacedRoot = path.join(root, "ws $HOME space");
+      fs.mkdirSync(path.join(spacedRoot, "src"), { recursive: true });
+      fs.writeFileSync(path.join(spacedRoot, "src/index.js"), "export const v = 1;\n");
+      try {
+        const spacedPlan = planSquadCohort({
+          task: "Check quoting",
+          scopeFiles: ["src/index.js"],
+          readOnly: true,
+          executionMode: "subagent",
+          readOnlySubagent: true,
+          outPath: "scratch/my plan.json",
+          reportRoot: "scratch/my reports/agy-squad"
+        }, spacedRoot);
+        const execSteps = spacedPlan.verificationPipeline.filter(s => !s.startsWith("#"));
+        assert.ok(execSteps.length >= 3);
+        for (const step of execSteps) {
+          assert.ok(!step.includes('"' + spacedPlan.workspace), `wsCliArg must not use double-quoted $ expansion: ${step}`);
+          assert.ok(step.includes(`'${spacedPlan.workspace}'`), `wsCliArg must POSIX single-quote spaced/$ workspace: ${step}`);
+          if (step.includes("--plan ")) {
+            assert.ok(step.includes("'scratch/my plan.json'"), `planCliRef with spaces must be single-quoted: ${step}`);
+          }
+          if (step.startsWith("agy-squad finalize ")) {
+            assert.ok(step.includes("'scratch/my reports/agy-squad/squad-task_squad/record.json'"), `spaced recordSlot must be single-quoted: ${step}`);
+          }
+          assert.ok(!/(?:^|\s)<[^'\s]+>/.test(step), `Unquoted <placeholder> redirection token prohibited: ${step}`);
+          assert.ok(!/(?:^|\s)\[--/.test(step), `Unquoted [--flag] metasyntax prohibited in executable steps: ${step}`);
+        }
+        const auditPrompt = spacedPlan.integrityAuditPlan[0].Subagent.Prompt;
+        assert.match(auditPrompt, /Run `agy-squad digest --workspace '/);
+
+        const { shellQuote } = await import("../mcp/handoffs.mjs");
+        assert.equal(typeof shellQuote, "function");
+        assert.equal(shellQuote(""), "''");
+        assert.equal(shellQuote("scratch/plan.json"), "scratch/plan.json");
+        assert.equal(shellQuote("<handoffs.json>"), "'<handoffs.json>'");
+        assert.equal(shellQuote("worker=<worker-uuid>"), "'worker=<worker-uuid>'");
+
+        // POSIX sh round-trip verification (Linux/macOS, plus Git Bash sh if available)
+        if (process.platform !== "win32") {
+          const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-sh-rt-"));
+          try {
+            const samples = [
+              "",
+              "scratch/my plan.json",
+              "path with 'apostrophe' inside",
+              "$HOME $(id) `uname`",
+              "C:\\Users\\dev\\my repo\\plan.json",
+              "<handoffs.json>",
+              "worker=<worker-uuid>",
+              "semi;colon|pipe&amp"
+            ];
+            const quotedArgs = samples.map(s => shellQuote(s)).join(" ");
+            const shCmd = `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' -- ${quotedArgs}`;
+            const shRes = spawnSync("sh", ["-c", shCmd], { cwd: probeDir, encoding: "utf8" });
+            assert.equal(shRes.status, 0, shRes.stderr);
+            assert.deepEqual(JSON.parse(shRes.stdout), samples);
+            assert.deepEqual(fs.readdirSync(probeDir), [], "Quoted <placeholder> must not create files via redirection");
+          } finally {
+            fs.rmSync(probeDir, { recursive: true, force: true });
+          }
+        }
+
+        // Windows PowerShell round-trip verification (mandatory on win32; opportunistic when pwsh exists elsewhere)
+        const psBin = process.platform === "win32" ? "powershell.exe" : "pwsh";
+        const psProbe = spawnSync(psBin, ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"], { encoding: "utf8" });
+        if (process.platform === "win32") {
+          assert.equal(psProbe.status, 0, `Windows CI must execute PowerShell quoting check: ${psProbe.stderr}`);
+        }
+        if (psProbe.status === 0) {
+          const psDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-ps-rt-"));
+          try {
+            const winSamples = [
+              "scratch/my plan.json",
+              "C:\\Users\\dev\\my repo\\plan.json",
+              "$env:USERNAME $(Get-Location)",
+              "<handoffs.json>",
+              "worker=<worker-uuid>"
+            ];
+            const psArgs = winSamples.map(s => shellQuote(s)).join(" ");
+            const psCmd = `& ${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' -- ${psArgs}`;
+            const psRes = spawnSync(psBin, ["-NoProfile", "-NonInteractive", "-Command", psCmd], { cwd: psDir, encoding: "utf8" });
+            assert.equal(psRes.status, 0, psRes.stderr);
+            assert.deepEqual(JSON.parse(psRes.stdout), winSamples);
+            assert.deepEqual(fs.readdirSync(psDir), []);
+          } finally {
+            fs.rmSync(psDir, { recursive: true, force: true });
+          }
+        }
+      } finally {
+        fs.rmSync(spacedRoot, { recursive: true, force: true });
+      }
+    }
+
     console.log("✓ squad_planner model pinning, scope overlap checks, transcript-safe provenance scaffold, and CLI plan");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

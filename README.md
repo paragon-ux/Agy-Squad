@@ -35,7 +35,7 @@ You do not need Agy-Squad for every task. Use `/boost` when fixing or investigat
  
 The npm package includes the custom `agy-squad-readonly` subagent type for read-only `invoke_subagent` specialists. Enable it with `readOnlySubagent: true` in `squad_planner` or `--readonly-subagent` with `agy-squad plan --mode subagent`. The specialist returns its Markdown report as chat text and sends only the short `READY` receipt. `agy-squad collect` then writes that report to the planned report slot without changing downstream hashing or verification.
  
-In a default-open transcript environment, `collect` can extract the final `# Evidence Report` response directly from the worker transcript when the receipt sender is the worker conversation UUID. When Agy-Context-Saver policy is restrictive, direct extraction fails closed. Extract through the allowed CLI instead and ingest the resulting JSON:
+In a default-open transcript environment, `collect` extracts the final `# Evidence Report` response directly from the worker transcript only when the coordinator binds each worker to its `invoke_subagent` conversation UUID (via `--id-map <worker=uuid>`, `--provenance`, or `--record`) and the receipt `sender` matches that bound UUID. Untrusted UUID text inside receipt messages is ignored. When Agy-Context-Saver policy is restrictive, direct extraction fails closed. Extract through the allowed CLI instead and ingest the resulting JSON:
  
 ```bash
 agy-context transcript query --id <worker-uuid> --roles assistant --mode full --field content --limit 5 --full --json --out scratch/worker-transcript.json

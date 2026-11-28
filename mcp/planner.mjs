@@ -18,6 +18,8 @@ import {
   bundlePath,
   ensureDirectory,
   expandScopeEntriesToFiles,
+  isExpectedRealPath,
+  isSameFsObject,
   normalizeContainedJsonOutPath,
   normalizeReportRoot,
   publish,
@@ -817,6 +819,31 @@ function planSquadCohort(
   }
   const swarmPaneTarget =
     swarmPaneOutPath !== undefined ? resolveSwarmPaneOutTarget(swarmPaneOutPath, root) : undefined;
+  if (swarmPaneTarget && normalizedOutRel !== undefined) {
+    const paneAbs = swarmPaneTarget.kind === "workspace"
+      ? path.join(root, swarmPaneTarget.relPath)
+      : swarmPaneTarget.absPath;
+    const planTargets = [
+      { label: "outPath", rel: normalizedOutRel },
+      ...(waveFiles
+        ? [
+            { label: "wave1 sidecar", rel: waveFiles.wave1 },
+            { label: "wave2 sidecar", rel: waveFiles.wave2 }
+          ]
+        : [])
+    ];
+    for (const item of planTargets) {
+      const itemAbs = path.join(root, item.rel);
+      const exactOrCaseMatch =
+        paneAbs === itemAbs ||
+        ((process.platform === "win32" || process.platform === "darwin") &&
+          paneAbs.toLowerCase() === itemAbs.toLowerCase() &&
+          (process.platform === "win32" || !fs.existsSync(path.dirname(paneAbs)) || !fs.existsSync(path.dirname(itemAbs)) || isSameFsObject(path.dirname(paneAbs), path.dirname(itemAbs))));
+      if (exactOrCaseMatch || isExpectedRealPath(itemAbs, paneAbs) || isSameFsObject(itemAbs, paneAbs)) {
+        throw new Error(`swarmPaneOutPath '${swarmPaneOutPath}' collides with ${item.label} '${item.rel}'.`);
+      }
+    }
+  }
   let loadedSquads;
   let selectedManifest;
   if (task !== undefined) {
@@ -1156,7 +1183,7 @@ function planSquadCohort(
     });
   }
 
-  const wsCliArg = /[\s"'`$\\]/.test(root) ? JSON.stringify(root) : root;
+  const wsCliArg = shellQuote(root);
   const auditWarnings = [];
   const validatedAuditKeys = new Set();
   const integrityAuditPlan = includeIntegrityAuditor
@@ -1188,8 +1215,8 @@ function planSquadCohort(
           );
           recordSubagentWorkerModel(auditModel);
           const targetScopeNote = executionMode === "swarm"
-            ? `Run 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots/traces only (no unrelated repo source reads).`
-            : `Run 'agy-squad digest --workspace ${wsCliArg} ${squadRecordSlot}' & 'agy-squad verdict --workspace ${wsCliArg} --integrity ${auditSlot}'; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
+            ? `Run \`agy-squad digest --workspace ${wsCliArg} ${shellQuote(squadRecordSlot)}\` & \`agy-squad verdict --workspace ${wsCliArg} --integrity ${shellQuote(auditSlot)}\`; '${id}' slots/traces only (no unrelated repo source reads).`
+            : `Run \`agy-squad digest --workspace ${wsCliArg} ${shellQuote(squadRecordSlot)}\` & \`agy-squad verdict --workspace ${wsCliArg} --integrity ${shellQuote(auditSlot)}\`; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,
@@ -1366,7 +1393,7 @@ function planSquadCohort(
   }
   if (executionMode === "swarm" && workspaceIsolation !== "inherit") {
     warnings.push(
-      `Swarm workers run in '${workspaceIsolation}' copies; merge or collect report slots from worker copies into the coordinator workspace before running agy-squad bundle.`
+      `Swarm workers run in '${workspaceIsolation}' copies; merge or collect report slots from worker copies into the coordinator workspace (in layered mode, run agy-squad collect after Wave 1 receipts and before spawning Wave 2 leads) before running agy-squad bundle.`
     );
   }
   if (modelProvenance.warning) {
