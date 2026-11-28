@@ -177,11 +177,13 @@ const SUBCOMMAND_HELP = {
     "",
     "Options:",
     "  --plan <plan.json>               Planner JSON output defining expected report slots",
+    "  --provenance <scaffold.json>     Optional provenanceScaffold JSON binding worker UUIDs",
     "  --record <record.json>           Bundle record JSON defining expected report slots",
     "  --squad <id>                     Collect slots for one squad ID (with --from, or filter --plan)",
     "  --from <worktree-dir>            Repeatable source worktree directory",
     "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts (requires --plan or --record)",
     "  --handoff <receipt>              Repeatable inline handoff receipt containing wt=<dir>",
+    "  --id-map <worker=uuid>           Repeatable coordinator-bound worker conversation UUID",
     "  --transcript-json <slot=json>    Materialize Agy-Context-Saver transcript JSON into a report slot",
     "  --from-transcript                Enable direct transcript extraction for matching receipts",
     "  --workspace <dir>                Target coordinator workspace root (default: cwd)",
@@ -746,7 +748,7 @@ function parseCollectHandoffEntries(items) {
 const STRING_OPTIONS_BY_COMMAND = {
   plan: ["manifest", "workspace", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq", "out", "swarm-pane-out", "emit-wave"],
   dispatch: ["squad", "manifest", "workspace"],
-  collect: ["plan", "record", "squad", "from", "handoffs", "handoff", "transcript-json", "workspace", "report-root"],
+  collect: ["plan", "provenance", "record", "squad", "from", "handoffs", "handoff", "id-map", "transcript-json", "workspace", "report-root"],
   "bundle-init": ["plan", "provenance", "squad", "out-dir", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "out"],
   fingerprint: ["workspace"],
   inspect: ["workspace"],
@@ -924,14 +926,16 @@ async function main(args) {
     return 0;
   }
   if (command === "collect") {
-    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) [--from <worktree-dir>...] [--handoffs <file.json>] [--handoff <receipt>...] [--transcript-json <slot=jsonPath>...] [--from-transcript] [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
+    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) [--provenance <scaffold.json>] [--from <worktree-dir>...] [--handoffs <file.json>] [--handoff <receipt>...] [--id-map <worker=uuid>...] [--transcript-json <slot=jsonPath>...] [--from-transcript] [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       plan: { type: "string" },
+      provenance: { type: "string" },
       record: { type: "string" },
       squad: { type: "string" },
       from: { type: "string", multiple: true },
       handoffs: { type: "string" },
       handoff: { type: "string", multiple: true },
+      "id-map": { type: "string", multiple: true },
       workspace: { type: "string" },
       "report-root": { type: "string" },
       overwrite: { type: "boolean", default: false },
@@ -960,6 +964,10 @@ async function main(args) {
     }
     const targetRoot = inferChildWorkspaceIfContained(baseRoot, explicit, plan?.workspace ?? record?.workspace, handoffsMod);
     const rebaseInput = p => targetRoot !== baseRoot && p !== "-" ? path.resolve(baseRoot, p) : p;
+    const provenance = values.provenance !== undefined
+      ? await readJsonInput(targetRoot, rebaseInput(values.provenance), "provenance", handoffsMod)
+      : undefined;
+    const idMap = values["id-map"] !== undefined ? parseKeyValuePairs(values["id-map"], "id-map") : undefined;
     let handoffs;
     if (values.handoffs !== undefined) {
       const parsedHandoffs = await readJsonInput(targetRoot, rebaseInput(values.handoffs), "handoffs", handoffsMod);
@@ -982,7 +990,9 @@ async function main(args) {
       sources,
       handoffs,
       plan,
+      provenance,
       record,
+      idMap,
       squadId: values.squad,
       reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot) : undefined,
       overwrite: values.overwrite,

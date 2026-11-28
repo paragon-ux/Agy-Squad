@@ -1583,18 +1583,16 @@ function restrictiveTranscriptPolicyError(homeDir = os.homedir(), explicitHomeOv
   return null;
 }
 
-function extractUuidFromHandoff(handoff) {
-  for (const field of [handoff?.sender, handoff?.conversationId, handoff?.senderId]) {
-    const value = typeof field === "string" ? field.trim() : "";
-    if (UUID_RE.test(value)) return value;
-  }
-  const message = typeof handoff?.message === "string" ? handoff.message : "";
-  const m = message.match(/(?:^|[\s;,(])(?:id|uuid|conversationId)=([0-9a-f-]{36})(?=$|[\s;,)])/i);
-  return m && UUID_RE.test(m[1]) ? m[1] : null;
+function normalizeUuid(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
 function resolveTranscriptFullPath(conversationId, homeDir = os.homedir()) {
-  if (!UUID_RE.test(conversationId)) throw new Error(`Invalid transcript conversation UUID: ${conversationId}`);
+  const normId = normalizeUuid(conversationId);
+  if (!normId) throw new Error(`Invalid transcript conversation UUID: ${conversationId}`);
+  conversationId = normId;
   const geminiDir = path.join(homeDir, ".gemini");
   let hostEntries = [];
   try {
@@ -1770,7 +1768,11 @@ function extractAcsJsonReport(root, rawFilePath, verifiedDirs) {
   if (typeof content !== "string" || !content.trim()) throw new Error(`Agy-Context-Saver transcript JSON has empty report content: ${rawFilePath}`);
   const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > TRANSCRIPT_REPORT_LIMIT_BYTES) throw new Error(`Agy-Context-Saver transcript report exceeds the 128 KiB ceiling: ${rawFilePath}`);
-  if (conversationId !== null && !UUID_RE.test(conversationId)) throw new Error(`Agy-Context-Saver transcript JSON has an invalid conversation UUID: ${rawFilePath}`);
+  if (conversationId !== null) {
+    const normConvId = normalizeUuid(conversationId);
+    if (!normConvId) throw new Error(`Agy-Context-Saver transcript JSON has an invalid conversation UUID: ${rawFilePath}`);
+    conversationId = normConvId;
+  }
   return { bytes: Buffer.from(content, "utf8"), provenance: { conversationId, stepIndex }, relPath: relCandidate };
 }
  
@@ -1793,7 +1795,9 @@ function collectReportSlots(root, options = {}) {
     sources = [],
     handoffs,
     plan,
+    provenance,
     record,
+    idMap,
     squadId,
     reportRoot,
     overwrite = false,
@@ -1807,6 +1811,15 @@ function collectReportSlots(root, options = {}) {
 
   if (!Array.isArray(sources)) {
     throw new Error("Provide at least one worktree directory via --from <dir>.");
+  }
+  if (
+    provenance !== undefined &&
+    (!isPlainObject(provenance) || (provenance.entries !== undefined && !Array.isArray(provenance.entries)))
+  ) {
+    throw new Error("Provide a valid provenance scaffold JSON object with an entries array.");
+  }
+  if (idMap !== undefined && !isPlainObject(idMap)) {
+    throw new Error("idMap must be a plain object mapping worker names to conversation UUIDs.");
   }
   const receiptRoots = workerReceiptRoots([
     ...(Array.isArray(handoffs) ? handoffs : []),
@@ -1882,7 +1895,47 @@ function collectReportSlots(root, options = {}) {
     }
   };
   const senderSlots = new Map();
-  const bindSender = (sender, slot) => { if (typeof sender === "string" && typeof slot === "string") senderSlots.set(sender, overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot); };
+  const slotWorkerNames = new Map();
+  const workerKeyToSlot = new Map();
+  const slotToBinding = new Map();
+  const slotToUuid = new Map();
+  const uuidToSlot = new Map();
+  const rebaseIfNeeded = (slot) => (overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  const registerSlotWorker = (workerName, rawSlot) => {
+    if (typeof workerName !== "string" || !workerName.trim() || typeof rawSlot !== "string") return;
+    const wn = workerName.trim();
+    const resolvedSlot = rebaseIfNeeded(rawSlot);
+    if (!slotWorkerNames.has(resolvedSlot)) slotWorkerNames.set(resolvedSlot, wn);
+    workerKeyToSlot.set(wn, resolvedSlot);
+    workerKeyToSlot.set(`<invoke_subagent:${wn}:conversationId>`, resolvedSlot);
+  };
+  const bindSlotConversationId = (slotRel, rawId, requireUuid = false, sourceLabel = "binding") => {
+    if (typeof rawId !== "string") {
+      if (requireUuid) throw new Error(`Invalid ${sourceLabel} conversation UUID for '${slotRel}'.`);
+      return;
+    }
+    const trimmed = rawId.trim();
+    if (!trimmed || (!requireUuid && /^<.*>$/.test(trimmed))) return;
+    const normUuid = normalizeUuid(trimmed);
+    if (requireUuid && !normUuid) {
+      throw new Error(`Invalid ${sourceLabel} UUID for '${slotRel}': expected a 36-character UUID, got '${rawId}'.`);
+    }
+    const canonicalId = normUuid ?? trimmed;
+    const prevId = slotToBinding.get(slotRel);
+    if (prevId !== undefined && prevId !== canonicalId) {
+      throw new Error(`Conflicting conversationId bindings for '${slotRel}': '${prevId}' vs '${canonicalId}'.`);
+    }
+    slotToBinding.set(slotRel, canonicalId);
+    if (normUuid) {
+      const prevSlot = uuidToSlot.get(normUuid);
+      if (prevSlot !== undefined && prevSlot !== slotRel) {
+        throw new Error(`Duplicate conversationId '${normUuid}' bound to multiple report slots ('${prevSlot}' and '${slotRel}').`);
+      }
+      uuidToSlot.set(normUuid, slotRel);
+      slotToUuid.set(slotRel, normUuid);
+    }
+  };
+  const bindSender = (sender, slot) => { if (typeof sender === "string" && typeof slot === "string") senderSlots.set(sender, rebaseIfNeeded(slot)); };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -1899,21 +1952,27 @@ function collectReportSlots(root, options = {}) {
       if (w?.lead?.reportSlot !== undefined) {
         const leadIsInherit = w.lead.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
         addSlot(w.lead.reportSlot, leadIsInherit, leadIsInherit);
+        registerSlotWorker(w.lead.workerName, w.lead.reportSlot);
       }
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
           const specialistIsInherit = plan.executionMode === "subagent" || s.swarmAdd?.workspace === "inherit";
           addSlot(s.reportSlot, specialistIsInherit);
+          registerSlotWorker(s.workerName, s.reportSlot);
           if (!specialistIsInherit) bindSender(s.workerName, s.reportSlot);
         }
       }
     }
-    for (const entry of plan.provenanceScaffold?.entries ?? []) {
+    for (const entry of [...(plan.provenanceScaffold?.entries ?? []), ...(provenance?.entries ?? [])]) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (entry?.reportSlot !== undefined) {
         const entryIsInherit = plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit");
         addSlot(entry.reportSlot, entryIsInherit, entryIsInherit);
+        registerSlotWorker(entry.workerName, entry.reportSlot);
+        bindSlotConversationId(rebaseIfNeeded(entry.reportSlot), entry.conversationId, false, "provenance");
+      } else if (typeof entry?.workerName === "string" && workerKeyToSlot.has(entry.workerName.trim())) {
+        bindSlotConversationId(workerKeyToSlot.get(entry.workerName.trim()), entry.conversationId, false, "provenance");
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
@@ -1921,6 +1980,7 @@ function collectReportSlots(root, options = {}) {
       if (audit?.reportSlot !== undefined) {
         const auditIsInherit = audit.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
         addSlot(audit.reportSlot, auditIsInherit, auditIsInherit);
+        registerSlotWorker(audit.workerName, audit.reportSlot);
       }
     }
     if (squadId !== undefined && !matchedPlanSquad) {
@@ -1941,7 +2001,25 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix), true);
     for (const a of record.assignments ?? []) {
-      if (a?.report !== undefined) { addSlot(a.report); bindSender(a.conversationId, a.report); bindSender(a.workerName, a.report); }
+      if (a?.report !== undefined) {
+        addSlot(a.report);
+        bindSender(a.conversationId, a.report);
+        bindSender(a.workerName, a.report);
+        registerSlotWorker(a.workerName, a.report);
+        if (typeof a.conversationId === "string" && a.conversationId.trim()) {
+          workerKeyToSlot.set(a.conversationId.trim(), rebaseIfNeeded(a.report));
+        }
+        bindSlotConversationId(rebaseIfNeeded(a.report), a.conversationId, false, "record");
+      }
+    }
+    for (const entry of provenance?.entries ?? []) {
+      if (entry?.squadId !== undefined && entry.squadId !== record.squadId) continue;
+      const targetSlot = entry?.reportSlot !== undefined
+        ? rebaseIfNeeded(entry.reportSlot)
+        : (typeof entry?.workerName === "string" ? workerKeyToSlot.get(entry.workerName.trim()) : undefined);
+      if (targetSlot && targetSlotSet.has(targetSlot)) {
+        bindSlotConversationId(targetSlot, entry.conversationId, false, "provenance");
+      }
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
@@ -1990,6 +2068,14 @@ function collectReportSlots(root, options = {}) {
     }
   } else {
     throw new Error("Provide --plan <plan.json>, --record <record.json>, or --squad <id> to collect report slots.");
+  }
+
+  for (const [key, val] of Object.entries(idMap ?? {})) {
+    const mappedSlot = workerKeyToSlot.get(key) ?? (targetSlotSet.has(key) ? key : undefined);
+    if (!mappedSlot) {
+      throw new Error(`--id-map key '${key}' did not match any worker or assignment in the supplied plan or record.`);
+    }
+    bindSlotConversationId(mappedSlot, val, true, "--id-map");
   }
 
   const targetSlots = [...targetSlotSet];
@@ -2058,23 +2144,25 @@ function collectReportSlots(root, options = {}) {
     ...(Array.isArray(handoffs) ? handoffs : []),
     ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
   ];
-  const handoffBySender = new Map();
-  for (const handoff of transcriptHandoffs) {
-    if (handoff?.sender) handoffBySender.set(String(handoff.sender), handoff);
-  }
   const verifiedExistingRootDirs = new Set([root]);
   for (const [slotRel, jsonPathRaw] of transcriptMappings.entries()) {
     if (!targetSlotSet.has(slotRel)) throw new Error(`--transcript-json slot '${slotRel}' is not an expected report slot.`);
     const extracted = extractAcsJsonReport(root, jsonPathRaw, verifiedExistingRootDirs);
-    if (!extracted.provenance.conversationId) {
-      const workerName = readonlyWorkers.get(slotRel);
-      const handoff = (workerName ? handoffBySender.get(workerName) : null) || transcriptHandoffs.find(h => typeof h?.message === "string" && h.message.includes(slotRel));
-      extracted.provenance.conversationId = handoff ? extractUuidFromHandoff(handoff) : null;
+    const boundUuid = slotToUuid.get(slotRel);
+    if (boundUuid) {
+      if (extracted.provenance.conversationId && extracted.provenance.conversationId !== boundUuid) {
+        throw new Error(
+          `--transcript-json conversationId '${extracted.provenance.conversationId}' does not match coordinator binding '${boundUuid}' for '${slotRel}'.`
+        );
+      }
+      if (!extracted.provenance.conversationId) {
+        extracted.provenance.conversationId = boundUuid;
+      }
     }
     addTranscriptEntry(slotRel, extracted, `transcript-json:${extracted.relPath}`);
   }
   const directTranscriptSlots = fromTranscript
-    ? new Map([...targetSlotSet].map(slotRel => [slotRel, undefined]))
+    ? new Map([...targetSlotSet].map(slotRel => [slotRel, slotWorkerNames.get(slotRel)]))
     : readonlyWorkers;
   const hasExplicitHome = typeof transcriptHomeDir === "string" && transcriptHomeDir.trim().length > 0;
   const homeDir = hasExplicitHome ? path.resolve(transcriptHomeDir) : os.homedir();
@@ -2082,22 +2170,51 @@ function collectReportSlots(root, options = {}) {
     if (foundBySlot.has(slotRel)) continue;
     const existingRootReport = readIfPresentWithStat(root, slotRel, verifiedExistingRootDirs);
     if (existingRootReport && decodeUtf8(existingRootReport.bytes, slotRel).trim().length > 0) continue;
-    const workerHandoff = (workerName ? handoffBySender.get(workerName) : null) || transcriptHandoffs.find(h => typeof h?.message === "string" && h.message.includes(slotRel));
-    if (!workerHandoff) continue;
-    const parsedReceipt = typeof workerHandoff.message === "string"
-      ? parsePointerReceipt(stripReceiptPrefix(workerHandoff.message), slotRel)
-      : null;
-    if (parsedReceipt?.status === "NO_REPORT") continue;
-    const conversationId = extractUuidFromHandoff(workerHandoff);
-    if (!conversationId) throw new Error(`Read-only subagent report slot ${slotRel} requires a strict sender UUID or id=<uuid> in its handoff receipt; pass --transcript-json when the coordinator extracts through Agy-Context-Saver.`);
+    const boundUuid = slotToUuid.get(slotRel);
+    const allowRosterSender = plan?.executionMode === "swarm" && typeof workerName === "string" && workerName.length > 0;
+    const isAuthorizedSender = (rawSender) => {
+      if (!boundUuid) return false;
+      const normSender = normalizeUuid(rawSender);
+      if (normSender && normSender === boundUuid) return true;
+      return Boolean(allowRosterSender && rawSender.trim() === workerName);
+    };
+    const matchingHandoffs = [];
+    for (const h of transcriptHandoffs) {
+      if (!h || typeof h !== "object" || typeof h.sender !== "string" || typeof h.message !== "string") continue;
+      const rawSender = h.sender.trim();
+      const stripped = stripReceiptPrefix(h.message);
+      const parsedForSlot = parsePointerReceipt(stripped, slotRel);
+      const targetsThisSlotExplicitly = parsedForSlot?.status === "READY" || parsedForSlot?.status === "PARTIAL";
+      const fromAuthorizedSender = isAuthorizedSender(rawSender);
+      if (!targetsThisSlotExplicitly && !fromAuthorizedSender) continue;
+      if (!boundUuid) {
+        throw new Error(
+          `Direct transcript extraction for '${slotRel}' requires a coordinator-bound conversation UUID via --id-map <worker=uuid>, --provenance <scaffold.json>, or --record <record.json> (or pass --transcript-json <slot=json>).`
+        );
+      }
+      if (!fromAuthorizedSender) {
+        throw new Error(
+          `Handoff sender '${rawSender}' is not authorized for slot '${slotRel}'; expected strict sender UUID '${boundUuid}' (or pass --transcript-json <slot=json>).`
+        );
+      }
+      if (!parsedForSlot) {
+        throw new Error(`Invalid handoff receipt from '${rawSender}' for slot '${slotRel}'.`);
+      }
+      matchingHandoffs.push({ handoff: h, status: parsedForSlot.status });
+    }
+    if (matchingHandoffs.length === 0) continue;
+    if (new Set(matchingHandoffs.map(m => m.handoff.message)).size > 1) {
+      throw new Error(`Conflicting handoffs for slot '${slotRel}'.`);
+    }
+    if (matchingHandoffs[0].status === "NO_REPORT") continue;
     const restriction = restrictiveTranscriptPolicyError(homeDir, hasExplicitHome);
     if (restriction) throw new Error(restriction);
     try {
-      const transcriptPath = resolveTranscriptFullPath(conversationId, homeDir);
-      const extracted = parseTranscriptReportJsonl(transcriptPath, conversationId);
-      addTranscriptEntry(slotRel, extracted, `transcript:${conversationId}`);
+      const transcriptPath = resolveTranscriptFullPath(boundUuid, homeDir);
+      const extracted = parseTranscriptReportJsonl(transcriptPath, boundUuid);
+      addTranscriptEntry(slotRel, extracted, `transcript:${boundUuid}`);
     } catch (error) {
-      throw new Error(`Failed to materialize read-only subagent report '${slotRel}' from transcript '${conversationId}': ${error.message}`);
+      throw new Error(`Failed to materialize read-only subagent report '${slotRel}' from transcript '${boundUuid}': ${error.message}`);
     }
   }
  
@@ -2522,8 +2639,11 @@ function expandScopeEntriesToFiles(
   return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+// POSIX single-quote serializer (also literal in PowerShell when value contains no apostrophe; not for cmd.exe).
 function shellQuote(value) {
-  return /^[A-Za-z0-9_./<>:-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\\''") + "'";
+  const str = String(value);
+  if (!str) return "''";
+  return /^[A-Za-z0-9_./:-]+$/.test(str) ? str : "'" + str.replaceAll("'", "'\\''") + "'";
 }
 
 function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
@@ -3026,6 +3146,7 @@ export {
   resolveCanonicalRoot,
   resolveReportRoot,
   sha256,
+  shellQuote,
   stripReceiptPrefix,
   summarizeCitations,
   trimTrailingSlashes,

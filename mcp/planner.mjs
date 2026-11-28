@@ -24,6 +24,7 @@ import {
   recordSlotPath,
   relativizeContainedCliPath,
   reportPath,
+  shellQuote,
   trimTrailingSlashes
 } from "./handoffs.mjs";
 
@@ -1488,34 +1489,41 @@ function planSquadCohort(
     (Array.isArray(w.lead?.scopeFiles) && w.lead.scopeFiles.includes("."))
   );
 
-  const planCliRef = normalizedOutRel ?? "<plan.json>";
-  const fileSpecArg = hasWildcardScope ? "<verified-files...>" : "--from-scope";
+  const planCliRef = shellQuote(normalizedOutRel ?? "<plan.json>");
+  const handoffsRef = shellQuote("<handoffs.json>");
+  const fileSpecArg = hasWildcardScope ? shellQuote("<verified-files...>") : "--from-scope";
   const singleWorker = workers.length === 1 ? workers[0] : null;
-  const singleRecordSlot = singleWorker ? singleWorker.recordSlot : null;
-  const singleBundleSlot = singleWorker ? bundlePath(singleWorker.squadId, normalizedReportRoot) : null;
-  const multiRecordSlots = workers.map(w => w.recordSlot).join(" ");
-  const multiRecordPins = workers.map(w => `${w.recordSlot}=<accepted-sha256>`).join(" ");
+  const singleRecordSlot = singleWorker ? shellQuote(singleWorker.recordSlot) : null;
+  const singleBundleSlot = singleWorker ? shellQuote(bundlePath(singleWorker.squadId, normalizedReportRoot)) : null;
+  const multiRecordSlots = workers.map(w => shellQuote(w.recordSlot)).join(" ");
+  const multiRecordPins = workers.map(w => shellQuote(`${w.recordSlot}=<accepted-sha256>`)).join(" ");
 
   const hasReadOnlySubagentSpecialists =
     executionMode === "subagent" &&
     workers.some(w => w.specialists.some(s => (s.typeName ?? s.Subagent?.TypeName) === READONLY_SUBAGENT_TYPE));
+  const subagentIdMapArgs =
+    executionMode === "subagent"
+      ? workers
+          .flatMap(w => w.specialists.map(s => ` --id-map ${shellQuote(`${s.workerName}=<${s.workerName}-uuid>`)}`))
+          .join("")
+      : "";
 
   const verificationPipeline = [
     ...(workspaceIsolation !== "inherit" || hasReadOnlySubagentSpecialists
-      ? [`agy-squad collect --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>`]
+      ? [`agy-squad collect --workspace ${wsCliArg} --plan ${planCliRef} --handoffs ${handoffsRef}${hasReadOnlySubagentSpecialists ? subagentIdMapArgs : ""}`]
       : []),
     ...(flatSynthesisSlots.length > 0
-      ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.join(", ")}`]
+      ? [`# Write synthesis ('Content Verdict: PASS|FAIL|BLOCKED'): ${flatSynthesisSlots.map(s => shellQuote(s)).join(", ")}`]
       : []),
     singleRecordSlot
-      ? `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} --out ${singleRecordSlot} ${fileSpecArg}`
-      : `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --all-squads --handoffs <handoffs.json>${includeIntegrityAuditor ? " --digest" : ""} ${fileSpecArg}`,
+      ? `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --handoffs ${handoffsRef}${subagentIdMapArgs}${includeIntegrityAuditor ? " --digest" : ""} --out ${singleRecordSlot} ${fileSpecArg}`
+      : `agy-squad bundle-init --workspace ${wsCliArg} --plan ${planCliRef} --all-squads --handoffs ${handoffsRef}${subagentIdMapArgs}${includeIntegrityAuditor ? " --digest" : ""} ${fileSpecArg}`,
     singleRecordSlot
-      ? `agy-squad finalize --workspace ${wsCliArg} ${singleRecordSlot}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`
-      : `agy-squad finalize --workspace ${wsCliArg} ${multiRecordSlots}${includeIntegrityAuditor ? "" : " --allow-unaudited"} [--strict-citations] [--prune [--keep-reports]]`,
+      ? `agy-squad finalize --workspace ${wsCliArg} ${singleRecordSlot}${includeIntegrityAuditor ? "" : " --allow-unaudited"}`
+      : `agy-squad finalize --workspace ${wsCliArg} ${multiRecordSlots}${includeIntegrityAuditor ? "" : " --allow-unaudited"}`,
     singleBundleSlot
-      ? `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} ${singleBundleSlot} <sha256>`
-      : `# Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} --records ${multiRecordPins} [--clean-records]`
+      ? `# Optional finalize flags: --strict-citations --prune [--keep-reports]. Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} ${singleBundleSlot} '<sha256>'`
+      : `# Optional finalize flags: --strict-citations --prune [--keep-reports]. Post-synthesis prune (finalize without --prune first, synthesize once): agy-squad prune --workspace ${wsCliArg} --records ${multiRecordPins} [--clean-records]`
   ];
 
   const recordedSwarmPanePath = swarmPaneTarget

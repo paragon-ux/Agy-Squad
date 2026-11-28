@@ -54,11 +54,15 @@ function makeFixture(records, options = {}) {
 }
 
 function collectFixture(fixture, extra = {}) {
-  return collectReportSlots(fixture.root, {
+  const base = {
     plan: fixture.plan,
     sources: [],
     handoffs: [fixture.handoff],
-    transcriptHomeDir: fixture.home,
+    idMap: { worker: uuid },
+    transcriptHomeDir: fixture.home
+  };
+  return collectReportSlots(fixture.root, {
+    ...base,
     ...extra
   });
 }
@@ -142,8 +146,12 @@ try {
       assert.equal(specialist.typeName, "agy-squad-readonly");
       assert.equal(specialist.Subagent.TypeName, "agy-squad-readonly");
       assert.ok(
-        plan.verificationPipeline.some(step => step.startsWith("agy-squad collect ")),
-        "verificationPipeline must include agy-squad collect when readOnlySubagent is enabled"
+        plan.verificationPipeline.some(step => step.startsWith("agy-squad collect ") && step.includes("--id-map ")),
+        "verificationPipeline must include agy-squad collect with --id-map when readOnlySubagent is enabled"
+      );
+      assert.ok(
+        plan.verificationPipeline.some(step => step.startsWith("agy-squad bundle-init ") && step.includes("--id-map ")),
+        "verificationPipeline must include --id-map on bundle-init in subagent mode"
       );
       const defaultPlan = planSquadCohort({
         task: "Inspect a.js",
@@ -215,12 +223,72 @@ try {
   {
     const fixture = makeFixture([{ type: "PLANNER_RESPONSE", step_index: 1, content: reportBody }]);
     try {
-      assertFixtureFailure(fixture, /strict sender UUID|pass --transcript-json/, {
+      assertFixtureFailure(fixture, /strict sender UUID|not authorized|pass --transcript-json/, {
         handoffs: [{ sender: "worker", message: `READY ${fixture.slot} - ok` }]
       });
-      assertFixtureFailure(fixture, /strict sender UUID|pass --transcript-json/, {
+      assertFixtureFailure(fixture, /strict sender UUID|not authorized|pass --transcript-json/, {
         handoffs: [{ sender: "not-a-uuid", message: `READY ${fixture.slot} - ok id=also-not-a-uuid` }]
       });
+      // ASQ-DEV-V1: Unbound sender UUID or untrusted id=<uuid> in handoff message must fail closed
+      assertFixtureFailure(fixture, /coordinator-bound conversation UUID/, { idMap: undefined });
+      const otherUuid = "99999999-e89b-42d3-a456-426614174999";
+      const otherLogs = path.join(fixture.home, ".gemini", "antigravity", "brain", otherUuid, ".system_generated", "logs");
+      fs.mkdirSync(otherLogs, { recursive: true });
+      fs.writeFileSync(path.join(otherLogs, "transcript_full.jsonl"), JSON.stringify({ type: "PLANNER_RESPONSE", step_index: 1, content: "# Evidence Report\n\nSPOOFED OTHER SESSION" }) + "\n");
+      assertFixtureFailure(fixture, /coordinator-bound conversation UUID/, {
+        idMap: undefined,
+        handoffs: [{ sender: "worker", message: `READY ${fixture.slot} - ok id=${otherUuid}` }]
+      });
+      assertFixtureFailure(fixture, /not authorized|strict sender UUID/, {
+        idMap: { worker: uuid },
+        handoffs: [{ sender: otherUuid, message: `READY ${fixture.slot} - ok` }]
+      });
+      // Trailing id=<otherUuid> in message must never override coordinator-bound uuid
+      const boundRes = collectFixture(fixture, {
+        idMap: { worker: uuid },
+        handoffs: [{ sender: uuid, message: `READY ${fixture.slot} - ok id=${otherUuid}` }]
+      });
+      assert.equal(boundRes.collected[0].transcriptProvenance.conversationId, uuid);
+      assert.equal(fs.readFileSync(path.join(fixture.root, fixture.slot), "utf8"), reportBody);
+      fs.rmSync(path.join(fixture.root, fixture.slot), { force: true });
+      // Case-normalized UUID agreement succeeds; conflicting or duplicate bindings fail closed
+      const upperRes = collectFixture(fixture, {
+        idMap: { worker: uuid.toUpperCase() },
+        provenance: { entries: [{ squadId: "trial-a", workerName: "worker", reportSlot: fixture.slot, conversationId: uuid }] },
+        handoffs: [{ sender: uuid.toUpperCase(), message: `READY ${fixture.slot} - ok` }]
+      });
+      assert.equal(upperRes.collected[0].transcriptProvenance.conversationId, uuid);
+      fs.rmSync(path.join(fixture.root, fixture.slot), { force: true });
+      assertFixtureFailure(fixture, /Conflicting conversationId/, {
+        idMap: { worker: otherUuid },
+        provenance: { entries: [{ squadId: "trial-a", workerName: "worker", reportSlot: fixture.slot, conversationId: uuid }] }
+      });
+      assertFixtureFailure(fixture, /did not match/, {
+        idMap: { worker: uuid, ghost: otherUuid }
+      });
+      {
+        const slot2 = reportPath("trial-a", 2);
+        const twoSlotPlan = {
+          executionMode: "subagent",
+          workers: [{
+            squadId: "trial-a",
+            specialists: [
+              { workerName: "worker-1", reportSlot: fixture.slot, typeName: "agy-squad-readonly" },
+              { workerName: "worker-2", reportSlot: slot2, typeName: "agy-squad-readonly" }
+            ]
+          }]
+        };
+        assertFixtureFailure(fixture, /Duplicate conversationId/, {
+          plan: twoSlotPlan,
+          idMap: { "worker-1": uuid, "worker-2": uuid.toUpperCase() },
+          handoffs: [{ sender: uuid, message: `READY ${fixture.slot} - ok` }]
+        });
+        assertFixtureFailure(fixture, /not authorized/, {
+          plan: twoSlotPlan,
+          idMap: { "worker-1": uuid, "worker-2": otherUuid },
+          handoffs: [{ sender: otherUuid, message: `READY ${fixture.slot} - ok` }]
+        });
+      }
       // NO_REPORT receipt must skip materializing report.md cleanly
       const noReportRes = collectFixture(fixture, {
         handoffs: [{ sender: uuid, message: "NO_REPORT - blocked on missing fixture" }],
@@ -433,7 +501,7 @@ try {
       ].join("\n") + "\n");
       write("scratch/handoffs.json", JSON.stringify([{ sender: uuid, message: `READY ${specialist.reportSlot} - ok` }]));
       write(lead.reportSlot, "Content Verdict: PASS\nLead synthesis.\n");
-      result = run(["collect", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--strict"]);
+      result = run(["collect", "--plan", "scratch/plan.json", "--handoffs", "scratch/handoffs.json", "--id-map", `${specialist.workerName}=${uuid}`, "--strict"]);
       assert.equal(result.status, 0, result.stderr);
       const collectOut = JSON.parse(result.stdout);
       assert.equal(collectOut.collected[0].transcriptProvenance.conversationId, uuid);
