@@ -2216,6 +2216,39 @@ try {
             }
           }
         }
+
+        // ASQ-9: Custom manifest integrity_auditor instructions with single-quoted, double-quoted, and unquoted shell-safe original paths
+        const defaultRecSlot = "scratch/agy-squad/squad-main/record.json", defaultAuditSlot = "scratch/agy-squad/squad-integrity_auditor/specialist-1/report.md";
+        const customManifestPath = path.join(spacedRoot, "custom-audit-manifest.json");
+        const instr = `Read '${defaultRecSlot}' and "${defaultAuditSlot}" first. Verify "${defaultRecSlot}" alongside '${defaultAuditSlot}', then check \`agy-squad digest '${defaultRecSlot}'\` ; \`agy-squad verdict --integrity "${defaultAuditSlot}"\` ; \`agy-squad inspect ${defaultRecSlot}\`.`;
+        fs.writeFileSync(customManifestPath, JSON.stringify({ squads: {
+          main: { specialists: [{ role: "Reviewer", objective: "Review index", scopeFiles: ["src/index.js"], readOnly: true }] },
+          integrity_auditor: { specialists: [{ role: "Custom Auditor", objective: "Audit main squad", scopeFiles: ["src/index.js"], instructions: instr }] }
+        } }));
+        try {
+          const customPlan = planSquadCohort({ manifestPath: "custom-audit-manifest.json", executionMode: "swarm" }, spacedRoot);
+          const mainSpec = customPlan.workers[0].specialists[0].reportSlot;
+          for (const [effRec, effAudit] of [
+            ["scratch/new-record.json", "scratch/custom-audit/squad-integrity_auditor/specialist-1/report.md"],
+            ["scratch/records/my new $& record.json", "scratch/custom audit/squad-integrity_auditor/specialist-1/report.md"]
+          ]) {
+            const recCustom = buildBundleRecordInit(spacedRoot, { plan: customPlan, files: ["src/index.js"], recordPath: effRec, handoffs: [{ sender: customPlan.workers[0].specialists[0].workerName, message: `READY ${mainSpec} - ok` }] });
+            recCustom.integrityAuditSlots = [effAudit];
+            const boundBrief = buildBoundAuditSwarmAdds(spacedRoot, customPlan, recCustom, effRec, { evidenceDigest: "c".repeat(64) })[0].brief;
+            assert.ok(!boundBrief.includes(defaultRecSlot) && !boundBrief.includes(defaultAuditSlot) && !boundBrief.includes("''") && boundBrief.split("\n").includes(`Report slot: ${effAudit}`), boundBrief);
+            const cmds = [...boundBrief.matchAll(/`(agy-squad (?:digest|verdict|inspect)[^`]+)`/g)].map(m => m[1]);
+            assert.equal(cmds.length, 5);
+            if (process.platform !== "win32") {
+              for (const [cmdStr, expectedArgs] of [[cmds[0], ["digest", effRec]], [cmds[1], ["verdict", "--integrity", effAudit]], [cmds[2], ["inspect", effRec]], [cmds[3], ["digest", "--workspace", customPlan.workspace, effRec]], [cmds[4], ["verdict", "--workspace", customPlan.workspace, "--integrity", effAudit]]]) {
+                const echoRes = spawnSync("sh", ["-c", cmdStr.replace(/^agy-squad\b/, `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(2)))' -- argv0`)], { encoding: "utf8" });
+                assert.equal(echoRes.status, 0, echoRes.stderr);
+                assert.deepEqual(JSON.parse(echoRes.stdout), expectedArgs);
+              }
+            }
+          }
+        } finally {
+          fs.rmSync(customManifestPath, { force: true });
+        }
       } finally {
         fs.rmSync(spacedRoot, { recursive: true, force: true });
       }

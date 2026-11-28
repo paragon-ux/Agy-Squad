@@ -2750,12 +2750,10 @@ function replaceLineTokensOnce(line, rules) {
     for (const rule of rules) {
       if (!rule.from || !line.startsWith(rule.from, i)) continue;
       const end = i + rule.from.length;
-      if (
-        rule.boundary &&
-        ((i > 0 && line[i - 1] !== " " && line[i - 1] !== "\t" && line[i - 1] !== "`") ||
-          (end < line.length && line[end] !== " " && line[end] !== "\t" && line[end] !== "`" && line[end] !== ";"))
-      ) {
-        continue;
+      if (rule.boundary) {
+        const leadOk = i === 0 || (rule.boundary === "quoted" ? " \t`([=:".includes(line[i - 1]) : " \t`".includes(line[i - 1]));
+        const trailOk = end >= line.length || (rule.boundary === "quoted" ? " \t`;.,:)]".includes(line[end]) : " \t`;".includes(line[end]));
+        if (!leadOk || !trailOk) continue;
       }
       matched = rule;
       break;
@@ -2768,6 +2766,14 @@ function replaceLineTokensOnce(line, rules) {
     }
   }
   return out;
+}
+
+function addOrigPathBindRules(cmdRules, origPath, quotedReplacement) {
+  const sq = "'" + origPath.replaceAll("'", "'\\''") + "'";
+  const dq = '"' + origPath.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"';
+  const sh = shellQuote(origPath);
+  cmdRules.push({ from: sq, to: quotedReplacement, boundary: "quoted" }, { from: dq, to: quotedReplacement, boundary: "quoted" });
+  if (sh !== sq && sh !== dq) cmdRules.push({ from: sh, to: quotedReplacement, boundary: true });
 }
 
 function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
@@ -2797,17 +2803,19 @@ function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResul
     if (effectiveRecordPath) {
       const quotedRecord = shellQuote(effectiveRecordPath);
       cmdRules.push({ from: "'<rel-record>'", to: quotedRecord, boundary: false });
+      cmdRules.push({ from: '"<rel-record>"', to: quotedRecord, boundary: false });
       cmdRules.push({ from: "<rel-record>", to: quotedRecord, boundary: false });
       if (origRecordSlot && origRecordSlot !== effectiveRecordPath) {
-        cmdRules.push({ from: shellQuote(origRecordSlot), to: quotedRecord, boundary: true });
+        addOrigPathBindRules(cmdRules, origRecordSlot, quotedRecord);
       }
     }
     if (auditSlot) {
       const quotedAudit = shellQuote(auditSlot);
       cmdRules.push({ from: "'<rel-slot>'", to: quotedAudit, boundary: false });
+      cmdRules.push({ from: '"<rel-slot>"', to: quotedAudit, boundary: false });
       cmdRules.push({ from: "<rel-slot>", to: quotedAudit, boundary: false });
       if (origAuditSlot && origAuditSlot !== auditSlot) {
-        cmdRules.push({ from: shellQuote(origAuditSlot), to: quotedAudit, boundary: true });
+        addOrigPathBindRules(cmdRules, origAuditSlot, quotedAudit);
       }
     }
     if (mappedUuids.length > 0) {
