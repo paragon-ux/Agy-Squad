@@ -2753,7 +2753,9 @@ function replaceLineTokensOnce(line, rules) {
       if (rule.boundary) {
         const leadOk = i === 0 || (rule.boundary === "quoted" ? " \t`([=:".includes(line[i - 1]) : " \t`".includes(line[i - 1]));
         const trailOk = end >= line.length || " \t`;".includes(line[end]) ||
-          (!inCmd && rule.boundary === "quoted" && ".,:)]".includes(line[end]) && (end + 1 >= line.length || " \t".includes(line[end + 1])));
+          (rule.boundary === "quoted" && (inCmd
+            ? line[end] === ")"
+            : /^[)\]]*[.,:]?(?=$|[ \t`;])/.test(line.slice(end))));
         if (!leadOk || !trailOk) continue;
       }
       matched = rule;
