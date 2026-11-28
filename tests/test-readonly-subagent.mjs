@@ -70,7 +70,7 @@ function assertFixtureFailure(fixture, pattern, extra = {}) {
 try {
   {
     const agentPath = fileURLToPath(new URL("../agents/agy-squad-readonly.md", import.meta.url));
-    const agentText = fs.readFileSync(agentPath, "utf8");
+    const agentText = fs.readFileSync(agentPath, "utf8").replace(/\r\n/g, "\n");
     assert.match(agentText, /^---\nname: agy-squad-readonly\n/);
     assert.match(agentText, /^subagent: true$/m);
     assert.match(agentText, /^mainAgent: false$/m);
@@ -395,7 +395,13 @@ try {
   {
     const root = tmpdir("agy-ro-e2e-");
     const home = tmpdir("agy-ro-e2e-home-");
-    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      XDG_STATE_HOME: path.join(home, ".local", "state"),
+      LOCALAPPDATA: path.join(home, "AppData", "Local")
+    };
     delete env.AGY_TEST_PROFILE_DIR;
     const write = (rel, text) => {
       const full = path.join(root, rel);
