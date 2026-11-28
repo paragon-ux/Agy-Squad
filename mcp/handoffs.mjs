@@ -2742,42 +2742,25 @@ function shellQuote(value) {
   return /^[A-Za-z0-9_./:-]+$/.test(str) ? str : "'" + str.replaceAll("'", "'\\''") + "'";
 }
 
+function formatAuditorTargetScopeNote(targetSquad, workspaceRoot, recordSlot, auditSlot, executionMode = "swarm") {
+  const wsOpt = workspaceRoot ? ` --workspace ${shellQuote(workspaceRoot)}` : "";
+  const suffix = executionMode === "swarm" ? "slots/traces only" : "slots, conversationIds & traces only";
+  return `Run \`agy-squad digest${wsOpt} ${shellQuote(recordSlot)}\` & \`agy-squad verdict${wsOpt} --integrity ${shellQuote(auditSlot)}\`; '${targetSquad}' ${suffix} (no unrelated repo source reads).`;
+}
+
 function replaceLineTokensOnce(line, rules) {
   if (rules.length === 0) return line;
-  let out = "", inCmd = false;
+  let out = "";
   for (let i = 0; i < line.length;) {
-    let matched = null;
-    for (const rule of rules) {
-      if (!rule.from || !line.startsWith(rule.from, i)) continue;
-      const end = i + rule.from.length;
-      if (rule.boundary) {
-        const leadOk = i === 0 || (rule.boundary === "quoted" ? " \t`([=:".includes(line[i - 1]) : " \t`".includes(line[i - 1]));
-        const trailOk = end >= line.length || " \t`;".includes(line[end]) ||
-          (rule.boundary === "quoted" && (inCmd
-            ? line[end] === ")"
-            : /^[)\]]*[.,:]?(?=$|[ \t`;])/.test(line.slice(end))));
-        if (!leadOk || !trailOk) continue;
-      }
-      matched = rule;
-      break;
-    }
+    const matched = rules.find(r => r.from && line.startsWith(r.from, i));
     if (matched) {
       out += matched.to;
       i += matched.from.length;
     } else {
-      if (line[i] === "`") inCmd = !inCmd;
       out += line[i++];
     }
   }
   return out;
-}
-
-function addOrigPathBindRules(cmdRules, origPath, quotedReplacement) {
-  const sq = "'" + origPath.replaceAll("'", "'\\''") + "'";
-  const dq = '"' + origPath.replace(/[\\"$`]/g, ch => "\\" + ch) + '"';
-  const sh = shellQuote(origPath);
-  cmdRules.push({ from: sq, to: quotedReplacement, boundary: "quoted" }, { from: dq, to: quotedReplacement, boundary: "quoted" });
-  if (sh !== sq && sh !== dq) cmdRules.push({ from: sh, to: quotedReplacement, boundary: true });
 }
 
 function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
@@ -2803,27 +2786,32 @@ function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResul
       : auditEntry.reportSlot;
     const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
     const origAuditSlot = auditEntry.reportSlot;
+    const boundRec = effectiveRecordPath || origRecordSlot;
+    const boundAud = auditSlot || origAuditSlot;
+    const rebindGen = Boolean(origRecordSlot && origAuditSlot && (boundRec !== origRecordSlot || boundAud !== origAuditSlot));
+    const wsRoot = plan.workspace ?? _targetRoot;
+    const origGenNote = rebindGen ? formatAuditorTargetScopeNote(auditEntry.targetSquad, wsRoot, origRecordSlot, origAuditSlot, "swarm") : "";
+    const origLegacyNote = rebindGen && wsRoot ? formatAuditorTargetScopeNote(auditEntry.targetSquad, "", origRecordSlot, origAuditSlot, "swarm") : "";
+    const boundGenNote = rebindGen ? formatAuditorTargetScopeNote(auditEntry.targetSquad, wsRoot, boundRec, boundAud, "swarm") : "";
     const cmdRules = [];
     if (effectiveRecordPath) {
       const quotedRecord = shellQuote(effectiveRecordPath);
-      cmdRules.push({ from: "'<rel-record>'", to: quotedRecord, boundary: false });
-      cmdRules.push({ from: '"<rel-record>"', to: quotedRecord, boundary: false });
-      cmdRules.push({ from: "<rel-record>", to: quotedRecord, boundary: false });
-      if (origRecordSlot && origRecordSlot !== effectiveRecordPath) {
-        addOrigPathBindRules(cmdRules, origRecordSlot, quotedRecord);
-      }
+      cmdRules.push(
+        { from: "'<rel-record>'", to: quotedRecord },
+        { from: '"<rel-record>"', to: quotedRecord },
+        { from: "<rel-record>", to: quotedRecord }
+      );
     }
     if (auditSlot) {
       const quotedAudit = shellQuote(auditSlot);
-      cmdRules.push({ from: "'<rel-slot>'", to: quotedAudit, boundary: false });
-      cmdRules.push({ from: '"<rel-slot>"', to: quotedAudit, boundary: false });
-      cmdRules.push({ from: "<rel-slot>", to: quotedAudit, boundary: false });
-      if (origAuditSlot && origAuditSlot !== auditSlot) {
-        addOrigPathBindRules(cmdRules, origAuditSlot, quotedAudit);
-      }
+      cmdRules.push(
+        { from: "'<rel-slot>'", to: quotedAudit },
+        { from: '"<rel-slot>"', to: quotedAudit },
+        { from: "<rel-slot>", to: quotedAudit }
+      );
     }
     if (mappedUuids.length > 0) {
-      cmdRules.push({ from: "u1,u2", to: mappedUuids.join(","), boundary: false });
+      cmdRules.push({ from: "u1,u2", to: mappedUuids.join(",") });
     }
     const brief = String(auditEntry.swarmAdd.brief ?? "")
       .split("\n")
@@ -2833,6 +2821,12 @@ function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResul
         }
         if (auditSlot && origAuditSlot && line === `Report slot: ${origAuditSlot}`) {
           return `Report slot: ${auditSlot}`;
+        }
+        if (rebindGen) {
+          if (line === origGenNote || (origLegacyNote && line === origLegacyNote)) return boundGenNote;
+          if (line === `Instructions: ${origGenNote}` || (origLegacyNote && line === `Instructions: ${origLegacyNote}`)) {
+            return `Instructions: ${boundGenNote}`;
+          }
         }
         const nextLine = digestResult?.evidenceDigest
           ? line.replace(/Evidence Digest:\s*<sha256>/g, () => `Evidence Digest: ${digestResult.evidenceDigest}`)
@@ -3301,6 +3295,7 @@ export {
   extractCitationUrls,
   extractWorktreePathsFromHandoffs,
   fingerprint,
+  formatAuditorTargetScopeNote,
   inspectHandoffs,
   isContainedPath,
   isExpectedRealPath,

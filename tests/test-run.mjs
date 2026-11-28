@@ -357,7 +357,7 @@ try {
   const deepReport = JSON.parse(deepRun.stdout);
   assert.equal(deepReport.promptBudgets.swarmAuditorTemplateBytes, JSON.parse(spacedDiag.stdout).promptBudgets.swarmAuditorTemplateBytes);
   assert.ok(deepReport.promptBudgets.swarmAuditorTemplateBytes <= 2000);
-  const deepPlanner = path.join(deepRepo, "mcp/planner.mjs");
+  const deepPlanner = path.join(deepRepo, "mcp/handoffs.mjs");
   const savedDeepPlanner = fs.readFileSync(deepPlanner, "utf8");
   try {
     fs.writeFileSync(deepPlanner, savedDeepPlanner.replace("slots/traces only", `slots/traces only ${"padding ".repeat(100)}`));

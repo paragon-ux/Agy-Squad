@@ -18,6 +18,7 @@ import {
   bundlePath,
   ensureDirectory,
   expandScopeEntriesToFiles,
+  formatAuditorTargetScopeNote,
   isExpectedRealPath,
   isSameFsObject,
   normalizeContainedJsonOutPath,
@@ -1214,9 +1215,7 @@ function planSquadCohort(
             overriddenSubagentModels
           );
           recordSubagentWorkerModel(auditModel);
-          const targetScopeNote = executionMode === "swarm"
-            ? `Run \`agy-squad digest --workspace ${wsCliArg} ${shellQuote(squadRecordSlot)}\` & \`agy-squad verdict --workspace ${wsCliArg} --integrity ${shellQuote(auditSlot)}\`; '${id}' slots/traces only (no unrelated repo source reads).`
-            : `Run \`agy-squad digest --workspace ${wsCliArg} ${shellQuote(squadRecordSlot)}\` & \`agy-squad verdict --workspace ${wsCliArg} --integrity ${shellQuote(auditSlot)}\`; '${id}' slots, conversationIds & traces only (no unrelated repo source reads).`;
+          const targetScopeNote = formatAuditorTargetScopeNote(id, root, squadRecordSlot, auditSlot, executionMode);
           const compiledAudit = buildSubagentSpec(
             {
               ...rawAudit,

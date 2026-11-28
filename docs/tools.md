@@ -64,7 +64,7 @@ Agy-Squad exposes two MCP tools (`dispatch_squad` in `mcp/dispatch.mjs` and `squ
 | --- | --- | --- |
 | `objective` | Required | Plain task statement for the worker or lead. |
 | `scopeFiles` | Required (`>= 1`) | Workspace-relative files or directories without trailing `/` (`"."` and `"docs"` are valid; `"docs/"`, absolute paths, `\` separators, `.` or `..` segments, and newlines are rejected by `mcp/briefs.mjs`). |
-| `role`, `instructions`, `expectedDeliverable` | Optional | Optional role label, custom guidance, and deliverable description. |
+| `role`, `instructions`, `expectedDeliverable` | Optional | Optional role label, custom guidance, and deliverable description. Custom `integrity_auditor` `instructions` are preserved literally during `bundle-init` path binding; use `<rel-record>` and `<rel-slot>` as complete shell arguments when custom commands need dynamic paths (not inside filenames or embedded filter code; for `jq`, pass `jq --arg record <rel-record> 'select(.recordPath == $record)' ...`). |
 | `readOnly` | Optional | Boolean (`ReadOnly` alias supported). Exempts read-only specialists or leads from writable `scopeFiles` overlap checks and adds read-only brief guidance. |
 | `typeName` | Optional | Defaults to `self`. Disallowed read-only or sandboxed presets (`research`, `browser`, `image-generator`) are rejected. The custom `agy-squad-readonly` type is valid only for read-only specialists in `subagent` mode. |
 | `model` | Optional | Defaults to `inherit` in `dispatch_squad` (only `inherit`, `flash_lite`, `flash`, or `pro` pin directly under `dispatch_squad`; any other explicit ID defaults to `inherit` with a `warnings[]` advisory recommending `squad_planner` under `executionMode: "swarm"`). |
