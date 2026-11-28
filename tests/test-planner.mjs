@@ -2151,6 +2151,71 @@ try {
             fs.rmSync(psDir, { recursive: true, force: true });
           }
         }
+
+        // ASQ-R2-B1: Bound Wave-3 auditor brief single-quoting across spaced reportRoot, spaced custom record/audit slots, and sequential-rewrite safety
+        const { buildBoundAuditSwarmAdds, buildBundleRecordInit } = await import("../mcp/handoffs.mjs");
+        for (const reportRootOpt of ["scratch/my reports/agy-squad", "scratch/agy-squad"]) {
+          const swarmSpacedPlan = planSquadCohort({
+            task: "Check bound audit quoting",
+            scopeFiles: ["src/index.js"],
+            readOnly: true,
+            executionMode: "swarm",
+            reportRoot: reportRootOpt
+          }, spacedRoot);
+          const leadRel = swarmSpacedPlan.workers[0].synthesisSlot;
+          const specRel = swarmSpacedPlan.workers[0].specialists[0].reportSlot;
+          fs.mkdirSync(path.join(spacedRoot, path.dirname(leadRel)), { recursive: true });
+          fs.mkdirSync(path.join(spacedRoot, path.dirname(specRel)), { recursive: true });
+          fs.writeFileSync(path.join(spacedRoot, leadRel), "Content Verdict: PASS\n");
+          fs.writeFileSync(path.join(spacedRoot, specRel), "src/index.js:1 ok\n");
+
+          for (const customRecRel of [
+            "scratch/records/my run.json",
+            "scratch/records/run $& <rel-slot> 1.json",
+            ...(process.platform !== "win32" ? ["scratch/records/o'hare run.json"] : [])
+          ]) {
+            const customAuditRel = "scratch/custom audit/squad-integrity_auditor/specialist-1/report.md";
+            const recInit = buildBundleRecordInit(spacedRoot, {
+              plan: swarmSpacedPlan,
+              files: ["src/index.js"],
+              recordPath: customRecRel,
+              handoffs: [{ sender: swarmSpacedPlan.workers[0].specialists[0].workerName, message: `READY ${specRel} - ok` }]
+            });
+            recInit.integrityAuditSlots = [customAuditRel];
+            const bound = buildBoundAuditSwarmAdds(spacedRoot, swarmSpacedPlan, recInit, customRecRel, { evidenceDigest: "b".repeat(64) });
+            assert.equal(bound.length, 1);
+            const briefLines = bound[0].brief.split("\n");
+            assert.ok(briefLines.includes(`- ${customRecRel}`), `Scope line must keep unquoted record path (${customRecRel}):\n${bound[0].brief}`);
+            assert.ok(briefLines.includes(`Report slot: ${customAuditRel}`), `Report slot line must keep unquoted audit path:\n${bound[0].brief}`);
+            const instrLine = briefLines.find(l => l.startsWith("Instructions: Run `agy-squad digest "));
+            assert.ok(instrLine, `Missing bound Instructions line:\n${bound[0].brief}`);
+            const backtickCmds = [...instrLine.matchAll(/`([^`]+)`/g)].map(m => m[1]);
+            assert.equal(backtickCmds.length, 2);
+
+            if (process.platform !== "win32") {
+              for (const [cmdStr, expectedArgs] of [
+                [backtickCmds[0], ["digest", "--workspace", swarmSpacedPlan.workspace, customRecRel]],
+                [backtickCmds[1], ["verdict", "--workspace", swarmSpacedPlan.workspace, "--integrity", customAuditRel]]
+              ]) {
+                const echoCmd = cmdStr.replace(/^agy-squad\b/, `${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --`);
+                const echoRes = spawnSync("sh", ["-c", echoCmd], { encoding: "utf8" });
+                assert.equal(echoRes.status, 0, `sh failed on ${cmdStr}: ${echoRes.stderr}`);
+                assert.deepEqual(JSON.parse(echoRes.stdout), expectedArgs, `ASQ-R2-B1 sh argv mismatch for ${cmdStr}`);
+              }
+            }
+            if (psProbe.status === 0 && !customRecRel.includes("'")) {
+              for (const [cmdStr, expectedArgs] of [
+                [backtickCmds[0], ["digest", "--workspace", swarmSpacedPlan.workspace, customRecRel]],
+                [backtickCmds[1], ["verdict", "--workspace", swarmSpacedPlan.workspace, "--integrity", customAuditRel]]
+              ]) {
+                const psEchoCmd = cmdStr.replace(/^agy-squad\b/, `& ${shellQuote(process.execPath)} -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --`);
+                const psEchoRes = spawnSync(psBin, ["-NoProfile", "-NonInteractive", "-Command", psEchoCmd], { encoding: "utf8" });
+                assert.equal(psEchoRes.status, 0, `PowerShell failed on ${cmdStr}: ${psEchoRes.stderr}`);
+                assert.deepEqual(JSON.parse(psEchoRes.stdout), expectedArgs, `ASQ-R2-B1 PowerShell argv mismatch for ${cmdStr}`);
+              }
+            }
+          }
+        }
       } finally {
         fs.rmSync(spacedRoot, { recursive: true, force: true });
       }

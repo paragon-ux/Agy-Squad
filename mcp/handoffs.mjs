@@ -2704,6 +2704,34 @@ function shellQuote(value) {
   return /^[A-Za-z0-9_./:-]+$/.test(str) ? str : "'" + str.replaceAll("'", "'\\''") + "'";
 }
 
+function replaceLineTokensOnce(line, rules) {
+  if (rules.length === 0) return line;
+  let out = "";
+  for (let i = 0; i < line.length;) {
+    let matched = null;
+    for (const rule of rules) {
+      if (!rule.from || !line.startsWith(rule.from, i)) continue;
+      const end = i + rule.from.length;
+      if (
+        rule.boundary &&
+        ((i > 0 && line[i - 1] !== " " && line[i - 1] !== "\t" && line[i - 1] !== "`") ||
+          (end < line.length && line[end] !== " " && line[end] !== "\t" && line[end] !== "`" && line[end] !== ";"))
+      ) {
+        continue;
+      }
+      matched = rule;
+      break;
+    }
+    if (matched) {
+      out += matched.to;
+      i += matched.from.length;
+    } else {
+      out += line[i++];
+    }
+  }
+  return out;
+}
+
 function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
   if (!isPlainObject(plan) || !Array.isArray(plan.integrityAuditPlan) || record?.requireIntegrityAudit === false) {
     return [];
@@ -2725,26 +2753,43 @@ function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResul
     const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[idx]
       ? record.integrityAuditSlots[idx]
       : auditEntry.reportSlot;
-    let brief = String(auditEntry.swarmAdd.brief ?? "");
     const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
+    const origAuditSlot = auditEntry.reportSlot;
+    const cmdRules = [];
     if (effectiveRecordPath) {
-      brief = brief.replaceAll("<rel-record>", shellQuote(effectiveRecordPath));
+      const quotedRecord = shellQuote(effectiveRecordPath);
+      cmdRules.push({ from: "'<rel-record>'", to: quotedRecord, boundary: false });
+      cmdRules.push({ from: "<rel-record>", to: quotedRecord, boundary: false });
       if (origRecordSlot && origRecordSlot !== effectiveRecordPath) {
-        brief = brief.replaceAll(origRecordSlot, shellQuote(effectiveRecordPath));
+        cmdRules.push({ from: shellQuote(origRecordSlot), to: quotedRecord, boundary: true });
       }
     }
     if (auditSlot) {
-      brief = brief.replaceAll("<rel-slot>", shellQuote(auditSlot));
-      if (auditEntry.reportSlot && auditEntry.reportSlot !== auditSlot) {
-        brief = brief.replaceAll(auditEntry.reportSlot, shellQuote(auditSlot));
+      const quotedAudit = shellQuote(auditSlot);
+      cmdRules.push({ from: "'<rel-slot>'", to: quotedAudit, boundary: false });
+      cmdRules.push({ from: "<rel-slot>", to: quotedAudit, boundary: false });
+      if (origAuditSlot && origAuditSlot !== auditSlot) {
+        cmdRules.push({ from: shellQuote(origAuditSlot), to: quotedAudit, boundary: true });
       }
     }
-    if (digestResult?.evidenceDigest) {
-      brief = brief.replace(/Evidence Digest:\s*<sha256>/g, `Evidence Digest: ${digestResult.evidenceDigest}`);
-    }
     if (mappedUuids.length > 0) {
-      brief = brief.replaceAll("u1,u2", mappedUuids.join(","));
+      cmdRules.push({ from: "u1,u2", to: mappedUuids.join(","), boundary: false });
     }
+    const brief = String(auditEntry.swarmAdd.brief ?? "")
+      .split("\n")
+      .map(line => {
+        if (effectiveRecordPath && origRecordSlot && line === `- ${origRecordSlot}`) {
+          return `- ${effectiveRecordPath}`;
+        }
+        if (auditSlot && origAuditSlot && line === `Report slot: ${origAuditSlot}`) {
+          return `Report slot: ${auditSlot}`;
+        }
+        const nextLine = digestResult?.evidenceDigest
+          ? line.replace(/Evidence Digest:\s*<sha256>/g, () => `Evidence Digest: ${digestResult.evidenceDigest}`)
+          : line;
+        return replaceLineTokensOnce(nextLine, cmdRules);
+      })
+      .join("\n");
     return {
       ...auditEntry.swarmAdd,
       brief
