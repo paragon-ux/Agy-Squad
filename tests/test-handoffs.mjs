@@ -3947,6 +3947,126 @@ try {
         fs.rmSync(b2Dir, { recursive: true, force: true });
       }
     }
+
+    // ASQ-R2-F2: Workspace-aware prune recovery on partial OS failure (idx=1, idx=0, spaced paths, outside cwd, multi-workspace, options preserved)
+    if (process.platform !== "win32" && (typeof process.getuid !== "function" || process.getuid() !== 0)) {
+      const outerDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "agy-f2-outer-")));
+      const ws1 = path.join(outerDir, "child repo one");
+      const ws2 = path.join(outerDir, "child repo two");
+      try {
+        const setupTwoSquadRepo = (wsDir) => {
+          fs.mkdirSync(path.join(wsDir, "src"), { recursive: true });
+          fs.writeFileSync(path.join(wsDir, "src/a.js"), "export const a = 1;\n");
+          fs.writeFileSync(path.join(wsDir, "src/b.js"), "export const b = 2;\n");
+          fs.writeFileSync(path.join(wsDir, "manifest.json"), JSON.stringify({
+            squads: {
+              alpha: { specialists: [{ role: "A", objective: "Check a", scopeFiles: ["src/a.js"], readOnly: true }] },
+              beta: { specialists: [{ role: "B", objective: "Check b", scopeFiles: ["src/b.js"], readOnly: true }] }
+            }
+          }));
+          assert.equal(spawnSync(process.execPath, [agySquadCli, "plan", "--workspace", wsDir, "--manifest", "manifest.json", "--topology", "flat", "--report-root", "scratch/my reports", "--out", "scratch/my plan.json"], { cwd: outerDir, encoding: "utf8" }).status, 0);
+          const planObj = JSON.parse(fs.readFileSync(path.join(wsDir, "scratch/my plan.json"), "utf8"));
+          const handoffsList = [];
+          for (const w of planObj.workers) {
+            const sp = w.specialists[0];
+            fs.mkdirSync(path.join(wsDir, path.dirname(sp.reportSlot)), { recursive: true });
+            fs.mkdirSync(path.join(wsDir, path.dirname(w.synthesisSlot)), { recursive: true });
+            fs.writeFileSync(path.join(wsDir, sp.reportSlot), `Verified ${w.squadId}.\n`);
+            fs.writeFileSync(path.join(wsDir, w.synthesisSlot), "Content Verdict: PASS\nSynthesized.\n");
+            handoffsList.push({ sender: sp.workerName, message: `READY ${sp.reportSlot} - ok` });
+          }
+          fs.writeFileSync(path.join(wsDir, "scratch/handoffs.json"), JSON.stringify(handoffsList));
+          const initRes = spawnSync(process.execPath, [agySquadCli, "bundle-init", "--workspace", wsDir, "--plan", "scratch/my plan.json", "--all-squads", "--out-dir", "scratch/my records", "--handoffs", "scratch/handoffs.json", "--from-scope", "--allow-unaudited"], { cwd: outerDir, encoding: "utf8" });
+          assert.equal(initRes.status, 0, initRes.stderr);
+          return { planObj, records: JSON.parse(initRes.stdout).records };
+        };
+
+        const { planObj: p1, records: [rAlpha, rBeta] } = setupTwoSquadRepo(ws1);
+        const alphaSpecDir = path.dirname(path.join(ws1, p1.workers[0].specialists[0].reportSlot));
+        const betaSpecDir = path.dirname(path.join(ws1, p1.workers[1].specialists[0].reportSlot));
+
+        // 1. Failure at idx=0 (first squad) during finalize --prune from outside workspace still emits --workspace recovery command
+        fs.chmodSync(alphaSpecDir, 0o555);
+        const failIdx0 = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws1, rAlpha.path, rBeta.path, "--allow-unaudited", "--prune"], { cwd: outerDir, encoding: "utf8" });
+        fs.chmodSync(alphaSpecDir, 0o755);
+        assert.notEqual(failIdx0.status, 0);
+        assert.match(failIdx0.stderr, /--workspace /);
+
+        // 2. Failure at idx=1 (second squad) after alpha pruned -> execute emitted recovery command from outerDir!
+        fs.chmodSync(betaSpecDir, 0o555);
+        const failIdx1 = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws1, rAlpha.path, rBeta.path, "--allow-unaudited", "--replace", "--prune"], { cwd: outerDir, encoding: "utf8" });
+        fs.chmodSync(betaSpecDir, 0o755);
+        assert.notEqual(failIdx1.status, 0);
+        assert.equal(fs.existsSync(path.join(ws1, p1.workers[0].specialists[0].reportSlot)), false, "alpha should already be pruned");
+        assert.equal(fs.existsSync(path.join(ws1, p1.workers[1].specialists[0].reportSlot)), true, "beta should remain unpruned");
+        const cmdLineMatch = failIdx1.stderr.split("\n").find(l => l.trim().startsWith("agy-squad prune "));
+        assert.ok(cmdLineMatch, `Expected runnable agy-squad prune recovery line in:\n${failIdx1.stderr}`);
+        const execRecovery = spawnSync("sh", ["-c", cmdLineMatch.trim().replace(/^agy-squad\b/, `'${process.execPath}' '${agySquadCli}'`)], { cwd: outerDir, encoding: "utf8" });
+        assert.equal(execRecovery.status, 0, `Emitted recovery command failed from outerDir: ${execRecovery.stderr}`);
+        assert.equal(fs.existsSync(path.join(ws1, p1.workers[1].specialists[0].reportSlot)), false, "Recovery command must prune beta");
+
+        // 3. Multi-workspace batch prune --records --clean-records failure emits separate workspace-scoped commands and cleans records
+        const { planObj: p2, records: [r2Alpha, r2Beta] } = setupTwoSquadRepo(ws2);
+        const finWs2 = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws2, r2Alpha.path, r2Beta.path, "--allow-unaudited"], { cwd: outerDir, encoding: "utf8" });
+        assert.equal(finWs2.status, 0, finWs2.stderr);
+        const [fin2A, fin2B] = JSON.parse(finWs2.stdout).results;
+        const finWs1Again = spawnSync(process.execPath, [agySquadCli, "verify", "--workspace", ws1, path.posix.join("scratch/my reports", `squad-${rAlpha.squadId}`, "lead/report.sources.json")], { cwd: outerDir, encoding: "utf8" });
+        assert.equal(finWs1Again.status, 0, finWs1Again.stderr);
+        const sha1Alpha = JSON.parse(finWs1Again.stdout).sha256;
+
+        const ws2BetaDir = path.dirname(path.join(ws2, p2.workers[1].specialists[0].reportSlot));
+        fs.chmodSync(ws2BetaDir, 0o555);
+        const multiWsFail = spawnSync(process.execPath, [
+          agySquadCli, "prune", "--records",
+          `child repo one/${rAlpha.path}=${sha1Alpha}`,
+          `child repo two/${r2Alpha.path}=${fin2A.sha256}`,
+          `child repo two/${r2Beta.path}=${fin2B.sha256}`,
+          "--clean-records"
+        ], { cwd: outerDir, encoding: "utf8" });
+        fs.chmodSync(ws2BetaDir, 0o755);
+        assert.notEqual(multiWsFail.status, 0);
+        assert.match(multiWsFail.stderr, /--clean-records/);
+        const multiCmds = multiWsFail.stderr.split("\n").filter(l => l.trim().startsWith("agy-squad prune "));
+        assert.ok(multiCmds.length >= 1, `Expected workspace-scoped retry command:\n${multiWsFail.stderr}`);
+        for (const c of multiCmds) {
+          const r = spawnSync("sh", ["-c", c.trim().replace(/^agy-squad\b/, `'${process.execPath}' '${agySquadCli}'`)], { cwd: outerDir, encoding: "utf8" });
+          assert.equal(r.status, 0, `Multi-workspace recovery command failed: ${r.stderr}`);
+        }
+        assert.equal(fs.existsSync(path.join(ws2, p2.workers[1].specialists[0].reportSlot)), false);
+        assert.equal(fs.existsSync(path.join(ws2, r2Beta.path)), false, "--clean-records must remove beta record on recovery");
+
+        // 4. Sibling bundle=sha batch prune failure preserves --workspace and --keep-reports on recovery
+        const ws3 = path.join(outerDir, "child repo three");
+        try {
+          const { planObj: p3, records: [r3Alpha, r3Beta] } = setupTwoSquadRepo(ws3);
+          const fin3 = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws3, r3Alpha.path, r3Beta.path, "--allow-unaudited"], { cwd: outerDir, encoding: "utf8" });
+          assert.equal(fin3.status, 0, fin3.stderr);
+          const [b3A, b3B] = JSON.parse(fin3.stdout).results;
+          const ws3AlphaDir = path.dirname(path.join(ws3, p3.workers[0].specialists[0].reportSlot));
+          fs.chmodSync(ws3AlphaDir, 0o555);
+          const bundleFail = spawnSync(process.execPath, [agySquadCli, "prune", "--workspace", ws3, `${b3A.bundlePath}=${b3A.sha256}`, `${b3B.bundlePath}=${b3B.sha256}`], { cwd: outerDir, encoding: "utf8" });
+          fs.chmodSync(ws3AlphaDir, 0o755);
+          assert.notEqual(bundleFail.status, 0);
+          const bundleRetryLine = bundleFail.stderr.split("\n").find(l => l.trim().startsWith("agy-squad prune "));
+          assert.ok(bundleRetryLine && bundleRetryLine.includes("--workspace "), `Expected workspace-scoped bundle prune retry:\n${bundleFail.stderr}`);
+          const bundleRetryRes = spawnSync("sh", ["-c", bundleRetryLine.trim().replace(/^agy-squad\b/, `'${process.execPath}' '${agySquadCli}'`)], { cwd: outerDir, encoding: "utf8" });
+          assert.equal(bundleRetryRes.status, 0, bundleRetryRes.stderr);
+          assert.equal(fs.existsSync(path.join(ws3, p3.workers[0].specialists[0].reportSlot)), false);
+          assert.equal(fs.existsSync(path.join(ws3, p3.workers[1].specialists[0].reportSlot)), false);
+        } finally {
+          try { fs.chmodSync(path.join(ws3, "scratch/my reports/squad-alpha/specialist-1"), 0o755); } catch {}
+        }
+      } finally {
+        for (const d of [ws1, ws2]) {
+          try {
+            for (const sq of ["squad-alpha", "squad-beta"]) {
+              fs.chmodSync(path.join(d, "scratch/my reports", sq, "specialist-1"), 0o755);
+            }
+          } catch {}
+        }
+        fs.rmSync(outerDir, { recursive: true, force: true });
+      }
+    }
   }
 
   console.log("✓ Receipt reconciliation, changed evidence, custom scratch roots, retryable cleanup, SQ-SVC-001, and SQ-RUN/SQ-ARCH-001 regressions");

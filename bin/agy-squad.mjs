@@ -569,7 +569,33 @@ function readRecordWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawPat
     effectiveRoot === baseRoot
       ? initialRel
       : normalizeWorkspaceCliPath(path.join(baseRoot, initialRel), process.platform, effectiveRoot);
-  return { record, effectiveRoot, recRel };
+  return { record, effectiveRoot, recRel, initialRel, baseRoot };
+}
+
+function formatPruneRecoveryNotice({ completedLabels, failedLabel, remainingItems, cleanRecords = false, keepReports = false, shellQuote }) {
+  const byWorkspace = new Map();
+  for (const rem of remainingItems) {
+    const useParentWs = rem.mode === "records" && path.isAbsolute(rem.recRel) && Boolean(rem.baseRoot);
+    const wsRoot = useParentWs ? rem.baseRoot : rem.effectiveRoot;
+    const useRecordsFlag = rem.mode === "records" && (!path.isAbsolute(rem.recRel) || useParentWs);
+    const groupKey = `${useRecordsFlag ? "records" : "bundles"}:${wsRoot}`;
+    let group = byWorkspace.get(groupKey);
+    if (!group) {
+      group = { wsRoot, useRecordsFlag, pins: [] };
+      byWorkspace.set(groupKey, group);
+    }
+    const relPinPath = useRecordsFlag ? (useParentWs ? rem.initialRel : rem.recRel) : rem.bundleRel;
+    group.pins.push(shellQuote(`${relPinPath}=${rem.sha}`));
+  }
+  const cmds = [...byWorkspace.values()].map(({ wsRoot, useRecordsFlag, pins }) =>
+    `agy-squad prune --workspace ${shellQuote(wsRoot)}${useRecordsFlag ? " --records" : ""} ${pins.join(" ")}${useRecordsFlag && cleanRecords ? " --clean-records" : ""}${keepReports ? " --keep-reports" : ""}`
+  );
+  const completedStr = completedLabels.length > 0 ? completedLabels.join(", ") : "none";
+  const remainingStr = remainingItems.map(r => r.label).join(", ");
+  return (
+    `Phase-1 bundle verification succeeded (completed prunes: [${completedStr}]; failed/partially processed: '${failedLabel}'; remaining: [${remainingStr}]). ` +
+    `Already-removed loose reports are skipped safely on retry. Recover with:\n${cmds.join("\n")}`
+  );
 }
 
 function resolveBundleWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawBundleArg, handoffsMod) {
@@ -1382,7 +1408,7 @@ async function main(args) {
     );
     // Phase 1: bundle and verify every requested record before unlinking any loose report.
     const finalizedResults = [];
-    for (const { record, effectiveRoot, recRel } of loadedPositionals) {
+    for (const { record, effectiveRoot, recRel, initialRel } of loadedPositionals) {
       const verifiedDirs = new Set([effectiveRoot]);
       const bundleInput = {
         ...record,
@@ -1413,7 +1439,7 @@ async function main(args) {
         status: statusBySender.get(conversationId) ?? "PENDING"
       }));
       const verified = handoffsMod.verifyBundle(effectiveRoot, bundled.path, bundled.sha256, { verifiedDirs });
-      finalizedResults.push({ record, effectiveRoot, verifiedDirs, recRel, inspected, bundled, verified, pruned: null });
+      finalizedResults.push({ record, effectiveRoot, baseRoot, initialRel, verifiedDirs, recRel, inspected, bundled, verified, pruned: null });
     }
     // Phase 2: prune loose specialist reports only after all records sealed and verified cleanly.
     if (values.prune) {
@@ -1427,17 +1453,23 @@ async function main(args) {
           });
           prunedSquads.push(item.record.squadId);
         } catch (error) {
-          if (prunedSquads.length > 0) {
-            const remaining = finalizedResults
-              .slice(idx)
-              .map(rem => handoffsMod.shellQuote(`${rem.recRel}=${rem.bundled.sha256}`))
-              .join(" ");
-            throw new Error(
-              `Prune failed on squad '${item.record.squadId}' after pruning [${prunedSquads.join(", ")}]: ${error.message}\n` +
-              `All bundles were verified in Phase 1. Recover remaining prunes with: agy-squad prune --records ${remaining}`
-            );
-          }
-          throw error;
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: prunedSquads,
+            failedLabel: item.record.squadId,
+            remainingItems: finalizedResults.slice(idx).map(rem => ({
+              mode: "records",
+              label: rem.record.squadId,
+              effectiveRoot: rem.effectiveRoot,
+              baseRoot: rem.baseRoot,
+              initialRel: rem.initialRel,
+              recRel: rem.recRel,
+              bundleRel: rem.bundled.path,
+              sha: rem.bundled.sha256
+            })),
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed on squad '${item.record.squadId}': ${error.message}\n${notice}`);
         }
       }
     }
@@ -1497,7 +1529,7 @@ async function main(args) {
         const pinIndex = rawRecArg.lastIndexOf("=");
         if (pinIndex < 1 || !/^[a-f0-9]{64}$/.test(rawRecArg.slice(pinIndex + 1))) throw new Error("prune --records requires <record.json>=<accepted-sha256>.");
         const acceptedSha = rawRecArg.slice(pinIndex + 1);
-        const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecArg.slice(0, pinIndex), handoffsMod);
+        const { record, effectiveRoot, recRel, initialRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecArg.slice(0, pinIndex), handoffsMod);
         const verifiedDirs = new Set([effectiveRoot]);
         const resolvedRootPrefix = handoffsMod.resolveReportRoot(record);
         const bundleRel = handoffsMod.bundlePath(record.squadId, resolvedRootPrefix);
@@ -1514,7 +1546,7 @@ async function main(args) {
             if (err?.code !== "ENOENT") throw err;
           }
         }
-        prepared.push({ record, effectiveRoot, recRel, recFull, verifiedDirs, bundleRel, acceptedSha });
+        prepared.push({ record, effectiveRoot, baseRoot, initialRel, recRel, recFull, verifiedDirs, bundleRel, acceptedSha });
       }
       // Phase 2: prune loose reports and clean records after all entries verified cleanly.
       const results = [];
@@ -1545,17 +1577,24 @@ async function main(args) {
             ...(pruned.retained ? { retained: pruned.retained } : {})
           });
         } catch (error) {
-          if (results.length > 0) {
-            const remaining = prepared
-              .slice(idx)
-              .map(rem => handoffsMod.shellQuote(`${rem.recRel}=${rem.acceptedSha}`))
-              .join(" ");
-            throw new Error(
-              `Prune failed on squad '${item.record.squadId}' after pruning [${results.map(r => r.squadId).join(", ")}]: ${error.message}\n` +
-              `Retry remaining entries with: agy-squad prune --records ${remaining}${values["clean-records"] ? " --clean-records" : ""}`
-            );
-          }
-          throw error;
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: results.map(r => r.squadId),
+            failedLabel: item.record.squadId,
+            remainingItems: prepared.slice(idx).map(rem => ({
+              mode: "records",
+              label: rem.record.squadId,
+              effectiveRoot: rem.effectiveRoot,
+              baseRoot: rem.baseRoot,
+              initialRel: rem.initialRel,
+              recRel: rem.recRel,
+              bundleRel: rem.bundleRel,
+              sha: rem.acceptedSha
+            })),
+            cleanRecords: values["clean-records"],
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed on squad '${item.record.squadId}': ${error.message}\n${notice}`);
         }
       }
       console.log(
@@ -1606,17 +1645,20 @@ async function main(args) {
             ...(pruned.retained ? { retained: pruned.retained } : {})
           });
         } catch (error) {
-          if (results.length > 0) {
-            const remaining = preparedBundles
-              .slice(idx)
-              .map(rem => handoffsMod.shellQuote(`${rem.bundleRel}=${rem.sha}`))
-              .join(" ");
-            throw new Error(
-              `Prune failed at '${item.bundleRel}' after pruning ${results.length} bundle(s): ${error.message}\n` +
-              `Retry remaining entries with: agy-squad prune ${remaining}`
-            );
-          }
-          throw error;
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: results.map(r => r.bundlePath),
+            failedLabel: item.bundleRel,
+            remainingItems: preparedBundles.slice(idx).map(rem => ({
+              mode: "bundles",
+              label: rem.bundleRel,
+              effectiveRoot: rem.effectiveRoot,
+              bundleRel: rem.bundleRel,
+              sha: rem.sha
+            })),
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed at '${item.bundleRel}': ${error.message}\n${notice}`);
         }
       }
       console.log(JSON.stringify({ ok: true, count: results.length, results, removed }, null, 2));
