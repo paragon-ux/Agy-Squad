@@ -1,6 +1,6 @@
 {
   "name": "agy-squad",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Structured multi-agent /swarm code reviews, non-overlapping file scopes, tiny handoffs, and SHA-256 proof bundles for Google Antigravity.",
   "main": "mcp/index.js",
   "exports": {
@@ -12,6 +12,7 @@
     "agy-squad-mcp": "mcp/index.js"
   },
   "files": [
+    "agents",
     "assets",
     "bin",
     "mcp",
@@ -20,6 +21,8 @@
     ".agents/skills",
     "!.agents/skills/self-diagnosis/**",
     "!.agents/skills/self-diagnosis",
+    "!.agents/skills/platform-fit/**",
+    "!.agents/skills/platform-fit",
     "docs",
     "!docs/plans/**",
     "!docs/plans",
@@ -39,7 +42,7 @@
     "uninstall": "node scripts/install-register.mjs --uninstall",
     "status": "node scripts/install-register.mjs --status",
     "preflight": "node scripts/release-preflight.mjs",
-    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-lifecycle-installer.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
+    "test": "node tests/test-verdicts-and-pivot.mjs && node tests/test-dispatch.mjs && node tests/test-planner.mjs && node tests/test-readonly-subagent.mjs && node tests/test-handoffs.mjs && node tests/test-run.mjs && node tests/test-server.mjs && node tests/test-lifecycle-installer.mjs && node benchmarks/teamwork-vs-squad/verify-benchmark.mjs && node tests/verify-package.mjs --self-test",
     "verify:package": "node tests/verify-package.mjs --self-test && npm pack --dry-run --json | node tests/verify-package.mjs",
     "docs": "zensical serve"
   },

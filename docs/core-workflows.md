@@ -17,13 +17,13 @@ Agy-Squad structures each cohort run into four ordered stages: Pre-Flight Intake
 
 ### Phase 0: Step 0 intake and swarm defaults
 
-For native `/swarm` runs, call `ask_question` once at Step 0 whenever any of the four swarm settings (`topology`, `model`, `workspaceIsolation`, or report retention) is absent from the user's prompt. Ask only for the missing settings, and skip Step 0 when all four are already specified. Recommended options stay lightweight (inline tasks default to `flat`, manifests with `lead` blocks compile `layered` unless `--topology flat` is passed, `inherit` workspace isolation, the coordinator's active model, and an independent Integrity Audit):
+For native `/swarm` runs, read-only reviews and cohorts with separate file scopes start right away using built-in defaults (`flat` for inline tasks, staged `layered` waves for manifests with `lead` blocks unless `--topology flat` is passed, `inherit` workspace mode, the coordinator's active model, `--prune` after synthesis, and an independent Integrity Audit). The coordinator calls `ask_question` at Step 0 only when `squad_planner` finds writable `siblingOverlaps` on `inherit`, when destructive state changes are ambiguous, or when you ask to customize run settings:
 
 | Decision | Default and options | Governing control |
 | --- | --- | --- |
-| **Topology** | Inline tasks default to **Flat** (specialists report to coordinator); manifests with `lead` blocks compile **Layered** unless `--topology flat` is passed (`all_l1` leads in `dispatch_squad` or domain coordinators in `/swarm`) | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `<squadId>`) |
+| **Topology** | Inline tasks default to **Flat** (specialists report to coordinator); manifests with `lead` blocks compile staged **Layered** waves (`wave1` specialists, `wave2` leads after specialist `READY` receipts, `wave3` `audit-<id>`) unless `--topology flat` is passed | `squad_planner` (omit `squadId` for all squads) or `dispatch_squad` (`all_l1` / `<squadId>`) |
 | **Workspace isolation** | Default: `inherit` (shared coordinator root for read-only or disjoint `scopeFiles`); opt into `share` (shared-storage copy) or `branch` (isolated clone) for concurrent edits | `squad_planner` (`workspaceIsolation`, `/swarm` only; `subagent` requires `inherit`) |
-| **Teardown and provenance** | Full retention (`--keep-reports`, preserving `scratch/agy-squad/`) or verified report pruning (`--prune`, plus `rm -rf scratch/agy-squad` after archiving findings) | `agy-squad prune` / `agy-squad finalize --prune` |
+| **Teardown and provenance** | Default: verified report pruning after final synthesis (`agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records` or `finalize --prune`); pass `--keep-reports` to retain `scratch/agy-squad/` reports | `agy-squad prune` / `agy-squad finalize` |
 | **Model** | Default: coordinator active model (omit `model`/`--model`); or explicit user-selected model ID (`swarm{action: "models"}`) | `squad_planner` (`model`, `knownModels`) and `swarm{action: "status"}` |
 | **Integrity rigor** | Default: independent flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `CLEAN` or `INTEGRITY VIOLATION`); explicit `--no-integrity` / `--allow-unaudited` opt-out | `agy-squad bundle` / `agy-squad finalize` and `mcp/verdicts.mjs` |
 | **Instruction self-containment** | Explicit file paths, objectives, and criteria in every brief; unanchored codes (such as `H4` or `D2`) are rejected | `mcp/briefs.mjs` |
@@ -112,12 +112,14 @@ Agy-Squad separates native worker cleanup from report bundling and scratch delet
 | --- | --- | --- | --- |
 | **1. Native `/swarm` planning and workspace** | `agy-squad plan` (`squad_planner`) + Antigravity `/swarm` | Native `/swarm` owns worker lifecycles and `kill` cleanup (`workspace: "share"` / `"branch"` worktrees); `agy-squad` creates no temporary `.agents/plugins/`, `.agents/agents/`, or `run-<uuid>/` directories (the legacy `agy-squad run` PTY launcher is retired) | Preserves workspace-relative specialist/lead reports under `scratch/agy-squad/squad-<id>/` (or custom `reportRoot`) |
 | **2. Handoff and integrity bundle** | `agy-squad` (`finalize`, `bundle`, `verify`, `prune`) | `prune` (or `finalize --prune` / `verify --prune --expected-sha256 <sha256>`) deletes loose `specialist-<N>/report.md` files only after `bundle` and `verify` succeed (unless `--keep-reports` or `retainReports: true` is set) | Preserves `lead/report.md` (`Content Verdict: PASS`), `lead/report.sources.json` (SHA-256 digests of all inputs and specialist reports), and verified `integrityAudit` evidence (`Integrity Verdict: CLEAN`) |
-| **3. Self-diagnosis wave** | `agy-squad finalize --prune` + scratch cleanup | Removes verified loose specialist reports via `finalize --prune`, and clears finished `scratch/agy-squad/` directories once findings are archived | Retain verified `lead/report.sources.json` bundles until findings and bundle SHA-256 digests are recorded in `docs/reviews/<slug>.md` |
+| **3. Self-diagnosis wave** | `agy-squad finalize` + `agy-squad prune --records` + scratch cleanup | Finalizes bundles via `finalize`, and removes verified loose specialist reports and temporary record files via `prune --records ... --clean-records` (or `finalize --prune` when no review ledger is written), then clears finished `scratch/agy-squad/` directories once findings are archived | Retain verified `lead/report.sources.json` bundles until findings and bundle SHA-256 digests are recorded in `docs/reviews/<slug>.md` |
 
-To prune verified specialist reports and optionally clear completed self-diagnosis scratch directories after archiving findings into `docs/reviews/<target-review-slug>.md`:
+To prune verified specialist reports and temporary record files after archiving findings into `docs/reviews/<target-review-slug>.md` (and optionally clear completed self-diagnosis scratch directories):
 
 ```bash
-agy-squad finalize scratch/record.json --prune
+agy-squad finalize scratch/agy-squad/squad-*/record.json
+# After transcribing findings and bundle SHA-256 digests into docs/reviews/<slug>.md:
+agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records
 # Optional: remove finished scratch bundles once findings are archived in docs/reviews/
 rm -rf scratch/agy-squad
 ```

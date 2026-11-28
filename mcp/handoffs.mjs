@@ -1,7 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, validateSquadId } from "./verdicts.mjs";
+import { StringDecoder } from "node:string_decoder";
+import { isDeepStrictEqual } from "node:util";
+import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
 const messageLimit = 500;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f\u2028\u2029]/;
@@ -19,6 +23,14 @@ function isValidRelativePrefix(prefix) {
     !path.isAbsolute(prefix) &&
     !prefix.split("/").some(part => !part || part === "." || part === "..")
   );
+}
+
+function isValidScopeEntry(file) {
+  if (typeof file !== "string") return false;
+  const trimmed = file.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) return false;
+  if (trimmed.startsWith("/") || trimmed.includes("\\") || WINDOWS_DRIVE_RE.test(trimmed)) return false;
+  return trimmed === "." || !trimmed.split("/").some(part => !part || part === "." || part === "..");
 }
 
 function trimTrailingSlashes(value) {
@@ -64,6 +76,16 @@ function reportPath(squadId, specialistNumber, reportRoot = defaultReportRoot())
     throw new Error(`Report slot exceeds 500-byte Pointer-Over-Wire prefix budget (including PARTIAL, /swarm @mention, and observation headroom): ${relative}`);
   }
   return relative;
+}
+
+function recordSlotPath(squadId, reportRoot = defaultReportRoot()) {
+  validateSquadId(squadId);
+  const normalizedRoot = normalizeReportRoot(reportRoot);
+  const directory = `squad-${encodeURIComponent(squadId)}`;
+  if (Buffer.byteLength(directory) > 255) {
+    throw new Error("Squad ID must fit in one workspace directory name.");
+  }
+  return `${normalizedRoot}/${directory}/record.json`;
 }
 
 const REPORT_TAIL_RE = /^squad-[^/\s]+\/(?:lead\/report\.(?:md|sources\.json)|specialist-[1-9]\d*\/report\.md)$/;
@@ -317,7 +339,9 @@ function workspacePath(root, relative, verifiedDirs) {
   return file;
 }
 
-function readOpenedFileWithStat(file, relative = file) {
+const STREAM_HASH_BUF = Buffer.allocUnsafe(65536);
+
+function readOpenedFileWithStat(file, relative = file, { maxBytes = Infinity, hashOnly = false } = {}) {
   const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
   if (process.platform !== "linux" || !hasONofollow) {
     const linkStat = fs.lstatSync(file);
@@ -348,6 +372,16 @@ function readOpenedFileWithStat(file, relative = file) {
         throw new Error(`Expected a regular file at the recorded path: ${relative}`);
       }
     }
+    if (hashOnly) {
+      const hash = createHash("sha256");
+      while (true) {
+        const n = fs.readSync(fd, STREAM_HASH_BUF, 0, STREAM_HASH_BUF.length, null);
+        if (n <= 0) break;
+        hash.update(STREAM_HASH_BUF.subarray(0, n));
+      }
+      return { digest: hash.digest("hex"), stat, realPath };
+    }
+    if (stat.size > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
     const expectedSize = stat.size;
     let bytes;
     if (expectedSize >= 0 && expectedSize <= 64 * 1024 * 1024) {
@@ -361,12 +395,16 @@ function readOpenedFileWithStat(file, relative = file) {
       if (offset < buf.length) {
         bytes = buf.subarray(0, offset);
       } else {
+        if (offset > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
         const chunks = [buf];
+        let totalBytes = buf.length;
         const extra = Buffer.allocUnsafe(65536);
         while (true) {
           const n = fs.readSync(fd, extra, 0, extra.length, null);
           if (n <= 0) break;
+          if (totalBytes + n > maxBytes) throw Object.assign(new Error(`File exceeds size limit: ${relative}`), { code: "EFBIG" });
           chunks.push(Buffer.from(extra.subarray(0, n)));
+          totalBytes += n;
         }
         bytes = Buffer.concat(chunks);
       }
@@ -416,14 +454,16 @@ function readFile(root, relative, verifiedDirs) {
   return readOpenedFile(workspacePath(canonicalRoot, relative, verifiedDirs), relative);
 }
 
-function readIfPresentWithStat(root, relative, verifiedDirs) {
+function readIfPresentWithStat(root, relative, verifiedDirs, options) {
   try {
-    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative);
+    return readOpenedFileWithStat(workspacePath(root, relative, verifiedDirs), relative, options);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
 }
+
+const hashIfPresentWithStat = (root, relative, verifiedDirs) => readIfPresentWithStat(root, relative, verifiedDirs, { hashOnly: true });
 
 function fingerprint(root, files, verifiedDirs = new Set()) {
   const canonicalRoot = resolveCanonicalRoot(root, verifiedDirs);
@@ -1028,7 +1068,7 @@ function bundleReports(root, record, options = {}) {
     throw new Error("integrityAuditSlots must be an array of nonempty workspace-relative paths.");
   }
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
-  if (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS") {
+  if (verdict !== undefined && (allowNonPassing ? !validVerdicts.has(verdict) : verdict !== "PASS")) {
     throw new Error("Only independently passing cohorts are eligible for bundling.");
   }
   const {
@@ -1108,6 +1148,7 @@ function bundleReports(root, record, options = {}) {
         ...(allowPartial ? { allowPartial: true } : {}),
         synthesis,
         verifiedFiles,
+        assignments: record.assignments,
         ...(retainReports ? { retainReports: true } : {}),
         ...(integrityAudit ? { integrityAudit, integrityAudits } : {}),
         reports
@@ -1433,6 +1474,327 @@ function discoverSingleSquadAuditSlotsIfMatching(sources, squadId, rootPrefix) {
   return matching;
 }
 
+function extractWorktreePathsFromHandoffs(handoffs) {
+  if (!Array.isArray(handoffs) || handoffs.length === 0) return [];
+  const extracted = [];
+  const seen = new Set();
+  const pushWt = (val) => {
+    const trimmed = typeof val === "string" ? val.trim() : "";
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      extracted.push(trimmed);
+    }
+  };
+  const wtRe = /(?:^|[\s;,(])wt=(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;,)"'\r\n]+))/g;
+  for (const item of handoffs) {
+    if (typeof item === "string") {
+      wtRe.lastIndex = 0;
+      for (let m; (m = wtRe.exec(item)); ) pushWt(m[1] ?? m[2] ?? m[3]);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    if (typeof item.worktree === "string") pushWt(item.worktree);
+    if (typeof item.message === "string") {
+      wtRe.lastIndex = 0;
+      for (let m; (m = wtRe.exec(item.message)); ) pushWt(m[1] ?? m[2] ?? m[3]);
+    }
+  }
+  return extracted;
+}
+
+function gitCommonDirectory(root) {
+  const result = spawnSync("git", ["-C", root, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 3000 });
+  if (result.status !== 0) return null;
+  try { return fs.realpathSync.native(path.resolve(root, result.stdout.trim())); } catch { return null; }
+}
+
+function validateWorkerWorktreeRoot(root, candidate) {
+  const real = resolveCanonicalRoot(candidate);
+  const common = gitCommonDirectory(root);
+  const workerCommon = gitCommonDirectory(real);
+  if (!common || !workerCommon || !isExpectedRealPath(common, workerCommon)) {
+    throw new Error(`Untrusted worker worktree: ${candidate}. Authorize a source explicitly with --from <dir>.`);
+  }
+  return real;
+}
+
+function workerReceiptRoots(handoffs) {
+  return (Array.isArray(handoffs) ? handoffs : []).flatMap(h =>
+    h && typeof h.sender === "string"
+      ? extractWorktreePathsFromHandoffs([h]).map(root => ({ root, sender: h.sender }))
+      : []);
+}
+
+function tryRealPath(candidate) {
+  let cur = path.resolve(candidate);
+  const tail = [];
+  while (true) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch {}
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.resolve(candidate);
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
+const READONLY_SUBAGENT_TYPE = "agy-squad-readonly";
+const SUBAGENT_PLACEHOLDER_RE = /^<invoke_subagent:([A-Za-z0-9_.-]+):conversationId>$/;
+const RESERVED_WORKER_KEYS = new Set(["__proto__", "constructor", "prototype", ".", ".."]);
+
+function extractPlaceholderWorkerName(rawId) {
+  if (typeof rawId !== "string") return undefined;
+  const match = SUBAGENT_PLACEHOLDER_RE.exec(rawId.trim());
+  if (!match || RESERVED_WORKER_KEYS.has(match[1]) || match[1].endsWith(".")) return undefined;
+  return match[1];
+}
+const TRANSCRIPT_REPORT_LIMIT_BYTES = 128 * 1024;
+const MAX_TRANSCRIPT_STREAM_BYTES = 64 * 1024 * 1024;
+const MAX_TRANSCRIPT_JSON_BYTES = 2 * 1024 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function restrictiveTranscriptPolicyError(homeDir = os.homedir(), explicitHomeOverride = false) {
+  const now = Date.now();
+  const profileHome = explicitHomeOverride ? undefined : process.env.AGY_TEST_PROFILE_DIR;
+  const useEnvStateDirs = !explicitHomeOverride && !profileHome;
+  const effectiveHome = profileHome || homeDir;
+  const stateDirs = [path.join(effectiveHome, ".gemini", "antigravity", "context-saver")];
+  if (process.platform === "win32") {
+    const localAppData = useEnvStateDirs && process.env.LOCALAPPDATA
+      ? process.env.LOCALAPPDATA
+      : path.join(effectiveHome, "AppData", "Local");
+    stateDirs.push(path.join(localAppData, "agy-context-saver"));
+  } else {
+    const stateHome = useEnvStateDirs && process.env.XDG_STATE_HOME
+      ? process.env.XDG_STATE_HOME
+      : path.join(effectiveHome, ".local", "state");
+    stateDirs.push(path.join(stateHome, "agy-context-saver"));
+  }
+  const uniqueStateDirs = [...new Set(stateDirs)];
+  for (const stateDir of uniqueStateDirs) {
+    const filePath = path.join(stateDir, "transcript-access.json");
+    try {
+      const st = fs.lstatSync(filePath);
+      if (st.isSymbolicLink() || !st.isFile()) continue;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const fresh = Object.values(parsed?.policies || {}).filter(p => {
+        if (!p || typeof p !== "object") return false;
+        const updatedAt = Number(p.updatedAt || p.createdAt || 0);
+        const ttlMs = Number(p.ttlMs) > 0 ? Number(p.ttlMs) : 3600000;
+        return updatedAt > 0 && now - updatedAt < ttlMs;
+      });
+      const active = fresh.find(p => p.ownerId === parsed?.activeOwnerId) ||
+        fresh.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0];
+      if (active && ["deny", "self-only", "allowlist"].includes(active.mode)) {
+        return "A restrictive Agy-Context-Saver transcript policy is active. Direct transcript extraction is disabled; run 'agy-context transcript query --id <uuid> --roles assistant --mode full --field content --limit 5 --full --json --out <json>' and pass --transcript-json <slot>=<json>.";
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function normalizeUuid(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return UUID_RE.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+function resolveTranscriptFullPath(conversationId, homeDir = os.homedir()) {
+  const normId = normalizeUuid(conversationId);
+  if (!normId) throw new Error(`Invalid transcript conversation UUID: ${conversationId}`);
+  conversationId = normId;
+  const geminiDir = path.join(homeDir, ".gemini");
+  let hostEntries = [];
+  try {
+    const realGeminiDir = fs.realpathSync.native(geminiDir);
+    if (!fs.statSync(realGeminiDir).isDirectory()) {
+      throw new Error(`Refusing non-directory transcript root: ${geminiDir}`);
+    }
+    hostEntries = fs.readdirSync(realGeminiDir, { withFileTypes: true })
+      .filter(d => d.name.startsWith("antigravity") && d.isDirectory() && !d.isSymbolicLink())
+      .map(d => path.join(realGeminiDir, d.name));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") hostEntries = [];
+    else throw error;
+  }
+  const matches = [];
+  for (const hostRoot of hostEntries) {
+    let current = hostRoot;
+    try {
+      for (const component of ["brain", conversationId, ".system_generated", "logs"]) {
+        current = path.join(current, component);
+        const st = fs.lstatSync(current);
+        if (st.isSymbolicLink() || !st.isDirectory()) {
+          throw new Error(`Refusing symlinked or non-directory transcript path component: ${current}`);
+        }
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue;
+      throw error;
+    }
+    const candidate = path.join(current, "transcript_full.jsonl");
+    try {
+      const st = fs.lstatSync(candidate);
+      if (st.isSymbolicLink() || !st.isFile()) {
+        throw new Error(`Refusing symlinked or non-regular transcript file: ${candidate}`);
+      }
+      const real = fs.realpathSync.native(candidate);
+      const expected = path.join(fs.realpathSync.native(current), "transcript_full.jsonl");
+      if (!isExpectedRealPath(real, expected)) {
+        throw new Error(`Transcript path escapes canonical Antigravity brain directory: ${candidate}`);
+      }
+      matches.push(real);
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue;
+      throw error;
+    }
+  }
+  const unique = [...new Set(matches)];
+  if (unique.length !== 1) throw new Error(`Expected exactly one transcript_full.jsonl for '${conversationId}', found ${unique.length}.`);
+  return unique[0];
+}
+
+function parseTranscriptReportJsonl(filePath, conversationId) {
+  const hasONofollow = typeof fs.constants.O_NOFOLLOW === "number" && fs.constants.O_NOFOLLOW !== 0;
+  if (process.platform !== "linux" || !hasONofollow) {
+    const lst = fs.lstatSync(filePath);
+    if (lst.isSymbolicLink()) {
+      throw new Error(`Refusing symlinked transcript file: ${filePath}`);
+    }
+  }
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) {
+      throw new Error(`Refusing non-regular transcript file: ${filePath}`);
+    }
+    if (st.size > MAX_TRANSCRIPT_STREAM_BYTES) {
+      throw new Error(`Transcript '${conversationId}' exceeds the 64 MiB stream ceiling.`);
+    }
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let totalBytesRead = 0;
+    let carry = "";
+    let sawAnyLine = false;
+    let selected = null;
+    const reportHashes = new Set();
+    let incompleteTrailing = false;
+
+    const processLine = (line, isFinal) => {
+      if (!line.trim()) return;
+      sawAnyLine = true;
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        if (isFinal) {
+          incompleteTrailing = true;
+          return;
+        }
+        throw new Error(`Transcript '${conversationId}' has a malformed JSONL record before the final line.`);
+      }
+      if (item?.type !== "PLANNER_RESPONSE" || typeof item.content !== "string" || !item.content.trim().startsWith("# Evidence Report")) return;
+      const stepIndex = Number(item.step_index);
+      if (!Number.isSafeInteger(stepIndex) || stepIndex < 0) {
+        throw new Error(`Final '# Evidence Report' response in transcript '${conversationId}' lacks a valid step_index.`);
+      }
+      reportHashes.add(sha256(Buffer.from(item.content, "utf8")));
+      if (reportHashes.size > 1) throw new Error(`Ambiguous final '# Evidence Report' responses in transcript '${conversationId}'.`);
+      if (!selected || stepIndex > selected.stepIndex) {
+        selected = {
+          stepIndex,
+          content: item.content,
+          truncated: Object.hasOwn(item, "truncated_fields")
+        };
+      }
+    };
+
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      totalBytesRead += bytesRead;
+      if (totalBytesRead > MAX_TRANSCRIPT_STREAM_BYTES) {
+        throw new Error(`Transcript '${conversationId}' exceeds the 64 MiB stream ceiling.`);
+      }
+      carry += decoder.write(buffer.subarray(0, bytesRead));
+      let newlineIndex;
+      while ((newlineIndex = carry.indexOf("\n")) !== -1) {
+        let line = carry.slice(0, newlineIndex);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        carry = carry.slice(newlineIndex + 1);
+        processLine(line, false);
+      }
+    }
+    carry += decoder.end();
+    processLine(carry, true);
+    if (incompleteTrailing) throw new Error(`Transcript '${conversationId}' has an incomplete trailing JSONL record.`);
+    if (!sawAnyLine) throw new Error(`Transcript '${conversationId}' is empty.`);
+    if (!selected) throw new Error(`No final '# Evidence Report' assistant response found in transcript '${conversationId}'.`);
+    if (selected.truncated) throw new Error(`Selected transcript response for '${conversationId}' has truncated_fields.`);
+    const bytes = Buffer.byteLength(selected.content, "utf8");
+    if (bytes > TRANSCRIPT_REPORT_LIMIT_BYTES) throw new Error(`Transcript report for '${conversationId}' exceeds the 128 KiB ceiling.`);
+    return {
+      bytes: Buffer.from(selected.content, "utf8"),
+      provenance: { conversationId, stepIndex: selected.stepIndex }
+    };
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
+}
+
+function extractAcsJsonReport(root, rawFilePath, verifiedDirs) {
+  if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
+    throw new Error("Expected a nonempty workspace JSON path for --transcript-json.");
+  }
+  const trimmed = rawFilePath.trim();
+  const relCandidate = path.isAbsolute(trimmed)
+    ? relativizeContainedCliPath(trimmed, root, { allowEqual: false })
+    : (process.platform === "win32" ? trimmed.replace(/\\/g, "/") : trimmed).replace(/^(?:\.\/)+/, "");
+  if (!relCandidate || path.isAbsolute(relCandidate)) {
+    throw new Error(`--transcript-json path must stay inside the workspace: ${rawFilePath}`);
+  }
+  assertNoSymlinkedAncestors(root, relCandidate, verifiedDirs);
+  const absTarget = workspacePath(root, relCandidate, verifiedDirs);
+  const opened = readOpenedFileWithStat(absTarget, rawFilePath, { maxBytes: MAX_TRANSCRIPT_JSON_BYTES });
+  const parsed = JSON.parse(decodeUtf8(opened.bytes, rawFilePath));
+  if (parsed?.clamped === true) throw new Error(`Agy-Context-Saver transcript JSON is clamped: ${rawFilePath}`);
+  let content;
+  let stepIndex = null;
+  let conversationId = typeof parsed?.convId === "string" ? parsed.convId : null;
+  if (typeof parsed?.data === "string") {
+    content = parsed.data;
+    stepIndex = Number.isFinite(Number(parsed.stepIndex)) ? Number(parsed.stepIndex) : null;
+  } else if (Array.isArray(parsed?.items) || Array.isArray(parsed?.steps)) {
+    const records = Array.isArray(parsed.items) ? parsed.items : parsed.steps;
+    const candidates = records.filter(item => item?.type === "PLANNER_RESPONSE" && typeof item.content === "string" && item.content.trim());
+    const marker = candidates.filter(item => item.content.trim().startsWith("# Evidence Report"));
+    if (new Set(marker.map(item => item.content)).size > 1) throw new Error(`Agy-Context-Saver transcript JSON has ambiguous '# Evidence Report' responses: ${rawFilePath}`);
+    const selected = (marker.length > 0 ? marker : candidates).at(-1);
+    if (!selected) throw new Error(`Agy-Context-Saver transcript JSON has no assistant report content: ${rawFilePath}`);
+    if (Object.hasOwn(selected, "truncated_fields")) throw new Error(`Agy-Context-Saver transcript JSON selected item has truncated_fields: ${rawFilePath}`);
+    content = selected.content;
+    stepIndex = Number.isFinite(Number(selected.step_index)) ? Number(selected.step_index) : null;
+  }
+  if (typeof content !== "string" || !content.trim()) throw new Error(`Agy-Context-Saver transcript JSON has empty report content: ${rawFilePath}`);
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > TRANSCRIPT_REPORT_LIMIT_BYTES) throw new Error(`Agy-Context-Saver transcript report exceeds the 128 KiB ceiling: ${rawFilePath}`);
+  if (conversationId !== null) {
+    const normConvId = normalizeUuid(conversationId);
+    if (!normConvId) throw new Error(`Agy-Context-Saver transcript JSON has an invalid conversation UUID: ${rawFilePath}`);
+    conversationId = normConvId;
+  }
+  return { bytes: Buffer.from(content, "utf8"), provenance: { conversationId, stepIndex }, relPath: relCandidate };
+}
+ 
+function parseTranscriptJsonMappings(values) {
+  const out = new Map();
+  for (const item of Array.isArray(values) ? values : values ? [values] : []) {
+    const eq = String(item).indexOf("=");
+    if (eq <= 0 || eq === String(item).length - 1) throw new Error(`Invalid --transcript-json entry '${item}'; expected <slot>=<jsonPath>.`);
+    out.set(String(item).slice(0, eq).trim(), String(item).slice(eq + 1).trim());
+  }
+  return out;
+}
+ 
 function collectReportSlots(root, options = {}) {
   root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -1440,27 +1802,69 @@ function collectReportSlots(root, options = {}) {
   }
   const {
     sources = [],
+    handoffs,
     plan,
+    provenance,
     record,
+    idMap,
     squadId,
     reportRoot,
     overwrite = false,
     dryRun = false,
     allowEmpty = false,
-    strict = false
+    strict = false,
+    transcriptJson,
+    fromTranscript = false,
+    transcriptHomeDir
   } = options;
 
-  if (!Array.isArray(sources) || sources.length === 0) {
+  if (!Array.isArray(sources)) {
     throw new Error("Provide at least one worktree directory via --from <dir>.");
   }
-  if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
-    throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
+  if (
+    provenance !== undefined &&
+    (!isPlainObject(provenance) || (provenance.entries !== undefined && !Array.isArray(provenance.entries)))
+  ) {
+    throw new Error("Provide a valid provenance scaffold JSON object with an entries array.");
+  }
+  if (idMap !== undefined && !isPlainObject(idMap)) {
+    throw new Error("idMap must be a plain object mapping worker names to conversation UUIDs.");
+  }
+  const receiptRoots = workerReceiptRoots([
+    ...(Array.isArray(handoffs) ? handoffs : []),
+    ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
+  ]).map(r => ({ ...r, realRoot: tryRealPath(r.root) }));
+  const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
+  if (sources.length === 0 && plan === undefined && record === undefined) {
+    throw new Error("Collecting from --handoffs receipts requires --plan <plan.json> or --record <record.json> to bind senders to assigned slots; pass --from <worktree-dir> explicitly with --squad.");
+  }
+  if (
+    typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" ||
+    typeof strict !== "boolean" || typeof fromTranscript !== "boolean"
+  ) {
+    throw new Error("Collect flags overwrite, dryRun, allowEmpty, strict, and fromTranscript must be booleans.");
   }
   const overrideRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
+  const transcriptMappings = parseTranscriptJsonMappings(transcriptJson);
+  const readonlyWorkers = new Map();
+  if (plan?.executionMode === "subagent" && Array.isArray(plan.workers)) {
+    for (const worker of plan.workers) {
+      if (squadId !== undefined && worker?.squadId !== squadId) continue;
+      for (const specialist of Array.isArray(worker?.specialists) ? worker.specialists : []) {
+        const specialistType = specialist?.typeName ?? specialist?.Subagent?.TypeName;
+        if (specialistType === READONLY_SUBAGENT_TYPE && typeof specialist.reportSlot === "string") {
+          const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(specialist.reportSlot, overrideRoot) : specialist.reportSlot;
+          readonlyWorkers.set(resolvedSlot, specialist.workerName);
+        }
+      }
+    }
+  }
+  const hasTranscriptMaterializationInputs = transcriptMappings.size > 0 || readonlyWorkers.size > 0 || fromTranscript === true;
+  if (inferredSources.length === 0 && !hasTranscriptMaterializationInputs) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
 
   const resolvedSources = [];
   const seenRealSources = new Set();
-  for (const src of sources) {
+  for (const src of inferredSources) {
     if (typeof src !== "string" || !src.trim()) {
       throw new Error("Worktree --from path must be a nonempty directory path.");
     }
@@ -1479,20 +1883,79 @@ function collectReportSlots(root, options = {}) {
     const seenKey = process.platform === "win32" ? realSrc.toLowerCase() : realSrc;
     if (!seenRealSources.has(seenKey)) {
       seenRealSources.add(seenKey);
-      resolvedSources.push({ raw: src, real: realSrc });
+      const senders = sources.length > 0 ? null : new Set(receiptRoots.filter(r => isExpectedRealPath(r.realRoot, realSrc)).map(r => r.sender));
+      if (senders) validateWorkerWorktreeRoot(root, realSrc);
+      resolvedSources.push({ raw: src, real: realSrc, senders });
     }
   }
 
   const targetSlotSet = new Set();
   const inheritSlotSet = new Set();
-  const addSlot = (slot, isInherit = false) => {
+  const optionalPlanInheritSlots = new Set();
+  const addSlot = (slot, isInherit = false, optionalInPlan = false) => {
     validateReportSlotPath(slot);
     const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot;
     targetSlotSet.add(resolvedSlot);
     if (isInherit) {
       inheritSlotSet.add(resolvedSlot);
     }
+    if (optionalInPlan) {
+      optionalPlanInheritSlots.add(resolvedSlot);
+    }
   };
+  const senderSlots = new Map();
+  const slotWorkerNames = new Map();
+  const workerKeyToSlot = new Map();
+  const slotToBinding = new Map();
+  const slotToUuid = new Map();
+  const uuidToSlot = new Map();
+  const rebaseIfNeeded = (slot) => (overrideRoot !== undefined ? rebaseSlotReportRoot(slot, overrideRoot) : slot);
+  const registerWorkerKey = (key, resolvedSlot) => {
+    if (typeof key !== "string" || !key || RESERVED_WORKER_KEYS.has(key)) return;
+    const prevSlot = workerKeyToSlot.get(key);
+    if (prevSlot !== undefined && prevSlot !== resolvedSlot) {
+      throw new Error(`Ambiguous worker key '${key}' mapped to multiple report slots ('${prevSlot}' and '${resolvedSlot}').`);
+    }
+    workerKeyToSlot.set(key, resolvedSlot);
+  };
+  const registerSlotWorker = (workerName, rawSlot) => {
+    if (typeof workerName !== "string" || !workerName.trim() || typeof rawSlot !== "string") return;
+    const wn = workerName.trim();
+    if (RESERVED_WORKER_KEYS.has(wn)) {
+      throw new Error(`Invalid reserved worker name '${wn}'.`);
+    }
+    const resolvedSlot = rebaseIfNeeded(rawSlot);
+    if (!slotWorkerNames.has(resolvedSlot)) slotWorkerNames.set(resolvedSlot, wn);
+    registerWorkerKey(wn, resolvedSlot);
+    registerWorkerKey(`<invoke_subagent:${wn}:conversationId>`, resolvedSlot);
+  };
+  const bindSlotConversationId = (slotRel, rawId, requireUuid = false, sourceLabel = "binding") => {
+    if (typeof rawId !== "string") {
+      if (requireUuid) throw new Error(`Invalid ${sourceLabel} conversation UUID for '${slotRel}'.`);
+      return;
+    }
+    const trimmed = rawId.trim();
+    if (!trimmed || (!requireUuid && /^<.*>$/.test(trimmed))) return;
+    const normUuid = normalizeUuid(trimmed);
+    if (requireUuid && !normUuid) {
+      throw new Error(`Invalid ${sourceLabel} UUID for '${slotRel}': expected a 36-character UUID, got '${rawId}'.`);
+    }
+    const canonicalId = normUuid ?? trimmed;
+    const prevId = slotToBinding.get(slotRel);
+    if (prevId !== undefined && prevId !== canonicalId) {
+      throw new Error(`Conflicting conversationId bindings for '${slotRel}': '${prevId}' vs '${canonicalId}'.`);
+    }
+    slotToBinding.set(slotRel, canonicalId);
+    if (normUuid) {
+      const prevSlot = uuidToSlot.get(normUuid);
+      if (prevSlot !== undefined && prevSlot !== slotRel) {
+        throw new Error(`Duplicate conversationId '${normUuid}' bound to multiple report slots ('${prevSlot}' and '${slotRel}').`);
+      }
+      uuidToSlot.set(normUuid, slotRel);
+      slotToUuid.set(slotRel, normUuid);
+    }
+  };
+  const bindSender = (sender, slot) => { if (typeof sender === "string" && typeof slot === "string") senderSlots.set(sender, rebaseIfNeeded(slot)); };
   let explicitExpectations = false;
   if (plan !== undefined) {
     if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -1507,28 +1970,37 @@ function collectReportSlots(root, options = {}) {
       if (squadId !== undefined && w?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (w?.lead?.reportSlot !== undefined) {
-        addSlot(w.lead.reportSlot, w.lead.swarmAdd?.workspace === "inherit");
+        const leadIsInherit = w.lead.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(w.lead.reportSlot, leadIsInherit, leadIsInherit);
+        registerSlotWorker(w.lead.workerName, w.lead.reportSlot);
       }
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
-          addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
+          const specialistIsInherit = plan.executionMode === "subagent" || s.swarmAdd?.workspace === "inherit";
+          addSlot(s.reportSlot, specialistIsInherit);
+          registerSlotWorker(s.workerName, s.reportSlot);
+          if (!specialistIsInherit) bindSender(s.workerName, s.reportSlot);
         }
       }
     }
-    for (const entry of plan.provenanceScaffold?.entries ?? []) {
+    for (const entry of [...(plan.provenanceScaffold?.entries ?? []), ...(provenance?.entries ?? [])]) {
       if (squadId !== undefined && entry?.squadId !== squadId) continue;
       matchedPlanSquad = true;
       if (entry?.reportSlot !== undefined) {
-        addSlot(
-          entry.reportSlot,
-          plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit")
-        );
+        const entryIsInherit = plan.executionMode === "swarm" && (entry?.slotType === "lead" || entry?.slotType === "audit");
+        addSlot(entry.reportSlot, entryIsInherit, entryIsInherit);
+        registerSlotWorker(entry.workerName, entry.reportSlot);
+        bindSlotConversationId(rebaseIfNeeded(entry.reportSlot), entry.conversationId, false, "provenance");
+      } else if (typeof entry?.workerName === "string" && workerKeyToSlot.has(entry.workerName.trim())) {
+        bindSlotConversationId(workerKeyToSlot.get(entry.workerName.trim()), entry.conversationId, false, "provenance");
       }
     }
     for (const audit of plan.integrityAuditPlan ?? []) {
       if (squadId !== undefined && audit?.targetSquad !== squadId) continue;
       if (audit?.reportSlot !== undefined) {
-        addSlot(audit.reportSlot, audit.swarmAdd?.workspace === "inherit");
+        const auditIsInherit = audit.swarmAdd?.workspace === "inherit" || plan.executionMode === "subagent";
+        addSlot(audit.reportSlot, auditIsInherit, auditIsInherit);
+        registerSlotWorker(audit.workerName, audit.reportSlot);
       }
     }
     if (squadId !== undefined && !matchedPlanSquad) {
@@ -1549,7 +2021,39 @@ function collectReportSlots(root, options = {}) {
     const rootPrefix = overrideRoot ?? resolveReportRoot(record);
     addSlot(reportPath(record.squadId, undefined, rootPrefix), true);
     for (const a of record.assignments ?? []) {
-      if (a?.report !== undefined) addSlot(a.report);
+      if (a?.report !== undefined) {
+        addSlot(a.report);
+        const resolvedSlot = rebaseIfNeeded(a.report);
+        const trimmedCid = typeof a.conversationId === "string" ? a.conversationId.trim() : "";
+        const explicitWn = typeof a.workerName === "string" && a.workerName.trim() ? a.workerName.trim() : undefined;
+        let placeholderWn;
+        if (trimmedCid.startsWith("<invoke_subagent:")) {
+          placeholderWn = extractPlaceholderWorkerName(trimmedCid);
+          if (!placeholderWn) {
+            throw new Error(`Invalid subagent placeholder '${trimmedCid}' for '${resolvedSlot}'.`);
+          }
+        }
+        if (explicitWn && placeholderWn && explicitWn !== placeholderWn) {
+          throw new Error(`Conflicting workerName '${explicitWn}' and placeholder '${trimmedCid}' for '${resolvedSlot}'.`);
+        }
+        const effectiveWn = explicitWn ?? placeholderWn;
+        bindSender(a.conversationId, a.report);
+        bindSender(effectiveWn, a.report);
+        registerSlotWorker(effectiveWn, a.report);
+        if (trimmedCid) {
+          registerWorkerKey(trimmedCid, resolvedSlot);
+        }
+        bindSlotConversationId(resolvedSlot, a.conversationId, false, "record");
+      }
+    }
+    for (const entry of provenance?.entries ?? []) {
+      if (entry?.squadId !== undefined && entry.squadId !== record.squadId) continue;
+      const targetSlot = entry?.reportSlot !== undefined
+        ? rebaseIfNeeded(entry.reportSlot)
+        : (typeof entry?.workerName === "string" ? workerKeyToSlot.get(entry.workerName.trim()) : undefined);
+      if (targetSlot && targetSlotSet.has(targetSlot)) {
+        bindSlotConversationId(targetSlot, entry.conversationId, false, "provenance");
+      }
     }
     let hasExplicitAuditSlot = false;
     for (const slot of record.integrityAuditSlots ?? []) {
@@ -1600,10 +2104,22 @@ function collectReportSlots(root, options = {}) {
     throw new Error("Provide --plan <plan.json>, --record <record.json>, or --squad <id> to collect report slots.");
   }
 
+  for (const key of Object.getOwnPropertyNames(idMap ?? {})) {
+    if (RESERVED_WORKER_KEYS.has(key)) {
+      throw new Error(`Invalid reserved --id-map key '${key}'.`);
+    }
+    const val = idMap[key];
+    const mappedSlot = workerKeyToSlot.get(key) ?? (targetSlotSet.has(key) ? key : undefined);
+    if (!mappedSlot) {
+      throw new Error(`--id-map key '${key}' did not match any worker or assignment in the supplied plan or record.`);
+    }
+    bindSlotConversationId(mappedSlot, val, true, "--id-map");
+  }
+
   const targetSlots = [...targetSlotSet];
   const foldSlotCase = process.platform === "win32" || process.platform === "darwin";
   const foundBySlot = new Map();
-  for (const { raw, real } of resolvedSources) {
+  for (const { raw, real, senders } of resolvedSources) {
     const verifiedSrcDirs = new Set([real]);
     const cohortEntriesCache = new Map();
     const cohortHasSlotDir = (slotRel) => {
@@ -1633,6 +2149,7 @@ function collectReportSlots(root, options = {}) {
       return entryNames === "probe" || (entryNames !== null && entryNames.has(foldSlotCase ? slotName.toLowerCase() : slotName));
     };
     for (const slotRel of targetSlots) {
+      if (senders && (inheritSlotSet.has(slotRel) || ![...senders].some(sender => senderSlots.get(sender) === slotRel))) continue;
       if (!cohortHasSlotDir(slotRel)) continue;
       const opened = readIfPresentWithStat(real, slotRel, verifiedSrcDirs);
       if (!opened) continue;
@@ -1652,9 +2169,97 @@ function collectReportSlots(root, options = {}) {
     }
   }
 
+  const addTranscriptEntry = (slotRel, extracted, sourceLabel) => {
+    if (!targetSlotSet.has(slotRel) || foundBySlot.has(slotRel)) return;
+    foundBySlot.set(slotRel, {
+      bytes: extracted.bytes,
+      hash: sha256(extracted.bytes),
+      source: sourceLabel,
+      transcriptProvenance: { ...extracted.provenance, sha256: sha256(extracted.bytes) }
+    });
+  };
+  const transcriptHandoffs = [
+    ...(Array.isArray(handoffs) ? handoffs : []),
+    ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
+  ];
+  const verifiedExistingRootDirs = new Set([root]);
+  for (const [slotRel, jsonPathRaw] of transcriptMappings.entries()) {
+    if (!targetSlotSet.has(slotRel)) throw new Error(`--transcript-json slot '${slotRel}' is not an expected report slot.`);
+    const extracted = extractAcsJsonReport(root, jsonPathRaw, verifiedExistingRootDirs);
+    const boundUuid = slotToUuid.get(slotRel);
+    if (boundUuid) {
+      if (extracted.provenance.conversationId && extracted.provenance.conversationId !== boundUuid) {
+        throw new Error(
+          `--transcript-json conversationId '${extracted.provenance.conversationId}' does not match coordinator binding '${boundUuid}' for '${slotRel}'.`
+        );
+      }
+      if (!extracted.provenance.conversationId) {
+        extracted.provenance.conversationId = boundUuid;
+      }
+    }
+    addTranscriptEntry(slotRel, extracted, `transcript-json:${extracted.relPath}`);
+  }
+  const directTranscriptSlots = fromTranscript
+    ? new Map([...targetSlotSet].map(slotRel => [slotRel, slotWorkerNames.get(slotRel)]))
+    : readonlyWorkers;
+  const hasExplicitHome = typeof transcriptHomeDir === "string" && transcriptHomeDir.trim().length > 0;
+  const homeDir = hasExplicitHome ? path.resolve(transcriptHomeDir) : os.homedir();
+  for (const [slotRel, workerName] of directTranscriptSlots.entries()) {
+    if (foundBySlot.has(slotRel)) continue;
+    const existingRootReport = readIfPresentWithStat(root, slotRel, verifiedExistingRootDirs);
+    if (existingRootReport && decodeUtf8(existingRootReport.bytes, slotRel).trim().length > 0) continue;
+    const boundUuid = slotToUuid.get(slotRel);
+    const allowRosterSender = plan?.executionMode === "swarm" && typeof workerName === "string" && workerName.length > 0;
+    const isAuthorizedSender = (rawSender) => {
+      if (!boundUuid) return false;
+      const normSender = normalizeUuid(rawSender);
+      if (normSender && normSender === boundUuid) return true;
+      return Boolean(allowRosterSender && rawSender.trim() === workerName);
+    };
+    const matchingHandoffs = [];
+    for (const h of transcriptHandoffs) {
+      if (!h || typeof h !== "object" || typeof h.sender !== "string" || typeof h.message !== "string") continue;
+      const rawSender = h.sender.trim();
+      const stripped = stripReceiptPrefix(h.message);
+      const parsedForSlot = parsePointerReceipt(stripped, slotRel);
+      const targetsThisSlotExplicitly = parsedForSlot?.status === "READY" || parsedForSlot?.status === "PARTIAL";
+      const fromAuthorizedSender = isAuthorizedSender(rawSender);
+      if (!targetsThisSlotExplicitly && !fromAuthorizedSender) continue;
+      if (!boundUuid) {
+        throw new Error(
+          `Direct transcript extraction for '${slotRel}' requires a coordinator-bound conversation UUID via --id-map <worker=uuid>, --provenance <scaffold.json>, or --record <record.json> (or pass --transcript-json <slot=json>).`
+        );
+      }
+      if (!fromAuthorizedSender) {
+        throw new Error(
+          `Handoff sender '${rawSender}' is not authorized for slot '${slotRel}'; expected strict sender UUID '${boundUuid}' (or pass --transcript-json <slot=json>).`
+        );
+      }
+      if (!parsedForSlot) {
+        throw new Error(`Invalid handoff receipt from '${rawSender}' for slot '${slotRel}'.`);
+      }
+      matchingHandoffs.push({ handoff: h, status: parsedForSlot.status });
+    }
+    if (matchingHandoffs.length === 0) continue;
+    if (new Set(matchingHandoffs.map(m => m.handoff.message)).size > 1) {
+      throw new Error(`Conflicting handoffs for slot '${slotRel}'.`);
+    }
+    if (matchingHandoffs[0].status === "NO_REPORT") continue;
+    const restriction = restrictiveTranscriptPolicyError(homeDir, hasExplicitHome);
+    if (restriction) throw new Error(restriction);
+    try {
+      const transcriptPath = resolveTranscriptFullPath(boundUuid, homeDir);
+      const extracted = parseTranscriptReportJsonl(transcriptPath, boundUuid);
+      addTranscriptEntry(slotRel, extracted, `transcript:${boundUuid}`);
+    } catch (error) {
+      throw new Error(`Failed to materialize read-only subagent report '${slotRel}' from transcript '${boundUuid}': ${error.message}`);
+    }
+  }
+ 
   const verifiedInheritDirs = new Set([root]);
   const missing = targetSlots.filter(slotRel => {
     if (foundBySlot.has(slotRel)) return false;
+    if (optionalPlanInheritSlots.has(slotRel)) return false;
     if (inheritSlotSet.has(slotRel)) {
       const rootExisting = readIfPresentWithStat(root, slotRel, verifiedInheritDirs);
       if (rootExisting && decodeUtf8(rootExisting.bytes, slotRel).trim().length > 0) {
@@ -1709,7 +2314,8 @@ function collectReportSlots(root, options = {}) {
         from: entry.source,
         sha256: entry.hash,
         bytes: entry.bytes.length,
-        status: "unchanged"
+        status: "unchanged",
+        ...(entry.transcriptProvenance ? { transcriptProvenance: entry.transcriptProvenance } : {})
       });
       continue;
     }
@@ -1722,7 +2328,8 @@ function collectReportSlots(root, options = {}) {
       from: entry.source,
       sha256: entry.hash,
       bytes: entry.bytes.length,
-      status: dryRun ? "would-copy" : "copied"
+      status: dryRun ? "would-copy" : "copied",
+      ...(entry.transcriptProvenance ? { transcriptProvenance: entry.transcriptProvenance } : {})
     });
   }
 
@@ -1801,6 +2408,7 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
       squadId: id,
       workspace: typeof plan.workspace === "string" && plan.workspace ? plan.workspace : fallbackRoot,
       ...(plan.reportRoot !== undefined ? { reportRoot: plan.reportRoot } : {}),
+      ...(w.readOnly === true || plan.readOnly === true ? { readOnly: true } : {}),
       verdict: "PASS",
       verifiedFiles: {},
       assignments,
@@ -1816,6 +2424,428 @@ function hydratePlanForBundleInit(plan, fallbackRoot, selectedSquadId) {
   };
 }
 
+const MAX_FROM_SCOPE_FILES = 256;
+const SKIPPED_SCOPE_WALK_DIRS = new Set([".git", "node_modules"]);
+
+function relativizeContainedCliPath(inputPath, targetRoot, { platform = process.platform, allowEqual = false } = {}) {
+  if (typeof inputPath !== "string" || typeof targetRoot !== "string" || !targetRoot.trim()) {
+    return null;
+  }
+  const trimmed = inputPath.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed) || platform !== process.platform || !path.isAbsolute(trimmed)) {
+    return null;
+  }
+  let canonicalRoot;
+  try {
+    canonicalRoot = resolveCanonicalRoot(targetRoot);
+  } catch {
+    return null;
+  }
+  const resolved = path.resolve(trimmed);
+  let cur = resolved;
+  const tail = [];
+  while (true) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink() && tail.length === 0) {
+        // Leaf itself is a symlink: only relativize if its lexical parent directory is inside canonicalRoot,
+        // so downstream O_NOFOLLOW rejects in-workspace symlinks with ELOOP while external inbound symlinks stay rejected as outside-workspace.
+        const realLexParent = fs.realpathSync.native(path.dirname(cur));
+        if (!isContainedPath(canonicalRoot, realLexParent, true, platform)) return null;
+        const candidateInside = path.join(realLexParent, path.basename(cur));
+        if (!isContainedPath(canonicalRoot, candidateInside, allowEqual, platform)) return null;
+        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
+        return rel || (allowEqual ? "." : null);
+      }
+      if (st.isSymbolicLink() && tail.length > 0) {
+        // Ancestor symlink: only allow if the symlink's lexical parent is canonicalRoot's parent (aliased workspace root itself),
+        // never an in-workspace symlinked subdirectory.
+        const realSym = fs.realpathSync.native(cur);
+        if (!isExpectedRealPath(canonicalRoot, realSym)) return null;
+        const candidateInside = path.join(realSym, ...tail);
+        if (!isContainedPath(canonicalRoot, candidateInside, allowEqual, platform)) return null;
+        const rel = path.relative(canonicalRoot, candidateInside).split(path.sep).join("/");
+        return rel || (allowEqual ? "." : null);
+      }
+      const realExisting = fs.realpathSync.native(cur);
+      if (!isContainedPath(canonicalRoot, realExisting, true, platform)) {
+        return null;
+      }
+      const candidateTarget = tail.length > 0 ? path.join(realExisting, ...tail) : realExisting;
+      if (!isContainedPath(canonicalRoot, candidateTarget, allowEqual, platform)) {
+        return null;
+      }
+      const rel = path.relative(canonicalRoot, candidateTarget).split(path.sep).join("/");
+      return rel || (allowEqual ? "." : null);
+    } catch (err) {
+      if (err?.code !== "ENOENT" && err?.code !== "ENOTDIR") return null;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+}
+
+function normalizeContainedJsonOutPath(rawPath, targetRoot, label = "outPath", platform = process.platform) {
+  let candidate = typeof rawPath === "string" ? rawPath.trim() : "";
+  if (candidate && targetRoot && path.isAbsolute(candidate)) {
+    const relativized = relativizeContainedCliPath(candidate, targetRoot, { platform, allowEqual: false });
+    if (relativized !== null) candidate = relativized;
+  }
+  const errSuffix = label === "outPath" ? " inside workspace" : "";
+  if (
+    !candidate ||
+    CONTROL_CHAR_RE.test(candidate) ||
+    candidate.startsWith("/") ||
+    candidate.startsWith("\\") ||
+    path.isAbsolute(candidate) ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    (platform !== "win32" && candidate.includes("\\"))
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  const posixOut = (platform === "win32" ? candidate.replace(/\\/g, "/") : candidate).replace(/^(?:\.\/)+/, "");
+  if (
+    !posixOut ||
+    posixOut.split("/").some(p => !p || p === "." || p === "..") ||
+    !posixOut.toLowerCase().endsWith(".json") ||
+    path.posix.basename(posixOut).toLowerCase() === ".json"
+  ) {
+    throw new Error(`${label} must be a workspace-relative .json path${errSuffix}: ${rawPath}`);
+  }
+  return posixOut;
+}
+
+function extractScopeLinesFromBrief(text) {
+  if (typeof text !== "string" || !text) return [];
+  const lines = text.split(/\r?\n/);
+  const scopes = [];
+  let inScope = false;
+  for (const line of lines) {
+    if (!inScope) {
+      if (line === "Scope:" || line.startsWith("Spot-check scope (")) {
+        inScope = true;
+      }
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const entry = line.slice(2).trim();
+      if (entry) scopes.push(entry);
+    } else {
+      break;
+    }
+  }
+  return scopes;
+}
+
+function collectPlanSquadScopeEntries(rawPlan, selectedSquadId) {
+  if (!Array.isArray(rawPlan?.workers)) {
+    throw new Error(`--from-scope requires plan.workers['${selectedSquadId}'] with scopeFiles.`);
+  }
+  const squadWorker = rawPlan.workers.find(w => w && typeof w === "object" && w.squadId === selectedSquadId);
+  if (!squadWorker) {
+    throw new Error(`--from-scope could not find squad '${selectedSquadId}' in plan.workers.`);
+  }
+  const collected = [];
+  const addWorkerScopes = (entry) => {
+    if (!entry || typeof entry !== "object") return;
+    if (Array.isArray(entry.scopeFiles)) {
+      for (const item of entry.scopeFiles) collected.push(item);
+      return;
+    }
+    const briefText = entry.swarmAdd?.brief ?? entry.Subagent?.Prompt;
+    for (const item of extractScopeLinesFromBrief(briefText)) {
+      collected.push(item);
+    }
+  };
+  for (const specialist of Array.isArray(squadWorker.specialists) ? squadWorker.specialists : []) {
+    addWorkerScopes(specialist);
+  }
+  if (squadWorker.lead) {
+    addWorkerScopes(squadWorker.lead);
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const raw of collected) {
+    if (typeof raw !== "string") {
+      throw new Error(`--from-scope found invalid scopeFiles entry for squad '${selectedSquadId}'.`);
+    }
+    if (!isValidScopeEntry(raw)) {
+      throw new Error(`--from-scope found invalid workspace-relative scope entry '${raw}' for squad '${selectedSquadId}'.`);
+    }
+    const trimmed = raw.trim();
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      deduped.push(trimmed);
+    }
+  }
+  if (deduped.length === 0) {
+    throw new Error(`--from-scope found no scopeFiles for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return deduped;
+}
+
+function buildOutputTargetMatcher(canonicalRoot, candidateOutRels) {
+  const targets = [];
+  const seen = new Set();
+  for (const raw of candidateOutRels) {
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    let rel;
+    try {
+      rel = normalizeContainedJsonOutPath(raw, canonicalRoot, "recordPath");
+    } catch {
+      continue;
+    }
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const abs = path.join(canonicalRoot, rel);
+    targets.push({
+      rel,
+      lowerRel: rel.toLowerCase(),
+      baseLower: path.posix.basename(rel).toLowerCase(),
+      abs,
+      dirAbs: path.dirname(abs)
+    });
+  }
+  if (targets.length === 0) return () => null;
+  return (candidateInput) => {
+    if (typeof candidateInput !== "string" || !candidateInput.trim()) return null;
+    let candNorm = candidateInput.trim();
+    if (path.isAbsolute(candNorm)) {
+      const rel = relativizeContainedCliPath(candNorm, canonicalRoot, { allowEqual: false });
+      if (!rel) return null;
+      candNorm = rel;
+    } else {
+      if (process.platform === "win32") candNorm = candNorm.replace(/\\/g, "/");
+      candNorm = candNorm.replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "");
+    }
+    const candLower = candNorm.toLowerCase();
+    const candAbs = path.join(canonicalRoot, candNorm);
+    const candDirAbs = path.dirname(candAbs);
+    const candBaseLower = path.posix.basename(candNorm).toLowerCase();
+    for (const t of targets) {
+      if (candNorm === t.rel) return t.rel;
+      if (process.platform === "win32" && candLower === t.lowerRel) return t.rel;
+      if (isSameFsObject(candAbs, t.abs)) return t.rel;
+      if (process.platform === "darwin" && candBaseLower === t.baseLower && isSameFsObject(candDirAbs, t.dirAbs)) {
+        return t.rel;
+      }
+    }
+    return null;
+  };
+}
+
+function expandScopeEntriesToFiles(
+  canonicalRoot,
+  entries,
+  selectedSquadId,
+  verifiedDirs,
+  resolvedReportRoot,
+  options = {}
+) {
+  const maxFiles = Number.isInteger(options?.maxFiles) && options.maxFiles > 0 ? options.maxFiles : MAX_FROM_SCOPE_FILES;
+  const allowEmptyResult = Boolean(options?.allowEmptyResult);
+  const excludeFilePredicate = typeof options?.excludeFilePredicate === "function" ? options.excludeFilePredicate : null;
+  const expanded = new Set();
+  const reportRootPrefix = `${resolvedReportRoot}/`;
+  const throwCapExceeded = (originEntry) => {
+    const detail = originEntry ? ` while expanding '${originEntry}'` : "";
+    const err = new Error(
+      `--from-scope exceeded the ${maxFiles}-file safety cap${detail}; pass explicit --file <path> arguments instead.`
+    );
+    err.code = "EMAXFILES";
+    err.partialFiles = [...expanded].slice(0, maxFiles).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw err;
+  };
+  const walkDirectory = (dirAbs, dirRel, originEntry) => {
+    const dirents = fs.readdirSync(dirAbs, { withFileTypes: true }).sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    );
+    for (const dirent of dirents) {
+      const childRel = `${dirRel}/${dirent.name}`;
+      if (dirent.isSymbolicLink()) {
+        throw new Error(`Refusing to follow symlink '${childRel}' while expanding --from-scope directory '${originEntry}'.`);
+      }
+      if (dirent.isDirectory()) {
+        if (
+          SKIPPED_SCOPE_WALK_DIRS.has(dirent.name) ||
+          childRel === resolvedReportRoot ||
+          childRel.startsWith(reportRootPrefix)
+        ) {
+          continue;
+        }
+        walkDirectory(path.join(dirAbs, dirent.name), childRel, originEntry);
+      } else if (dirent.isFile()) {
+        if (excludeFilePredicate?.(childRel)) continue;
+        expanded.add(childRel);
+        if (expanded.size > maxFiles) {
+          throwCapExceeded(originEntry);
+        }
+      } else {
+        throw new Error(`Unsupported non-regular file '${childRel}' encountered while expanding --from-scope directory '${originEntry}'.`);
+      }
+    }
+  };
+
+  for (const entry of entries) {
+    if (entry === ".") {
+      throw new Error(
+        "--from-scope cannot expand repo-wide wildcard '.'; narrow scopeFiles in the plan or pass explicit --file <path> arguments."
+      );
+    }
+    const targetAbs = workspacePath(canonicalRoot, entry, verifiedDirs);
+    let stat;
+    try {
+      stat = fs.lstatSync(targetAbs);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        throw new Error(`--from-scope path '${entry}' does not exist in workspace.`);
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      const symErr = new Error(`Refusing to follow symlink '${entry}' in --from-scope.`);
+      symErr.code = "ELOOP";
+      throw symErr;
+    }
+    if (stat.isFile()) {
+      const hit = excludeFilePredicate?.(entry);
+      if (hit) {
+        throw new Error(
+          `--from-scope file entry '${entry}' collides with generated record output '${hit}'; write the record outside scoped files.`
+        );
+      }
+      expanded.add(entry);
+      if (expanded.size > maxFiles) {
+        throwCapExceeded(null);
+      }
+    } else if (stat.isDirectory()) {
+      if (entry === resolvedReportRoot || entry.startsWith(reportRootPrefix)) {
+        continue;
+      }
+      walkDirectory(targetAbs, entry, entry);
+    } else {
+      throw new Error(`Unsupported non-regular file '${entry}' in --from-scope.`);
+    }
+  }
+  if (expanded.size === 0 && !allowEmptyResult) {
+    throw new Error(`--from-scope resolved 0 regular files for squad '${selectedSquadId}'; pass explicit --file <path> arguments.`);
+  }
+  return [...expanded].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+// POSIX single-quote serializer (also literal in PowerShell when value contains no apostrophe; not for cmd.exe).
+function shellQuote(value) {
+  const str = String(value);
+  if (!str) return "''";
+  return /^[A-Za-z0-9_./:-]+$/.test(str) ? str : "'" + str.replaceAll("'", "'\\''") + "'";
+}
+
+function formatAuditorTargetScopeNote(targetSquad, workspaceRoot, recordSlot, auditSlot, executionMode = "swarm") {
+  const wsOpt = workspaceRoot ? ` --workspace ${shellQuote(workspaceRoot)}` : "";
+  const suffix = executionMode === "swarm" ? "slots/traces only" : "slots, conversationIds & traces only";
+  return `Run \`agy-squad digest${wsOpt} ${shellQuote(recordSlot)}\` & \`agy-squad verdict${wsOpt} --integrity ${shellQuote(auditSlot)}\`; '${targetSquad}' ${suffix} (no unrelated repo source reads).`;
+}
+
+function replaceLineTokensOnce(line, rules) {
+  if (rules.length === 0) return line;
+  let out = "";
+  for (let i = 0; i < line.length;) {
+    const matched = rules.find(r => r.from && line.startsWith(r.from, i));
+    if (matched) {
+      out += matched.to;
+      i += matched.from.length;
+    } else {
+      out += line[i++];
+    }
+  }
+  return out;
+}
+
+function buildBoundAuditSwarmAdds(_targetRoot, plan, record, outRel, digestResult) {
+  if (!isPlainObject(plan) || !Array.isArray(plan.integrityAuditPlan) || record?.requireIntegrityAudit === false) {
+    return [];
+  }
+  const matching = plan.integrityAuditPlan.filter(a => a && a.targetSquad === record.squadId && isPlainObject(a.swarmAdd));
+  if (matching.length === 0) return [];
+  const effectiveRecordPath = outRel ?? record.recordPath ?? recordSlotPath(record.squadId, record.reportRoot);
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const mappedUuids = [];
+  const seenUuids = new Set();
+  for (const a of record.assignments ?? []) {
+    const cid = typeof a?.conversationId === "string" ? a.conversationId.trim() : "";
+    if (uuidRe.test(cid) && !seenUuids.has(cid)) {
+      seenUuids.add(cid);
+      mappedUuids.push(cid);
+    }
+  }
+  const bindOne = (auditEntry, idx) => {
+    const auditSlot = Array.isArray(record.integrityAuditSlots) && record.integrityAuditSlots[idx]
+      ? record.integrityAuditSlots[idx]
+      : auditEntry.reportSlot;
+    const origRecordSlot = auditEntry.recordSlot ?? recordSlotPath(record.squadId, plan.reportRoot);
+    const origAuditSlot = auditEntry.reportSlot;
+    const boundRec = effectiveRecordPath || origRecordSlot;
+    const boundAud = auditSlot || origAuditSlot;
+    const rebindGen = Boolean(origRecordSlot && origAuditSlot && (boundRec !== origRecordSlot || boundAud !== origAuditSlot));
+    const wsRoot = plan.workspace ?? _targetRoot;
+    const origGenNote = rebindGen ? formatAuditorTargetScopeNote(auditEntry.targetSquad, wsRoot, origRecordSlot, origAuditSlot, "swarm") : "";
+    const origLegacyNote = rebindGen && wsRoot ? formatAuditorTargetScopeNote(auditEntry.targetSquad, "", origRecordSlot, origAuditSlot, "swarm") : "";
+    const boundGenNote = rebindGen ? formatAuditorTargetScopeNote(auditEntry.targetSquad, wsRoot, boundRec, boundAud, "swarm") : "";
+    const cmdRules = [];
+    if (effectiveRecordPath) {
+      const quotedRecord = shellQuote(effectiveRecordPath);
+      cmdRules.push(
+        { from: "'<rel-record>'", to: quotedRecord },
+        { from: '"<rel-record>"', to: quotedRecord },
+        { from: "<rel-record>", to: quotedRecord }
+      );
+    }
+    if (auditSlot) {
+      const quotedAudit = shellQuote(auditSlot);
+      cmdRules.push(
+        { from: "'<rel-slot>'", to: quotedAudit },
+        { from: '"<rel-slot>"', to: quotedAudit },
+        { from: "<rel-slot>", to: quotedAudit }
+      );
+    }
+    if (mappedUuids.length > 0) {
+      cmdRules.push({ from: "u1,u2", to: mappedUuids.join(",") });
+    }
+    const brief = String(auditEntry.swarmAdd.brief ?? "")
+      .split("\n")
+      .map(line => {
+        if (effectiveRecordPath && origRecordSlot && line === `- ${origRecordSlot}`) {
+          return `- ${effectiveRecordPath}`;
+        }
+        if (auditSlot && origAuditSlot && line === `Report slot: ${origAuditSlot}`) {
+          return `Report slot: ${auditSlot}`;
+        }
+        if (rebindGen) {
+          if (line === origGenNote || (origLegacyNote && line === origLegacyNote)) return boundGenNote;
+          if (line === `Instructions: ${origGenNote}` || (origLegacyNote && line === `Instructions: ${origLegacyNote}`)) {
+            return `Instructions: ${boundGenNote}`;
+          }
+        }
+        const nextLine = digestResult?.evidenceDigest
+          ? line.replace(/Evidence Digest:\s*<sha256>/g, () => `Evidence Digest: ${digestResult.evidenceDigest}`)
+          : line;
+        return replaceLineTokensOnce(nextLine, cmdRules);
+      })
+      .join("\n");
+    return {
+      ...auditEntry.swarmAdd,
+      brief
+    };
+  };
+  return matching.map(bindOne);
+}
+
+function buildBoundAuditSwarmAdd(targetRoot, plan, record, outRel, digestResult) {
+  return buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult)[0];
+}
+
 function buildBundleRecordInit(root, options = {}) {
   if (!isPlainObject(options)) {
     throw new Error("Provide valid bundle-init options.");
@@ -1827,6 +2857,7 @@ function buildBundleRecordInit(root, options = {}) {
     provenance,
     squadId,
     files = [],
+    fromScope = false,
     reportRoot,
     verdict,
     idMap = {},
@@ -1834,9 +2865,13 @@ function buildBundleRecordInit(root, options = {}) {
     allowUnaudited = false,
     allowNonPassing = false,
     allowPartial = false,
+    recordPath: explicitRecordPath,
     onLeadRead
   } = options;
 
+  if (typeof fromScope !== "boolean") {
+    throw new Error("fromScope must be a boolean.");
+  }
   if (typeof allowUnaudited !== "boolean") {
     throw new Error("allowUnaudited must be a boolean.");
   }
@@ -1868,7 +2903,7 @@ function buildBundleRecordInit(root, options = {}) {
     selectedSquadId = templateKeys[0];
   } else {
     throw new Error(
-      `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id>.`
+      `Plan defines ${templateKeys.length} squads (${templateKeys.join(", ") || "none"}); specify --squad <id> (or --all-squads).`
     );
   }
   validateSquadId(selectedSquadId);
@@ -1883,6 +2918,8 @@ function buildBundleRecordInit(root, options = {}) {
       : template.reportRoot !== undefined
         ? normalizeReportRoot(template.reportRoot)
         : defaultReportRoot();
+
+  const isReadOnlySquad = Boolean(template.readOnly === true);
 
   const mergedEntries = [
     ...(Array.isArray(plan.provenanceScaffold?.entries) ? plan.provenanceScaffold.entries : []),
@@ -1933,9 +2970,30 @@ function buildBundleRecordInit(root, options = {}) {
     } else if (plan.executionMode !== "swarm" && hasRealConversationId(entry)) {
       nextId = entry.conversationId.trim();
     }
+    const explicitItemWorkerName =
+      typeof item.workerName === "string" && item.workerName.trim() ? item.workerName.trim() : undefined;
+    const swarmRosterName =
+      plan.executionMode === "swarm"
+        ? explicitItemWorkerName ??
+          (typeof (slotEntry?.workerName ?? workerEntry?.workerName) === "string"
+            ? (slotEntry?.workerName ?? workerEntry?.workerName).trim()
+            : typeof item.conversationId === "string" && !/^<.*>$/.test(item.conversationId.trim())
+              ? item.conversationId.trim()
+              : undefined)
+        : explicitItemWorkerName;
     return {
       conversationId: nextId,
-      report: slotPath
+      ...(swarmRosterName && (explicitItemWorkerName || swarmRosterName !== nextId)
+        ? { workerName: swarmRosterName }
+        : {}),
+      report: slotPath,
+      ...(() => {
+        const roots = workerReceiptRoots(handoffs).filter(h => h.sender === nextId || h.sender === swarmRosterName);
+        if (!roots.length) return {};
+        const verified = [...new Set(roots.map(h => validateWorkerWorktreeRoot(root, h.root)))];
+        if (verified.length !== 1) throw new Error(`Conflicting worktree roots for ${nextId}.`);
+        return { worktreeRoot: verified[0] };
+      })()
     };
   });
   for (const key of Object.keys(idMap ?? {})) {
@@ -1947,8 +3005,30 @@ function buildBundleRecordInit(root, options = {}) {
   if (!Array.isArray(files) || files.some(f => typeof f !== "string" || !f.trim())) {
     throw new Error("verifiedFiles inputs must be nonempty workspace-relative file paths.");
   }
+  const candidateRecordOutputs = Array.isArray(options.excludedRecordOutputs)
+    ? options.excludedRecordOutputs
+    : (explicitRecordPath ? [explicitRecordPath] : [recordSlotPath(selectedSquadId, resolvedReportRoot)]);
+  const matchOutputTarget = buildOutputTargetMatcher(root, candidateRecordOutputs);
+  const rejectOutputCollision = (fileList) => {
+    for (const file of fileList) {
+      const hit = matchOutputTarget(file);
+      if (hit) {
+        throw new Error(
+          `Verified input '${file}' collides with generated record output '${hit}'; write the record outside verified inputs or omit it from --file.`
+        );
+      }
+    }
+  };
+  rejectOutputCollision(files);
   let verifiedFiles = {};
-  if (files.length > 0) {
+  if (fromScope) {
+    const scopeEntries = collectPlanSquadScopeEntries(rawPlan, selectedSquadId);
+    const expandedFiles = expandScopeEntriesToFiles(root, scopeEntries, selectedSquadId, verifiedDirs, resolvedReportRoot, {
+      excludeFilePredicate: matchOutputTarget
+    });
+    const combinedFiles = [...new Set([...expandedFiles, ...files])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    verifiedFiles = fingerprint(root, combinedFiles, verifiedDirs);
+  } else if (files.length > 0) {
     verifiedFiles = fingerprint(root, files, verifiedDirs);
   } else if (
     template.verifiedFiles &&
@@ -1956,7 +3036,9 @@ function buildBundleRecordInit(root, options = {}) {
     !Array.isArray(template.verifiedFiles) &&
     Object.keys(template.verifiedFiles).length > 0
   ) {
-    verifiedFiles = fingerprint(root, Object.keys(template.verifiedFiles), verifiedDirs);
+    const templateFiles = Object.keys(template.verifiedFiles);
+    rejectOutputCollision(templateFiles);
+    verifiedFiles = fingerprint(root, templateFiles, verifiedDirs);
   }
 
   const validVerdicts = new Set(["PASS", "FAIL", "BLOCKED"]);
@@ -2017,6 +3099,8 @@ function buildBundleRecordInit(root, options = {}) {
     squadId: selectedSquadId,
     workspace: root,
     reportRoot: resolvedReportRoot,
+    ...(typeof explicitRecordPath === "string" && explicitRecordPath ? { recordPath: explicitRecordPath } : {}),
+    ...(isReadOnlySquad ? { readOnly: true } : {}),
     verdict: resolvedVerdict,
     ...(allowNonPassing ? { allowNonPassing: true } : {}),
     ...(allowPartial ? { allowPartial: true } : {}),
@@ -2028,30 +3112,215 @@ function buildBundleRecordInit(root, options = {}) {
   };
 }
 
+function buildBundleRecordsForAllSquads(root, options = {}) {
+  if (!isPlainObject(options) || !isPlainObject(options.plan) || !Array.isArray(options.plan.workers)) {
+    throw new Error("--all-squads requires a valid squad_planner JSON object with a workers array.");
+  }
+  const verifiedDirs = options.verifiedDirs ?? new Set();
+  root = resolveCanonicalRoot(root, verifiedDirs);
+  const rawPlan = options.plan;
+  const workerSquads = rawPlan.workers.filter(w => isPlainObject(w) && typeof w.squadId === "string");
+  if (workerSquads.length === 0) {
+    throw new Error("--all-squads found 0 working squads in plan.workers.");
+  }
+  const allHandoffs = Array.isArray(options.handoffs) ? options.handoffs : undefined;
+  const fullIdMap = isPlainObject(options.idMap) ? options.idMap : {};
+  const provEntries = [
+    ...(Array.isArray(rawPlan.provenanceScaffold?.entries) ? rawPlan.provenanceScaffold.entries : []),
+    ...(Array.isArray(options.provenance?.entries) ? options.provenance.entries : [])
+  ];
+
+  // Map every specialist/lead/auditor sender key across the plan so shared handoffs.json & idMap route deterministically.
+  const specialistSquadByKey = new Map();
+  const nonSpecialistKeys = new Set();
+  const squadIdMapKeys = new Map();
+  for (const w of workerSquads) {
+    const sqId = w.squadId;
+    const idKeys = new Set();
+    squadIdMapKeys.set(sqId, idKeys);
+    for (const s of Array.isArray(w.specialists) ? w.specialists : []) {
+      if (!isPlainObject(s)) continue;
+      if (typeof s.workerName === "string") {
+        specialistSquadByKey.set(s.workerName, sqId);
+        idKeys.add(s.workerName);
+        const placeholder = `<invoke_subagent:${s.workerName}:conversationId>`;
+        idKeys.add(placeholder);
+        if (Object.hasOwn(fullIdMap, s.workerName)) {
+          specialistSquadByKey.set(String(fullIdMap[s.workerName]).trim(), sqId);
+        }
+        if (Object.hasOwn(fullIdMap, placeholder)) {
+          specialistSquadByKey.set(String(fullIdMap[placeholder]).trim(), sqId);
+        }
+      }
+    }
+    if (isPlainObject(w.lead) && typeof w.lead.workerName === "string") {
+      nonSpecialistKeys.add(w.lead.workerName);
+    }
+  }
+  for (const p of provEntries) {
+    if (!p || typeof p !== "object" || typeof p.squadId !== "string") continue;
+    const idKeys = squadIdMapKeys.get(p.squadId);
+    if (typeof p.workerName === "string" && idKeys) idKeys.add(p.workerName);
+    if (p.slotType === "lead" || p.slotType === "audit") {
+      if (typeof p.conversationId === "string") nonSpecialistKeys.add(p.conversationId.trim());
+    } else if (typeof p.conversationId === "string" && p.conversationId.trim()) {
+      specialistSquadByKey.set(p.conversationId.trim(), p.squadId);
+    }
+  }
+  for (const a of Array.isArray(rawPlan.integrityAuditPlan) ? rawPlan.integrityAuditPlan : []) {
+    if (a && typeof a.workerName === "string") nonSpecialistKeys.add(a.workerName);
+  }
+
+  for (const key of Object.keys(fullIdMap)) {
+    const matchedAny = [...squadIdMapKeys.values()].some(set => set.has(key));
+    if (!matchedAny) {
+      throw new Error(`--id-map key '${key}' did not match any worker in plan.workers.`);
+    }
+  }
+
+  const handoffsBySquad = new Map(workerSquads.map(w => [w.squadId, []]));
+  if (allHandoffs !== undefined) {
+    for (const h of allHandoffs) {
+      if (!h || typeof h !== "object" || typeof h.sender !== "string" || !h.sender.trim() || typeof h.message !== "string" || !h.message.trim()) {
+        throw new Error("Each handoff must include nonempty 'sender' and 'message' strings.");
+      }
+      const sender = h.sender.trim();
+      const targetSq = specialistSquadByKey.get(sender);
+      if (targetSq) {
+        handoffsBySquad.get(targetSq).push({ sender, message: h.message });
+      } else if (!nonSpecialistKeys.has(sender)) {
+        throw new Error(`Handoff sender '${sender}' does not match any worker in plan.`);
+      }
+    }
+  }
+
+  const resolvedOutRels = workerSquads.map(w =>
+    typeof options.resolveOutPath === "function" ? options.resolveOutPath(w.squadId) : undefined
+  );
+
+  return workerSquads.map((w, idx) => {
+    const sqId = w.squadId;
+    const idKeys = squadIdMapKeys.get(sqId);
+    const scopedIdMap = Object.create(null);
+    for (const [k, v] of Object.entries(fullIdMap)) {
+      if (idKeys.has(k)) scopedIdMap[k] = v;
+    }
+    const outRel = resolvedOutRels[idx];
+    let preReadSynthesis;
+    const record = buildBundleRecordInit(root, {
+      ...options,
+      squadId: sqId,
+      idMap: scopedIdMap,
+      handoffs: allHandoffs !== undefined ? handoffsBySquad.get(sqId) : undefined,
+      recordPath: outRel,
+      excludedRecordOutputs: resolvedOutRels,
+      verifiedDirs,
+      onLeadRead: info => { preReadSynthesis = info; }
+    });
+    return { squadId: sqId, outRel, record, preReadSynthesis };
+  });
+}
+
+function doesRecordMatchAcceptedBundle(record, bundle) {
+  if (!isPlainObject(record) || !isPlainObject(bundle)) return false;
+  if (bundle.squadId !== record.squadId) return false;
+  if (!isDeepStrictEqual(bundle.verifiedFiles, record.verifiedFiles)) return false;
+  if (!isDeepStrictEqual(bundle.assignments, record.assignments)) return false;
+
+  if (Boolean(record.allowNonPassing) && bundle.allowNonPassing !== true) return false;
+  if (Boolean(record.allowPartial) && bundle.allowPartial !== true) return false;
+  if (record.retainReports === true && bundle.retainReports !== true) return false;
+
+  if (record.verdict !== undefined) {
+    if (bundle.verdict !== record.verdict) return false;
+    if (bundle.verdict !== "PASS" && bundle.allowNonPassing !== true) return false;
+  } else if (bundle.verdict !== "PASS") {
+    if (bundle.allowNonPassing !== true || (bundle.verdict !== "FAIL" && bundle.verdict !== "BLOCKED")) {
+      return false;
+    }
+  }
+
+  const isAuditCohort =
+    record.squadId === "integrity_auditor" ||
+    (typeof record.squadId === "string" && record.squadId.startsWith("integrity_auditor-"));
+  if (isAuditCohort) {
+    return bundle.auditPolicy === "unaudited-explicit" && !bundle.integrityAudit && !bundle.integrityAudits;
+  }
+
+  const explicitAuditSet = new Set();
+  if (typeof record.integrityReport === "string" && record.integrityReport.trim()) {
+    explicitAuditSet.add(record.integrityReport);
+  }
+  if (Array.isArray(record.integrityAuditSlots)) {
+    for (const slot of record.integrityAuditSlots) {
+      if (typeof slot === "string" && slot.trim()) explicitAuditSet.add(slot);
+    }
+  }
+  const hasExplicitRecordAudit = explicitAuditSet.size > 0;
+
+  if (record.requireIntegrityAudit === false) {
+    if (!hasExplicitRecordAudit) return bundle.auditPolicy === "unaudited-explicit";
+    if (bundle.auditPolicy === "unaudited-explicit") return true;
+    if (bundle.auditPolicy !== "required") return false;
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+
+  if (bundle.auditPolicy === "unaudited-explicit") return true;
+  if (bundle.auditPolicy !== "required") return false;
+  if (hasExplicitRecordAudit) {
+    const bundleAuditPaths = Array.isArray(bundle.integrityAudits) ? bundle.integrityAudits.map(a => a?.path) : [];
+    return isDeepStrictEqual(bundleAuditPaths, [...explicitAuditSet]);
+  }
+  return true;
+}
+
 export {
+  CONTROL_CHAR_RE,
+  READONLY_SUBAGENT_TYPE,
+  assertNoSymlinkedAncestors,
+  buildBoundAuditSwarmAdd,
+  buildBoundAuditSwarmAdds,
   buildBundleRecordInit,
+  buildBundleRecordsForAllSquads,
+  bundlePath,
   bundleReports,
+  collectPlanSquadScopeEntries,
   collectReportSlots,
   computeEvidenceDigest,
   decodeUtf8,
+  doesRecordMatchAcceptedBundle,
   ensureDirectory,
+  expandScopeEntriesToFiles,
   extractCitationUrls,
+  extractWorktreePathsFromHandoffs,
   fingerprint,
+  formatAuditorTargetScopeNote,
   inspectHandoffs,
   isContainedPath,
   isExpectedRealPath,
+  isSameFsObject,
+  isValidScopeEntry,
   messageLimit,
+  normalizeContainedJsonOutPath,
   normalizeReportRoot,
   pruneReports,
   publish,
   readFile,
   readOpenedFileWithStat,
   readRegularFileSafe,
+  recordSlotPath,
+  relativizeContainedCliPath,
   reportPath,
   resolveCanonicalRoot,
+  resolveReportRoot,
+  sha256,
+  shellQuote,
   stripReceiptPrefix,
   summarizeCitations,
   trimTrailingSlashes,
   verifyAndPruneBundle,
-  verifyBundle
+  verifyBundle,
+  validateWorkerWorktreeRoot,
+  workspacePath
 };

@@ -4,11 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { buildSubagentSpec } from "../../../../mcp/briefs.mjs";
-import { normalizeReportRoot, trimTrailingSlashes } from "../../../../mcp/handoffs.mjs";
+import { normalizeReportRoot, shellQuote, trimTrailingSlashes } from "../../../../mcp/handoffs.mjs";
 import { TOOLS } from "../../../../mcp/index.js";
 import { planSquadCohort } from "../../../../mcp/planner.mjs";
 import { stripCode, stripFencedCodeBlocks } from "../../../../mcp/verdicts.mjs";
-import { SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
+import { MAINTAINER_SKILLS, SHIPPED_SKILLS, isDirectEntryPoint } from "../../../../scripts/install-register.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const HOSTED_DOCS_PREFIX = "https://paragon-ux.github.io/Agy-Squad/";
@@ -279,6 +279,12 @@ function checkRelativeLinks(skillFile, markdown, markdownTextCache, existsCache,
         broken.push(`${displayLink} (escapes .agents/skills/)`);
         continue;
       }
+      const sourceSkill = path.relative(skillsRootDir, skillFile).split(path.sep)[0];
+      const targetSkill = rel.split(path.sep)[0];
+      if (SHIPPED_SKILLS.includes(sourceSkill) && MAINTAINER_SKILLS.includes(targetSkill)) {
+        broken.push(`${displayLink} (links shipped skill to repo-only maintainer skill)`);
+        continue;
+      }
     }
     if (!existsCached(resolved, markdownTextCache, existsCache)) {
       broken.push(label);
@@ -364,9 +370,16 @@ function runDiagnostics() {
         text: readMarkdownCached(filePath, markdownTextCache)
       }))
     : [];
+  const readonlyAgent = path.join(repoRoot, "agents", "agy-squad-readonly.md");
+  if (!fs.existsSync(readonlyAgent)) {
+    findings.push({ id: "AGENT-MISSING-READONLY", priority: "P1", summary: "Missing agents/agy-squad-readonly.md" });
+  }
+
   const skillsRoot = path.join(repoRoot, ".agents", "skills");
   const skillNames = [...SHIPPED_SKILLS];
-  if (fs.existsSync(path.join(skillsRoot, "self-diagnosis"))) skillNames.push("self-diagnosis");
+  for (const maintainerSkill of MAINTAINER_SKILLS) {
+    if (fs.existsSync(path.join(skillsRoot, maintainerSkill))) skillNames.push(maintainerSkill);
+  }
   const skillDirs = new Map();
   for (const name of skillNames) {
     const dir = path.join(skillsRoot, name);
@@ -476,6 +489,9 @@ function runDiagnostics() {
   const swarmSpecBrief = minSwarm.workers[0].specialists[0].swarmAdd.brief;
   const swarmLeadBrief = minSwarm.workers[0].lead.swarmAdd.brief;
   const swarmAuditBrief = minSwarm.integrityAuditPlan[0].swarmAdd.brief;
+  // Measure template overhead independently of the host's checkout path.
+  const workspaceArgument = shellQuote(minSwarm.workspace);
+  const templateBytes = text => Buffer.byteLength(text.replaceAll(workspaceArgument, "'<workspace>'"), "utf8");
   const mcpToolsListResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: TOOLS } }), "utf8");
 
   for (const [label, text] of [
@@ -499,9 +515,9 @@ function runDiagnostics() {
     specialistTemplateBytes: Buffer.byteLength(subSpecPrompt, "utf8"),
     leadTemplateBytes: Buffer.byteLength(subLeadPrompt, "utf8"),
     precompiledLeadTemplateBytes: Buffer.byteLength(subPreLeadPrompt, "utf8"),
-    swarmSpecialistTemplateBytes: Buffer.byteLength(swarmSpecBrief, "utf8"),
-    swarmLeadTemplateBytes: Buffer.byteLength(swarmLeadBrief, "utf8"),
-    swarmAuditorTemplateBytes: Buffer.byteLength(swarmAuditBrief, "utf8"),
+    swarmSpecialistTemplateBytes: templateBytes(swarmSpecBrief),
+    swarmLeadTemplateBytes: templateBytes(swarmLeadBrief),
+    swarmAuditorTemplateBytes: templateBytes(swarmAuditBrief),
     mcpToolsListResponseBytes
   };
   for (const [id, actual, limit, label] of [
@@ -551,4 +567,4 @@ if (isDirectEntryPoint(process.argv[1], import.meta.url)) {
   runCli();
 }
 
-export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripMarkdownLinkSyntax };
+export { checkRelativeLinks, extractMarkdownLinks, getHeadingSlugs, hasValidSvgEnvelope, runDiagnostics, stripHtmlComments, stripMarkdownLinkSyntax };

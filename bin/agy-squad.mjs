@@ -1,68 +1,29 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
+import {
+  CONTROL_CHAR_RE,
+  normalizeContainedJsonOutPath,
+  relativizeContainedCliPath
+} from "../mcp/handoffs.mjs";
+import {
+  PACKAGE_VERSION,
+  assertNodeVersion,
+  isDirectEntryPoint,
+  isNodeVersionSupported
+} from "../scripts/install-register.mjs";
 
-const MIN_NODE_MAJOR = 22;
-
-function isNodeVersionSupported(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  if (typeof versionStr !== "string") return false;
-  const match = versionStr.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
-  return Boolean(match && Number.parseInt(match[1], 10) >= minMajor);
-}
-
-function assertNodeVersion(versionStr = process.versions.node, minMajor = MIN_NODE_MAJOR) {
-  if (!isNodeVersionSupported(versionStr, minMajor)) {
-    const cleaned = typeof versionStr === "string" ? versionStr.trim().replace(/^v/i, "") : "";
-    const foundLabel = cleaned ? `v${cleaned}` : "unknown";
-    throw new Error(`Agy-Squad requires Node.js >= ${minMajor}.0.0 (found ${foundLabel}). Please upgrade Node.js.`);
-  }
-}
-
-function readPackageVersion() {
-  try {
-    return JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version || "0.2.2";
-  } catch {
-    return "0.2.2";
-  }
-}
+const readPackageVersion = () => PACKAGE_VERSION;
+const isDirectExecution = (argv1 = process.argv[1], selfUrl = import.meta.url, platform = process.platform) =>
+  isDirectEntryPoint(argv1, selfUrl, platform);
 
 function warnUncarriedCitations(citations, targetLabel) {
   const uncarried = citations?.uncarriedUrls;
   if (!Array.isArray(uncarried) || uncarried.length === 0) return;
   console.error(
-    `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
+    `[WARN] ${uncarried.length} specialist citation URL(s) not carried into ${targetLabel} (raw specialist markdown stays archived in report.sources.json; pass --strict-citations on bundle/finalize to fail closed):\n${uncarried.map(url => `  - ${url}`).join("\n")}`
   );
-}
-
-function isDirectExecution(
-  argv1 = process.argv[1],
-  selfUrl = import.meta.url,
-  platform = process.platform
-) {
-  if (!argv1 || !selfUrl) return false;
-  const selfPath =
-    selfUrl instanceof URL || (typeof selfUrl === "string" && selfUrl.startsWith("file:"))
-      ? fileURLToPath(selfUrl)
-      : selfUrl;
-  const pathImpl = platform === "win32" ? path.win32 : path.posix;
-  const normalize = (p) => {
-    let resolved;
-    if (platform === process.platform) {
-      try {
-        resolved = fs.realpathSync.native(path.resolve(p));
-      } catch {
-        resolved = path.resolve(p);
-      }
-    } else {
-      resolved = pathImpl.resolve(p);
-    }
-    if (platform === "win32") return resolved.replace(/\\/g, "/").toLowerCase();
-    if (platform === "darwin") return resolved.toLowerCase();
-    return resolved;
-  };
-  return normalize(argv1) === normalize(selfPath);
 }
 
 const usage = [
@@ -86,20 +47,20 @@ const usage = [
   "                                  Compile invoke_subagent stage payload (subagent fallback)",
   "",
   "Verification & Bundling Commands:",
-  "  collect --plan|--record|--squad --from <dir>... [options]",
+  "  collect --plan|--record|--squad [--from <dir>... | --handoffs <file>] [options]",
   "                                  Collect report slots from share/branch worktrees",
   "  bundle-init --plan <plan.json> [options] [<file>...]",
-  "                                  Build a bundle record JSON from a plan and verified files",
+  "                                  Build bundle record(s) from a plan and verified files",
   "  fingerprint <file...>           Compute SHA-256 digests for verifiedFiles",
   "  inspect <record.json>           Reconcile Pointer-Over-Wire handoff receipts",
-  "  digest <record.json> [options]  Compute canonical Evidence Digest for integrity auditing",
+  "  digest <record.json> [options]  Compute canonical Evidence Digest for integrity binding",
   "  bundle <record.json> [options]  Create a SHA-256 verified proof bundle (.sources.json)",
   "  verify <report.sources.json> [sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
   "                                  Verify bundle integrity (+ optional --prune with SHA-256)",
-  "  finalize <record.json> [options]",
+  "  finalize <record.json...> [options]",
   "                                  Run inspect -> bundle -> verify (+ optional --prune) in one call",
-  "  prune <report.sources.json> <accepted-sha256> [--keep-reports]",
-  "                                  Prune verified loose specialist reports",
+  "  prune (<report.sources.json> <sha256> | --records <record.json>=<accepted-sha256>...) [options]",
+  "                                  Prune verified loose specialist reports (and optional records)",
   "  verdict [--integrity] <report.md>",
   "                                  Strictly parse a content or integrity verdict",
   "",
@@ -167,7 +128,7 @@ const SUBCOMMAND_HELP = {
     "Options:",
     "  --manifest <path>                Load squads from a workspace manifest JSON file",
     "  --squad <id>                     Compile one squad (omit to compile all manifest squads)",
-    "  --topology flat|layered          Override topology (flat for inline task, manifest-defined otherwise; Step 0 asks if unspecified)",
+    "  --topology flat|layered          Override topology (flat for inline task, wave-gated layered for manifests; asks only on writable inherit overlaps)",
     "  --mode swarm|subagent            Target native /swarm (default) or invoke_subagent",
     "  --model <id>                     Pin an explicit model ID (verified via --known-model)",
     "  --known-model <id>               Repeatable allowed model ID from swarm{action:\"models\"}",
@@ -176,25 +137,33 @@ const SUBCOMMAND_HELP = {
     "  --scope <path>                   Repeatable workspace-relative scope path (task mode)",
     "  --role <title>                   Repeatable specialist role title (task mode)",
     "  --read-only                      Mark inline task specialists readOnly: true",
+    "  --readonly-subagent              Use agy-squad-readonly for read-only subagent specialists",
     "  --role-scope <role=path>         Repeatable per-role scope override (task mode)",
     "  --no-integrity                   Omit flat audit-<id> stage when explicitly skipping integrity audits",
     "  --report-root <path>             Custom workspace-relative root (default: scratch/agy-squad)",
     "  --occupied-worker <name>         Repeatable existing roster name to avoid collisions",
     "  --board-since <seq>              Scope read_board{since: <seq>} for working members",
     "  --board-seq <seq>                Repeatable board seq for read_board{seqs: [...]}",
+    "  --workspace <dir>                Target repository root (or set AGY_SQUAD_WORKSPACE)",
+    "  --out <plan.json>                Write plan JSON (+ .wave1.json / .wave2.json) and print summary with swarmPane",
+    "  --swarm-pane-out <path>          Write swarmPane JSON directly (workspace .json or .system_generated/swarm/plan.json)",
+    "  --emit-wave <1|2|3>              Print compact swarmAdd slice for Wave 1, 2, or 3",
+    "  --replace                        Overwrite existing --out / --swarm-pane-out file(s)",
+    "  --compact                        Print compact summary with swarmPane without full worker briefs",
     "",
     "Examples:",
     "  agy-squad plan --mode swarm --scope src --role \"Implementer\" --role \"Reviewer\" \"Audit auth\"",
-    "  agy-squad plan --manifest swarm-manifest.json --topology flat --workspace-isolation inherit"
+    "  agy-squad plan --manifest swarm-manifest.json --out scratch/plan.json --replace"
   ].join("\n"),
   dispatch: [
-    "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]",
+    "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>] [--workspace <dir>]",
     "",
     "Compile one invoke_subagent stage payload (subagent fallback mode only).",
     "",
     "Options:",
     "  --squad <id>                     Target squad ID, all_l1, or integrity_auditor[:<id>]",
     "  --manifest <path>                Workspace manifest JSON path (optional auto-discovery)",
+    "  --workspace <dir>                Target repository root (or set AGY_SQUAD_WORKSPACE)",
     "",
     "Examples:",
     "  agy-squad dispatch --squad all_l1 --manifest swarm-manifest.json",
@@ -202,15 +171,21 @@ const SUBCOMMAND_HELP = {
   ].join("\n"),
   collect: [
     "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>)",
-    "                         --from <worktree-dir>... [options]",
+    "                         [--from <worktree-dir>... | --handoffs <handoffs.json>] [options]",
     "",
     "Copy worker, lead, and auditor report slots from share/branch worktrees into workspace.",
     "",
     "Options:",
     "  --plan <plan.json>               Planner JSON output defining expected report slots",
+    "  --provenance <scaffold.json>     Optional provenanceScaffold JSON binding worker UUIDs",
     "  --record <record.json>           Bundle record JSON defining expected report slots",
-    "  --squad <id>                     Collect slots for one squad ID",
+    "  --squad <id>                     Collect slots for one squad ID (with --from, or filter --plan)",
     "  --from <worktree-dir>            Repeatable source worktree directory",
+    "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts (requires --plan or --record)",
+    "  --handoff <receipt>              Repeatable inline handoff receipt containing wt=<dir>",
+    "  --id-map <worker=uuid>           Repeatable coordinator-bound worker conversation UUID",
+    "  --transcript-json <slot=json>    Materialize Agy-Context-Saver transcript JSON into a report slot",
+    "  --from-transcript                Enable direct transcript extraction for matching receipts",
     "  --workspace <dir>                Target coordinator workspace root (default: cwd)",
     "  --report-root <path>             Custom workspace-relative report root",
     "  --overwrite                      Overwrite differing existing slots in workspace",
@@ -219,22 +194,25 @@ const SUBCOMMAND_HELP = {
     "  --allow-empty                    Succeed even when zero matching slots are found",
     "",
     "Examples:",
-    "  agy-squad collect --plan scratch/plan.json --from ../wt-worker-1 --from ../wt-worker-2",
-    "  agy-squad collect --squad auth --from ../wt-auth --dry-run"
+    "  agy-squad collect --plan scratch/plan.json --handoffs scratch/handoffs.json",
+    "  agy-squad collect --plan scratch/plan.json --from ../wt-worker-1 --from ../wt-worker-2"
   ].join("\n"),
   "bundle-init": [
     "Usage: agy-squad bundle-init --plan <plan.json> [options] [<file>...]",
     "",
-    "Initialize a bundle record JSON from squad_planner output and verified workspace files.",
+    "Initialize bundle record JSON(s) from squad_planner output and verified workspace files.",
     "",
     "Options:",
     "  --plan <plan.json>               Required planner JSON output (or '-' for stdin)",
     "  --provenance <scaffold.json>     Optional provenanceScaffold JSON override",
-    "  --squad <id>                     Target squad ID (required for multi-squad plans)",
+    "  --squad <id>                     Target squad ID (or pass --all-squads)",
+    "  --all-squads                     Initialize records across all squads in plan.workers",
+    "  --out-dir <dir>                  Custom output directory for --all-squads records",
     "  --workspace <dir>                Coordinator workspace root (default: cwd)",
     "  --report-root <path>             Custom workspace-relative report root",
     "  --verdict PASS|FAIL|BLOCKED      Explicit lead verdict override",
     "  --file <path>                    Repeatable verified workspace file path",
+    "  --from-scope                     Infer & fingerprint regular files from the squad's plan scopeFiles",
     "  --id-map <worker=id>             Repeatable runtime conversationId mapping",
     "  --handoffs <file.json>           JSON array of { sender, message } handoff receipts",
     "  --handoff <sender=message>       Repeatable inline handoff receipt entry",
@@ -242,24 +220,25 @@ const SUBCOMMAND_HELP = {
     "  --allow-non-passing              Allow FAIL/BLOCKED synthesis verdicts",
     "  --allow-partial                  Allow PARTIAL/NO_REPORT specialist handoffs",
     "  --digest                         Compute and output canonical Evidence Digest",
-    "  --out <record.json>              Write record to a workspace-relative .json file",
-    "  --replace                        Overwrite an existing --out file",
+    "  --out <record.json>              Write record atomically and emit compact receipt",
+    "  --verbose                        Include full record object in --out stdout JSON",
+    "  --replace                        Overwrite existing --out / --all-squads record file(s)",
     "",
     "Examples:",
-    "  agy-squad bundle-init --plan scratch/plan.json --handoffs scratch/handoffs.json --digest --out scratch/rec.json src/app.js",
+    "  agy-squad bundle-init --plan scratch/plan.json --from-scope --handoffs scratch/handoffs.json --digest --out scratch/rec.json",
     "  agy-squad bundle-init --plan scratch/plan.json --squad auth --handoffs scratch/handoffs.json src/auth.js"
   ].join("\n"),
   fingerprint: [
-    "Usage: agy-squad fingerprint <file...>",
+    "Usage: agy-squad fingerprint [--workspace <dir>] <file...>",
     "",
     "Compute SHA-256 digests for workspace-relative files used in verifiedFiles.",
     "",
     "Examples:",
     "  agy-squad fingerprint src/auth.js src/session.js",
-    "  agy-squad fingerprint README.md docs/tools.md"
+    "  agy-squad fingerprint --workspace /path/to/repo README.md docs/tools.md"
   ].join("\n"),
   inspect: [
-    "Usage: agy-squad inspect <record.json>",
+    "Usage: agy-squad inspect [--workspace <dir>] <record.json>",
     "",
     "Reconcile <= 500 byte Pointer-Over-Wire receipts and verify slot readability.",
     "",
@@ -267,24 +246,26 @@ const SUBCOMMAND_HELP = {
     "  agy-squad inspect scratch/bundle-record.json"
   ].join("\n"),
   digest: [
-    "Usage: agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]",
+    "Usage: agy-squad digest <record.json> [--workspace <dir>] [--allow-non-passing] [--allow-partial]",
     "",
     "Compute the deterministic 64-hex Evidence Digest for integrity auditor binding.",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
     "  --allow-non-passing              Allow FAIL or BLOCKED lead verdicts",
     "  --allow-partial                  Allow PARTIAL or NO_REPORT specialist handoffs",
     "",
     "Examples:",
     "  agy-squad digest scratch/bundle-record.json",
-    "  agy-squad digest scratch/bundle-record.json --allow-non-passing --allow-partial"
+    "  agy-squad digest scratch/bundle-record.json --allow-non-passing"
   ].join("\n"),
   bundle: [
-    "Usage: agy-squad bundle <record.json> [options]",
+    "Usage: agy-squad bundle <record.json> [--workspace <dir>] [options]",
     "",
     "Write a SHA-256 verified v2 proof bundle (lead/report.sources.json).",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
     "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
@@ -297,11 +278,12 @@ const SUBCOMMAND_HELP = {
     "  agy-squad bundle scratch/bundle-record.json --allow-unaudited"
   ].join("\n"),
   verify: [
-    "Usage: agy-squad verify <report.sources.json> [expected-sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
+    "Usage: agy-squad verify <report.sources.json> [expected-sha256] [--workspace <dir>] [--expected-sha256 <sha256>] [--prune [--keep-reports]]",
     "",
     "Verify bundle SHA-256 digests, auditPolicy, verdicts, and optional loose report pruning.",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
     "  --expected-sha256 <sha256>       Pin expected 64-hex bundle SHA-256 (required with --prune; or pass as 2nd positional arg)",
     "  --prune                          Unlink verified loose specialist reports after verify (requires expected SHA-256)",
     "  --keep-reports                   With --prune, retain loose specialist reports on disk",
@@ -311,42 +293,48 @@ const SUBCOMMAND_HELP = {
     "  agy-squad verify scratch/agy-squad/squad-auth/lead/report.sources.json --expected-sha256 <64-hex-sha256> --prune"
   ].join("\n"),
   finalize: [
-    "Usage: agy-squad finalize <record.json> [options]",
+    "Usage: agy-squad finalize <record.json...> [--workspace <dir>] [--compact] [options]",
     "",
-    "Run inspect -> bundle -> verify (+ optional --prune) in one deterministic call.",
+    "Run inspect -> bundle -> verify (+ optional --prune) across 1..M records in one call.",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
+    "  --compact                        Emit compact summary even on a single record",
     "  --allow-unaudited                Opt out of requireIntegrityAudit: true when explicitly skipping integrity audits",
     "  --allow-non-passing              Allow archiving FAIL or BLOCKED cohorts",
     "  --allow-partial                  Allow archiving PARTIAL or NO_REPORT specialist slots",
     "  --strict-citations               Fail closed if any specialist URL is missing from lead/report.md",
     "  --replace                        Overwrite an existing differing report.sources.json",
-    "  --predecessor <sha256>           Require existing bundle digest to match before overwrite",
+    "  --predecessor <sha256>           Require existing bundle digest to match before overwrite (single record)",
     "  --prune                          Unlink verified loose specialist reports after verify",
     "  --keep-reports                   With --prune, retain loose specialist reports on disk",
     "",
     "Examples:",
     "  agy-squad finalize scratch/bundle-record.json --replace --prune",
-    "  agy-squad finalize scratch/bundle-record.json --allow-unaudited --prune --keep-reports"
+    "  agy-squad finalize scratch/agy-squad/squad-a/record.json scratch/agy-squad/squad-b/record.json --replace --prune"
   ].join("\n"),
   prune: [
-    "Usage: agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports]",
+    "Usage: agy-squad prune (<report.sources.json> <accepted-sha256> | <bundle>=<sha256>... | --records <record.json>=<accepted-sha256>...) [--workspace <dir>] [--keep-reports] [--clean-records]",
     "",
-    "Safely remove verified loose specialist reports matching the accepted bundle SHA-256.",
+    "Safely remove verified loose specialist reports matching accepted bundle SHA-256 digests.",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
+    "  --records <record.json>=<sha256> Pin each record to its accepted bundle digest",
+    "  --clean-records                  With --records, unlink verified record.json files after pruning",
     "  --keep-reports                   Verify bundle and retain loose reports on disk",
     "",
     "Examples:",
     "  agy-squad prune scratch/agy-squad/squad-auth/lead/report.sources.json <64-hex-sha256>",
-    "  agy-squad prune scratch/agy-squad/squad-auth/lead/report.sources.json <sha256> --keep-reports"
+    "  agy-squad prune --records scratch/agy-squad/squad-a/record.json=<accepted-a-sha256> scratch/agy-squad/squad-b/record.json=<accepted-b-sha256> --clean-records"
   ].join("\n"),
   verdict: [
-    "Usage: agy-squad verdict [--integrity] <report.md>",
+    "Usage: agy-squad verdict [--workspace <dir>] [--integrity] <report.md>",
     "",
     "Strictly parse a single-line Content Verdict (PASS|FAIL|BLOCKED) or Integrity Verdict.",
     "",
     "Options:",
+    "  --workspace <dir>                Coordinator workspace root",
     "  --integrity                      Parse Integrity Verdict (CLEAN|INTEGRITY VIOLATION) plus targetSquad and evidenceDigest when present",
     "",
     "Examples:",
@@ -355,9 +343,9 @@ const SUBCOMMAND_HELP = {
   ].join("\n")
 };
 
-async function runPlanCommand(rest, root) {
+async function runPlanCommand(rest, fallbackRoot) {
   const usageLine =
-    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...]";
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--workspace <dir>] [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--readonly-subagent] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...] [--out <plan.json>] [--swarm-pane-out <path>] [--emit-wave <1|2|3>] [--replace] [--compact]";
   if (!rest.length) {
     throw new Error(usageLine);
   }
@@ -373,6 +361,7 @@ async function runPlanCommand(rest, root) {
   };
   const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
     manifest: { type: "string" },
+    workspace: { type: "string" },
     squad: { type: "string" },
     topology: { type: "string" },
     mode: { type: "string" },
@@ -381,14 +370,36 @@ async function runPlanCommand(rest, root) {
     scope: { type: "string", multiple: true },
     role: { type: "string", multiple: true },
     "read-only": { type: "boolean", default: false },
+    "readonly-subagent": { type: "boolean", default: false },
     "role-scope": { type: "string", multiple: true },
     "no-integrity": { type: "boolean", default: false },
     "report-root": { type: "string" },
     "known-model": { type: "string", multiple: true },
     "occupied-worker": { type: "string", multiple: true },
     "board-since": { type: "string" },
-    "board-seq": { type: "string", multiple: true }
+    "board-seq": { type: "string", multiple: true },
+    out: { type: "string" },
+    "swarm-pane-out": { type: "string" },
+    "emit-wave": { type: "string" },
+    replace: { type: "boolean", default: false },
+    compact: { type: "boolean", default: false }
   });
+  if (values.replace && values.out === undefined && values["swarm-pane-out"] === undefined) {
+    throw new Error(`Flag '--replace' requires '--out <plan.json>' or '--swarm-pane-out <path>' on 'agy-squad plan'.\n${usageLine}`);
+  }
+  let parsedEmitWave;
+  if (values["emit-wave"] !== undefined) {
+    const rawWave = String(values["emit-wave"]).trim();
+    if (rawWave !== "1" && rawWave !== "2" && rawWave !== "3") {
+      throw new Error(`--emit-wave must be 1, 2, or 3 (got '${values["emit-wave"]}').`);
+    }
+    if (values.compact) {
+      throw new Error("Conflicting flags: --emit-wave cannot be combined with --compact.");
+    }
+    parsedEmitWave = Number(rawWave);
+  }
+  const { resolveCanonicalRoot } = await import("../mcp/handoffs.mjs");
+  const { targetRoot } = resolveCommandWorkspace(values.workspace, fallbackRoot, resolveCanonicalRoot);
   let roleScopes;
   if (values["role-scope"] !== undefined) {
     roleScopes = Object.create(null);
@@ -408,11 +419,12 @@ async function runPlanCommand(rest, root) {
       if (!Object.hasOwn(roleScopes, roleKey)) {
         roleScopes[roleKey] = [];
       }
-      roleScopes[roleKey].push(normalizeScopeCliPath(rawPath));
+      roleScopes[roleKey].push(normalizeScopeCliPath(rawPath, process.platform, targetRoot));
     }
   }
-  const { planSquadCohort } = await import("../mcp/planner.mjs");
+  const { buildCompactPlanSummary, buildWaveSlice, planSquadCohort } = await import("../mcp/planner.mjs");
   const task = positionals.join(" ").trim();
+  const normalizedOut = values.out !== undefined ? normalizeBundleOutCliPath(values.out, process.platform, targetRoot) : undefined;
   const planArgs = {
     ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {}),
     ...(task ? { task } : {}),
@@ -421,30 +433,45 @@ async function runPlanCommand(rest, root) {
     ...(values.mode !== undefined ? { executionMode: values.mode } : {}),
     ...(values.model !== undefined ? { model: values.model } : {}),
     ...(values["workspace-isolation"] !== undefined ? { workspaceIsolation: values["workspace-isolation"] } : {}),
-    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(p => normalizeScopeCliPath(p)) } : {}),
+    ...(values.scope !== undefined ? { scopeFiles: values.scope.map(p => normalizeScopeCliPath(p, process.platform, targetRoot)) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["read-only"] ? { readOnly: true } : {}),
+    ...(values["readonly-subagent"] ? { readOnlySubagent: true } : {}),
     ...(roleScopes !== undefined ? { roleScopes } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
-    ...(values["report-root"] !== undefined ? { reportRoot: normalizeWorkspaceCliPath(values["report-root"]) } : {}),
+    ...(values["report-root"] !== undefined ? { reportRoot: normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot) } : {}),
     ...(values["known-model"] !== undefined ? { knownModels: values["known-model"] } : {}),
     ...(values["occupied-worker"] !== undefined ? { occupiedWorkerNames: values["occupied-worker"] } : {}),
     ...(values["board-since"] !== undefined ? { boardSince: parseSeqArg(values["board-since"], "--board-since") } : {}),
-    ...(values["board-seq"] !== undefined ? { boardSeqs: values["board-seq"].map(v => parseSeqArg(v, "--board-seq")) } : {})
+    ...(values["board-seq"] !== undefined ? { boardSeqs: values["board-seq"].map(v => parseSeqArg(v, "--board-seq")) } : {}),
+    ...(normalizedOut !== undefined ? { outPath: normalizedOut } : {}),
+    ...(values["swarm-pane-out"] !== undefined ? { swarmPaneOutPath: values["swarm-pane-out"] } : {}),
+    ...(parsedEmitWave !== undefined ? { emitWave: parsedEmitWave } : {}),
+    ...(values.replace ? { replace: true } : {})
   };
-  return planSquadCohort(planArgs, root);
+  const plan = planSquadCohort(planArgs, targetRoot);
+  if (parsedEmitWave !== undefined) {
+    return buildWaveSlice(plan, parsedEmitWave);
+  }
+  if (normalizedOut !== undefined || values.compact) {
+    return buildCompactPlanSummary(plan, normalizedOut);
+  }
+  return plan;
 }
 
-async function runDispatchCommand(rest, root) {
-  const usageLine = "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>]";
+async function runDispatchCommand(rest, fallbackRoot) {
+  const usageLine = "Usage: agy-squad dispatch (--squad <id> | <squadId>) [--manifest <path>] [--workspace <dir>]";
   if (!rest.length) {
     throw new Error(usageLine);
   }
   const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
     squad: { type: "string" },
-    manifest: { type: "string" }
+    manifest: { type: "string" },
+    workspace: { type: "string" }
   });
+  const { resolveCanonicalRoot } = await import("../mcp/handoffs.mjs");
   const { dispatchSquadData, formatNotFoundError } = await import("../mcp/dispatch.mjs");
+  const { targetRoot, explicit } = resolveCommandWorkspace(values.workspace, fallbackRoot, resolveCanonicalRoot);
   if (values.squad !== undefined && positionals.length > 0) {
     throw new Error("Pass either --squad <id> or a positional <squadId>, not both.");
   }
@@ -457,12 +484,13 @@ async function runDispatchCommand(rest, root) {
   }
   const dispatchArgs = {
     squadId,
-    ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {})
+    ...(values.manifest !== undefined ? { manifestPath: values.manifest } : {}),
+    ...(explicit ? { workspace: targetRoot } : {})
   };
   try {
-    return JSON.stringify(dispatchSquadData(dispatchArgs, root), null, 2);
+    return JSON.stringify(dispatchSquadData(dispatchArgs, targetRoot), null, 2);
   } catch (error) {
-    const message = error.code === "ENOENT" ? formatNotFoundError(dispatchArgs, root) : error.message;
+    const message = error.code === "ENOENT" ? formatNotFoundError(dispatchArgs, targetRoot) : error.message;
     throw new Error(`dispatch_squad: ${message}`);
   }
 }
@@ -503,24 +531,119 @@ function resolveWorkspaceRoot(workspaceArg, fallbackRoot, resolveCanonicalRoot) 
   }
 }
 
+function resolveCommandWorkspace(workspaceArg, cwdRoot, resolveCanonicalRoot) {
+  if (workspaceArg !== undefined) {
+    return { targetRoot: resolveWorkspaceRoot(workspaceArg, cwdRoot, resolveCanonicalRoot), explicit: true };
+  }
+  const envWs = process.env.AGY_SQUAD_WORKSPACE?.trim();
+  if (envWs) {
+    return { targetRoot: resolveWorkspaceRoot(envWs, cwdRoot, resolveCanonicalRoot), explicit: true };
+  }
+  return { targetRoot: cwdRoot, explicit: false };
+}
+
+function inferChildWorkspaceIfContained(currentRoot, explicitWorkspaceSet, candidateWs, handoffsMod) {
+  if (explicitWorkspaceSet || typeof candidateWs !== "string" || !candidateWs.trim()) {
+    return currentRoot;
+  }
+  try {
+    const canonicalChild = handoffsMod.resolveCanonicalRoot(candidateWs.trim());
+    if (
+      !handoffsMod.isExpectedRealPath(currentRoot, canonicalChild) &&
+      handoffsMod.isContainedPath(currentRoot, canonicalChild, false)
+    ) {
+      return canonicalChild;
+    }
+  } catch {}
+  return currentRoot;
+}
+
+function readRecordWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawPathArg, handoffsMod, invalidMsg = "Provide a valid bundle record.") {
+  const initialRel = normalizeWorkspaceCliPath(rawPathArg, process.platform, baseRoot);
+  const record = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(baseRoot, initialRel), initialRel));
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error(invalidMsg);
+  }
+  const effectiveRoot = inferChildWorkspaceIfContained(baseRoot, explicitWorkspaceSet, record.workspace, handoffsMod);
+  const recRel =
+    effectiveRoot === baseRoot
+      ? initialRel
+      : normalizeWorkspaceCliPath(path.join(baseRoot, initialRel), process.platform, effectiveRoot);
+  return { record, effectiveRoot, recRel, initialRel, baseRoot };
+}
+
+function formatPruneRecoveryNotice({ completedLabels, failedLabel, remainingItems, cleanRecords = false, keepReports = false, shellQuote }) {
+  const byWorkspace = new Map();
+  for (const rem of remainingItems) {
+    const useParentWs = rem.mode === "records" && path.isAbsolute(rem.recRel) && Boolean(rem.baseRoot);
+    const wsRoot = useParentWs ? rem.baseRoot : rem.effectiveRoot;
+    const useRecordsFlag = rem.mode === "records" && (!path.isAbsolute(rem.recRel) || useParentWs);
+    const groupKey = `${useRecordsFlag ? "records" : "bundles"}:${wsRoot}`;
+    let group = byWorkspace.get(groupKey);
+    if (!group) {
+      group = { wsRoot, useRecordsFlag, pins: [] };
+      byWorkspace.set(groupKey, group);
+    }
+    const relPinPath = useRecordsFlag ? (useParentWs ? rem.initialRel : rem.recRel) : rem.bundleRel;
+    group.pins.push(shellQuote(`${relPinPath}=${rem.sha}`));
+  }
+  const cmds = [...byWorkspace.values()].map(({ wsRoot, useRecordsFlag, pins }) =>
+    `agy-squad prune --workspace ${shellQuote(wsRoot)}${useRecordsFlag ? " --records" : ""} ${pins.join(" ")}${useRecordsFlag && cleanRecords ? " --clean-records" : ""}${keepReports ? " --keep-reports" : ""}`
+  );
+  const completedStr = completedLabels.length > 0 ? completedLabels.join(", ") : "none";
+  const remainingStr = remainingItems.map(r => r.label).join(", ");
+  return (
+    `Phase-1 bundle verification succeeded (completed prunes: [${completedStr}]; failed/partially processed: '${failedLabel}'; remaining: [${remainingStr}]). ` +
+    `Already-removed loose reports are skipped safely on retry. Recover with:\n${cmds.join("\n")}`
+  );
+}
+
+function resolveBundleWithWorkspaceInference(baseRoot, explicitWorkspaceSet, rawBundleArg, handoffsMod) {
+  const initialRel = normalizeWorkspaceCliPath(rawBundleArg, process.platform, baseRoot);
+  if (!explicitWorkspaceSet && typeof initialRel === "string" && initialRel && !path.isAbsolute(initialRel)) {
+    try {
+      const parsed = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(baseRoot, initialRel), initialRel));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.squadId === "string") {
+        const rootPrefix = handoffsMod.resolveReportRoot(parsed.reports?.[0]?.path ?? initialRel, true);
+        const expectedBundleRel = handoffsMod.bundlePath(parsed.squadId, rootPrefix);
+        if (initialRel !== expectedBundleRel && initialRel.endsWith(`/${expectedBundleRel}`)) {
+          const childPrefix = initialRel.slice(0, initialRel.length - expectedBundleRel.length - 1);
+          const effectiveRoot = inferChildWorkspaceIfContained(
+            baseRoot,
+            false,
+            path.join(baseRoot, childPrefix),
+            handoffsMod
+          );
+          if (effectiveRoot !== baseRoot) {
+            return { effectiveRoot, bundleRel: expectedBundleRel };
+          }
+        }
+      }
+    } catch {}
+  }
+  return { effectiveRoot: baseRoot, bundleRel: initialRel };
+}
+
 async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpectedRealPath, readFile, readRegularFileSafe }) {
   if (typeof pathOrDash !== "string" || !pathOrDash.trim()) {
     throw new Error(`${label} path must be nonempty.`);
   }
   const trimmedInput = pathOrDash.trim();
   let raw;
+  let resolvedRelPath;
   if (trimmedInput === "-") {
     const { text: readStreamText } = await import("node:stream/consumers");
     raw = await readStreamText(process.stdin);
   } else {
-    const normalized = normalizeWorkspaceCliPath(trimmedInput);
+    const normalized = normalizeWorkspaceCliPath(trimmedInput, process.platform, targetRoot);
     if (
-      !path.isAbsolute(trimmedInput) &&
       normalized &&
+      !path.isAbsolute(normalized) &&
       normalized !== "." &&
       !normalized.includes("\\") &&
       !normalized.split("/").includes("..")
     ) {
+      resolvedRelPath = normalized;
       try {
         raw = decodeUtf8(readFile(targetRoot, normalized), normalized);
       } catch (err) {
@@ -529,6 +652,7 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpe
         if (err.code === "ENOENT" && !isExpectedRealPath(workspaceCandidate, cwdResolved)) {
           try {
             raw = decodeUtf8(readRegularFileSafe(cwdResolved, trimmedInput), trimmedInput);
+            resolvedRelPath = relativizeContainedCliPath(cwdResolved, targetRoot) ?? undefined;
           } catch (fallbackErr) {
             throw fallbackErr.code === "ENOENT" ? err : fallbackErr;
           }
@@ -542,24 +666,32 @@ async function readJsonInput(targetRoot, pathOrDash, label, { decodeUtf8, isExpe
     }
   }
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (resolvedRelPath && parsed && typeof parsed === "object") {
+      Object.defineProperty(parsed, "_cliRelPath", { value: resolvedRelPath, enumerable: false, configurable: true });
+    }
+    return parsed;
   } catch (error) {
     throw new Error(`Invalid JSON in ${label} (${trimmedInput}): ${error.message}`);
   }
 }
 
-function normalizeWorkspaceCliPath(inputPath, platform = process.platform) {
+function normalizeWorkspaceCliPath(inputPath, platform = process.platform, targetRoot = undefined, allowEqual = false) {
   if (typeof inputPath !== "string") return inputPath;
   const trimmed = inputPath.trim();
+  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) {
+    return trimmed;
+  }
   if (
-    !trimmed ||
-    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmed) ||
     trimmed.startsWith("/") ||
     trimmed.startsWith("\\") ||
     /^[a-zA-Z]:/.test(trimmed) ||
     path.isAbsolute(trimmed)
   ) {
-    return trimmed;
+    const relativized = targetRoot
+      ? relativizeContainedCliPath(trimmed, targetRoot, { platform, allowEqual })
+      : null;
+    return relativized !== null ? relativized : trimmed;
   }
   if (platform !== "win32" && trimmed.includes("\\")) {
     return trimmed;
@@ -572,8 +704,8 @@ function normalizeWorkspaceCliPath(inputPath, platform = process.platform) {
   return stripped || normalized;
 }
 
-function normalizeScopeCliPath(inputPath, platform = process.platform) {
-  const normalized = normalizeWorkspaceCliPath(inputPath, platform);
+function normalizeScopeCliPath(inputPath, platform = process.platform, targetRoot = undefined) {
+  const normalized = normalizeWorkspaceCliPath(inputPath, platform, targetRoot, true);
   if (
     typeof normalized === "string" &&
     normalized.length > 1 &&
@@ -586,32 +718,8 @@ function normalizeScopeCliPath(inputPath, platform = process.platform) {
   return normalized;
 }
 
-function normalizeBundleOutCliPath(inputOut, platform = process.platform) {
-  const trimmedOut = typeof inputOut === "string" ? inputOut.trim() : "";
-  if (
-    !trimmedOut ||
-    /[\x00-\x1f\x7f\u2028\u2029]/.test(trimmedOut) ||
-    trimmedOut.startsWith("/") ||
-    trimmedOut.startsWith("\\") ||
-    path.isAbsolute(trimmedOut) ||
-    /^[a-zA-Z]:/.test(trimmedOut)
-  ) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  if (platform !== "win32" && trimmedOut.includes("\\")) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  const normalizedOut = platform === "win32" ? trimmedOut.replace(/\\/g, "/") : trimmedOut;
-  const outRel = normalizedOut.replace(/^(?:\.\/)+/, "");
-  if (
-    !outRel ||
-    outRel.split("/").some(p => !p || p === "." || p === "..") ||
-    !outRel.toLowerCase().endsWith(".json") ||
-    path.posix.basename(outRel).toLowerCase() === ".json"
-  ) {
-    throw new Error(`--out must be a workspace-relative .json path: ${inputOut}`);
-  }
-  return outRel;
+function normalizeBundleOutCliPath(inputOut, platform = process.platform, targetRoot = undefined) {
+  return normalizeContainedJsonOutPath(inputOut, targetRoot, "--out", platform);
 }
 
 function parseKeyValuePairs(items, flagName) {
@@ -652,14 +760,30 @@ function parseHandoffPairEntries(items) {
   });
 }
 
+function parseCollectHandoffEntries(items) {
+  return (items ?? []).map(item => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`Invalid --handoff entry '${item}'; expected a nonempty receipt line.`);
+    }
+    const receipt = item.trim();
+    const match = /^([A-Za-z0-9_.:-]+)=(.+)$/.exec(receipt);
+    return match ? { sender: match[1], message: match[2] } : receipt;
+  });
+}
+
 const STRING_OPTIONS_BY_COMMAND = {
-  plan: ["manifest", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq"],
-  dispatch: ["squad", "manifest"],
-  collect: ["plan", "record", "squad", "from", "workspace", "report-root"],
-  "bundle-init": ["plan", "provenance", "squad", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "out"],
-  bundle: ["predecessor"],
-  verify: ["expected-sha256"],
-  finalize: ["predecessor"]
+  plan: ["manifest", "workspace", "squad", "topology", "mode", "model", "workspace-isolation", "scope", "role", "role-scope", "report-root", "known-model", "occupied-worker", "board-since", "board-seq", "out", "swarm-pane-out", "emit-wave"],
+  dispatch: ["squad", "manifest", "workspace"],
+  collect: ["plan", "provenance", "record", "squad", "from", "handoffs", "handoff", "id-map", "transcript-json", "workspace", "report-root"],
+  "bundle-init": ["plan", "provenance", "squad", "out-dir", "workspace", "report-root", "verdict", "file", "id-map", "handoffs", "handoff", "out"],
+  fingerprint: ["workspace"],
+  inspect: ["workspace"],
+  digest: ["workspace"],
+  bundle: ["workspace", "predecessor"],
+  verify: ["workspace", "expected-sha256"],
+  finalize: ["workspace", "predecessor"],
+  prune: ["workspace", "records"],
+  verdict: ["workspace"]
 };
 
 function hasHelpFlag(argv, command) {
@@ -828,17 +952,23 @@ async function main(args) {
     return 0;
   }
   if (command === "collect") {
-    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) --from <worktree-dir>... [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
+    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) [--provenance <scaffold.json>] [--from <worktree-dir>...] [--handoffs <file.json>] [--handoff <receipt>...] [--id-map <worker=uuid>...] [--transcript-json <slot=jsonPath>...] [--from-transcript] [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       plan: { type: "string" },
+      provenance: { type: "string" },
       record: { type: "string" },
       squad: { type: "string" },
       from: { type: "string", multiple: true },
+      handoffs: { type: "string" },
+      handoff: { type: "string", multiple: true },
+      "id-map": { type: "string", multiple: true },
       workspace: { type: "string" },
       "report-root": { type: "string" },
       overwrite: { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
+      "transcript-json": { type: "string", multiple: true },
+      "from-transcript": { type: "boolean", default: false },
       "allow-empty": { type: "boolean", default: false }
     });
     if (values.plan !== undefined && values.record !== undefined) {
@@ -847,45 +977,73 @@ async function main(args) {
     if (values.record !== undefined && values.squad !== undefined) {
       throw new Error("Pass either --record or --squad to 'agy-squad collect', not both.");
     }
-    const sources = [...(values.from ?? []), ...positionals];
-    if (!sources.length) {
-      throw new Error(usageLine);
-    }
     const handoffsMod = await import("../mcp/handoffs.mjs");
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
     let plan;
     let record;
     if (values.plan !== undefined) {
-      plan = await readJsonInput(targetRoot, values.plan, "plan", handoffsMod);
+      plan = await readJsonInput(baseRoot, values.plan, "plan", handoffsMod);
     } else if (values.record !== undefined) {
-      record = await readJsonInput(targetRoot, values.record, "record", handoffsMod);
+      record = await readJsonInput(baseRoot, values.record, "record", handoffsMod);
     } else if (values.squad === undefined) {
+      throw new Error(usageLine);
+    }
+    const targetRoot = inferChildWorkspaceIfContained(baseRoot, explicit, plan?.workspace ?? record?.workspace, handoffsMod);
+    const rebaseInput = p => targetRoot !== baseRoot && p !== "-" ? path.resolve(baseRoot, p) : p;
+    const provenance = values.provenance !== undefined
+      ? await readJsonInput(targetRoot, rebaseInput(values.provenance), "provenance", handoffsMod)
+      : undefined;
+    const idMap = values["id-map"] !== undefined ? parseKeyValuePairs(values["id-map"], "id-map") : undefined;
+    let handoffs;
+    if (values.handoffs !== undefined) {
+      const parsedHandoffs = await readJsonInput(targetRoot, rebaseInput(values.handoffs), "handoffs", handoffsMod);
+      if (!Array.isArray(parsedHandoffs)) {
+        throw new Error("--handoffs JSON file must contain an array of handoff entries.");
+      }
+      handoffs = parsedHandoffs;
+    }
+    if ((values.handoff ?? []).length > 0) {
+      handoffs = [...(handoffs ?? []), ...parseCollectHandoffEntries(values.handoff)];
+    }
+    const sources = [...(values.from ?? []), ...positionals];
+    const hasHandoffInputs =
+      (Array.isArray(handoffs) && handoffs.length > 0) ||
+      (Array.isArray(record?.handoffs) && record.handoffs.length > 0);
+    if (!sources.length && !hasHandoffInputs && !(Array.isArray(values["transcript-json"]) && values["transcript-json"].length > 0)) {
       throw new Error(usageLine);
     }
     const result = handoffsMod.collectReportSlots(targetRoot, {
       sources,
+      handoffs,
       plan,
+      provenance,
       record,
+      idMap,
       squadId: values.squad,
-      reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"]) : undefined,
+      reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot) : undefined,
       overwrite: values.overwrite,
       dryRun: values["dry-run"],
       strict: values.strict,
-      allowEmpty: values["allow-empty"]
+      allowEmpty: values["allow-empty"],
+      transcriptJson: values["transcript-json"],
+      fromTranscript: values["from-transcript"]
     });
     console.log(JSON.stringify(result, null, 2));
     return 0;
   }
   if (command === "bundle-init") {
-    const usageLine = "Usage: agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id>] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [<file...>]";
+    const usageLine = "Usage: agy-squad bundle-init --plan <plan.json> [--provenance <scaffold.json>] [--squad <id> | --all-squads [--out-dir <dir>]] [--workspace <dir>] [--report-root <path>] [--verdict PASS|FAIL|BLOCKED] [--file <path>...] [--from-scope] [--id-map <worker=id>...] [--handoffs <file.json>] [--handoff <sender=message>...] [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--digest] [--out <record.json>] [--replace] [--verbose] [<file...>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       plan: { type: "string" },
       provenance: { type: "string" },
       squad: { type: "string" },
+      "all-squads": { type: "boolean", default: false },
+      "out-dir": { type: "string" },
       workspace: { type: "string" },
       "report-root": { type: "string" },
       verdict: { type: "string" },
       file: { type: "string", multiple: true },
+      "from-scope": { type: "boolean", default: false },
       "id-map": { type: "string", multiple: true },
       handoffs: { type: "string" },
       handoff: { type: "string", multiple: true },
@@ -894,18 +1052,30 @@ async function main(args) {
       "allow-partial": { type: "boolean", default: false },
       digest: { type: "boolean", default: false },
       out: { type: "string" },
-      replace: { type: "boolean", default: false }
+      replace: { type: "boolean", default: false },
+      verbose: { type: "boolean", default: false }
     });
     if (values.plan === undefined) {
       throw new Error(usageLine);
     }
-    if (values.replace && values.out === undefined) {
-      throw new Error(`Flag '--replace' requires '--out <record.json>' on 'agy-squad bundle-init'.\n${usageLine}`);
+    if (values.replace && values.out === undefined && !values["all-squads"]) {
+      throw new Error(`Flag '--replace' requires '--out <record.json>' or '--all-squads' on 'agy-squad bundle-init'.\n${usageLine}`);
+    }
+    if (values.verbose && values.out === undefined && !values["all-squads"]) {
+      throw new Error(`Flag '--verbose' requires '--out <record.json>' or '--all-squads' on 'agy-squad bundle-init'.\n${usageLine}`);
+    }
+    if (values["out-dir"] !== undefined && !values["all-squads"]) {
+      throw new Error(`Flag '--out-dir <dir>' requires '--all-squads' on 'agy-squad bundle-init'.\n${usageLine}`);
+    }
+    if (values["all-squads"] && (values.squad !== undefined || values.out !== undefined)) {
+      throw new Error(`Flag '--all-squads' cannot be combined with '--squad' or '--out'.\n${usageLine}`);
     }
     const handoffsMod = await import("../mcp/handoffs.mjs");
-    const targetRoot = resolveWorkspaceRoot(values.workspace, root, handoffsMod.resolveCanonicalRoot);
-    const plan = await readJsonInput(targetRoot, values.plan, "plan", handoffsMod);
-    const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, values.provenance, "provenance", handoffsMod) : undefined;
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const plan = await readJsonInput(baseRoot, values.plan, "plan", handoffsMod);
+    const targetRoot = inferChildWorkspaceIfContained(baseRoot, explicit, plan?.workspace, handoffsMod);
+    const rebaseInput = p => targetRoot !== baseRoot && p !== "-" ? path.resolve(baseRoot, p) : p;
+    const provenance = values.provenance !== undefined ? await readJsonInput(targetRoot, rebaseInput(values.provenance), "provenance", handoffsMod) : undefined;
     if (
       provenance !== undefined &&
       (!provenance ||
@@ -917,25 +1087,119 @@ async function main(args) {
     }
     let handoffs;
     if (values.handoffs !== undefined) {
-      const parsedHandoffs = await readJsonInput(targetRoot, values.handoffs, "handoffs", handoffsMod);
-      if (!Array.isArray(parsedHandoffs)) {
+      const parsedHandoffsInput = await readJsonInput(targetRoot, rebaseInput(values.handoffs), "handoffs", handoffsMod);
+      if (!Array.isArray(parsedHandoffsInput)) {
         throw new Error("--handoffs JSON file must contain an array of { sender, message } entries.");
       }
-      handoffs = parsedHandoffs;
+      handoffs = parsedHandoffsInput;
     }
     if ((values.handoff ?? []).length > 0) {
       handoffs = [...(handoffs ?? []), ...parseHandoffPairEntries(values.handoff)];
     }
     const idMap = parseKeyValuePairs(values["id-map"], "id-map");
-    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(p));
+    const files = [...(values.file ?? []), ...positionals].map(p => normalizeWorkspaceCliPath(rebaseInput(p), process.platform, targetRoot));
+    const customReportRoot =
+      values["report-root"] !== undefined
+        ? normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot)
+        : undefined;
+
+    const squadHasDotScope = sqId => {
+      const w = Array.isArray(plan?.workers) ? plan.workers.find(x => x?.squadId === sqId) : undefined;
+      const scopes = [
+        ...(Array.isArray(w?.lead?.scopeFiles) ? w.lead.scopeFiles : []),
+        ...(Array.isArray(w?.specialists) ? w.specialists.flatMap(s => (Array.isArray(s?.scopeFiles) ? s.scopeFiles : [])) : [])
+      ];
+      return scopes.some(s => typeof s === "string" && s.trim() === ".");
+    };
+    const buildEmptyDigestFilesError = sqId =>
+      squadHasDotScope(sqId)
+        ? "bundle-init --digest requires at least one verified workspace file. Because squad scope includes '.', pass explicit workspace-relative paths via --file <path> or trailing <file...> arguments (--from-scope rejects wildcard '.' scopes)."
+        : "bundle-init --digest requires at least one verified workspace file. Pass --from-scope, or one or more workspace-relative paths via --file <path> or trailing <file...> arguments.";
+
     const initVerifiedDirs = new Set([targetRoot]);
+
+    if (values["all-squads"]) {
+      const outDirRel =
+        values["out-dir"] !== undefined
+          ? handoffsMod.normalizeReportRoot(normalizeWorkspaceCliPath(rebaseInput(values["out-dir"]), process.platform, targetRoot))
+          : undefined;
+      const batchItems = handoffsMod.buildBundleRecordsForAllSquads(targetRoot, {
+        plan,
+        provenance,
+        files,
+        fromScope: values["from-scope"],
+        reportRoot: customReportRoot,
+        verdict: values.verdict,
+        idMap,
+        handoffs,
+        allowUnaudited: values["allow-unaudited"],
+        allowNonPassing: values["allow-non-passing"],
+        allowPartial: values["allow-partial"],
+        verifiedDirs: initVerifiedDirs,
+        resolveOutPath: sqId =>
+          outDirRel
+            ? `${outDirRel}/${encodeURIComponent(sqId)}.record.json`
+            : handoffsMod.recordSlotPath(sqId, customReportRoot ?? plan?.reportRoot)
+      });
+      const prepared = [];
+      for (const item of batchItems) {
+        const rec = item.record;
+        if (values.digest && (!Array.isArray(rec.handoffs) || rec.handoffs.length === 0)) {
+          throw new Error(
+            `bundle-init --digest requires specialist handoff receipts (squad '${item.squadId}'). Pass --handoffs <file.json> or --handoff <worker=READY ...>, or omit --digest until handoffs are recorded.`
+          );
+        }
+        if (values.digest && Object.keys(rec.verifiedFiles ?? {}).length === 0) {
+          throw new Error(buildEmptyDigestFilesError(item.squadId));
+        }
+        const digestResult = values.digest
+          ? handoffsMod.computeEvidenceDigest(targetRoot, rec, {
+              verifiedDirs: initVerifiedDirs,
+              skipFileRehash: true,
+              preReadSynthesis: item.preReadSynthesis
+            })
+          : undefined;
+        if (digestResult) {
+          warnUncarriedCitations(digestResult.citations, `${item.squadId} synthesis report`);
+        }
+        const outRel = normalizeBundleOutCliPath(item.outRel, process.platform, targetRoot);
+        handoffsMod.assertNoSymlinkedAncestors(targetRoot, outRel, new Set([targetRoot]));
+        try {
+          const st = fs.lstatSync(path.join(targetRoot, outRel));
+          if (st.isSymbolicLink() || !st.isFile()) throw new Error(`Expected a regular file at the recorded path: ${outRel}`);
+          if (!values.replace) throw new Error(`Target already exists: ${outRel}`);
+        } catch (error) { if (error.code !== "ENOENT") throw error; }
+        const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, rec, outRel, digestResult);
+        prepared.push({ rec, outRel, result: {
+          path: outRel,
+          squadId: rec.squadId,
+          verifiedFilesCount: Object.keys(rec.verifiedFiles).length,
+          ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations } : {}),
+          ...(auditSwarmAdds.length > 0 ? { auditSwarmAdd: auditSwarmAdds[0] } : {}),
+          ...(auditSwarmAdds.length > 1 ? { auditSwarmAdds } : {}),
+          ...(values.verbose ? { record: rec } : {})
+        }});
+      }
+      for (const { rec, outRel } of prepared) {
+        const parentDir = path.posix.dirname(outRel);
+        if (parentDir && parentDir !== ".") handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
+        handoffsMod.publish(targetRoot, outRel, Buffer.from(JSON.stringify(rec, null, 2) + "\n"), values.replace, initVerifiedDirs, undefined, { sync: false });
+      }
+      const recordsOut = prepared.map(item => item.result);
+      console.log(JSON.stringify({ ok: true, squadCount: recordsOut.length, records: recordsOut }, null, 2));
+      return 0;
+    }
+
+    const outRel = values.out !== undefined ? normalizeBundleOutCliPath(rebaseInput(values.out), process.platform, targetRoot) : undefined;
     let preReadSynthesis;
     const record = handoffsMod.buildBundleRecordInit(targetRoot, {
       plan,
       provenance,
       squadId: values.squad,
       files,
-      reportRoot: values["report-root"] !== undefined ? normalizeWorkspaceCliPath(values["report-root"]) : undefined,
+      fromScope: values["from-scope"],
+      reportRoot: customReportRoot,
+      recordPath: outRel,
       verdict: values.verdict,
       idMap,
       handoffs,
@@ -951,9 +1215,7 @@ async function main(args) {
       );
     }
     if (values.digest && Object.keys(record.verifiedFiles ?? {}).length === 0) {
-      throw new Error(
-        "bundle-init --digest requires at least one verified workspace file. Pass one or more workspace-relative paths via --file <path> or trailing <file...> arguments."
-      );
+      throw new Error(buildEmptyDigestFilesError(record.squadId));
     }
     const digestResult = values.digest
       ? handoffsMod.computeEvidenceDigest(targetRoot, record, {
@@ -965,20 +1227,23 @@ async function main(args) {
     if (digestResult) {
       warnUncarriedCitations(digestResult.citations, "synthesis report");
     }
-    if (values.out !== undefined) {
-      const outRel = normalizeBundleOutCliPath(values.out);
+    if (outRel !== undefined) {
       const parentDir = path.posix.dirname(outRel);
       if (parentDir && parentDir !== ".") {
         handoffsMod.ensureDirectory(targetRoot, parentDir, [], initVerifiedDirs);
       }
       const outBytes = Buffer.from(JSON.stringify(record, null, 2) + "\n", "utf8");
       handoffsMod.publish(targetRoot, outRel, outBytes, values.replace, initVerifiedDirs, undefined, { sync: false });
+      const auditSwarmAdds = handoffsMod.buildBoundAuditSwarmAdds(targetRoot, plan, record, outRel, digestResult);
       console.log(JSON.stringify({
+        ok: true,
         path: outRel,
         squadId: record.squadId,
         verifiedFilesCount: Object.keys(record.verifiedFiles).length,
         ...(digestResult ? { evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations } : {}),
-        record
+        ...(auditSwarmAdds.length > 0 ? { auditSwarmAdd: auditSwarmAdds[0] } : {}),
+        ...(auditSwarmAdds.length > 1 ? { auditSwarmAdds } : {}),
+        ...(values.verbose ? { record } : {})
       }, null, 2));
     } else if (digestResult) {
       console.log(JSON.stringify({ evidenceDigest: digestResult.evidenceDigest, citations: digestResult.citations, record }, null, 2));
@@ -988,50 +1253,68 @@ async function main(args) {
     return 0;
   }
   if (command === "fingerprint") {
-    const usageLine = "Usage: agy-squad fingerprint <file...>";
-    const { positionals } = parseSubcommandArgs(rest, usageLine);
+    const usageLine = "Usage: agy-squad fingerprint [--workspace <dir>] <file...>";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" }
+    });
     if (!positionals.length) throw new Error(usageLine);
-    const { fingerprint } = await import("../mcp/handoffs.mjs");
-    console.log(JSON.stringify(fingerprint(root, positionals.map(p => normalizeWorkspaceCliPath(p))), null, 2));
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    console.log(JSON.stringify(handoffsMod.fingerprint(targetRoot, positionals.map(p => normalizeWorkspaceCliPath(p, process.platform, targetRoot))), null, 2));
     return 0;
   }
   if (command === "inspect") {
-    const usageLine = "Usage: agy-squad inspect <record.json>";
-    const { positionals } = parseSubcommandArgs(rest, usageLine);
+    const usageLine = "Usage: agy-squad inspect [--workspace <dir>] <record.json>";
+    const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" }
+    });
     if (positionals.length !== 1) throw new Error(usageLine);
-    const { decodeUtf8, inspectHandoffs, readFile } = await import("../mcp/handoffs.mjs");
-    const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
-    console.log(JSON.stringify(inspectHandoffs(root, record), null, 2));
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(
+      baseRoot,
+      explicit,
+      positionals[0],
+      handoffsMod,
+      "Provide a valid bundle or handoff record."
+    );
+    const inspectInput = !path.isAbsolute(recRel) && !record.recordPath ? { ...record, recordPath: recRel } : record;
+    console.log(JSON.stringify(handoffsMod.inspectHandoffs(effectiveRoot, inspectInput), null, 2));
     return 0;
   }
   if (command === "digest") {
-    const usageLine = "Usage: agy-squad digest <record.json> [--allow-non-passing] [--allow-partial]";
+    const usageLine = "Usage: agy-squad digest [--workspace <dir>] <record.json> [--allow-non-passing] [--allow-partial]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
       "allow-non-passing": { type: "boolean", default: false },
       "allow-partial": { type: "boolean", default: false }
     });
     if (positionals.length !== 1) throw new Error(usageLine);
-    const { computeEvidenceDigest, decodeUtf8, readFile } = await import("../mcp/handoffs.mjs");
-    const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error("Provide a valid bundle or handoff record.");
-    }
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(
+      baseRoot,
+      explicit,
+      positionals[0],
+      handoffsMod,
+      "Provide a valid bundle or handoff record."
+    );
     const digestInput = {
       ...record,
+      ...(!path.isAbsolute(recRel) && !record.recordPath ? { recordPath: recRel } : {}),
       ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
       ...(values["allow-partial"] ? { allowPartial: true } : {})
     };
-    const digestOut = computeEvidenceDigest(root, digestInput);
+    const digestOut = handoffsMod.computeEvidenceDigest(effectiveRoot, digestInput);
     warnUncarriedCitations(digestOut.citations, "synthesis report");
     console.log(JSON.stringify(digestOut, null, 2));
     return 0;
   }
   if (command === "bundle") {
     const usageLine =
-      "Usage: agy-squad bundle <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>]";
+      "Usage: agy-squad bundle [--workspace <dir>] <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
       "allow-unaudited": { type: "boolean", default: false },
       "allow-non-passing": { type: "boolean", default: false },
       "allow-partial": { type: "boolean", default: false },
@@ -1040,14 +1323,12 @@ async function main(args) {
       predecessor: { type: "string" }
     });
     if (positionals.length !== 1) throw new Error(usageLine);
-    const { bundleReports, decodeUtf8, readFile } = await import("../mcp/handoffs.mjs");
-    const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath), recPath));
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error("Provide a valid bundle record.");
-    }
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { record, effectiveRoot, recRel } = readRecordWithWorkspaceInference(baseRoot, explicit, positionals[0], handoffsMod);
     const bundleInput = {
       ...record,
+      ...(!path.isAbsolute(recRel) && !record.recordPath ? { recordPath: recRel } : {}),
       ...(values["allow-unaudited"]
         ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
         : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
@@ -1057,15 +1338,16 @@ async function main(args) {
       ...(values.replace ? { replaceExisting: true } : {}),
       ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
     };
-    const bundled = bundleReports(root, bundleInput);
+    const bundled = handoffsMod.bundleReports(effectiveRoot, bundleInput);
     warnUncarriedCitations(bundled.citations, bundled.path);
     console.log(JSON.stringify(bundled, null, 2));
     return 0;
   }
   if (command === "verify") {
     const usageLine =
-      "Usage: agy-squad verify <report.sources.json> [expected-sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]";
+      "Usage: agy-squad verify [--workspace <dir>] <report.sources.json> [expected-sha256] [--expected-sha256 <sha256>] [--prune [--keep-reports]]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
       "expected-sha256": { type: "string" },
       prune: { type: "boolean", default: false },
       "keep-reports": { type: "boolean", default: false }
@@ -1077,16 +1359,21 @@ async function main(args) {
     if (values["keep-reports"] && !values.prune) {
       throw new Error(`Flag '--keep-reports' requires '--prune' on 'agy-squad verify'.\n${usageLine}`);
     }
-    const rel = normalizeWorkspaceCliPath(positionals[0]);
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const { effectiveRoot: targetRoot, bundleRel: rel } = resolveBundleWithWorkspaceInference(
+      baseRoot,
+      explicit,
+      positionals[0],
+      handoffsMod
+    );
     const expectedSha256 = values["expected-sha256"] ?? positionals[1];
     if (values.prune) {
-      const { verifyAndPruneBundle } = await import("../mcp/handoffs.mjs");
-      const out = verifyAndPruneBundle(root, rel, { expectedSha256, keepReports: values["keep-reports"] });
+      const out = handoffsMod.verifyAndPruneBundle(targetRoot, rel, { expectedSha256, keepReports: values["keep-reports"] });
       warnUncarriedCitations(out.citations, out.path);
       console.log(JSON.stringify(out, null, 2));
     } else {
-      const { verifyBundle } = await import("../mcp/handoffs.mjs");
-      const out = verifyBundle(root, rel, expectedSha256);
+      const out = handoffsMod.verifyBundle(targetRoot, rel, expectedSha256);
       warnUncarriedCitations(out.citations, out.path);
       console.log(JSON.stringify(out, null, 2));
     }
@@ -1094,8 +1381,9 @@ async function main(args) {
   }
   if (command === "finalize") {
     const usageLine =
-      "Usage: agy-squad finalize <record.json> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]]";
+      "Usage: agy-squad finalize [--workspace <dir>] <record.json...> [--allow-unaudited] [--allow-non-passing] [--allow-partial] [--strict-citations] [--replace] [--predecessor <sha256>] [--prune [--keep-reports]] [--compact]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
       "allow-unaudited": { type: "boolean", default: false },
       "allow-non-passing": { type: "boolean", default: false },
       "allow-partial": { type: "boolean", default: false },
@@ -1103,93 +1391,308 @@ async function main(args) {
       replace: { type: "boolean", default: false },
       predecessor: { type: "string" },
       prune: { type: "boolean", default: false },
-      "keep-reports": { type: "boolean", default: false }
+      "keep-reports": { type: "boolean", default: false },
+      compact: { type: "boolean", default: false }
     });
-    if (positionals.length !== 1) throw new Error(usageLine);
+    if (positionals.length < 1) throw new Error(usageLine);
     if (values["keep-reports"] && !values.prune) {
       throw new Error(`Flag '--keep-reports' requires '--prune' on 'agy-squad finalize'.\n${usageLine}`);
     }
-    const {
-      bundleReports,
-      decodeUtf8,
-      readFile,
-      stripReceiptPrefix,
-      verifyAndPruneBundle,
-      verifyBundle
-    } = await import("../mcp/handoffs.mjs");
-    const recPath = normalizeWorkspaceCliPath(positionals[0]);
-    const verifiedDirs = new Set([root]);
-    const record = JSON.parse(decodeUtf8(readFile(root, recPath, verifiedDirs), recPath));
-    if (!record || typeof record !== "object" || Array.isArray(record)) {
-      throw new Error("Provide a valid bundle record.");
+    if (values.predecessor !== undefined && positionals.length > 1) {
+      throw new Error(`Flag '--predecessor' can only be used with a single <record.json> on 'agy-squad finalize'.\n${usageLine}`);
     }
-    const bundleInput = {
-      ...record,
-      ...(values["allow-unaudited"]
-        ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
-        : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
-      ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
-      ...(values["allow-partial"] ? { allowPartial: true } : {}),
-      ...(values["strict-citations"] ? { strictCitations: true } : {}),
-      ...(values.replace ? { replaceExisting: true } : {}),
-      ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
-    };
-    // bundleReports already reconciles handoffs and reads every report slot once; derive inspected summary from validated inputs without a duplicate disk pass.
-    const bundled = bundleReports(root, bundleInput, { verifiedDirs });
-    warnUncarriedCitations(bundled.citations, bundled.path);
-    const statusBySender = new Map();
-    for (const h of record.handoffs ?? []) {
-      const stripped = stripReceiptPrefix(h.message);
-      statusBySender.set(
-        h.sender,
-        stripped.startsWith("READY ") ? "READY" : stripped.startsWith("PARTIAL ") ? "PARTIAL" : "NO_REPORT"
-      );
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const loadedPositionals = positionals.map(rawRecPos =>
+      readRecordWithWorkspaceInference(baseRoot, explicit, rawRecPos, handoffsMod)
+    );
+    // Phase 1: bundle and verify every requested record before unlinking any loose report.
+    const finalizedResults = [];
+    for (const { record, effectiveRoot, recRel, initialRel } of loadedPositionals) {
+      const verifiedDirs = new Set([effectiveRoot]);
+      const bundleInput = {
+        ...record,
+        ...(!path.isAbsolute(recRel) && !record.recordPath ? { recordPath: recRel } : {}),
+        ...(values["allow-unaudited"]
+          ? { requireIntegrityAudit: false, integrityReport: undefined, integrityAuditSlots: undefined }
+          : (record.requireIntegrityAudit === undefined ? { requireIntegrityAudit: true } : {})),
+        ...(values["allow-non-passing"] ? { allowNonPassing: true } : {}),
+        ...(values["allow-partial"] ? { allowPartial: true } : {}),
+        ...(values["strict-citations"] ? { strictCitations: true } : {}),
+        ...(values.replace ? { replaceExisting: true } : {}),
+        ...(values.predecessor !== undefined ? { expectedPredecessorSha256: values.predecessor } : {})
+      };
+      // bundleReports already reconciles handoffs and reads every report slot once; derive inspected summary from validated inputs without a duplicate disk pass.
+      const bundled = handoffsMod.bundleReports(effectiveRoot, bundleInput, { verifiedDirs });
+      warnUncarriedCitations(bundled.citations, bundled.path);
+      const statusBySender = new Map();
+      for (const h of record.handoffs ?? []) {
+        const stripped = handoffsMod.stripReceiptPrefix(h.message);
+        statusBySender.set(
+          h.sender,
+          stripped.startsWith("READY ") ? "READY" : stripped.startsWith("PARTIAL ") ? "PARTIAL" : "NO_REPORT"
+        );
+      }
+      const inspected = (record.assignments ?? []).map(({ conversationId, report }) => ({
+        conversationId,
+        report,
+        status: statusBySender.get(conversationId) ?? "PENDING"
+      }));
+      const verified = handoffsMod.verifyBundle(effectiveRoot, bundled.path, bundled.sha256, { verifiedDirs });
+      finalizedResults.push({ record, effectiveRoot, baseRoot, initialRel, verifiedDirs, recRel, inspected, bundled, verified, pruned: null });
     }
-    const inspected = (record.assignments ?? []).map(({ conversationId, report }) => ({
-      conversationId,
-      report,
-      status: statusBySender.get(conversationId) ?? "PENDING"
-    }));
-    let verified;
-    let pruned = null;
+    // Phase 2: prune loose specialist reports only after all records sealed and verified cleanly.
     if (values.prune) {
-      const vp = verifyAndPruneBundle(root, bundled.path, {
-        expectedSha256: bundled.sha256,
-        keepReports: values["keep-reports"],
-        verifiedDirs
-      });
-      pruned = vp.pruned;
-      verified = { path: vp.path, sha256: vp.sha256, auditPolicy: vp.auditPolicy, reports: vp.reports, citations: vp.citations };
-    } else {
-      verified = verifyBundle(root, bundled.path, bundled.sha256, { verifiedDirs });
+      const prunedSquads = [];
+      for (let idx = 0; idx < finalizedResults.length; idx++) {
+        const item = finalizedResults[idx];
+        try {
+          item.pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundled.path, item.bundled.sha256, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          prunedSquads.push(item.record.squadId);
+        } catch (error) {
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: prunedSquads,
+            failedLabel: item.record.squadId,
+            remainingItems: finalizedResults.slice(idx).map(rem => ({
+              mode: "records",
+              label: rem.record.squadId,
+              effectiveRoot: rem.effectiveRoot,
+              baseRoot: rem.baseRoot,
+              initialRel: rem.initialRel,
+              recRel: rem.recRel,
+              bundleRel: rem.bundled.path,
+              sha: rem.bundled.sha256
+            })),
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed on squad '${item.record.squadId}': ${error.message}\n${notice}`);
+        }
+      }
     }
-    console.log(JSON.stringify({ inspected, bundled, verified, pruned }, null, 2));
+    if (finalizedResults.length === 1 && !values.compact) {
+      const single = finalizedResults[0];
+      console.log(JSON.stringify({ inspected: single.inspected, bundled: single.bundled, verified: single.verified, pruned: single.pruned }, null, 2));
+      return 0;
+    }
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          count: finalizedResults.length,
+          results: finalizedResults.map(item => {
+            const uncarriedUrls = Array.isArray(item.bundled.citations?.uncarriedUrls)
+              ? item.bundled.citations.uncarriedUrls
+              : [];
+            return {
+              squadId: item.record.squadId,
+              recordPath: item.recRel,
+              bundlePath: item.bundled.path,
+              sha256: item.bundled.sha256,
+              auditPolicy: item.verified.auditPolicy,
+              uncarriedCitationsCount: uncarriedUrls.length,
+              ...(uncarriedUrls.length > 0 ? { uncarriedUrls } : {}),
+              prunedCount: Array.isArray(item.pruned?.removed) ? item.pruned.removed.length : 0,
+              ...(item.pruned ? { pruned: item.pruned } : {})
+            };
+          })
+        },
+        null,
+        2
+      )
+    );
     return 0;
   }
   if (command === "prune") {
-    const usageLine = "Usage: agy-squad prune <report.sources.json> <accepted-sha256> [--keep-reports]";
+    const usageLine =
+      "Usage: agy-squad prune [--workspace <dir>] (<report.sources.json> <accepted-sha256> | <report.sources.json>=<accepted-sha256>... | --records <record.json>=<accepted-sha256>... [--clean-records]) [--keep-reports]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
+      records: { type: "string", multiple: true },
+      "clean-records": { type: "boolean", default: false },
       "keep-reports": { type: "boolean", default: false }
     });
+    if (values["clean-records"] && values.records === undefined) {
+      throw new Error(`Flag '--clean-records' requires '--records <record.json>=<accepted-sha256>...' on 'agy-squad prune'.\n${usageLine}`);
+    }
+    const handoffsMod = await import("../mcp/handoffs.mjs");
+    const { targetRoot: baseRoot, explicit } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    if (values.records !== undefined) {
+      const recordArgs = [...new Set([...values.records, ...positionals])];
+      if (!recordArgs.length) throw new Error(usageLine);
+      // Phase 1: validate every record=sha256 entry and bundle parity before unlinking any report or record.
+      const prepared = [];
+      for (const rawRecArg of recordArgs) {
+        const pinIndex = rawRecArg.lastIndexOf("=");
+        if (pinIndex < 1 || !/^[a-f0-9]{64}$/.test(rawRecArg.slice(pinIndex + 1))) throw new Error("prune --records requires <record.json>=<accepted-sha256>.");
+        const acceptedSha = rawRecArg.slice(pinIndex + 1);
+        const { record, effectiveRoot, recRel, initialRel } = readRecordWithWorkspaceInference(baseRoot, explicit, rawRecArg.slice(0, pinIndex), handoffsMod);
+        const verifiedDirs = new Set([effectiveRoot]);
+        const resolvedRootPrefix = handoffsMod.resolveReportRoot(record);
+        const bundleRel = handoffsMod.bundlePath(record.squadId, resolvedRootPrefix);
+        handoffsMod.verifyBundle(effectiveRoot, bundleRel, acceptedSha, { verifiedDirs });
+        const bundle = JSON.parse(handoffsMod.decodeUtf8(handoffsMod.readFile(effectiveRoot, bundleRel, verifiedDirs), bundleRel));
+        if (!handoffsMod.doesRecordMatchAcceptedBundle(record, bundle)) throw new Error("Record does not match the accepted bundle.");
+        const recFull = values["clean-records"] && !values["keep-reports"] && !path.isAbsolute(recRel)
+          ? handoffsMod.workspacePath(effectiveRoot, recRel, verifiedDirs)
+          : null;
+        if (recFull) {
+          try {
+            handoffsMod.readOpenedFileWithStat(recFull, recRel);
+          } catch (err) {
+            if (err?.code !== "ENOENT") throw err;
+          }
+        }
+        prepared.push({ record, effectiveRoot, baseRoot, initialRel, recRel, recFull, verifiedDirs, bundleRel, acceptedSha });
+      }
+      // Phase 2: prune loose reports and clean records after all entries verified cleanly.
+      const results = [];
+      const removed = [];
+      const cleanedRecords = [];
+      for (let idx = 0; idx < prepared.length; idx++) {
+        const item = prepared[idx];
+        try {
+          const pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundleRel, item.acceptedSha, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          removed.push(...(pruned.removed ?? []));
+          if (item.recFull && !pruned.retained) {
+            try {
+              handoffsMod.readOpenedFileWithStat(item.recFull, item.recRel);
+              fs.unlinkSync(item.recFull);
+              cleanedRecords.push(item.recRel);
+            } catch (err) {
+              if (err?.code !== "ENOENT") throw err;
+            }
+          }
+          results.push({
+            squadId: item.record.squadId,
+            bundlePath: item.bundleRel,
+            acceptedSha256: item.acceptedSha,
+            removed: pruned.removed ?? [],
+            ...(pruned.retained ? { retained: pruned.retained } : {})
+          });
+        } catch (error) {
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: results.map(r => r.squadId),
+            failedLabel: item.record.squadId,
+            remainingItems: prepared.slice(idx).map(rem => ({
+              mode: "records",
+              label: rem.record.squadId,
+              effectiveRoot: rem.effectiveRoot,
+              baseRoot: rem.baseRoot,
+              initialRel: rem.initialRel,
+              recRel: rem.recRel,
+              bundleRel: rem.bundleRel,
+              sha: rem.acceptedSha
+            })),
+            cleanRecords: values["clean-records"],
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed on squad '${item.record.squadId}': ${error.message}\n${notice}`);
+        }
+      }
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            count: results.length,
+            results,
+            removed,
+            ...(values["clean-records"] ? { cleanedRecords } : {})
+          },
+          null,
+          2
+        )
+      );
+      return 0;
+    }
+    if (positionals.length >= 1 && positionals.every(p => p.includes("="))) {
+      // Phase 1: validate and verify every bundle=sha256 entry before unlinking any loose report.
+      const preparedBundles = [];
+      for (const pair of positionals) {
+        const eqIdx = pair.lastIndexOf("=");
+        const rawBundle = pair.slice(0, eqIdx).trim();
+        const sha = pair.slice(eqIdx + 1).trim();
+        if (!rawBundle || !/^[0-9a-f]{64}$/.test(sha)) {
+          throw new Error(`Invalid bundle=sha256 pair '${pair}'.\n${usageLine}`);
+        }
+        const { effectiveRoot, bundleRel } = resolveBundleWithWorkspaceInference(baseRoot, explicit, rawBundle, handoffsMod);
+        const verifiedDirs = new Set([effectiveRoot]);
+        handoffsMod.verifyBundle(effectiveRoot, bundleRel, sha, { verifiedDirs });
+        preparedBundles.push({ effectiveRoot, bundleRel, sha, verifiedDirs });
+      }
+      // Phase 2: prune verified loose reports.
+      const results = [];
+      const removed = [];
+      for (let idx = 0; idx < preparedBundles.length; idx++) {
+        const item = preparedBundles[idx];
+        try {
+          const pruned = handoffsMod.pruneReports(item.effectiveRoot, item.bundleRel, item.sha, {
+            keepReports: values["keep-reports"],
+            verifiedDirs: item.verifiedDirs
+          });
+          removed.push(...(pruned.removed ?? []));
+          results.push({
+            bundlePath: item.bundleRel,
+            acceptedSha256: item.sha,
+            removed: pruned.removed ?? [],
+            ...(pruned.retained ? { retained: pruned.retained } : {})
+          });
+        } catch (error) {
+          const notice = formatPruneRecoveryNotice({
+            completedLabels: results.map(r => r.bundlePath),
+            failedLabel: item.bundleRel,
+            remainingItems: preparedBundles.slice(idx).map(rem => ({
+              mode: "bundles",
+              label: rem.bundleRel,
+              effectiveRoot: rem.effectiveRoot,
+              bundleRel: rem.bundleRel,
+              sha: rem.sha
+            })),
+            keepReports: values["keep-reports"],
+            shellQuote: handoffsMod.shellQuote
+          });
+          throw new Error(`Prune failed at '${item.bundleRel}': ${error.message}\n${notice}`);
+        }
+      }
+      console.log(JSON.stringify({ ok: true, count: results.length, results, removed }, null, 2));
+      return 0;
+    }
     if (positionals.length !== 2) {
       throw new Error(usageLine);
     }
-    const { pruneReports } = await import("../mcp/handoffs.mjs");
-    console.log(JSON.stringify(pruneReports(root, normalizeWorkspaceCliPath(positionals[0]), positionals[1], { keepReports: values["keep-reports"] }), null, 2));
+    const { effectiveRoot, bundleRel } = resolveBundleWithWorkspaceInference(baseRoot, explicit, positionals[0], handoffsMod);
+    console.log(
+      JSON.stringify(
+        handoffsMod.pruneReports(effectiveRoot, bundleRel, positionals[1], {
+          keepReports: values["keep-reports"]
+        }),
+        null,
+        2
+      )
+    );
     return 0;
   }
   if (command === "verdict") {
-    const usageLine = "Usage: agy-squad verdict [--integrity] <report.md>";
+    const usageLine = "Usage: agy-squad verdict [--workspace <dir>] [--integrity] <report.md>";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
+      workspace: { type: "string" },
       integrity: { type: "boolean", default: false }
     });
     if (positionals.length !== 1) {
       throw new Error(usageLine);
     }
-    const { decodeUtf8, readFile } = await import("../mcp/handoffs.mjs");
+    const handoffsMod = await import("../mcp/handoffs.mjs");
     const { parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad } = await import("../mcp/verdicts.mjs");
-    const reportRel = normalizeWorkspaceCliPath(positionals[0]);
-    const markdown = decodeUtf8(readFile(root, reportRel), reportRel);
+    const { targetRoot } = resolveCommandWorkspace(values.workspace, root, handoffsMod.resolveCanonicalRoot);
+    const reportRel = normalizeWorkspaceCliPath(positionals[0], process.platform, targetRoot);
+    const markdown = handoffsMod.decodeUtf8(handoffsMod.readFile(targetRoot, reportRel), reportRel);
     if (values.integrity) {
       const verdict = parseIntegrityVerdict(markdown);
       const targetSquad = parseTargetSquad(markdown);

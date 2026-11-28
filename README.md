@@ -25,10 +25,24 @@ Reload Antigravity Desktop IDE after setup finishes so the MCP server and skills
 
 ## How Agy-Squad extends native swarm
 
-Agy-Squad configures Antigravity's native swarm runtime rather than replacing it, adding non-overlapping file scopes, explicit model pinning, file-backed worker reports, one-line status receipts, and independent integrity auditing on top of the built-in shared board:
+Agy-Squad configures Antigravity's native `/swarm` runtime rather than replacing it. It assigns non-overlapping file scopes, stages domain leads after specialist reports land, writes reports to local files with one-line status receipts, populates the Swarm UI Overview (`swarm/plan.json`), and checks worker transcripts and SHA-256 file hashes before you accept a review.
+
+You do not need Agy-Squad for every task. Use `/boost` when fixing or investigating a single module, `invoke_subagent` (`research`) for a few quick read-only lookups, and `run_workflow` for scripted batch jobs that return typed JSON and can cancel the batch if one worker fails. Reach for Agy-Squad when you split a review or change across several areas, want completed reports kept if a sibling worker hits an error, need reports copied out of `share` or `branch` worktrees before `swarm kill` deletes them, or want a SHA-256 proof bundle:
 
 ![Native Antigravity /swarm vs. Agy-Squad roles and configuration additions](docs/assets/swarm-vs-agy-squad-roles.svg)
 
+### Read-only subagent report collection
+ 
+The npm package includes the custom `agy-squad-readonly` subagent type for read-only `invoke_subagent` specialists. Enable it with `readOnlySubagent: true` in `squad_planner` or `--readonly-subagent` with `agy-squad plan --mode subagent`. The specialist returns its Markdown report as chat text and sends only the short `READY` receipt. `agy-squad collect` then writes that report to the planned report slot without changing downstream hashing or verification.
+ 
+In a default-open transcript environment, `collect` extracts the final `# Evidence Report` response directly from the worker transcript only when the coordinator binds each worker to its `invoke_subagent` conversation UUID (via `--id-map <worker=uuid>`, `--provenance`, or `--record`) and the receipt `sender` matches that bound UUID. Untrusted UUID text inside receipt messages is ignored. When Agy-Context-Saver policy is restrictive, direct extraction fails closed. Extract through the allowed CLI instead and ingest the resulting JSON:
+ 
+```bash
+agy-context transcript query --id <worker-uuid> --roles assistant --mode full --field content --limit 5 --full --json --out scratch/worker-transcript.json
+agy-squad collect --plan scratch/plan.json --handoffs scratch/handoffs.json \
+  --transcript-json scratch/agy-squad/squad-<id>/specialist-1/report.md=scratch/worker-transcript.json
+```
+ 
 ## Built-in skills
 
 Agy-Squad ships four user-facing Antigravity skills in the npm package covering structured code reviews, cold launch readiness, and swarm governance:

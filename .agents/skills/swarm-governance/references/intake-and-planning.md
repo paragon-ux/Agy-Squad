@@ -4,29 +4,30 @@ Reference for [`SKILL.md`](../SKILL.md).
 
 ## Step 0: Sensible Defaults and Overrides
 
-Before calling `squad_planner` / `agy-squad plan`, check whether the user's `/swarm` prompt explicitly specifies all four settings below. Trigger a single `ask_question` call **iff ANY** of the four settings is missing, asking **only** for the missing setting(s) with the recommended default listed first. Skip Step 0 **only** when all four settings are explicitly specified in the prompt.
+Launch immediately with the recommended defaults below on read-only cohorts and overlap-free scopes (matching native `/swarm` startup speed and supporting non-interactive `agy -p` runs). Trigger a single `ask_question` call **only** when `squad_planner` / `agy-squad plan` reports writable `siblingOverlaps` under `workspaceIsolation: "inherit"`, destructive state ambiguity exists, or the user explicitly asks to customize run settings.
 
-| Setting | Recommended Default (first option) | Alternatives / Override |
+| Setting | Recommended Default (applied automatically when safe) | Alternatives / Override |
 | --- | --- | --- |
-| **Topology** | `flat` for inline tasks; `layered` for multi-squad manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (domain leads). |
+| **Topology** | `flat` for inline tasks; wave-gated `layered` for manifests with leads | `--topology flat` (strips manifest leads) or `--topology layered` (Wave-2 domain leads). |
 | **Model** | Coordinator model (omit `--model`) | `--model <id> --known-model <id>` (validated via `swarm{action: "models"}`). |
-| **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history. |
-| **Report retention** | `--prune` (prune verified loose reports on `finalize`) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
+| **Workspace isolation** | `inherit` (shared workspace) | `share` for concurrent edits; `branch` for isolated git history (`wt=<dir>` receipt locator). |
+| **Report retention** | `--prune` (prune verified loose reports after `.sources.json` archive) | `--keep-reports` to keep `specialist-<N>/report.md` across waves. |
 
-- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (skipping Stage 2 auditor wakeup and Stage 3 `verdict --integrity`) and close with `finalize --allow-unaudited [--prune]`, while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
+- **Fast coordinator setup (1 turn to Wave 1):** Read only the active `SKILL.md` entry file(s), run `agy-squad plan --out scratch/plan.json` (or `squad_planner` with `outPath`), write `swarmPane` to `.system_generated/swarm/plan.json`, and launch Wave 1 immediately when overlap-free; defer reference docs and never pre-read historical `docs/reviews/` ledgers before launching.
+- **Lightweight research mode:** For non-code or exploratory research swarms where forensic trace auditing is unnecessary, plan with `--no-integrity` (`includeIntegrityAuditor: false`) to omit `audit-*` workers (omitting `--digest` on `bundle-init` and closing with `finalize --allow-unaudited [--prune]`), while retaining bounded report slots, Pointer-Over-Wire receipts, and final cross-squad synthesis.
 
 ## Planner and Dispatch Commands
 
-Run via MCP (`squad_planner` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI:
+Run via MCP (`squad_planner` with `outPath` / `dispatch_squad`; pass `workspace: "<repo-root>"` on global installs) or `agy-squad` CLI (`--workspace <repo-root>` works across all subcommands):
 
 ```bash
-# Plan all manifest squads (omit --squad; never pass all_l1):
-agy-squad plan --manifest swarm-manifest.json --topology flat --workspace-isolation inherit
+# Plan all manifest squads to disk with compact stdout receipt (omit --squad; never pass all_l1):
+agy-squad plan --manifest swarm-manifest.json --out scratch/plan.json --replace
 
 # Inline read-only task + follow-up scoping:
 agy-squad plan --mode swarm --read-only --scope src/app.js --role "Security Reviewer" \
-  --role-scope "Security Reviewer=src/app.js" --occupied-worker prev-1 --board-since 60 \
-  --report-root scratch/agy-squad-wave2 "Audit auth flow."
+  --role-scope "Security Reviewer=src/app.js" --occupied-worker prev-1 \
+  --report-root scratch/agy-squad-wave2 --out scratch/plan-wave2.json "Audit auth flow."
 
 # invoke_subagent fallback only:
 agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
@@ -52,5 +53,5 @@ agy-squad dispatch --squad all_l1 --manifest task-01-manifest.json
 ## Deliverable-First Closing
 
 - Governance (`verdict`, `bundle`, `audit-*`, `finalize`, Section 5 closure) verifies the work; it is never a substitute for the user's deliverable.
-- For research, analysis, review, or architecture swarms (especially multi-squad cohorts whose `lead/report.md` files sit in separate `scratch/` folders), synthesize all verified `lead/report.md` and `specialist-N/report.md` reports into one complete user-facing deliverable **before** running `finalize --prune` (or pass `--keep-reports`), integrating reconciled findings, `## Sources` URLs and `file:line` citations (reconciling any `citations.uncarriedUrls` warning), cross-squad trade-offs, and prioritized recommendations.
-- Lead the final reply with the deliverable (or direct link to the synthesized artifact) and collapse verdicts, bundle SHA-256 digests, pruned counts, and Section 5 closure into a compact verification footer. Never reply with governance telemetry alone.
+- **Non-circular Stage 3 ordering:** Run `agy-squad finalize <record.json...> [--strict-citations]` **without `--prune`** first so verified bundle SHA-256 hashes are already on hand while loose specialist reports remain readable on disk. Then write the complete user-facing deliverable (or single-pass durable ledger) once: in **layered mode**, read verified `lead/report.md` outputs and open raw `specialist-N/report.md` only when `citations.uncarriedUrls` is non-empty, a lead verdict is non-`PASS`, or specific raw evidence is needed; in **flat mode**, synthesize directly from `specialist-N/report.md`. Finally, if report retention is `--prune`, run `agy-squad prune --records <record.json>=<accepted-sha256>... --clean-records` (or `prune <bundle.sources.json> <sha256>`). Single-step `finalize --prune` remains valid when no post-bundle SHA-256 needs to be embedded before pruning.
+- Lead the final reply with the deliverable (or direct link to the synthesized artifact) and collapse verdicts, bundle SHA-256 digests, pruned counts, and Section 5 closure into a compact verification footer. Never reply with governance telemetry alone, and skip redundant closeout test reruns on read-only runs when `git status` is clean on the already-tested `HEAD`.

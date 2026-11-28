@@ -5,6 +5,29 @@ All notable changes to `Agy-Squad` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-11-27
+
+### Added
+- `agy-squad plan` writes full cohort plans and staged wave slices to disk with `--out`, `--emit-wave`, `--swarm-pane-out`, `--replace`, and `--compact`, emitting `swarmPane` metadata for the Antigravity Swarm UI Overview.
+- `agy-squad collect` accepts `--handoffs` and `--handoff` to copy report slots directly from validated `wt=<dir>` worker worktree receipts.
+- `agy-squad bundle-init` adds `--all-squads`, `--out-dir`, `--from-scope`, and `--verbose` so coordinators can initialize records across every planned squad and infer verified files from non-wildcard `scopeFiles` entries.
+- `agy-squad finalize` accepts multiple record files in a single command, and `agy-squad prune` adds `--records <record.json>=<accepted-sha256>` with `--clean-records` to verify record parity and remove temporary record files after synthesis.
+- Added the packaged `agy-squad-readonly` custom subagent type for read-only `invoke_subagent` specialists, exposed through `readOnlySubagent` and `--readonly-subagent`.
+- `agy-squad collect` materializes final `# Evidence Report` chat responses from read-only subagent transcripts into planned report slots when paired with coordinator-bound worker UUIDs (`--id-map`, `--provenance`, or `--record`), and ingests Agy-Context-Saver JSON artifacts through `--transcript-json`.
+
+### Changed
+- `swarm-governance` starts read-only and non-overlapping `/swarm` cohorts with built-in defaults right away, prompting only when writable workers share files on `inherit` or when run settings are ambiguous.
+- Layered `/swarm` cohorts stage domain leads in Wave 2 after specialist reports land on disk (collecting `share` and `branch` worktree slots before Wave 2 launches), and `bundle-init --digest` binds generated auditor commands, `Scope:` and `Report slot:` metadata, explicit `<rel-record>` and `<rel-slot>` argument placeholders, worker IDs, and the 64-character evidence digest directly into Wave 3 auditor briefs while preserving hard-coded paths in custom `instructions` literally (pass dynamic paths to embedded programs as arguments, such as `jq --arg record <rel-record>`).
+- `agy-squad setup --check` and `agy-squad status` verify every required runtime module, shipped skill, and documentation file alongside `package.json` and `plugin.json` version parity so stale or incomplete copied installs exit nonzero with repair instructions. Maintainer-only skills now fail the check in both copied and linked installs.
+
+### Fixed
+- `agy-squad bundle-init --from-scope` skips generated `--out` and `--out-dir` record paths during directory walks so `--replace` runs do not invalidate `verifiedFiles` hashes, while failing closed if an explicit `--file` input collides with a generated record path.
+- Multi-record `agy-squad finalize --prune` and `agy-squad prune` validate and verify every entry before unlinking any report or record file and emit workspace-scoped `agy-squad prune --workspace ...` recovery commands with accepted SHA-256 digests if a filesystem error interrupts Phase 2, `planSquadCohort` rejects `swarmPaneOutPath` collisions with `--out` plan and wave sidecar files before writing, and `verificationPipeline` and bound Wave 3 auditor briefs single-quote generated slot paths, `<placeholder>` tokens, and `--id-map` bindings once without quoting `Scope:` or `Report slot:` metadata lines.
+- `agy-squad collect --record` resolves compiled worker names from `<invoke_subagent:<worker>:conversationId>` placeholders on unbound subagent records while rejecting conflicting or duplicate worker aliases.
+
+### Security
+- `agy-squad collect` requires an explicit, conflict-checked, bijective coordinator UUID binding (`--id-map <worker=uuid>`, `--provenance <scaffold.json>`, or `--record <record.json>`) plus a matching sender UUID before extracting reports directly from local session transcripts, ignoring untrusted UUID tokens inside worker receipt messages.
+
 ## [0.2.2] - 2026-11-24
 
 ### Added

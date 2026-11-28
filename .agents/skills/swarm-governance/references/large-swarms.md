@@ -11,9 +11,9 @@ Reference for `8+` workers, concurrent editors, or multi-squad waves under [`SKI
 
 `kill` permanently deletes `share`/`branch` copies. On normal completion:
 
-1. **Collect slots:** `agy-squad collect --plan <plan.json> --from <worktree-dir>...`
+1. **Collect slots:** `agy-squad collect --plan <plan.json> --handoffs <handoffs.json>` (auto-extracts `wt=<worktree-dir>` from `share`/`branch` worker receipts, or pass explicit `--from <worktree-dir>...`).
 2. **Merge edits:** Inspect and apply verified worker diffs into the coordinator workspace.
-3. **Audit & bundle:** Run `bundle-init --digest`, wake flat `audit-<id>`, run `verdict --integrity`, and run `finalize <record.json> [--prune]`.
+3. **Audit & bundle:** Run `bundle-init --all-squads --digest`, run Wave-3 `audit-<id>`, run `finalize <record.json...>`, publish findings, and then run `prune --records <record.json>=<accepted-sha256>... --clean-records` (or `finalize <record.json...> --prune` when no review ledger is written).
 4. **Kill & close:** Post `[done] <summary>` (no `@`), `kill` workers + `monitor`, and pass [Section 5](../SKILL.md#5-runtime-closure-checklist-pre-handoff-gate).
 
 ## Scaling Limits & Quota Recovery

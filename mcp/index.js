@@ -188,19 +188,19 @@ function resolveDefaultWorkspaceForCall(args, envWorkspace) {
 const WORKSPACE_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Active repo root (pass from global installs)."
+  description: "Active repo root."
 };
 
 const MANIFEST_PATH_SCHEMA = {
   type: "string",
   minLength: 1,
-  description: "Contained manifest path (rel/abs)."
+  description: "Manifest path."
 };
 
 const TOOLS = [
   {
     name: "dispatch_squad",
-    description: "Compile subagent leads (all_l1), integrity_auditor[:<id>], or squad specs.",
+    description: "Compile subagent leads (all_l1), auditor, or squad specs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -232,21 +232,28 @@ const TOOLS = [
         executionMode: { type: "string", enum: ["swarm", "subagent"], description: "Mode (swarm|subagent)." },
         model: { type: "string", minLength: 1, description: "Model ID." },
         workspaceIsolation: { type: "string", enum: ["inherit", "share", "branch"], description: "Copy isolation." },
-        scopeFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Task paths." },
-        roles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Role titles." },
+        scopeFiles: { type: "array", minItems: 1, maxItems: 256, items: { type: "string", minLength: 1, maxLength: 512 }, description: "Task paths." },
+        roles: { type: "array", minItems: 1, maxItems: 64, items: { type: "string", minLength: 1, maxLength: 160 }, description: "Role titles." },
         readOnly: { type: "boolean", description: "Read-only workers." },
+        readOnlySubagent: { type: "boolean", description: "Use agy-squad-readonly for read-only subagent specialists." },
         roleScopes: {
           type: "object",
           minProperties: 1,
+          maxProperties: 64,
           description: "Per-role paths.",
-          additionalProperties: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
+          additionalProperties: { type: "array", minItems: 1, maxItems: 256, items: { type: "string", minLength: 1, maxLength: 512 } }
         },
         includeIntegrityAuditor: { type: "boolean", description: "Include auditor." },
-        reportRoot: { type: "string", minLength: 1, description: "Report root." },
-        knownModels: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Valid models." },
-        occupiedWorkerNames: { type: "array", items: { type: "string", minLength: 1 }, description: "Used names." },
+        reportRoot: { type: "string", minLength: 1, maxLength: 256, description: "Report root." },
+        knownModels: { type: "array", minItems: 1, maxItems: 128, items: { type: "string", minLength: 1, maxLength: 160 }, description: "Valid models." },
+        occupiedWorkerNames: { type: "array", maxItems: 256, items: { type: "string", minLength: 1, maxLength: 64 }, description: "Used names." },
         boardSince: { type: "integer", minimum: 0, description: "Board since." },
-        boardSeqs: { type: "array", minItems: 1, items: { type: "integer", minimum: 0 }, description: "Audit seqs." }
+        boardSeqs: { type: "array", minItems: 1, maxItems: 256, items: { type: "integer", minimum: 0 }, description: "Audit seqs." },
+        outPath: { type: "string", minLength: 1, maxLength: 512, description: "Write plan JSON (rel or contained abs)." },
+        swarmPaneOutPath: { type: "string", minLength: 1, maxLength: 512, description: "Write swarmPane JSON (rel, contained abs, or brain)." },
+        emitWave: { type: "integer", enum: [1, 2, 3], description: "Emit wave 1|2|3 slice." },
+        replace: { type: "boolean", description: "Overwrite outPath." },
+        compact: { type: "boolean", description: "Compact receipt." }
       },
       oneOf: [
         { required: ["manifestPath"] },
