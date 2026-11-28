@@ -37,6 +37,7 @@ export const MAINTAINER_SKILLS = Object.freeze(["self-diagnosis", "platform-fit"
 export const REQUIRED_RUNTIME_FILES = Object.freeze([
   "package.json",
   "plugin.json",
+  "agents/agy-squad-readonly.md",
   "README.md",
   "bin/agy-squad.mjs",
   "mcp/index.js",
@@ -360,6 +361,7 @@ export function detectExistingInstallation(options = {}) {
         }
       } else {
         const linkedDirs = [
+          ["agents", "agents"],
           ["assets", "assets"],
           ["bin", "bin"],
           ["docs", "docs"],
@@ -490,7 +492,6 @@ export function detectExistingInstallation(options = {}) {
       const skillsPath = path.join(pluginDest, "skills");
       const dotAgentsSkillsPath = path.join(pluginDest, ".agents", "skills");
       const hasMaintainerSkillLeak =
-        details.plugin.isCopyFallback &&
         MAINTAINER_SKILLS.some(
           (skillName) =>
             fs.existsSync(path.join(skillsPath, skillName)) ||
@@ -711,7 +712,7 @@ export async function populateLinkedPluginDir(sourceRoot, targetPluginDir, optio
       await fsPromises.cp(src, dest, { recursive: true, filter: copyFilter });
     }
   };
-  for (const name of ["assets", "bin", "mcp"]) await linkEntry(path.join(sourceRoot, name), path.join(targetPluginDir, name));
+  for (const name of ["agents", "assets", "bin", "mcp"]) await linkEntry(path.join(sourceRoot, name), path.join(targetPluginDir, name));
   for (const name of ["docs", "scripts"]) {
     const source = path.join(sourceRoot, name), dest = path.join(targetPluginDir, name);
     if (!fs.existsSync(source)) continue;

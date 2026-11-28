@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { isDeepStrictEqual } from "node:util";
 import { hasContentVerdictAttempt, parseContentVerdict, parseEvidenceDigest, parseIntegrityVerdict, parseTargetSquad, stripFencedCodeBlocks, validateSquadId } from "./verdicts.mjs";
 
@@ -1535,6 +1537,226 @@ function tryRealPath(candidate) {
   }
 }
 
+const READONLY_SUBAGENT_TYPE = "agy-squad-readonly";
+const TRANSCRIPT_REPORT_LIMIT_BYTES = 128 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+ 
+function restrictiveTranscriptPolicyError(homeDir = os.homedir()) {
+  const now = Date.now();
+  const profileHome = process.env.AGY_TEST_PROFILE_DIR;
+  const stateDirs = [path.join(homeDir, ".gemini", "antigravity", "context-saver")];
+  if (process.platform === "win32") {
+    const localAppData = profileHome
+      ? path.join(profileHome, "AppData", "Local")
+      : (process.env.LOCALAPPDATA || path.join(homeDir, "AppData", "Local"));
+    stateDirs.push(path.join(localAppData, "agy-context-saver"));
+  } else {
+    const stateHome = profileHome
+      ? path.join(profileHome, ".local", "state")
+      : (process.env.XDG_STATE_HOME || path.join(homeDir, ".local", "state"));
+    stateDirs.push(path.join(stateHome, "agy-context-saver"));
+  }
+  const uniqueStateDirs = [...new Set(stateDirs)];
+  for (const stateDir of uniqueStateDirs) {
+    const filePath = path.join(stateDir, "transcript-access.json");
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const fresh = Object.values(parsed?.policies || {}).filter(p => {
+        if (!p || typeof p !== "object") return false;
+        const updatedAt = Number(p.updatedAt || p.createdAt || 0);
+        const ttlMs = Number(p.ttlMs) > 0 ? Number(p.ttlMs) : 3600000;
+        return updatedAt > 0 && now - updatedAt < ttlMs;
+      });
+      const active = fresh.find(p => p.ownerId === parsed?.activeOwnerId) ||
+        fresh.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0];
+      if (active && ["deny", "self-only", "allowlist"].includes(active.mode)) {
+        return "A restrictive Agy-Context-Saver transcript policy is active. Direct transcript extraction is disabled; run 'agy-context transcript query --id <uuid> --roles assistant --mode full --field content --limit 5 --full --json --out <json>' and pass --transcript-json <slot>=<json>.";
+      }
+    } catch {}
+    try {
+      const sessionFiles = fs.readdirSync(stateDir).filter(name => name.startsWith("agy-session-") && name.endsWith(".json")).slice(0, 64);
+      for (const name of sessionFiles) {
+        const fullPath = path.join(stateDir, name);
+        const st = fs.lstatSync(fullPath);
+        if (st.isSymbolicLink() || !st.isFile() || now - st.mtimeMs > 5 * 60 * 1000) continue;
+        const parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+        const directive = parsed?.lineage?.launchDirective;
+        if (directive === "deny" || directive === "self-only") {
+          return "An active launch-restricted Agy-Context-Saver session is present. Direct transcript extraction is disabled; run 'agy-context transcript query --id <uuid> --roles assistant --mode full --field content --limit 5 --full --json --out <json>' and pass --transcript-json <slot>=<json>.";
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+ 
+function extractUuidFromHandoff(handoff) {
+  for (const field of [handoff?.sender, handoff?.conversationId, handoff?.senderId]) {
+    const value = typeof field === "string" ? field.trim() : "";
+    if (UUID_RE.test(value)) return value;
+  }
+  const message = typeof handoff?.message === "string" ? handoff.message : "";
+  const m = message.match(/(?:^|[\s;,(])(?:id|uuid|conversationId)=([0-9a-f-]{36})(?=$|[\s;,)])/i);
+  return m && UUID_RE.test(m[1]) ? m[1] : null;
+}
+ 
+function resolveTranscriptFullPath(conversationId, homeDir = os.homedir()) {
+  if (!UUID_RE.test(conversationId)) throw new Error(`Invalid transcript conversation UUID: ${conversationId}`);
+  const geminiDir = path.join(homeDir, ".gemini");
+  let hostEntries = [];
+  try {
+    const geminiStat = fs.lstatSync(geminiDir);
+    if (geminiStat.isSymbolicLink() || !geminiStat.isDirectory()) throw new Error(`Refusing symlinked or non-directory transcript root: ${geminiDir}`);
+    hostEntries = fs.readdirSync(geminiDir, { withFileTypes: true })
+      .filter(d => d.name.startsWith("antigravity") && d.isDirectory() && !d.isSymbolicLink())
+      .map(d => path.join(geminiDir, d.name));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") hostEntries = [];
+    else if (String(error?.message || "").startsWith("Refusing symlinked")) throw error;
+  }
+  const matches = [];
+  for (const hostRoot of hostEntries) {
+    let current = hostRoot;
+    try {
+      for (const component of ["brain", conversationId, ".system_generated", "logs"]) {
+        current = path.join(current, component);
+        const st = fs.lstatSync(current);
+        if (st.isSymbolicLink() || !st.isDirectory()) {
+          throw new Error(`Refusing symlinked or non-directory transcript path component: ${current}`);
+        }
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue;
+      throw error;
+    }
+    const candidate = path.join(current, "transcript_full.jsonl");
+    try {
+      const st = fs.lstatSync(candidate);
+      if (st.isSymbolicLink() || !st.isFile()) {
+        throw new Error(`Refusing symlinked or non-regular transcript file: ${candidate}`);
+      }
+      const real = fs.realpathSync.native(candidate);
+      const expected = path.join(fs.realpathSync.native(current), "transcript_full.jsonl");
+      if (!isExpectedRealPath(real, expected)) {
+        throw new Error(`Transcript path escapes canonical Antigravity brain directory: ${candidate}`);
+      }
+      matches.push(real);
+    } catch (error) {
+      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue;
+      throw error;
+    }
+  }
+  const unique = [...new Set(matches)];
+  if (unique.length !== 1) throw new Error(`Expected exactly one transcript_full.jsonl for '${conversationId}', found ${unique.length}.`);
+  return unique[0];
+}
+ 
+function parseTranscriptReportJsonl(filePath, conversationId) {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let carry = "";
+    let sawAnyLine = false;
+    let selected = null;
+    const reportHashes = new Set();
+    let incompleteTrailing = false;
+ 
+    const processLine = (line, isFinal) => {
+      if (!line.trim()) return;
+      sawAnyLine = true;
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        if (isFinal) {
+          incompleteTrailing = true;
+          return;
+        }
+        throw new Error(`Transcript '${conversationId}' has a malformed JSONL record before the final line.`);
+      }
+      if (item?.type !== "PLANNER_RESPONSE" || typeof item.content !== "string" || !item.content.trim().startsWith("# Evidence Report")) return;
+      const stepIndex = Number(item.step_index);
+      if (!Number.isSafeInteger(stepIndex) || stepIndex < 0) {
+        throw new Error(`Final '# Evidence Report' response in transcript '${conversationId}' lacks a valid step_index.`);
+      }
+      reportHashes.add(sha256(Buffer.from(item.content, "utf8")));
+      if (reportHashes.size > 1) throw new Error(`Ambiguous final '# Evidence Report' responses in transcript '${conversationId}'.`);
+      if (!selected || stepIndex > selected.stepIndex) {
+        selected = {
+          stepIndex,
+          content: item.content,
+          truncated: Object.hasOwn(item, "truncated_fields")
+        };
+      }
+    };
+ 
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      carry += decoder.write(buffer.subarray(0, bytesRead));
+      let newlineIndex;
+      while ((newlineIndex = carry.indexOf("\n")) !== -1) {
+        let line = carry.slice(0, newlineIndex);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        carry = carry.slice(newlineIndex + 1);
+        processLine(line, false);
+      }
+    }
+    carry += decoder.end();
+    processLine(carry, true);
+    if (incompleteTrailing) throw new Error(`Transcript '${conversationId}' has an incomplete trailing JSONL record.`);
+    if (!sawAnyLine) throw new Error(`Transcript '${conversationId}' is empty.`);
+    if (!selected) throw new Error(`No final '# Evidence Report' assistant response found in transcript '${conversationId}'.`);
+    if (selected.truncated) throw new Error(`Selected transcript response for '${conversationId}' has truncated_fields.`);
+    const bytes = Buffer.byteLength(selected.content, "utf8");
+    if (bytes > TRANSCRIPT_REPORT_LIMIT_BYTES) throw new Error(`Transcript report for '${conversationId}' exceeds the 128 KiB ceiling.`);
+    return {
+      bytes: Buffer.from(selected.content, "utf8"),
+      provenance: { conversationId, stepIndex: selected.stepIndex }
+    };
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
+}
+ 
+function extractAcsJsonReport(filePath) {
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (parsed?.clamped === true) throw new Error(`ACS transcript JSON is clamped: ${filePath}`);
+  let content;
+  let stepIndex = null;
+  let conversationId = typeof parsed?.convId === "string" ? parsed.convId : null;
+  if (typeof parsed?.data === "string") {
+    content = parsed.data;
+    stepIndex = Number.isFinite(Number(parsed.stepIndex)) ? Number(parsed.stepIndex) : null;
+  } else if (Array.isArray(parsed?.items) || Array.isArray(parsed?.steps)) {
+    const records = Array.isArray(parsed.items) ? parsed.items : parsed.steps;
+    const candidates = records.filter(item => item?.type === "PLANNER_RESPONSE" && typeof item.content === "string" && item.content.trim());
+    const marker = candidates.filter(item => item.content.trim().startsWith("# Evidence Report"));
+    if (new Set(marker.map(item => item.content)).size > 1) throw new Error(`ACS transcript JSON has ambiguous '# Evidence Report' responses: ${filePath}`);
+    const selected = (marker.length > 0 ? marker : candidates).at(-1);
+    if (!selected) throw new Error(`ACS transcript JSON has no assistant report content: ${filePath}`);
+    if (Object.hasOwn(selected, "truncated_fields")) throw new Error(`ACS transcript JSON selected item has truncated_fields: ${filePath}`);
+    content = selected.content;
+    stepIndex = Number.isFinite(Number(selected.step_index)) ? Number(selected.step_index) : null;
+  }
+  if (typeof content !== "string" || !content.trim()) throw new Error(`ACS transcript JSON has empty report content: ${filePath}`);
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > TRANSCRIPT_REPORT_LIMIT_BYTES) throw new Error(`ACS transcript report exceeds the 128 KiB ceiling: ${filePath}`);
+  if (conversationId !== null && !UUID_RE.test(conversationId)) throw new Error(`ACS transcript JSON has an invalid conversation UUID: ${filePath}`);
+  return { bytes: Buffer.from(content, "utf8"), provenance: { conversationId, stepIndex } };
+}
+ 
+function parseTranscriptJsonMappings(values) {
+  const out = new Map();
+  for (const item of Array.isArray(values) ? values : values ? [values] : []) {
+    const eq = String(item).indexOf("=");
+    if (eq <= 0 || eq === String(item).length - 1) throw new Error(`Invalid --transcript-json entry '${item}'; expected <slot>=<jsonPath>.`);
+    out.set(String(item).slice(0, eq).trim(), String(item).slice(eq + 1).trim());
+  }
+  return out;
+}
+ 
 function collectReportSlots(root, options = {}) {
   root = resolveCanonicalRoot(root);
   if (!options || typeof options !== "object" || Array.isArray(options)) {
@@ -1550,7 +1772,11 @@ function collectReportSlots(root, options = {}) {
     overwrite = false,
     dryRun = false,
     allowEmpty = false,
-    strict = false
+    strict = false,
+    transcriptJson,
+    fromTranscript = false,
+    fromTranscriptJson = false,
+    transcriptHomeDir
   } = options;
 
   if (!Array.isArray(sources)) {
@@ -1561,14 +1787,32 @@ function collectReportSlots(root, options = {}) {
     ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
   ]).map(r => ({ ...r, realRoot: tryRealPath(r.root) }));
   const inferredSources = sources.length > 0 ? sources : receiptRoots.map(r => r.root);
-  if (inferredSources.length === 0) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
   if (sources.length === 0 && plan === undefined && record === undefined) {
     throw new Error("Collecting from --handoffs receipts requires --plan <plan.json> or --record <record.json> to bind senders to assigned slots; pass --from <worktree-dir> explicitly with --squad.");
   }
-  if (typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" || typeof strict !== "boolean") {
-    throw new Error("Collect flags overwrite, dryRun, allowEmpty, and strict must be booleans.");
+  if (
+    typeof overwrite !== "boolean" || typeof dryRun !== "boolean" || typeof allowEmpty !== "boolean" ||
+    typeof strict !== "boolean" || typeof fromTranscript !== "boolean" || typeof fromTranscriptJson !== "boolean"
+  ) {
+    throw new Error("Collect flags overwrite, dryRun, allowEmpty, strict, fromTranscript, and fromTranscriptJson must be booleans.");
   }
   const overrideRoot = reportRoot !== undefined ? normalizeReportRoot(reportRoot) : undefined;
+  const transcriptMappings = parseTranscriptJsonMappings(transcriptJson);
+  const readonlyWorkers = new Map();
+  if (plan?.executionMode === "subagent" && Array.isArray(plan.workers)) {
+    for (const worker of plan.workers) {
+      if (squadId !== undefined && worker?.squadId !== squadId) continue;
+      for (const specialist of Array.isArray(worker?.specialists) ? worker.specialists : []) {
+        const specialistType = specialist?.typeName ?? specialist?.Subagent?.TypeName;
+        if (specialistType === READONLY_SUBAGENT_TYPE && typeof specialist.reportSlot === "string") {
+          const resolvedSlot = overrideRoot !== undefined ? rebaseSlotReportRoot(specialist.reportSlot, overrideRoot) : specialist.reportSlot;
+          readonlyWorkers.set(resolvedSlot, specialist.workerName);
+        }
+      }
+    }
+  }
+  const hasTranscriptMaterializationInputs = transcriptMappings.size > 0 || readonlyWorkers.size > 0 || fromTranscript === true;
+  if (inferredSources.length === 0 && !hasTranscriptMaterializationInputs) throw new Error("Provide --from <dir> or sender-bound --handoffs containing wt=<dir>.");
 
   const resolvedSources = [];
   const seenRealSources = new Set();
@@ -1632,8 +1876,9 @@ function collectReportSlots(root, options = {}) {
       }
       for (const s of w?.specialists ?? []) {
         if (s?.reportSlot !== undefined) {
-          addSlot(s.reportSlot, s.swarmAdd?.workspace === "inherit");
-          if (s.swarmAdd?.workspace !== "inherit") bindSender(s.workerName, s.reportSlot);
+          const specialistIsInherit = plan.executionMode === "subagent" || s.swarmAdd?.workspace === "inherit";
+          addSlot(s.reportSlot, specialistIsInherit);
+          if (!specialistIsInherit) bindSender(s.workerName, s.reportSlot);
         }
       }
     }
@@ -1774,6 +2019,66 @@ function collectReportSlots(root, options = {}) {
     }
   }
 
+  const addTranscriptEntry = (slotRel, extracted, sourceLabel) => {
+    if (!targetSlotSet.has(slotRel) || foundBySlot.has(slotRel)) return;
+    foundBySlot.set(slotRel, {
+      bytes: extracted.bytes,
+      hash: sha256(extracted.bytes),
+      source: sourceLabel,
+      transcriptProvenance: { ...extracted.provenance, sha256: sha256(extracted.bytes) }
+    });
+  };
+  const transcriptHandoffs = [
+    ...(Array.isArray(handoffs) ? handoffs : []),
+    ...(Array.isArray(record?.handoffs) ? record.handoffs : [])
+  ];
+  const handoffBySender = new Map();
+  for (const handoff of transcriptHandoffs) {
+    if (handoff?.sender) handoffBySender.set(String(handoff.sender), handoff);
+  }
+  for (const [slotRel, jsonPathRaw] of transcriptMappings.entries()) {
+    if (!targetSlotSet.has(slotRel)) throw new Error(`--transcript-json slot '${slotRel}' is not an expected report slot.`);
+    const jsonPath = path.isAbsolute(jsonPathRaw) ? jsonPathRaw : path.resolve(root, jsonPathRaw);
+    const extracted = extractAcsJsonReport(jsonPath);
+    if (!extracted.provenance.conversationId) {
+      const workerName = readonlyWorkers.get(slotRel);
+      const handoff = (workerName ? handoffBySender.get(workerName) : null) || transcriptHandoffs.find(h => typeof h?.message === "string" && h.message.includes(slotRel));
+      extracted.provenance.conversationId = handoff ? extractUuidFromHandoff(handoff) : null;
+    }
+    addTranscriptEntry(slotRel, extracted, `transcript-json:${jsonPath}`);
+  }
+  const directTranscriptSlots = fromTranscript
+    ? new Map([...targetSlotSet].map(slotRel => [slotRel, undefined]))
+    : readonlyWorkers;
+  const verifiedExistingRootDirs = new Set([root]);
+  for (const [slotRel, workerName] of directTranscriptSlots.entries()) {
+    if (foundBySlot.has(slotRel)) continue;
+    const existingRootReport = readIfPresentWithStat(root, slotRel, verifiedExistingRootDirs);
+    if (existingRootReport && decodeUtf8(existingRootReport.bytes, slotRel).trim().length > 0) continue;
+    const workerHandoff = (workerName ? handoffBySender.get(workerName) : null) || transcriptHandoffs.find(h => typeof h?.message === "string" && h.message.includes(slotRel));
+    if (fromTranscriptJson && workerHandoff) {
+      const marker = String(workerHandoff.message || "").match(/(?:^|[\s;,(])(?:transcript_json|transcript-json|tj)=([^\s;,)]+)/i);
+      if (marker) {
+        const jsonPath = path.isAbsolute(marker[1]) ? marker[1] : path.resolve(root, marker[1]);
+        addTranscriptEntry(slotRel, extractAcsJsonReport(jsonPath), `transcript-json:${jsonPath}`);
+        continue;
+      }
+    }
+    if (!workerHandoff) continue;
+    const conversationId = extractUuidFromHandoff(workerHandoff);
+    if (!conversationId) throw new Error(`Read-only subagent report slot ${slotRel} requires a strict sender UUID or id=<uuid> in its handoff receipt; pass --transcript-json when the coordinator extracts through Agy-Context-Saver.`);
+    const homeDir = transcriptHomeDir ? path.resolve(transcriptHomeDir) : os.homedir();
+    const restriction = restrictiveTranscriptPolicyError(homeDir);
+    if (restriction) throw new Error(restriction);
+    try {
+      const transcriptPath = resolveTranscriptFullPath(conversationId, homeDir);
+      const extracted = parseTranscriptReportJsonl(transcriptPath, conversationId);
+      addTranscriptEntry(slotRel, extracted, `transcript:${conversationId}`);
+    } catch (error) {
+      throw new Error(`Failed to materialize read-only subagent report '${slotRel}' from transcript '${conversationId}': ${error.message}`);
+    }
+  }
+ 
   const verifiedInheritDirs = new Set([root]);
   const missing = targetSlots.filter(slotRel => {
     if (foundBySlot.has(slotRel)) return false;
@@ -1832,7 +2137,8 @@ function collectReportSlots(root, options = {}) {
         from: entry.source,
         sha256: entry.hash,
         bytes: entry.bytes.length,
-        status: "unchanged"
+        status: "unchanged",
+        ...(entry.transcriptProvenance ? { transcriptProvenance: entry.transcriptProvenance } : {})
       });
       continue;
     }
@@ -1845,7 +2151,8 @@ function collectReportSlots(root, options = {}) {
       from: entry.source,
       sha256: entry.hash,
       bytes: entry.bytes.length,
-      status: dryRun ? "would-copy" : "copied"
+      status: dryRun ? "would-copy" : "copied",
+      ...(entry.transcriptProvenance ? { transcriptProvenance: entry.transcriptProvenance } : {})
     });
   }
 

@@ -64,6 +64,7 @@ console.log("Agy-Squad MCP server tests\n");
   assert.ok(planner.inputSchema.properties.executionMode.enum.includes("subagent"));
   assert.ok(planner.inputSchema.properties.boardSince && planner.inputSchema.properties.boardSeqs, "SQ-SWARM-BOARD-SCOPE schema fields exposed");
   assert.equal(planner.inputSchema.properties.readOnly?.type, "boolean", "OPT-IO-6: readOnly schema field exposed");
+  assert.equal(planner.inputSchema.properties.readOnlySubagent?.type, "boolean", "readOnlySubagent schema field exposed");
   assert.equal(planner.inputSchema.properties.roleScopes?.type, "object", "OPT-IO-6: roleScopes schema field exposed");
   assert.equal(planner.inputSchema.properties.roleScopes?.minProperties, 1, "R1-MCP-001: roleScopes schema enforces minProperties: 1");
   assert.equal(planner.inputSchema.properties.scopeFiles.description, "Task paths.", "OPT-GAP-SCHEMA-WORD: scopeFiles description must use 'Task paths.'");

@@ -151,6 +151,8 @@ agy-squad plan \
    READY scratch/agy-squad/squad-1/specialist-1/report.md -- gateway/gateway.mjs:10 timingSafeEqual throws RangeError on short hex
    ```
 3. The parent (or squad lead) runs `agy-squad collect` for any `share`/`branch` copies, inspects cited source lines and tests to verify correctness, writes a strict `Content Verdict: PASS` line in `lead/report.md` (bare `Verdict: PASS` is accepted only as a legacy alias), pairs with a flat integrity auditor (`audit-<id>` on `/swarm`, `integrity_auditor` via slot; emits `Integrity Verdict: CLEAN`), and runs `agy-squad bundle-init --digest` + `agy-squad finalize <record.json> [--prune]` (or granular `verdict`, `fingerprint`, `inspect`, `digest`, `bundle`, `verify`, `prune`) to record SHA-256 digests in `lead/report.sources.json`.
+ 
+   For read-only `invoke_subagent` specialists, `agy-squad plan --mode subagent --readonly-subagent` uses the packaged `agy-squad-readonly` type. The child sends the report as its final chat response rather than writing a file. `agy-squad collect --plan <plan.json> --handoffs <file>` materializes that response into `report.md` when the receipt sender is the worker conversation UUID. If Agy-Context-Saver transcript policy is restrictive, run the permitted `agy-context transcript query ... --json --out <file>` extraction first and pass `--transcript-json <slot>=<file>` to `collect`.
 4. Run `swarm status` or `manage_subagents` to inspect running worker models or stop active children ([Stopping agents](stopping-agents.md)).
 
 ## When to use Agy-Squad vs. alternatives

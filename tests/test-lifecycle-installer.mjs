@@ -1945,6 +1945,25 @@ try {
       });
       assert.equal(healthyCheck.status, 0, healthyCheck.stderr);
 
+      if (flowStatusJson.details.plugin.isSymlink) {
+        const leakDir = path.join(flowPluginDir, ".agents", "skills", "platform-fit");
+        fs.mkdirSync(leakDir, { recursive: true });
+        fs.writeFileSync(path.join(leakDir, "SKILL.md"), "# leaked maintainer skill\n", "utf8");
+        const malformedLinkedCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: flowEnv,
+          encoding: "utf8"
+        });
+        assert.equal(malformedLinkedCheck.status, 1, "setup --check must fail when a linked install exposes maintainer-only skills");
+        fs.rmSync(leakDir, { recursive: true, force: true });
+        const restoredLinkedCheck = spawnSync(process.execPath, [cli, "setup", "--check"], {
+          cwd: repoRoot,
+          env: flowEnv,
+          encoding: "utf8"
+        });
+        assert.equal(restoredLinkedCheck.status, 0, restoredLinkedCheck.stderr);
+      }
+ 
       // Simulate stale version drift on package.json: both status AND setup --check must exit 1
       const pkgDest = path.join(flowPluginDir, "package.json");
       fs.rmSync(pkgDest, { force: true });

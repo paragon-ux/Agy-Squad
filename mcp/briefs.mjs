@@ -333,9 +333,11 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
       ? `Write '${workspaceIsolation}' working copy slot (no overwrite)${citeSuffix}`
       : `Write shared slot (no overwrite)${citeSuffix}`;
   const readOnlyLine =
-    resolvedReadOnly && !isIntegrityAuditor
-      ? "Read-only mode: do NOT modify, create, or delete files outside <Report slot>."
-      : null;
+    isReadOnlySubagent
+      ? "Read-only mode: do NOT modify, create, or delete any file; the report exists only as your final chat response."
+      : resolvedReadOnly && !isIntegrityAuditor
+        ? "Read-only mode: do NOT modify, create, or delete files outside <Report slot>."
+        : null;
 
   const swarmRecipient = "@coordinator";
 

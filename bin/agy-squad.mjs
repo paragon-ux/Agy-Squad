@@ -137,6 +137,7 @@ const SUBCOMMAND_HELP = {
     "  --scope <path>                   Repeatable workspace-relative scope path (task mode)",
     "  --role <title>                   Repeatable specialist role title (task mode)",
     "  --read-only                      Mark inline task specialists readOnly: true",
+	"  --readonly-subagent              Use agy-squad-readonly for read-only subagent specialists",
     "  --role-scope <role=path>         Repeatable per-role scope override (task mode)",
     "  --no-integrity                   Omit flat audit-<id> stage when explicitly skipping integrity audits",
     "  --report-root <path>             Custom workspace-relative root (default: scratch/agy-squad)",
@@ -181,6 +182,9 @@ const SUBCOMMAND_HELP = {
     "  --from <worktree-dir>            Repeatable source worktree directory",
     "  --handoffs <file.json>           Extract wt=<dir> worktrees from handoff receipts (requires --plan or --record)",
     "  --handoff <receipt>              Repeatable inline handoff receipt containing wt=<dir>",
+    "  --transcript-json <slot=json>    Materialize ACS transcript JSON into a report slot",
+    "  --from-transcript-json           Read transcript JSON path marker from a handoff receipt",
+    "  --from-transcript                Enable direct transcript extraction for matching receipts",
     "  --workspace <dir>                Target coordinator workspace root (default: cwd)",
     "  --report-root <path>             Custom workspace-relative report root",
     "  --overwrite                      Overwrite differing existing slots in workspace",
@@ -340,7 +344,7 @@ const SUBCOMMAND_HELP = {
 
 async function runPlanCommand(rest, fallbackRoot) {
   const usageLine =
-    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--workspace <dir>] [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...] [--out <plan.json>] [--swarm-pane-out <path>] [--emit-wave <1|2|3>] [--replace] [--compact]";
+    "Usage: agy-squad plan (--manifest <path> | \"<task>\") [--workspace <dir>] [--squad <id>] [--topology flat|layered] [--mode swarm|subagent] [--model <id>] [--workspace-isolation inherit|share|branch] [--scope <path>...] [--role <title>...] [--read-only] [--readonly-subagent] [--role-scope <role=path>...] [--no-integrity] [--report-root <path>] [--known-model <id>...] [--occupied-worker <name>...] [--board-since <seq>] [--board-seq <seq>...] [--out <plan.json>] [--swarm-pane-out <path>] [--emit-wave <1|2|3>] [--replace] [--compact]";
   if (!rest.length) {
     throw new Error(usageLine);
   }
@@ -365,6 +369,7 @@ async function runPlanCommand(rest, fallbackRoot) {
     scope: { type: "string", multiple: true },
     role: { type: "string", multiple: true },
     "read-only": { type: "boolean", default: false },
+	"readonly-subagent": { type: "boolean", default: false },
     "role-scope": { type: "string", multiple: true },
     "no-integrity": { type: "boolean", default: false },
     "report-root": { type: "string" },
@@ -430,6 +435,7 @@ async function runPlanCommand(rest, fallbackRoot) {
     ...(values.scope !== undefined ? { scopeFiles: values.scope.map(p => normalizeScopeCliPath(p, process.platform, targetRoot)) } : {}),
     ...(values.role !== undefined ? { roles: values.role } : {}),
     ...(values["read-only"] ? { readOnly: true } : {}),
+	...(values["readonly-subagent"] ? { readOnlySubagent: true } : {}),
     ...(roleScopes !== undefined ? { roleScopes } : {}),
     ...(values["no-integrity"] ? { includeIntegrityAuditor: false } : {}),
     ...(values["report-root"] !== undefined ? { reportRoot: normalizeWorkspaceCliPath(values["report-root"], process.platform, targetRoot) } : {}),
@@ -919,7 +925,7 @@ async function main(args) {
     return 0;
   }
   if (command === "collect") {
-    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) [--from <worktree-dir>...] [--handoffs <file.json>] [--handoff <receipt>...] [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
+    const usageLine = "Usage: agy-squad collect (--plan <plan.json> | --record <record.json> | --squad <id>) [--from <worktree-dir>...] [--handoffs <file.json>] [--handoff <receipt>...] [--transcript-json <slot=jsonPath>...] [--from-transcript-json] [--from-transcript] [--workspace <dir>] [--report-root <path>] [--overwrite] [--dry-run] [--strict] [--allow-empty]";
     const { values, positionals } = parseSubcommandArgs(rest, usageLine, {
       plan: { type: "string" },
       record: { type: "string" },
@@ -932,6 +938,9 @@ async function main(args) {
       overwrite: { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
+	  "transcript-json": { type: "string", multiple: true },
+      "from-transcript-json": { type: "boolean", default: false },
+      "from-transcript": { type: "boolean", default: false },
       "allow-empty": { type: "boolean", default: false }
     });
     if (values.plan !== undefined && values.record !== undefined) {
@@ -968,7 +977,7 @@ async function main(args) {
     const hasHandoffInputs =
       (Array.isArray(handoffs) && handoffs.length > 0) ||
       (Array.isArray(record?.handoffs) && record.handoffs.length > 0);
-    if (!sources.length && !hasHandoffInputs) {
+    if (!sources.length && !hasHandoffInputs && !(Array.isArray(values["transcript-json"]) && values["transcript-json"].length > 0)) {
       throw new Error(usageLine);
     }
     const result = handoffsMod.collectReportSlots(targetRoot, {
@@ -981,7 +990,10 @@ async function main(args) {
       overwrite: values.overwrite,
       dryRun: values["dry-run"],
       strict: values.strict,
-      allowEmpty: values["allow-empty"]
+      allowEmpty: values["allow-empty"],
+      transcriptJson: values["transcript-json"],
+      fromTranscriptJson: values["from-transcript-json"],
+      fromTranscript: values["from-transcript"]
     });
     console.log(JSON.stringify(result, null, 2));
     return 0;

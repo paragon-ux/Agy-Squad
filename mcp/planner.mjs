@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import util from "node:util";
-import { AGENT_ALIAS_PAIRS, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
+import { AGENT_ALIAS_PAIRS, READONLY_SUBAGENT_TYPE, SUBAGENT_MODEL_ALIASES, buildSubagentSpec, validateScopeFiles } from "./briefs.mjs";
 import {
   formatNotFoundError,
   loadSquads,
@@ -39,6 +39,7 @@ const ALLOWED_PLANNER_KEYS = new Set([
   "scopeFiles",
   "roles",
   "readOnly",
+  "readOnlySubagent",
   "roleScopes",
   "includeIntegrityAuditor",
   "reportRoot",
@@ -719,6 +720,10 @@ function planSquadCohort(
   ) {
     throw new Error("swarmPaneOutPath must be a non-empty .json path.");
   }
+  if (args?.readOnlySubagent !== undefined && typeof args.readOnlySubagent !== "boolean") {
+    throw new Error("readOnlySubagent must be a boolean.");
+  }
+ 
   if (emitWave !== undefined) {
     if (typeof emitWave !== "number" || !Number.isInteger(emitWave) || emitWave < 1 || emitWave > 3) {
       throw new Error("emitWave must be 1, 2, or 3.");
@@ -750,6 +755,9 @@ function planSquadCohort(
   }
   if (executionMode !== "swarm" && executionMode !== "subagent") {
     throw new Error("executionMode must be 'swarm' or 'subagent'.");
+  }
+  if (args?.readOnlySubagent === true && executionMode !== "subagent") {
+    throw new Error("readOnlySubagent requires executionMode 'subagent'.");
   }
   if (swarmPaneOutPath !== undefined && executionMode !== "swarm") {
     throw new Error("swarmPaneOutPath is only supported with executionMode 'swarm'.");
@@ -1037,8 +1045,14 @@ function planSquadCohort(
         overriddenSubagentModels
       );
       recordSubagentWorkerModel(specModel);
+      const useReadOnlySubagent =
+        args?.readOnlySubagent === true &&
+        specReadOnly === true &&
+        rawSpec.typeName === undefined &&
+        rawSpec.TypeName === undefined;
       const subSpec = {
         ...rawSpec,
+        ...(useReadOnlySubagent ? { typeName: READONLY_SUBAGENT_TYPE } : {}),
         model: specModel.compiledModel
       };
       const slot = specialistReportSlots[number - 1];
@@ -1121,6 +1135,7 @@ function planSquadCohort(
         reportSlot: slot,
         scopeFiles: specScope,
         ...(typeof sRo === "boolean" ? { readOnly: sRo } : {}),
+        ...(compiled.TypeName === READONLY_SUBAGENT_TYPE ? { typeName: READONLY_SUBAGENT_TYPE } : {}),
         ...(executionMode === "swarm"
           ? {
               swarmAdd: {

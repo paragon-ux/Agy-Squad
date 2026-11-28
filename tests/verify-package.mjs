@@ -13,6 +13,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const REQUIRED = [
   "package.json",
   "plugin.json",
+  "agents/agy-squad-readonly.md",
   "assets/logo.svg",
   "README.md",
   "CHANGELOG.md",
@@ -112,7 +113,7 @@ function validate(packages, { rootDir = repoRoot, fileContents = null } = {}) {
       name === "README.md" || name === "CHANGELOG.md" ||
       name === "install.sh" || name === "install.ps1" ||
       name === "LICENSE" || name === "LICENSE.md" || name === "LICENSE.txt" ||
-      name.startsWith("assets/") || name.startsWith("bin/") || name.startsWith("mcp/") ||
+      name.startsWith("agents/") || name.startsWith("assets/") || name.startsWith("bin/") || name.startsWith("mcp/") ||
       name.startsWith("scripts/") ||
       name.startsWith(".agents/skills/") || name.startsWith("docs/"))
   );

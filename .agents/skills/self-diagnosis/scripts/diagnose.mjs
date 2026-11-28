@@ -370,6 +370,11 @@ function runDiagnostics() {
         text: readMarkdownCached(filePath, markdownTextCache)
       }))
     : [];
+  const readonlyAgent = path.join(repoRoot, "agents", "agy-squad-readonly.md");
+  if (!fs.existsSync(readonlyAgent)) {
+    findings.push({ id: "AGENT-MISSING-READONLY", priority: "P1", summary: "Missing agents/agy-squad-readonly.md" });
+  }
+
   const skillsRoot = path.join(repoRoot, ".agents", "skills");
   const skillNames = [...SHIPPED_SKILLS];
   for (const maintainerSkill of MAINTAINER_SKILLS) {
