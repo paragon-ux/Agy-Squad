@@ -235,7 +235,7 @@ const TOOLS = [
         scopeFiles: { type: "array", minItems: 1, maxItems: 256, items: { type: "string", minLength: 1, maxLength: 512 }, description: "Task paths." },
         roles: { type: "array", minItems: 1, maxItems: 64, items: { type: "string", minLength: 1, maxLength: 160 }, description: "Role titles." },
         readOnly: { type: "boolean", description: "Read-only workers." },
-		readOnlySubagent: { type: "boolean", description: "Use agy-squad-readonly for read-only subagent specialists." },
+        readOnlySubagent: { type: "boolean", description: "Use agy-squad-readonly for read-only subagent specialists." },
         roleScopes: {
           type: "object",
           minProperties: 1,

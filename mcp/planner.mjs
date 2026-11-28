@@ -1496,8 +1496,12 @@ function planSquadCohort(
   const multiRecordSlots = workers.map(w => w.recordSlot).join(" ");
   const multiRecordPins = workers.map(w => `${w.recordSlot}=<accepted-sha256>`).join(" ");
 
+  const hasReadOnlySubagentSpecialists =
+    executionMode === "subagent" &&
+    workers.some(w => w.specialists.some(s => (s.typeName ?? s.Subagent?.TypeName) === READONLY_SUBAGENT_TYPE));
+
   const verificationPipeline = [
-    ...(workspaceIsolation !== "inherit"
+    ...(workspaceIsolation !== "inherit" || hasReadOnlySubagentSpecialists
       ? [`agy-squad collect --workspace ${wsCliArg} --plan ${planCliRef} --handoffs <handoffs.json>`]
       : []),
     ...(flatSynthesisSlots.length > 0

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
-import { CONTROL_CHAR_RE, isContainedPath, isValidScopeEntry, messageLimit, reportPath, resolveCanonicalRoot, workspacePath, readOpenedFileWithStat } from "./handoffs.mjs";
+import { CONTROL_CHAR_RE, READONLY_SUBAGENT_TYPE, isContainedPath, isValidScopeEntry, messageLimit, reportPath, resolveCanonicalRoot, workspacePath, readOpenedFileWithStat } from "./handoffs.mjs";
 
 const DISALLOWED_BUILTINS = new Set(["research", "browser", "image-generator"]);
 const SUBAGENT_MODEL_ALIASES = new Set(["inherit", "flash_lite", "flash", "pro"]);
@@ -271,17 +271,29 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
   if (DISALLOWED_BUILTINS.has(payload.TypeName.toLowerCase())) {
     throw new Error(`Assignment '${role}' needs a writable typeName (disallowed built-in '${payload.TypeName}'); use 'self' or a custom subagent.`);
   }
+  const isIntegrityAuditor =
+    typeof explicitIntegrityAuditor === "boolean"
+      ? explicitIntegrityAuditor
+      : squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-");
+  const isReadOnlySubagent = payload.TypeName.trim().toLowerCase() === READONLY_SUBAGENT_TYPE;
+  if (isReadOnlySubagent) {
+    payload.TypeName = READONLY_SUBAGENT_TYPE;
+    if (executionMode !== "subagent") {
+      throw new Error(`Assignment '${role}' uses typeName '${READONLY_SUBAGENT_TYPE}', which requires executionMode 'subagent'.`);
+    }
+    if (resolvedReadOnly !== true) {
+      throw new Error(`Assignment '${role}' uses typeName '${READONLY_SUBAGENT_TYPE}', which requires readOnly: true.`);
+    }
+    if (isLead || isIntegrityAuditor) {
+      throw new Error(`Assignment '${role}' cannot use typeName '${READONLY_SUBAGENT_TYPE}' for a squad lead or integrity auditor.`);
+    }
+  }
   if (payload.Workspace !== "inherit") {
     throw new Error(`Assignment '${role}' needs Workspace 'inherit' so its report slot is shared.`);
   }
   if (validateOnly) {
     return payload;
   }
-
-  const isIntegrityAuditor =
-    typeof explicitIntegrityAuditor === "boolean"
-      ? explicitIntegrityAuditor
-      : squadId === "integrity_auditor" || squadId.startsWith("integrity_auditor-");
   const isSwarm = executionMode === "swarm";
   const normalizedObjective = normalizeModeObjective(objective, executionMode, isLead, isIntegrityAuditor);
 
@@ -329,9 +341,11 @@ function buildSubagentSpec(spec, squadId, manifestPath, specialistNumber, report
 
   const citeSuffix = isLead || isIntegrityAuditor ? "; cite checks/file:line." : ".";
   const reportPlacementLine =
-    isSwarm && workspaceIsolation !== "inherit"
-      ? `Write '${workspaceIsolation}' working copy slot (no overwrite)${citeSuffix}`
-      : `Write shared slot (no overwrite)${citeSuffix}`;
+    isReadOnlySubagent
+      ? "Final-response report contract: do NOT call write_file or edit files. Emit the complete Markdown evidence report as the standalone assistant chat response, beginning with '# Evidence Report'. If calling send_message in the same turn, keep the full report in that turn's response text; otherwise make it the exact closing response. Never follow it with filler."
+      : isSwarm && workspaceIsolation !== "inherit"
+        ? `Write '${workspaceIsolation}' working copy slot (no overwrite)${citeSuffix}`
+        : `Write shared slot (no overwrite)${citeSuffix}`;
   const readOnlyLine =
     isReadOnlySubagent
       ? "Read-only mode: do NOT modify, create, or delete any file; the report exists only as your final chat response."
@@ -400,6 +414,7 @@ export {
   AGENT_ALIAS_PAIRS,
   CONTROL_CHAR_RE,
   DISALLOWED_BUILTINS,
+  READONLY_SUBAGENT_TYPE,
   SUBAGENT_MODEL_ALIASES,
   buildSubagentSpec,
   superviseCohort,
