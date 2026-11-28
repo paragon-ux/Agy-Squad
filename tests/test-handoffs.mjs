@@ -4005,34 +4005,46 @@ try {
         assert.equal(execRecovery.status, 0, `Emitted recovery command failed from outerDir: ${execRecovery.stderr}`);
         assert.equal(fs.existsSync(path.join(ws1, p1.workers[1].specialists[0].reportSlot)), false, "Recovery command must prune beta");
 
-        // 3. Multi-workspace batch prune --records --clean-records failure emits separate workspace-scoped commands and cleans records
+        // 3. Multi-workspace batch prune --records --clean-records failure leaves pending entries in BOTH workspaces and emits 2 workspace-scoped commands
+        const ws1Extra = path.join(outerDir, "child repo one-b");
+        const { planObj: p1b, records: [r1bAlpha, r1bBeta] } = setupTwoSquadRepo(ws1Extra);
+        const finWs1b = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws1Extra, r1bAlpha.path, r1bBeta.path, "--allow-unaudited"], { cwd: outerDir, encoding: "utf8" });
+        assert.equal(finWs1b.status, 0, finWs1b.stderr);
+        const [fin1bA, fin1bB] = JSON.parse(finWs1b.stdout).results;
+
         const { planObj: p2, records: [r2Alpha, r2Beta] } = setupTwoSquadRepo(ws2);
         const finWs2 = spawnSync(process.execPath, [agySquadCli, "finalize", "--workspace", ws2, r2Alpha.path, r2Beta.path, "--allow-unaudited"], { cwd: outerDir, encoding: "utf8" });
         assert.equal(finWs2.status, 0, finWs2.stderr);
         const [fin2A, fin2B] = JSON.parse(finWs2.stdout).results;
-        const finWs1Again = spawnSync(process.execPath, [agySquadCli, "verify", "--workspace", ws1, path.posix.join("scratch/my reports", `squad-${rAlpha.squadId}`, "lead/report.sources.json")], { cwd: outerDir, encoding: "utf8" });
-        assert.equal(finWs1Again.status, 0, finWs1Again.stderr);
-        const sha1Alpha = JSON.parse(finWs1Again.stdout).sha256;
 
-        const ws2BetaDir = path.dirname(path.join(ws2, p2.workers[1].specialists[0].reportSlot));
-        fs.chmodSync(ws2BetaDir, 0o555);
+        // Fail at idx=1 (ws1Extra beta) after ws1Extra alpha completes, leaving ws1Extra beta + ws2 alpha + ws2 beta pending across 2 distinct workspaces!
+        const ws1bBetaDir = path.dirname(path.join(ws1Extra, p1b.workers[1].specialists[0].reportSlot));
+        fs.chmodSync(ws1bBetaDir, 0o555);
         const multiWsFail = spawnSync(process.execPath, [
           agySquadCli, "prune", "--records",
-          `child repo one/${rAlpha.path}=${sha1Alpha}`,
+          `child repo one-b/${r1bAlpha.path}=${fin1bA.sha256}`,
+          `child repo one-b/${r1bBeta.path}=${fin1bB.sha256}`,
           `child repo two/${r2Alpha.path}=${fin2A.sha256}`,
           `child repo two/${r2Beta.path}=${fin2B.sha256}`,
           "--clean-records"
         ], { cwd: outerDir, encoding: "utf8" });
-        fs.chmodSync(ws2BetaDir, 0o755);
+        fs.chmodSync(ws1bBetaDir, 0o755);
         assert.notEqual(multiWsFail.status, 0);
-        assert.match(multiWsFail.stderr, /--clean-records/);
+        assert.equal(fs.existsSync(path.join(ws1Extra, p1b.workers[0].specialists[0].reportSlot)), false, "Completed ws1Extra alpha report must be pruned");
+        assert.equal(fs.existsSync(path.join(ws1Extra, r1bAlpha.path)), false, "Completed ws1Extra alpha record must be cleaned");
         const multiCmds = multiWsFail.stderr.split("\n").filter(l => l.trim().startsWith("agy-squad prune "));
-        assert.ok(multiCmds.length >= 1, `Expected workspace-scoped retry command:\n${multiWsFail.stderr}`);
+        assert.equal(multiCmds.length, 2, `ASQ-10 expected 2 distinct workspace-scoped retry commands:\n${multiWsFail.stderr}`);
+        assert.ok(multiCmds[0].includes(`'${ws1Extra}'`) && multiCmds[0].includes(`${r1bBeta.path}=${fin1bB.sha256}`) && !multiCmds[0].includes(`${r1bAlpha.path}=`) && multiCmds[0].endsWith(" --clean-records"), `Unexpected cmd[0]: ${multiCmds[0]}`);
+        assert.ok(multiCmds[1].includes(`'${ws2}'`) && multiCmds[1].includes(`${r2Alpha.path}=${fin2A.sha256}`) && multiCmds[1].includes(`${r2Beta.path}=${fin2B.sha256}`) && multiCmds[1].endsWith(" --clean-records"), `Unexpected cmd[1]: ${multiCmds[1]}`);
         for (const c of multiCmds) {
           const r = spawnSync("sh", ["-c", c.trim().replace(/^agy-squad\b/, `'${process.execPath}' '${agySquadCli}'`)], { cwd: outerDir, encoding: "utf8" });
           assert.equal(r.status, 0, `Multi-workspace recovery command failed: ${r.stderr}`);
         }
+        assert.equal(fs.existsSync(path.join(ws1Extra, p1b.workers[1].specialists[0].reportSlot)), false);
+        assert.equal(fs.existsSync(path.join(ws1Extra, r1bBeta.path)), false);
+        assert.equal(fs.existsSync(path.join(ws2, p2.workers[0].specialists[0].reportSlot)), false);
         assert.equal(fs.existsSync(path.join(ws2, p2.workers[1].specialists[0].reportSlot)), false);
+        assert.equal(fs.existsSync(path.join(ws2, r2Alpha.path)), false);
         assert.equal(fs.existsSync(path.join(ws2, r2Beta.path)), false, "--clean-records must remove beta record on recovery");
 
         // 4. Sibling bundle=sha batch prune failure preserves --workspace and --keep-reports on recovery
@@ -4057,7 +4069,7 @@ try {
           try { fs.chmodSync(path.join(ws3, "scratch/my reports/squad-alpha/specialist-1"), 0o755); } catch {}
         }
       } finally {
-        for (const d of [ws1, ws2]) {
+        for (const d of [ws1, path.join(outerDir, "child repo one-b"), ws2]) {
           try {
             for (const sq of ["squad-alpha", "squad-beta"]) {
               fs.chmodSync(path.join(d, "scratch/my reports", sq, "specialist-1"), 0o755);
